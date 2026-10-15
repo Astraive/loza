@@ -574,6 +574,13 @@ func resolveAuthConfig(fc fileConfig) (string, []collectorAuthKey, error) {
 		if err != nil {
 			return "", nil, err
 		}
+		collector := strings.TrimSpace(key.Collector)
+		if (collector == "") != (len(key.Permissions) == 0) {
+			return "", nil, fmt.Errorf("auth.keys[%d].collector and auth.keys[%d].permissions must be configured together", i, i)
+		}
+		if collector != "" && len(key.Roles) > 0 {
+			return "", nil, fmt.Errorf("auth.keys[%d].roles must not be configured for a collector-scoped key", i)
+		}
 		var roles []auth.Role
 		if len(key.Roles) > 0 || explicitMode {
 			roles, err = resolveCredentialRoles(key.Roles, mode, explicitMode, fmt.Sprintf("auth.keys[%d].roles", i))
@@ -582,10 +589,6 @@ func resolveAuthConfig(fc fileConfig) (string, []collectorAuthKey, error) {
 			}
 		}
 
-		collector := strings.TrimSpace(key.Collector)
-		if (collector == "") != (len(key.Permissions) == 0) {
-			return "", nil, fmt.Errorf("auth.keys[%d].collector and auth.keys[%d].permissions must be configured together", i, i)
-		}
 		var permissions []auth.Permission
 		allowedEnvs := append([]string(nil), key.AllowedEnvs...)
 		if collector != "" {

@@ -79,8 +79,6 @@ auth:
       key_id: kcheckoutwriter
       secret_env: CHECKOUT_WRITER_KEY_SECRET
       kind: sec
-      mode: private
-      roles: [collector_ingest_server]
       collector: checkout
       permissions: [events:write]
       allowed_envs: [prod]
@@ -88,8 +86,6 @@ auth:
       key_id: kcheckoutreader
       secret_env: CHECKOUT_READER_KEY_SECRET
       kind: sec
-      mode: private
-      roles: [project_readonly]
       collector: checkout
       permissions: [events:read]
       allowed_envs: [prod]
@@ -100,7 +96,8 @@ auth:
 `kind` must be `sec` or `pub`; `mode` is `private` or `public`; public
 credentials require `allowed_origins` and may use only the `client` role.
 Scoped keys require a configured `collector`, non-empty `permissions`, and
-non-empty `allowed_envs`. Scoped permissions are exact:
+non-empty `allowed_envs`; they must not configure legacy `roles`. Scoped
+permissions are exact:
 `events:read`, `events:write`, `events:delete`, `logs:read`, `logs:write`,
 `logs:edit`, `logs:delete`, and `project:admin` are authorized independently
 on `/collectors/{collector}/...`. Unscoped keys remain limited to explicitly
