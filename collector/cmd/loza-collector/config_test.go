@@ -268,6 +268,12 @@ func TestResolveAuthConfigBuildsCollectorScopedKey(t *testing.T) {
 		t.Fatalf("scoped key permissions = %v, want read/write/delete", got)
 	}
 
+	cfg.Auth.Keys[0].Roles = []string{"project_admin"}
+	if err := validateFileConfig(cfg); err == nil || !strings.Contains(err.Error(), "roles must not be configured for a collector-scoped key") {
+		t.Fatalf("expected scoped key roles rejection, got %v", err)
+	}
+	cfg.Auth.Keys[0].Roles = nil
+
 	cfg.Auth.Keys[0].Permissions = nil
 	if err := validateFileConfig(cfg); err == nil || !strings.Contains(err.Error(), "auth.keys[0].permissions") {
 		t.Fatalf("expected scoped key permissions rejection, got %v", err)
