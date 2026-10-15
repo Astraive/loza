@@ -259,3 +259,66 @@ func TestHandleKeyRevoke_NotFound(t *testing.T) {
 		t.Errorf("expected 404, got %d", rec.Code)
 	}
 }
+
+func TestScopedKeyManagementEnforcesCollectorOwnership(t *testing.T) {
+	state := newTestCollectorState()
+
+	create := func(collector string) (string, *auth.KeyRecord) {
+		t.Helper()
+		req := scopedRequest(http.MethodPost, "/collectors/"+collector+"/keys", collector, "live", `{"kind":"sec","env":"live"}`)
+		rec := httptest.NewRecorder()
+		state.handleKeyCreate(rec, req)
+		if rec.Code != http.StatusCreated {
+			t.Fatalf("create scoped key for %s: got %d: %s", collector, rec.Code, rec.Body.String())
+		}
+		var response map[string]any
+		_ = json.Unmarshal(rec.Body.Bytes(), &response)
+		keyID, _ := response["key_id"].(string)
+		record, _ := state.keyStore.FindByKeyID(context.Background(), keyID)
+		return keyID, record
+	}
+
+	keyID, record := create("collector-b")
+	if record == nil || len(record.CollectorGrants) != 1 || record.CollectorGrants[0].Collector != "collector-b" {
+		t.Fatalf("created key grants = %#v, want collector-b grant", record)
+	}
+	if !record.CollectorGrants[0].Permissions[auth.PermEventsWrite] {
+		t.Fatal("created scoped key does not grant events:write")
+	}
+
+	for _, operation := range []struct {
+		name   string
+		path   string
+		handle func(http.ResponseWriter, *http.Request)
+	}{
+		{name: "revoke", path: "/collectors/collector-a/keys/" + keyID + "/revoke", handle: state.handleKeyRevoke},
+		{name: "rotate", path: "/collectors/collector-a/keys/" + keyID + "/rotate", handle: state.handleKeyRotate},
+	} {
+		t.Run(operation.name, func(t *testing.T) {
+			req := scopedRequest(http.MethodPost, operation.path, "collector-a", "live", "")
+			req.SetPathValue("id", keyID)
+			rec := httptest.NewRecorder()
+			operation.handle(rec, req)
+			if rec.Code != http.StatusNotFound {
+				t.Fatalf("cross-collector %s: got %d, want 404: %s", operation.name, rec.Code, rec.Body.String())
+			}
+		})
+	}
+
+	record, _ = state.keyStore.FindByKeyID(context.Background(), keyID)
+	if record.RevokedAt != nil {
+		t.Fatal("cross-collector key operation revoked the target key")
+	}
+}
+
+func TestScopedKeyCreateRejectsEnvironmentOutsideRouteScope(t *testing.T) {
+	state := newTestCollectorState()
+	req := scopedRequest(http.MethodPost, "/collectors/collector-a/keys", "collector-a", "test", `{"kind":"sec","env":"live"}`)
+	rec := httptest.NewRecorder()
+
+	state.handleKeyCreate(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("got %d, want 403: %s", rec.Code, rec.Body.String())
+	}
+}
