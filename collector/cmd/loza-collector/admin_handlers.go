@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/astraive/loza/collector/internal/auth"
+	publichttp "github.com/astraive/loza/collector/server/http"
 	speccontract "github.com/astraive/loza/spec/generated/go/contract"
 )
 
@@ -102,6 +103,11 @@ func (s *collectorState) handleKeyCreate(w http.ResponseWriter, r *http.Request)
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_env", "message": "env must be 'live', 'test', or 'dev'"})
 		return
 	}
+	scope, scoped := keyManagementScope(r)
+	if scoped && env != scope.Environment {
+		writeJSON(w, http.StatusForbidden, map[string]any{"error": "collector_scope_mismatch"})
+		return
+	}
 	token8, err := randomToken(8)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "token_generation_failed"})
@@ -124,12 +130,19 @@ func (s *collectorState) handleKeyCreate(w http.ResponseWriter, r *http.Request)
 			keyKind = auth.KeyKindPublic
 		}
 		newKey := &auth.KeyRecord{
-			ID:           keyID,
-			KeyID:        keyID,
-			SecretHash:   secretHash,
-			Kind:         keyKind,
-			Roles:        []auth.Role{auth.RoleIngestServer},
-			AllowedEnvs:  []string{env},
+			ID:          keyID,
+			KeyID:       keyID,
+			SecretHash:  secretHash,
+			Kind:        keyKind,
+			Roles:       []auth.Role{auth.RoleIngestServer},
+			AllowedEnvs: []string{env},
+		}
+		if scoped {
+			newKey.CollectorGrants = []auth.CollectorGrant{{
+				Collector:    scope.Name,
+				Environments: []string{scope.Environment},
+				Permissions:  map[auth.Permission]bool{auth.PermEventsWrite: true},
+			}}
 		}
 		if err := s.keyStore.CreateKey(newKey); err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "key_store_error"})
@@ -156,6 +169,13 @@ func (s *collectorState) handleKeyRevoke(w http.ResponseWriter, r *http.Request)
 	if s.keyStore == nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "key_store_not_configured"})
 		return
+	}
+	if scope, scoped := keyManagementScope(r); scoped {
+		record, err := s.keyStore.FindByKeyID(r.Context(), keyID)
+		if err != nil || !keyBelongsExclusivelyToScope(record, scope) {
+			writeJSON(w, http.StatusNotFound, map[string]any{"error": "key_not_found", "id": keyID})
+			return
+		}
 	}
 	if err := s.keyStore.RevokeKey(keyID); err != nil {
 		writeJSON(w, http.StatusNotFound, map[string]any{"error": "key_not_found", "id": keyID})
@@ -188,6 +208,10 @@ func (s *collectorState) handleKeyRotate(w http.ResponseWriter, r *http.Request)
 		writeJSON(w, http.StatusNotFound, map[string]any{"error": "key_not_found", "id": oldKeyID})
 		return
 	}
+	if scope, scoped := keyManagementScope(r); scoped && !keyBelongsExclusivelyToScope(oldRecord, scope) {
+		writeJSON(w, http.StatusNotFound, map[string]any{"error": "key_not_found", "id": oldKeyID})
+		return
+	}
 	kind := string(oldRecord.Kind)
 	env := "live"
 	if len(oldRecord.AllowedEnvs) > 0 {
@@ -209,12 +233,13 @@ func (s *collectorState) handleKeyRotate(w http.ResponseWriter, r *http.Request)
 	// Store the NEW key FIRST, then revoke old (order matters: never leave zero keys)
 	secretHash := auth.HashSecret(newSecret, s.serverSecret)
 	newKey := &auth.KeyRecord{
-		ID:           newKeyID,
-		KeyID:        newKeyID,
-		SecretHash:   secretHash,
-		Kind:         oldRecord.Kind,
-		Roles:        []auth.Role{auth.RoleIngestServer},
-		AllowedEnvs:  []string{env},
+		ID:              newKeyID,
+		KeyID:           newKeyID,
+		SecretHash:      secretHash,
+		Kind:            oldRecord.Kind,
+		Roles:           append([]auth.Role(nil), oldRecord.Roles...),
+		CollectorGrants: cloneKeyCollectorGrants(oldRecord.CollectorGrants),
+		AllowedEnvs:     append([]string(nil), oldRecord.AllowedEnvs...),
 	}
 	if err := s.keyStore.CreateKey(newKey); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "key_store_error"})
@@ -235,6 +260,47 @@ func (s *collectorState) handleKeyRotate(w http.ResponseWriter, r *http.Request)
 		"rotated":    true,
 		"old_key_id": oldKeyID,
 	})
+}
+
+func keyManagementScope(r *http.Request) (publichttp.AuthorizedCollector, bool) {
+	if strings.TrimSpace(r.PathValue("collector")) == "" {
+		return publichttp.AuthorizedCollector{}, false
+	}
+	scope, _ := publichttp.AuthorizedCollectorFromContext(r.Context())
+	return scope, true
+}
+
+func keyBelongsExclusivelyToScope(record *auth.KeyRecord, scope publichttp.AuthorizedCollector) bool {
+	if record == nil || scope.Name == "" || scope.Environment == "" || len(record.CollectorGrants) == 0 {
+		return false
+	}
+	for _, grant := range record.CollectorGrants {
+		if grant.Collector != scope.Name || len(grant.Environments) == 0 {
+			return false
+		}
+		for _, environment := range grant.Environments {
+			if environment != scope.Environment {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func cloneKeyCollectorGrants(grants []auth.CollectorGrant) []auth.CollectorGrant {
+	cloned := make([]auth.CollectorGrant, len(grants))
+	for i, grant := range grants {
+		permissions := make(map[auth.Permission]bool, len(grant.Permissions))
+		for permission, allowed := range grant.Permissions {
+			permissions[permission] = allowed
+		}
+		cloned[i] = auth.CollectorGrant{
+			Collector:    grant.Collector,
+			Environments: append([]string(nil), grant.Environments...),
+			Permissions:  permissions,
+		}
+	}
+	return cloned
 }
 
 func decodeJSONMap(w http.ResponseWriter, r *http.Request, code string) (map[string]any, bool) {
