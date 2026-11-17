@@ -1,5 +1,11 @@
 # LOZA Event Schema v1
 
+> **DEPRECATED:** This archived v1 event model (`event_type`/`deployment`-based)
+> is kept only for backward reference. The canonical event model is
+> `spec/schemas/json/event.schema.json`, which requires `schema_version`,
+> `event_version`, `event_id`, `timestamp`, `service`, `event`, and `kind`.
+> New events MUST validate against the canonical schema.
+
 This directory contains the v1 schema definitions for LOZA events.
 
 ## Schema Files

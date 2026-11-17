@@ -39,6 +39,18 @@ jobs:
         working-directory: spec
         run: python scripts/check_mirrors.py
 
+  contract-integrity-check:
+    name: Verify spec contract refs, docs, and registry integrity
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Check spec contract
+        working-directory: spec
+        run: python scripts/check_spec_contract.py
+
   conformance-check:
     name: Verify grouped SDK conformance
     runs-on: ubuntu-latest

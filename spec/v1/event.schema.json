@@ -1,6 +1,7 @@
 {
   "title": "LOZA Event Schema v1",
-  "description": "Canonical event schema for LOZA observability system",
+  "description": "Deprecated archived v1 event schema. Canonical: spec/schemas/json/event.schema.json",
+  "x-loza-deprecated": true,
   "type": "object",
   "required": [
     "event_id",

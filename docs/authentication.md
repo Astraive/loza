@@ -28,7 +28,7 @@ lz_{kind}_{env}_{key_id}_{secret}
 
 | Component | Values | Example |
 |-----------|--------|---------|
-| Prefix | `lx` | `lx` |
+| Prefix | `lz_` | `lz_` |
 | Kind | `pub`, `sec`, `local` | `sec` |
 | Env | `live`, `test`, `dev` | `live` |
 | Key ID | Single segment, no underscores | `k2M9aQp` |

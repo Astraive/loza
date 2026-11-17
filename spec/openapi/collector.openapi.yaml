@@ -5,9 +5,11 @@ info:
   description: |
     HTTP ingest contract for LOZA-compatible collectors.
 
-    Authentication is typically enforced via an API key header. HTTP is the
-    canonical wire contract; gRPC and GraphQL surfaces are expected to expose
-    the same readiness and ingest semantics when enabled.
+    Authentication is enforced with the `Authorization: Bearer` header using a
+    LOZA scoped API key (`lz_...`) or an opaque bearer token. The legacy
+    `X-LOZA-API-Key` header is not part of this contract. HTTP is the canonical
+    wire contract; gRPC and GraphQL surfaces are expected to expose the same
+    readiness and ingest semantics when enabled.
 
     This spec covers the public ingest surface. Admin/operational APIs
     (query, DLQ, keys, schema, sinks, tail, replay) are documented
@@ -19,13 +21,8 @@ paths:
       description: |
         Canonical ingest endpoint used by SDKs. Accepts the same payloads
         as /ingest — single event, array, envelope, NDJSON, or gzip.
-      parameters:
-        - name: X-LOZA-API-Key
-          in: header
-          required: false
-          description: API key header when auth is enabled.
-          schema:
-            type: string
+      security:
+        - bearerAuth: []
       requestBody:
         required: true
         content:
@@ -36,7 +33,7 @@ paths:
                 - type: array
                   items:
                     $ref: ../schemas/json/event.schema.json
-                - $ref: ../schemas/json/ingest-envelope.schema.json
+                - $ref: ../schemas/json/ingest.schema.json
           application/x-ndjson:
             schema:
               type: string
@@ -66,12 +63,8 @@ paths:
     delete:
       summary: Delete events
       description: Delete events by tenant, user, or event ID.
-      parameters:
-        - name: X-LOZA-API-Key
-          in: header
-          required: true
-          schema:
-            type: string
+      security:
+        - bearerAuth: []
       responses:
         "200":
           description: deleted
@@ -93,13 +86,8 @@ paths:
 
         Successful responses return a collector response object with
         `accepted`, `rejected`, `invalid`, `deduped`, and per-event `acks`.
-      parameters:
-        - name: X-LOZA-API-Key
-          in: header
-          required: false
-          description: Example API key header when auth is enabled.
-          schema:
-            type: string
+      security:
+        - bearerAuth: []
       requestBody:
         required: true
         content:
@@ -110,7 +98,7 @@ paths:
                 - type: array
                   items:
                     $ref: ../schemas/json/event.schema.json
-                - $ref: ../schemas/json/ingest-envelope.schema.json
+                - $ref: ../schemas/json/ingest.schema.json
           application/x-ndjson:
             schema:
               type: string
@@ -258,12 +246,8 @@ paths:
     post:
       summary: Query stored events
       description: Execute a SQL query against stored events.
-      parameters:
-        - name: X-LOZA-API-Key
-          in: header
-          required: true
-          schema:
-            type: string
+      security:
+        - bearerAuth: []
       requestBody:
         required: true
         content:
@@ -296,12 +280,9 @@ paths:
       description: |
         Compile and execute source LQL against the authorized collector's
         wide-event rows. The request never accepts SQL or a physical table.
+      security:
+        - bearerAuth: []
       parameters:
-        - name: X-LOZA-API-Key
-          in: header
-          required: true
-          schema:
-            type: string
         - name: limit
           in: query
           required: false
@@ -422,12 +403,8 @@ paths:
   /sinks:
     get:
       summary: List configured sinks
-      parameters:
-        - name: X-LOZA-API-Key
-          in: header
-          required: true
-          schema:
-            type: string
+      security:
+        - bearerAuth: []
       responses:
         "200":
           description: sink list
@@ -443,12 +420,8 @@ paths:
   /schema:
     get:
       summary: List schema versions
-      parameters:
-        - name: X-LOZA-API-Key
-          in: header
-          required: true
-          schema:
-            type: string
+      security:
+        - bearerAuth: []
       responses:
         "200":
           description: schema list
@@ -459,12 +432,9 @@ paths:
   /dlq:
     get:
       summary: List dead-letter queue entries
+      security:
+        - bearerAuth: []
       parameters:
-        - name: X-LOZA-API-Key
-          in: header
-          required: true
-          schema:
-            type: string
         - name: limit
           in: query
           schema:
@@ -486,12 +456,8 @@ paths:
   /keys:
     post:
       summary: Create API key
-      parameters:
-        - name: X-LOZA-API-Key
-          in: header
-          required: true
-          schema:
-            type: string
+      security:
+        - bearerAuth: []
       requestBody:
         required: true
         content:
@@ -518,3 +484,14 @@ paths:
                     type: string
         "401":
           description: auth error
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: LOZA scoped API key or opaque bearer token
+      description: |
+        Canonical LOZA authentication. Send `Authorization: Bearer <key>` where
+        `<key>` is a scoped `lz_...` API key or an opaque bearer token. The
+        legacy `X-LOZA-API-Key` header is not used by this contract.

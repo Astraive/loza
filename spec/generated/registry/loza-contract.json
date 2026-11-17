@@ -1,4 +1,5 @@
 {
+  "product_version": "0.3.4",
   "spec_version": "v1",
   "api_version": "v1",
   "event_version": "v1",
@@ -6,7 +7,7 @@
     "event": "spec/schemas/json/event.schema.json",
     "event_strict": "spec/schemas/json/event.strict.schema.json",
     "event_loose": "spec/schemas/json/event.loose.schema.json",
-    "ingest_envelope": "spec/schemas/json/ingest-envelope.schema.json",
+    "ingest_envelope": "spec/schemas/json/ingest.schema.json",
     "collector_response": "spec/schemas/json/collector-response.schema.json"
   },
   "required_fields": [
@@ -20,18 +21,25 @@
   ],
   "allowed_top_level_fields": [
     "attrs",
+    "checkpoints",
+    "collector",
     "delivery_attempts",
     "deployment",
     "duration_ms",
     "environment",
     "error",
+    "errors",
     "event",
     "event_id",
     "event_state",
     "event_version",
+    "finished_at",
+    "groups",
     "http",
+    "incident_id",
     "kind",
     "level",
+    "links",
     "message",
     "method",
     "organization",
@@ -40,16 +48,24 @@
     "partial_reason",
     "path",
     "pii",
+    "processes",
+    "redaction",
+    "release",
     "request_id",
     "resource",
     "route",
+    "sampling",
     "schema_version",
+    "sdk",
     "service",
     "source",
     "span_id",
+    "started_at",
     "status_code",
     "tenant",
+    "timers",
     "timestamp",
+    "trace_flags",
     "trace_id",
     "user",
     "version",
@@ -57,18 +73,25 @@
   ],
   "canonical_fields": [
     "attrs",
+    "checkpoints",
+    "collector",
     "delivery_attempts",
     "deployment",
     "duration_ms",
     "environment",
     "error",
+    "errors",
     "event",
     "event_id",
     "event_state",
     "event_version",
+    "finished_at",
+    "groups",
     "http",
+    "incident_id",
     "kind",
     "level",
+    "links",
     "message",
     "method",
     "organization",
@@ -77,16 +100,24 @@
     "partial_reason",
     "path",
     "pii",
+    "processes",
+    "redaction",
+    "release",
     "request_id",
     "resource",
     "route",
+    "sampling",
     "schema_version",
+    "sdk",
     "service",
     "source",
     "span_id",
+    "started_at",
     "status_code",
     "tenant",
+    "timers",
     "timestamp",
+    "trace_flags",
     "trace_id",
     "user",
     "version",
@@ -107,11 +138,14 @@
       "cli",
       "cron",
       "log",
-      "checkpoint"
+      "checkpoint",
+      "agent",
+      "ai"
     ],
     "levels": [
       "debug",
       "info",
+      "notice",
       "warn",
       "error",
       "fatal"
@@ -119,11 +153,14 @@
     "outcomes": [
       "success",
       "error",
-      "timeout",
-      "cancelled",
-      "rejected",
-      "abandoned",
       "partial",
+      "abandoned",
+      "retried",
+      "cancelled",
+      "timeout",
+      "skipped",
+      "rejected",
+      "quarantined",
       "unknown"
     ],
     "partial_reasons": [
@@ -139,6 +176,11 @@
       "finished",
       "emitting",
       "emitted",
+      "invalid",
+      "dropped",
+      "emit_failed",
+      "spooled",
+      "dlq_written",
       "failed_validation",
       "delivery_failed"
     ],
@@ -153,12 +195,14 @@
     "accepted",
     "partial",
     "rejected",
-    "invalid"
+    "invalid",
+    "quarantined"
   ],
   "collector_ack_statuses": [
     "accepted",
     "rejected",
-    "invalid"
+    "invalid",
+    "quarantined"
   ],
   "aliases": {
     "event_type": "event"
@@ -184,11 +228,45 @@
     "normalize_aliases": true
   },
   "validation_modes": {
+    "off": {
+      "name": "off",
+      "description": "Accept everything, still normalize payload",
+      "accept_all": true,
+      "normalize": true,
+      "validate": false,
+      "reject_on_failure": false
+    },
+    "warn": {
+      "name": "warn",
+      "description": "Accept and report schema issues as warnings",
+      "accept_all": true,
+      "normalize": true,
+      "validate": true,
+      "reject_on_failure": false
+    },
+    "enforce": {
+      "name": "enforce",
+      "description": "Reject invalid events, accept valid ones only",
+      "accept_all": false,
+      "normalize": true,
+      "validate": true,
+      "reject_on_failure": true
+    },
+    "quarantine": {
+      "name": "quarantine",
+      "description": "Store invalid events separately in quarantine, accept valid ones",
+      "accept_all": false,
+      "normalize": true,
+      "validate": true,
+      "reject_on_failure": false,
+      "quarantine_on_failure": true
+    },
     "strict": {
       "name": "strict",
       "description": "Reject unknown fields, aliases, and enforce all constraints",
       "allow_aliases": false,
-      "allow_unknown_top_level_fields": false
+      "allow_unknown_top_level_fields": false,
+      "reject_on_failure": true
     },
     "loose": {
       "name": "loose",
