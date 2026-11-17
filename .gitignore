@@ -133,9 +133,9 @@ target/
 # =============================================================================
 # Generated protobuf / generated code
 # =============================================================================
-# Ignore generated .pb.go files but track go.mod/go.sum for CI
-*.pb.go
-*_grpc.pb.go
+# Generated Go protobuf code under gen/go/loza/core is intentionally committed
+# so a fresh clone can build collector and cortex without running codegen.
+# Do not re-add *.pb.go / *_grpc.pb.go ignore rules here.
 
 # =============================================================================
 # Local / experimental app
