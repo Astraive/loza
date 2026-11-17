@@ -54,7 +54,7 @@ curl -fsSL https://raw.githubusercontent.com/Astraive/loza/main/cli/install/inst
 irm https://raw.githubusercontent.com/Astraive/loza/main/cli/install/install.ps1 | iex
 ```
 
-For offline or reproducible installation, download the release archive and its checksum, verify the checksum, and install the matching artifact. Do not execute an unreviewed remote installer in a restricted environment.
+Both installers restrict downloads to HTTPS release assets from the official `astraive/loza` repository and verify the archive's SHA-256 against the `<asset>.sha256` sidecar published with the release before installing. They fail closed on a missing, malformed, mismatched, or wrong-asset checksum, on a non-HTTPS/non-GitHub URL, and on a `LOZA_REPO` override that does not name the official repository. For offline or reproducible installation, download the release archive and its checksum from the release page, verify the checksum (for example, `sha256sum -c loza_<version>_<os>_<arch>.tar.gz.sha256`), and install the matching artifact. Do not execute an unreviewed remote installer in a restricted environment.
 
 ## First-use sequence
 
