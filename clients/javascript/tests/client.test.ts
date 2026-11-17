@@ -143,6 +143,32 @@ test('rejects invalid endpoint and authentication configurations', () => {
   }
 });
 
+test('rejects credentials sent as Bearer over plaintext HTTP to non-local endpoints', () => {
+  const insecureConfigurations = [
+    { endpoint: 'http://remote.example', collector: 'demo', apiKey: 'secret' },
+    { endpoint: 'http://203.0.113.10', collector: 'demo', apiKey: 'secret' },
+    { endpoint: 'http://remote.example', collector: 'demo', apiKey: 'secret', username: 'user', password: 'pass' },
+  ];
+  for (const config of insecureConfigurations) {
+    assert.throws(() => new Client(config), error => error instanceof QueryError && error.category === ErrorCategory.InvalidConfiguration);
+  }
+});
+
+test('allows API-key auth over plaintext HTTP only for localhost endpoints', async () => {
+  let authorization = '';
+  const client = new Client({
+    endpoint: 'http://127.0.0.1:9308',
+    collector: 'demo',
+    apiKey: 'secret',
+    fetch: async (_url, init) => {
+      authorization = (init.headers as Record<string, string>).Authorization;
+      return new Response(JSON.stringify({ columns: [], rows: [] }));
+    },
+  });
+  await client.query('from events');
+  assert.equal(authorization, 'Bearer secret');
+});
+
 test('rejects an empty query source before making a request', async () => {
   const client = new Client({ endpoint: 'http://localhost', collector: 'demo', fetch: async () => {
     throw new Error('request should not be made');

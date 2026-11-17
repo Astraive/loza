@@ -154,8 +154,8 @@ function resolveConfig(input: ConnectionConfig): ResolvedConfig {
   if (username && !password && !username.startsWith('lz_pub_')) {
     throw new QueryError('invalid LQL connection configuration: basic username requires a password', ErrorCategory.InvalidConfiguration);
   }
-  if (username && !apiKey && endpointURL.protocol === 'http:' && !isLocalhost(endpointURL.hostname)) {
-    throw new QueryError('invalid LQL connection configuration: basic authentication requires TLS', ErrorCategory.InvalidConfiguration);
+  if ((apiKey || username) && endpointURL.protocol === 'http:' && !isLocalhost(endpointURL.hostname)) {
+    throw new QueryError('invalid LQL connection configuration: credentials require TLS', ErrorCategory.InvalidConfiguration);
   }
   return {
     endpoint: endpoint.replace(/\/$/, ''), collector, apiKey, username, password, env, service,
