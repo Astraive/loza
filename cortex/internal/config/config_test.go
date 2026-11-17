@@ -332,6 +332,63 @@ func TestValidate(t *testing.T) {
 	}
 }
 
+func TestDefaultPostgresSSLModeIsSecure(t *testing.T) {
+	if got := defaultConfig().Storage.PostgreSQL.SSLMode; got != "require" {
+		t.Fatalf("default postgres ssl_mode = %q, want %q", got, "require")
+	}
+}
+
+func TestValidatePostgresSSLMode(t *testing.T) {
+	newPostgresConfig := func(host, sslMode string) Config {
+		cfg := *defaultConfig()
+		cfg.Storage.Backend = "postgres"
+		cfg.Storage.PostgreSQL.Host = host
+		cfg.Storage.PostgreSQL.SSLMode = sslMode
+		return cfg
+	}
+
+	tests := []struct {
+		name     string
+		host     string
+		mode     string
+		wantErr  bool
+		wantMode string
+	}{
+		{name: "require allowed for remote host", host: "db.example.com", mode: "require", wantMode: "require"},
+		{name: "verify-full allowed for remote host", host: "db.example.com", mode: "verify-full", wantMode: "verify-full"},
+		{name: "verify-ca allowed for remote host", host: "db.example.com", mode: "verify-ca", wantMode: "verify-ca"},
+		{name: "disable rejected for remote host", host: "db.example.com", mode: "disable", wantErr: true},
+		{name: "allow rejected for remote host", host: "db.example.com", mode: "allow", wantErr: true},
+		{name: "prefer rejected for remote host", host: "db.example.com", mode: "prefer", wantErr: true},
+		{name: "disable rejected for remote IP", host: "10.0.0.5", mode: "disable", wantErr: true},
+		{name: "disable allowed for localhost", host: "localhost", mode: "disable", wantMode: "disable"},
+		{name: "disable allowed for loopback IP", host: "127.0.0.1", mode: "disable", wantMode: "disable"},
+		{name: "disable allowed for local container service", host: "postgres", mode: "disable", wantMode: "disable"},
+		{name: "unknown mode rejected", host: "localhost", mode: "bogus", wantErr: true},
+		{name: "empty mode normalized to require", host: "db.example.com", mode: "", wantMode: "require"},
+		{name: "mode normalized to lowercase", host: "db.example.com", mode: "Verify-Full", wantMode: "verify-full"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := newPostgresConfig(tc.host, tc.mode)
+			err := cfg.Validate()
+			if tc.wantErr {
+				if err == nil {
+					t.Fatal("expected validation error")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected validation error: %v", err)
+			}
+			if cfg.Storage.PostgreSQL.SSLMode != tc.wantMode {
+				t.Fatalf("ssl_mode = %q, want %q", cfg.Storage.PostgreSQL.SSLMode, tc.wantMode)
+			}
+		})
+	}
+}
+
 func TestLoadDefaultPipeline(t *testing.T) {
 	defaults := writeBundledDefaults(t)
 	useBundledDefaults(t, defaults)

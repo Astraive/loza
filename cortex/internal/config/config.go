@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -560,6 +561,19 @@ func parseAPIKeys(raw string) []APIKey {
 	return keys
 }
 
+// isLocalPostgresHost reports whether a PostgreSQL host refers to the local
+// machine or a local container development service. Loopback addresses and
+// single-label hostnames (the usual Docker Compose / Kubernetes service names)
+// are considered local; FQDNs and remote IPs are not. Plaintext SSL modes are
+// only permitted for these hosts.
+func isLocalPostgresHost(host string) bool {
+	host = strings.ToLower(strings.TrimSpace(host))
+	if ip := net.ParseIP(strings.Trim(host, "[]")); ip != nil {
+		return ip.IsLoopback()
+	}
+	return !strings.ContainsAny(host, ".:")
+}
+
 // Validate validates the configuration
 func (c *Config) Validate() error {
 	// Validate server config
@@ -608,6 +622,24 @@ func (c *Config) Validate() error {
 		}
 		if c.Storage.PostgreSQL.MaxConnections > 100 {
 			return fmt.Errorf("postgres max_connections must not exceed 100")
+		}
+
+		// SECURITY: plaintext PostgreSQL connections must never be the default,
+		// and are only acceptable for local/loopback development databases.
+		mode := strings.ToLower(strings.TrimSpace(c.Storage.PostgreSQL.SSLMode))
+		if mode == "" {
+			mode = "require"
+		}
+		c.Storage.PostgreSQL.SSLMode = mode
+		switch mode {
+		case "require", "verify-ca", "verify-full":
+			// Encrypted transports are always acceptable.
+		case "disable", "allow", "prefer":
+			if !isLocalPostgresHost(c.Storage.PostgreSQL.Host) {
+				return fmt.Errorf("postgres ssl_mode %q is not allowed for non-local host %q (use 'require', 'verify-ca', or 'verify-full')", mode, c.Storage.PostgreSQL.Host)
+			}
+		default:
+			return fmt.Errorf("invalid postgres ssl_mode: %s (must be 'disable', 'allow', 'prefer', 'require', 'verify-ca', or 'verify-full')", c.Storage.PostgreSQL.SSLMode)
 		}
 	}
 
@@ -872,7 +904,7 @@ func defaultConfig() *Config {
 				Database:        "cortex",
 				User:            "cortex",
 				Password:        "",
-				SSLMode:         "disable",
+				SSLMode:         "require",
 				MaxConnections:  50,
 				MaxIdleConns:    10,
 				ConnMaxLifetime: 1 * time.Hour,
