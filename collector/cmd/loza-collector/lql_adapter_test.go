@@ -353,5 +353,135 @@ func TestLQLRequestLockedRejectsMismatchedReply(t *testing.T) {
 	response, err := compiler.requestLocked(ctx, "compile", map[string]any{})
 	if err == nil {
 		t.Fatalf("expected mismatched-id reply to be rejected, got response %+v", response)
+const lqlMockServerEnv = "LOZA_LQL_MOCK_STDIO"
+
+// init turns the test binary into a minimal LQL stdio subprocess when it is
+// re-executed with lqlMockServerEnv set. It speaks just enough of the protocol
+// for the adapter: a handshake, an immediately answered "compile" request, and
+// a deliberately slow "slow" request used to exercise cancellation.
+func init() {
+	if os.Getenv(lqlMockServerEnv) != "1" || len(os.Args) < 3 || os.Args[1] != "serve" || os.Args[2] != "--stdio" {
+		return
+	}
+	runLQLMockStdioServer()
+	os.Exit(0)
+}
+
+func runLQLMockStdioServer() {
+	scanner := bufio.NewScanner(os.Stdin)
+	writer := bufio.NewWriter(os.Stdout)
+	for scanner.Scan() {
+		var req struct {
+			ID     int64  `json:"id"`
+			Method string `json:"method"`
+			Params struct {
+				Query string `json:"query"`
+			} `json:"params"`
+		}
+		if err := json.Unmarshal(scanner.Bytes(), &req); err != nil {
+			continue
+		}
+		var result any
+		switch req.Method {
+		case "handshake":
+			result = map[string]any{
+				"compiler_version": "0.5.1",
+				"language_version": "0.1",
+				"protocol_version": 1,
+			}
+		case "slow":
+			time.Sleep(300 * time.Millisecond)
+			result = map[string]any{"plan": lqlMockPlan("slow")}
+		default:
+			result = map[string]any{"plan": lqlMockPlan(req.Params.Query)}
+		}
+		line, _ := json.Marshal(map[string]any{"id": req.ID, "result": result})
+		_, _ = writer.Write(line)
+		_ = writer.WriteByte('\n')
+		_ = writer.Flush()
+	}
+}
+
+func lqlMockPlan(query string) map[string]any {
+	return map[string]any{
+		"sql":           "SELECT '" + query + "'",
+		"parameters":    []any{},
+		"output_schema": []any{},
+	}
+}
+
+// TestLQLStdioCompilerCancelThenTwoRequests verifies that cancelling one
+// request cannot desync the stdio protocol: the persistent reader drains the
+// stale response, and two subsequent requests each get their own response.
+func TestLQLStdioCompilerCancelThenTwoRequests(t *testing.T) {
+	t.Setenv(lqlMockServerEnv, "1")
+	binary, err := filepath.Abs(os.Args[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	compiler, err := newLQLStdioCompiler(context.Background(), testLQLConfig(binary))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer compiler.Close(context.Background())
+
+	// A single reader owns stdout for the lifetime of the subprocess.
+	if got := compiler.activeReaders.Load(); got != 1 {
+		t.Fatalf("expected one stdout reader after handshake, got %d", got)
+	}
+
+	// Cancel a request while the mock subprocess is still producing it.
+	compiler.mu.Lock()
+	slowCtx, cancelSlow := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	_, err = compiler.requestLocked(slowCtx, "slow", map[string]any{"query": "cancelled"})
+	compiler.mu.Unlock()
+	cancelSlow()
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("expected cancelled request to time out, got %v", err)
+	}
+
+	compiler.pendingMu.Lock()
+	pendingAfterCancel := len(compiler.pending)
+	compiler.pendingMu.Unlock()
+	if pendingAfterCancel != 0 {
+		t.Fatalf("expected no pending requests after cancel, got %d", pendingAfterCancel)
+	}
+
+	// Let the stale response arrive; the reader must drain and discard it, and
+	// must remain alive rather than leaking a blocked per-request goroutine.
+	time.Sleep(400 * time.Millisecond)
+	if got := compiler.activeReaders.Load(); got != 1 {
+		t.Fatalf("expected one persistent reader after cancellation, got %d", got)
+	}
+	compiler.mu.Lock()
+	readerDone := compiler.readerDone
+	compiler.mu.Unlock()
+	select {
+	case <-readerDone:
+		t.Fatal("stdout reader stopped after a cancelled request")
+	default:
+	}
+
+	// Two follow-up requests must each receive their own response.
+	for _, query := range []string{"alpha", "beta"} {
+		compiler.mu.Lock()
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		resp, err := compiler.requestLocked(ctx, "compile", map[string]any{"query": query})
+		compiler.mu.Unlock()
+		cancel()
+		if err != nil {
+			t.Fatalf("request %q after cancellation: %v", query, err)
+		}
+		var body struct {
+			Plan struct {
+				SQL string `json:"sql"`
+			} `json:"plan"`
+		}
+		if err := json.Unmarshal(resp.Result, &body); err != nil {
+			t.Fatalf("decode response for %q: %v", query, err)
+		}
+		if want := "SELECT '" + query + "'"; body.Plan.SQL != want {
+			t.Fatalf("request %q got SQL %q, want %q (protocol desync)", query, body.Plan.SQL, want)
+		}
 	}
 }
