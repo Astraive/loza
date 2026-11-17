@@ -39,6 +39,8 @@ export function lozaHttpMiddleware(opts: HttpMiddlewareOptions = {}) {
     // is restored once next() and its async children complete.
     runWithEvent(ev, () => next());
 
+    // Install the response hooks before invoking downstream code. A handler
+    // that calls res.end() synchronously inside next() must be intercepted.
     const originalEnd = res.end;
     res.end = function (...args: any[]) {
       const durationMs = Date.now() - startedAt;
@@ -62,5 +64,9 @@ export function lozaHttpMiddleware(opts: HttpMiddlewareOptions = {}) {
       finishAndEmit(() => loza.finishError(ev, err));
       throw err;
     }
+    // Scope downstream request handling to this event with run(); the context
+    // is restored once next() and its async children complete. This runs only
+    // after the res.end / error hooks above are in place.
+    runWithEvent(ev, () => next());
   };
 }

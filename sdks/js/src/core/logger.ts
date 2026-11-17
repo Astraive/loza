@@ -483,7 +483,9 @@ export function fromRequest(req: any, logger?: Logger): Event {
 export async function run(ctx: Event, fn: () => void | Promise<void>, ...finishAttrs: Attr[]): Promise<string | null> {
   const l = getDefault();
   try {
-    await fn();
+    // Scope the callback so downstream work sees ctx via getEvent(), and the
+    // context is restored automatically when fn (and its async children) end.
+    await runWithEvent(ctx, () => fn());
     if (!ctx.getEventState().startsWith('finished')) {
       l.finish(ctx, 'success', ...finishAttrs);
     }

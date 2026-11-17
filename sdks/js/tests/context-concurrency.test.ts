@@ -5,6 +5,8 @@ import {
   getEvent, runWithEvent, withoutEvent,
 } from '../src/core/context.ts';
 import { lozaHttpMiddleware } from '../src/middleware/http.ts';
+import { lozaMiddleware } from '../src/middleware/express.ts';
+import { run } from '../src/core/logger.ts';
 
 function makeEvent(name: string): Event {
   return new Event({ event: name, service: 'svc', requestId: name }, 'svc', 'test');
@@ -95,6 +97,54 @@ describe('context concurrency and lifecycle', () => {
     // past the scoped downstream call.
     assert.equal(res.end('ok'), 'ended');
     assert.equal(eventAtResponseEnd, undefined);
+    assert.equal(getEvent(), undefined);
+  });
+
+  it('finishes and emits when res.end() is called synchronously inside next()', () => {
+    // Regression: the res.end override / error handler must be installed
+    // before next() runs, otherwise a synchronous res.end() bypasses them and
+    // the event is never finished or emitted.
+    const factories = [
+      () => lozaHttpMiddleware({ service: 'edge' }),
+      () => lozaMiddleware({ service: 'edge' }),
+    ];
+
+    for (const makeMiddleware of factories) {
+      const middleware = makeMiddleware();
+      let downstreamEvent: Event | undefined;
+      let ended = false;
+
+      const res = {
+        statusCode: 200,
+        end() { ended = true; return 'ended'; },
+        on() {},
+      };
+      const req = { method: 'GET', url: '/sync', path: '/sync', headers: {}, socket: {} };
+
+      middleware(req, res, () => {
+        downstreamEvent = getEvent();
+        // Synchronous response inside the downstream handler.
+        res.end('done');
+      });
+
+      assert.equal(ended, true);
+      assert.ok(downstreamEvent);
+      assert.equal(downstreamEvent?.event, 'GET /sync');
+      // finish() + emit() ran through the installed res.end override.
+      const state = downstreamEvent!.getEventState();
+      assert.ok(
+        state === 'emitted' || state === 'emitting',
+        `expected the event to be finished/emitted, got state "${state}"`,
+      );
+      assert.equal(getEvent(), undefined);
+    }
+  });
+
+  it('module-level run() scopes context to its callback', async () => {
+    const ev = makeEvent('module-run');
+    await run(ev, () => {
+      assert.equal(getEvent(), ev);
+    });
     assert.equal(getEvent(), undefined);
   });
 });
