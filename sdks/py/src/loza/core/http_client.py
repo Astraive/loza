@@ -9,7 +9,7 @@ from email.utils import parsedate_to_datetime
 from ipaddress import ip_address
 from os import getenv
 from typing import Any, Iterable
-from urllib.parse import urlencode, urlparse
+from urllib.parse import quote, urlencode, urlparse
 from urllib.error import HTTPError, URLError
 from urllib.request import HTTPRedirectHandler, Request, build_opener, urlopen
 from ..generated.spec_contract import (
@@ -394,6 +394,16 @@ def NewRoundTripper(base=None):
 # ── CollectorClient API extensions ──────────────────────────────────────────
 
 
+def _quote_segment(value: Any) -> str:
+    """Percent-encode a single dynamic URL path segment.
+
+    Caller-supplied identifiers must not be able to rewrite the request path
+    or inject query parameters/fragments. Encoding each segment with an empty
+    ``safe`` set neutralizes ``/``, ``?`` and ``#`` (and other reserved bytes).
+    """
+    return quote(str(value), safe="")
+
+
 def _collector_request(
     client: CollectorClient,
     method: str,
@@ -434,13 +444,13 @@ def _collector_tail(self, **params):
 def _collector_delete(self, **params):
     event_id = params.get("event_id") or params.get("id")
     if event_id:
-        return _collector_request(self, "DELETE", f"/events/{event_id}")
+        return _collector_request(self, "DELETE", f"/events/{_quote_segment(event_id)}")
     tenant_id = params.get("tenant_id")
     if tenant_id:
-        return _collector_request(self, "DELETE", f"/events/by-tenant/{tenant_id}")
+        return _collector_request(self, "DELETE", f"/events/by-tenant/{_quote_segment(tenant_id)}")
     user_id = params.get("user_id")
     if user_id:
-        return _collector_request(self, "DELETE", f"/events/by-user/{user_id}")
+        return _collector_request(self, "DELETE", f"/events/by-user/{_quote_segment(user_id)}")
     raise ValueError("delete requires one of: event_id/id, tenant_id, user_id")
 
 
@@ -453,11 +463,11 @@ def _collector_dlq_list(self, **params):
 
 
 def _collector_dlq_read(self, dlq_id):
-    return _collector_request(self, "GET", f"/dlq/{dlq_id}")
+    return _collector_request(self, "GET", f"/dlq/{_quote_segment(dlq_id)}")
 
 
 def _collector_dlq_replay(self, dlq_id):
-    return _collector_request(self, "POST", f"/dlq/{dlq_id}/replay")
+    return _collector_request(self, "POST", f"/dlq/{_quote_segment(dlq_id)}/replay")
 
 
 def _collector_keys_create(self, **params):
@@ -465,11 +475,11 @@ def _collector_keys_create(self, **params):
 
 
 def _collector_keys_revoke(self, key_id):
-    return _collector_request(self, "DELETE", f"/keys/{key_id}")
+    return _collector_request(self, "DELETE", f"/keys/{_quote_segment(key_id)}")
 
 
 def _collector_keys_rotate(self, key_id):
-    return _collector_request(self, "POST", f"/keys/{key_id}/rotate")
+    return _collector_request(self, "POST", f"/keys/{_quote_segment(key_id)}/rotate")
 
 
 def _collector_sinks_list(self):
@@ -477,7 +487,7 @@ def _collector_sinks_list(self):
 
 
 def _collector_sinks_test(self, name):
-    return _collector_request(self, "POST", f"/sinks/{name}/test")
+    return _collector_request(self, "POST", f"/sinks/{_quote_segment(name)}/test")
 
 
 def _collector_policy_validate(self, policy):
