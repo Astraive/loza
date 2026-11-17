@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"sort"
 	"strings"
@@ -164,6 +165,28 @@ func (a *Auth) AuthenticateToken(providedKey string) *AuthResult {
 	return result
 }
 
+// roleHierarchy is the canonical set of recognized roles and their authorization
+// levels. A higher level inherits every permission of the levels below it.
+var roleHierarchy = map[string]int{
+	"reader": 1,
+	"writer": 2,
+	"admin":  3,
+}
+
+// RoleLevel returns the authorization level for role. The boolean result is
+// false when role is not recognized; callers must treat unknown roles as
+// unauthorized (fail closed).
+func RoleLevel(role string) (int, bool) {
+	level, ok := roleHierarchy[role]
+	return level, ok
+}
+
+// IsValidRole reports whether role is a recognized role name.
+func IsValidRole(role string) bool {
+	_, ok := roleHierarchy[role]
+	return ok
+}
+
 func (a *Auth) authorizeRole(r *http.Request, requiredRole string) bool {
 	return a.AuthorizeRole(GetAuthResult(r.Context()), requiredRole)
 }
@@ -175,10 +198,13 @@ func (a *Auth) AuthorizeRole(result *AuthResult, requiredRole string) bool {
 		return false
 	}
 
-	roleHierarchy := map[string]int{
-		"reader": 1,
-		"writer": 2,
-		"admin":  3,
+	requiredLevel, requiredOK := RoleLevel(requiredRole)
+	currentLevel, currentOK := RoleLevel(result.Role)
+	if !requiredOK || !currentOK {
+		// Fail closed: an unknown role on either side denies access. The old
+		// zero-value lookup mapped unknown roles to level 0, which silently
+		// granted access whenever the required role was also unrecognized.
+		return false
 	}
 
 	requiredLevel, ok := roleHierarchy[requiredRole]
@@ -217,6 +243,11 @@ func (a *Auth) HandlerFunc(next http.HandlerFunc) http.HandlerFunc {
 }
 
 func (a *Auth) RequireRole(role string) func(http.Handler) http.Handler {
+	// Fail fast at route-registration time so a misconfigured required role
+	// cannot silently degrade into an authorization bypass at request time.
+	if !IsValidRole(role) {
+		panic(fmt.Sprintf("middleware: invalid required role %q (must be 'reader', 'writer', or 'admin')", role))
+	}
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if !a.enabled {
