@@ -119,6 +119,48 @@ func TestRoundTripperCheckpointsIncludeHTTPAttrs(t *testing.T) {
 	}
 }
 
+func TestRoundTripperCheckpointURLStripsSensitiveComponents(t *testing.T) {
+	cfg := Test()
+	l, err := New(cfg)
+	if err != nil {
+		t.Fatalf("new logger: %v", err)
+	}
+	prev := Default()
+	SetDefault(l)
+	defer SetDefault(prev)
+
+	ctx := Default().StartEvent(context.Background(), Params{Event: "http.client.test"})
+	// Userinfo and query parameters both carry secrets that must not be
+	// captured by the "http.client.url" telemetry attribute.
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
+		"https://user:secret@example.com/api/v1?api_key=SUPERSECRET123&token=abc", nil)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+
+	if _, err := NewRoundTripper(&captureRoundTripper{}).RoundTrip(req); err != nil {
+		t.Fatalf("roundtrip: %v", err)
+	}
+
+	started := mustCheckpointByName(t, ctx, "http.client.started")
+	got, ok := attrValue(started.Attrs, "http.client.url")
+	if !ok {
+		t.Fatalf("expected checkpoint url attr")
+	}
+	gotURL, ok := got.(string)
+	if !ok {
+		t.Fatalf("expected string url attr, got %T", got)
+	}
+	if want := "https://example.com/api/v1"; gotURL != want {
+		t.Fatalf("telemetry url = %q, want %q", gotURL, want)
+	}
+	for _, secret := range []string{"user", "secret", "api_key", "SUPERSECRET123", "token", "abc"} {
+		if strings.Contains(gotURL, secret) {
+			t.Fatalf("telemetry url %q leaked sensitive component %q", gotURL, secret)
+		}
+	}
+}
+
 func TestRoundTripperCheckpointsIncludeErrorAttr(t *testing.T) {
 	cfg := Test()
 	l, err := New(cfg)
