@@ -80,9 +80,9 @@ class ConnectionConfig:
     dsn: str = ""
     endpoint: str = ""
     collector: str = ""
-    api_key: str = ""
+    api_key: str = field(default="", repr=False)
     username: str = ""
-    password: str = ""
+    password: str = field(default="", repr=False)
     env: str = ""
     service: str = ""
     timeout: float = 30.0
@@ -93,9 +93,9 @@ class ConnectionConfig:
 class Client:
     _endpoint: str
     _collector: str
-    _api_key: str = ""
+    _api_key: str = field(default="", repr=False)
     _username: str = ""
-    _password: str = ""
+    _password: str = field(default="", repr=False)
     _env: str = ""
     _service: str = ""
     _timeout: float = 30.0

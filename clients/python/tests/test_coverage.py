@@ -149,6 +149,46 @@ def test_client_configuration_overrides_dsn_values() -> None:
     assert client._password == "config-pass"
 
 
+def test_client_repr_redacts_credentials() -> None:
+    api_key = "SECRET-API-KEY-DO-NOT-LOG"
+    password = "SECRET-PASSWORD-DO-NOT-LOG"
+    client = Client(
+        ConnectionConfig(
+            endpoint="https://collector.example",
+            collector="demo",
+            api_key=api_key,
+            username="lz_pub_user",
+            password=password,
+        )
+    )
+
+    rendered = repr(client)
+
+    assert api_key not in rendered
+    assert password not in rendered
+    assert "collector.example" in rendered
+    assert "demo" in rendered
+
+
+def test_connection_config_repr_redacts_credentials() -> None:
+    api_key = "SECRET-API-KEY-DO-NOT-LOG"
+    password = "SECRET-PASSWORD-DO-NOT-LOG"
+    config = ConnectionConfig(
+        endpoint="https://collector.example",
+        collector="demo",
+        api_key=api_key,
+        username="lz_pub_user",
+        password=password,
+    )
+
+    rendered = repr(config)
+
+    assert api_key not in rendered
+    assert password not in rendered
+    assert "collector.example" in rendered
+    assert "demo" in rendered
+
+
 def test_invalid_dsn_is_wrapped_as_configuration_error() -> None:
     with pytest.raises(QueryError) as caught:
         Client(ConnectionConfig(dsn="not-a-loza-dsn"))
