@@ -1146,8 +1146,13 @@ func Test() Config       { return core.Test() }
 // ParseLevel parses a level string.
 func ParseLevel(s string) Level { return core.ParseLevel(s) }
 
-// LoadFromEnv loads configuration from environment variables.
+// LoadFromEnv loads configuration from environment variables. Parse errors are
+// ignored; use LoadFromEnvE to surface configuration errors to callers.
 func LoadFromEnv(base Config) Config { return core.LoadFromEnv(base) }
+
+// LoadFromEnvE loads configuration from environment variables and returns any
+// parse failures so callers can surface misconfiguration.
+func LoadFromEnvE(base Config) (Config, error) { return core.LoadFromEnvE(base) }
 
 // ── Config options ─────────────────────────────────────────────────────────────
 

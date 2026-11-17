@@ -649,6 +649,7 @@ func (l *Logger) EmitEventWithContext(ctx context.Context, ev *Event) error {
 			Event:   deliverEv,
 			Level:   int(ev.Level),
 			IsError: ev.Error != nil || ev.Level >= LevelError,
+			Ctx:     ctx,
 		}
 		var enqueued bool
 		enqueued, err = pipeline.Enqueue(item)
@@ -663,18 +664,18 @@ func (l *Logger) EmitEventWithContext(ctx context.Context, ev *Event) error {
 			ev.markDeliveryFailed()
 			notifyDeliveryFailed(errors.New("async enqueue rejected"))
 		}
-		} else {
-			failed := false
-			delivered := len(cfg.Sinks) == 0
-			for _, s := range cfg.Sinks {
-				if werr := s.WriteEvent(ctx, buf, deliverEv); werr != nil {
-					notifyError(werr)
-					failed = true
-					err = werr
-				} else {
-					delivered = true
-				}
+	} else {
+		failed := false
+		delivered := len(cfg.Sinks) == 0
+		for _, s := range cfg.Sinks {
+			if werr := s.WriteEvent(ctx, buf, deliverEv); werr != nil {
+				notifyError(werr)
+				failed = true
+				err = werr
+			} else {
+				delivered = true
 			}
+		}
 		if failed && cfg.FallbackSink != nil {
 			if ferr := cfg.FallbackSink.WriteEvent(ctx, buf, deliverEv); ferr != nil {
 				notifyError(ferr)
@@ -801,13 +802,18 @@ func (l *Logger) Shutdown(ctx context.Context) error {
 	l.mu.RUnlock()
 
 	if pipeline != nil {
-		if err := pipeline.Shutdown(ctx); err != nil {
-			return err
-		}
+		// The pipeline owns (and closes on every shutdown path, including
+		// errors) the same sinks, so closing them here again would double-close.
+		return pipeline.Shutdown(ctx)
 	}
 	var errs []error
 	for _, s := range sinks {
 		if err := s.Close(ctx); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	if l.cfg.FallbackSink != nil {
+		if err := l.cfg.FallbackSink.Close(ctx); err != nil {
 			errs = append(errs, err)
 		}
 	}
