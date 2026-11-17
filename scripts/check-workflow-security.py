@@ -4,8 +4,9 @@
 This is a small, dependency-free enforcement check for the two rules that
 matter most for supply-chain safety in GitHub Actions:
 
-1. Every external ``uses:`` reference must be pinned to a full 40-character
-   commit SHA (local ``./`` reusable workflows are exempt).
+1. Every external ``uses:`` reference must have the form
+   ``<owner>/<repo>@<40-character-sha>`` (local ``./`` reusable workflows are
+   exempt). A bare SHA is not a valid action reference and is rejected.
 2. Every workflow must declare a top-level ``permissions:`` block, and that
    block must not grant any ``write`` scope. Jobs that need write access must
    opt in explicitly with a job-level ``permissions:`` block.
@@ -24,7 +25,9 @@ from pathlib import Path
 WORKFLOWS_DIR = Path(__file__).resolve().parent.parent / ".github" / "workflows"
 
 USES_RE = re.compile(r"^\s*(?:-\s*)?uses:\s*(\S+)")
-SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+PINNED_ACTION_RE = re.compile(
+    r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*@[0-9a-f]{40}$"
+)
 SCOPE_RE = re.compile(r"^\s+([A-Za-z][A-Za-z0-9_-]*):\s*(\S+)")
 WRITE_VALUES = {"write", "all"}
 
@@ -42,12 +45,10 @@ def check_file(text: str, name: str = "<workflow>") -> list[str]:
         ref = match.group(1)
         if ref.startswith("./"):
             continue  # local reusable workflow, nothing to pin
-        if SHA_RE.fullmatch(ref):
-            continue  # bare 40-character SHA is already pinned
-        _, sep, version = ref.rpartition("@")
-        if not sep or not SHA_RE.fullmatch(version):
+        if PINNED_ACTION_RE.fullmatch(ref) is None:
             findings.append(
-                f"{name}:{lineno}: action is not pinned to a 40-character SHA: {ref!r}"
+                f"{name}:{lineno}: action must be "
+                f"<owner>/<repo>@<40-character-sha>, got {ref!r}"
             )
 
     # Rule 2: top-level permissions must exist and be read-only.

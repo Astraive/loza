@@ -16,6 +16,8 @@ _MODULE = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(_MODULE)
 check_directory = _MODULE.check_directory
 check_file = _MODULE.check_file
+USES_RE = _MODULE.USES_RE
+PINNED_ACTION_RE = _MODULE.PINNED_ACTION_RE
 
 SHA = "a" * 40
 
@@ -32,7 +34,7 @@ class CheckWorkflowSecurityTests(unittest.TestCase):
             "      - uses: actions/checkout@v4\n"
         )
         findings = check_file(workflow, "test.yml")
-        self.assertTrue(any("not pinned" in finding for finding in findings), findings)
+        self.assertTrue(any("40-character-sha" in f for f in findings), findings)
 
     def test_moving_ref_is_rejected(self) -> None:
         workflow = (
@@ -43,7 +45,33 @@ class CheckWorkflowSecurityTests(unittest.TestCase):
             "    steps:\n"
             "      - uses: dtolnay/rust-toolchain@stable\n"
         )
-        self.assertTrue(any("not pinned" in f for f in check_file(workflow)))
+        self.assertTrue(any("40-character-sha" in f for f in check_file(workflow)))
+
+    def test_bare_sha_is_rejected(self) -> None:
+        # A bare SHA is not a resolvable GitHub Actions reference: the
+        # owner/repo prefix must be present too.
+        workflow = (
+            "permissions:\n"
+            "  contents: read\n"
+            "jobs:\n"
+            "  build:\n"
+            "    steps:\n"
+            f"      - uses: {SHA} # v4\n"
+        )
+        findings = check_file(workflow, "bare.yml")
+        self.assertTrue(any("40-character-sha" in f for f in findings), findings)
+        self.assertTrue(any(SHA in f for f in findings), findings)
+
+    def test_pinned_action_with_subpath_is_accepted(self) -> None:
+        workflow = (
+            "permissions:\n"
+            "  contents: read\n"
+            "jobs:\n"
+            "  build:\n"
+            "    steps:\n"
+            f"      - uses: github/codeql-action/upload-sarif@{SHA} # v4\n"
+        )
+        self.assertEqual(check_file(workflow), [])
 
     def test_pinned_action_is_accepted(self) -> None:
         workflow = (
@@ -104,6 +132,25 @@ class CheckWorkflowSecurityTests(unittest.TestCase):
         directory = Path(__file__).resolve().parent.parent / ".github" / "workflows"
         findings = check_directory(directory)
         self.assertEqual(findings, [], "\n".join(findings))
+
+        # Explicitly assert every external ref keeps its owner/repo prefix so
+        # a bare-SHA regression cannot slip through again.
+        external = []
+        for path in sorted(directory.glob("*.y*ml")):
+            for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+                match = USES_RE.match(line)
+                if match is None:
+                    continue
+                ref = match.group(1)
+                if ref.startswith("./"):
+                    continue
+                external.append((path.name, lineno, ref))
+                self.assertIsNotNone(
+                    PINNED_ACTION_RE.fullmatch(ref),
+                    f"{path.name}:{lineno}: invalid action reference {ref!r}",
+                )
+                self.assertNotRegex(ref, r"^[0-9a-f]{40}$", "bare SHA is not resolvable")
+        self.assertEqual(len(external), 94)
 
 
 if __name__ == "__main__":
