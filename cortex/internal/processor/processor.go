@@ -11,6 +11,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/astraive/loza/cortex/internal/config"
 	"github.com/astraive/loza/cortex/internal/eventconv"
 	"github.com/astraive/loza/cortex/internal/models"
 	"github.com/astraive/loza/cortex/internal/redaction"
@@ -29,12 +30,45 @@ type EventProcessor struct {
 	redactor   *redaction.Redactor
 }
 
+// defaultPIIAllowlist holds the non-sensitive event fields kept readable when
+// PII redaction is enforced. Keeping it in one place makes every ingestion
+// path apply identical redaction semantics.
+var defaultPIIAllowlist = []string{
+	"service", "level", "timestamp", "id", "event_id", "trace_id", "span_id",
+	"incident_id", "environment", "release", "version", "schema_version", "event_version",
+}
+
 func NewEventProcessor(eventStore storage.EventStore, topology storage.TopologyStore, graph storage.GraphStore) *EventProcessor {
 	return &EventProcessor{
 		eventStore: eventStore,
 		topology:   topology,
 		graph:      graph,
+		// A no-op redactor is the safe default: redactor is never nil, and the
+		// configured redactor is always attached through NewConfiguredEventProcessor.
+		redactor: redaction.NewWithConfig(redaction.Config{}),
 	}
+}
+
+// NewConfiguredEventProcessor is the single constructor for production event
+// ingestion. It always attaches a redactor derived from cfg: when redaction is
+// enabled the configured redactor is applied, and when it is disabled a no-op
+// redactor is attached so no path can silently bypass PII redaction.
+func NewConfiguredEventProcessor(eventStore storage.EventStore, topology storage.TopologyStore, graph storage.GraphStore, piiCfg config.PIIRedactionConfig) *EventProcessor {
+	redactCfg := redaction.Config{}
+	if piiCfg.Enabled {
+		redactCfg = redaction.Config{
+			Mode:      redaction.Mode(piiCfg.Mode),
+			Blocklist: piiCfg.Blocklist,
+			Allowlist: piiCfg.Allowlist,
+		}
+		if redactCfg.Mode == "" && len(redactCfg.Blocklist) == 0 {
+			redactCfg.Mode = redaction.ModeEnforce
+		}
+		if len(redactCfg.Allowlist) == 0 {
+			redactCfg.Allowlist = defaultPIIAllowlist
+		}
+	}
+	return NewEventProcessor(eventStore, topology, graph).WithConfigurableRedaction(redactCfg)
 }
 
 // WithRedactor adds PII redaction to the processor.

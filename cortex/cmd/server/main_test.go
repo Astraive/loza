@@ -12,6 +12,7 @@ import (
 	"github.com/astraive/loza/cortex/internal/models"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/test/bufconn"
+	"github.com/astraive/loza/cortex/internal/storage"
 )
 
 type noopBatchProcessor struct{}
@@ -157,5 +158,157 @@ func TestStartGRPCServerClosesChannelOnSetupFailure(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("startGRPCServer did not signal setup failure via channel close")
+type syncTestEventStore struct {
+	saved [][]*models.Event
+}
+
+func (f *syncTestEventStore) Save(context.Context, *models.Event, *storage.LifecycleData) error {
+	return nil
+}
+
+func (f *syncTestEventStore) SaveBatch(_ context.Context, events []*models.Event, _ []*storage.LifecycleData) error {
+	f.saved = append(f.saved, events)
+	return nil
+}
+
+func (*syncTestEventStore) Get(context.Context, string) (*models.Event, error) {
+	return nil, errors.New("not found")
+}
+func (*syncTestEventStore) List(context.Context, int, int) ([]*models.Event, error) {
+	return nil, nil
+}
+func (*syncTestEventStore) FindByTraceID(context.Context, string) ([]*models.Event, error) {
+	return nil, nil
+}
+func (*syncTestEventStore) FindByIncidentID(context.Context, string) ([]*models.Event, error) {
+	return nil, nil
+}
+func (*syncTestEventStore) FindByService(context.Context, string, string, string) ([]*models.Event, error) {
+	return nil, nil
+}
+func (*syncTestEventStore) FindByEventName(context.Context, string, int, int) ([]*models.Event, error) {
+	return nil, nil
+}
+func (*syncTestEventStore) FindByOutcome(context.Context, string, int, int) ([]*models.Event, error) {
+	return nil, nil
+}
+func (*syncTestEventStore) FindByLevel(context.Context, string, int, int) ([]*models.Event, error) {
+	return nil, nil
+}
+func (*syncTestEventStore) FindByDurationRange(context.Context, float64, float64, int, int) ([]*models.Event, error) {
+	return nil, nil
+}
+func (*syncTestEventStore) FindByEnvironment(context.Context, string, int, int) ([]*models.Event, error) {
+	return nil, nil
+}
+func (*syncTestEventStore) FindByRelease(context.Context, string, int, int) ([]*models.Event, error) {
+	return nil, nil
+}
+func (*syncTestEventStore) AverageDuration(context.Context, string, time.Time, time.Time) (float64, error) {
+	return 0, nil
+}
+func (*syncTestEventStore) CountByEventName(context.Context, string, time.Time, time.Time) (map[string]int64, error) {
+	return nil, nil
+}
+func (*syncTestEventStore) CountByOutcome(context.Context, string, time.Time, time.Time) (map[string]int64, error) {
+	return nil, nil
+}
+func (*syncTestEventStore) PercentileDuration(context.Context, string, float64, time.Time, time.Time) (float64, error) {
+	return 0, nil
+}
+func (*syncTestEventStore) DistinctServices(context.Context) ([]string, error) { return nil, nil }
+func (*syncTestEventStore) DistinctEventNames(context.Context) ([]string, error) {
+	return nil, nil
+}
+func (*syncTestEventStore) ListLifecycleSummaries(context.Context, *storage.LifecycleFilter) ([]*models.LifecycleSummary, int, error) {
+	return nil, 0, nil
+}
+
+type syncTestTopologyStore struct{}
+
+func (*syncTestTopologyStore) SaveAlias(context.Context, *models.ServiceAlias) error { return nil }
+func (*syncTestTopologyStore) GetAlias(context.Context, string, string) (*models.ServiceAlias, error) {
+	return nil, errors.New("not found")
+}
+func (*syncTestTopologyStore) GetHistory(context.Context, string) ([]*models.ServiceAlias, error) {
+	return nil, nil
+}
+
+type syncTestGraphStore struct{}
+
+func (*syncTestGraphStore) SaveNode(context.Context, *models.Node) error { return nil }
+func (*syncTestGraphStore) GetNode(context.Context, string) (*models.Node, error) {
+	return nil, errors.New("not found")
+}
+func (*syncTestGraphStore) ListNodes(context.Context, string, int) ([]*models.Node, error) {
+	return nil, nil
+}
+func (*syncTestGraphStore) SaveEdge(context.Context, *models.Edge) error { return nil }
+func (*syncTestGraphStore) GetEdges(context.Context, string, string) ([]*models.Edge, error) {
+	return nil, nil
+}
+func (*syncTestGraphStore) Traverse(context.Context, string, models.TraversalOptions) (*models.GraphView, error) {
+	return nil, nil
+}
+
+type syncTestStorage struct {
+	events   *syncTestEventStore
+	topology *syncTestTopologyStore
+	graph    *syncTestGraphStore
+}
+
+func (*syncTestStorage) Init(context.Context) error { return nil }
+func (*syncTestStorage) Close() error               { return nil }
+func (s *syncTestStorage) Events() storage.EventStore {
+	return s.events
+}
+func (s *syncTestStorage) Topology() storage.TopologyStore {
+	return s.topology
+}
+func (s *syncTestStorage) Graph() storage.GraphStore {
+	return s.graph
+}
+func (*syncTestStorage) Incidents() storage.IncidentStore       { return nil }
+func (*syncTestStorage) Signatures() storage.SignatureStore     { return nil }
+func (*syncTestStorage) Remediations() storage.RemediationStore { return nil }
+func (*syncTestStorage) Feedback() storage.FeedbackStore        { return nil }
+
+func TestSyncProcessorAppliesPIIRedaction(t *testing.T) {
+	cfg := config.Default()
+	cfg.PIIRedaction.Enabled = true
+	cfg.PIIRedaction.Mode = "enforce"
+
+	events := &syncTestEventStore{}
+	stor := &syncTestStorage{
+		events:   events,
+		topology: &syncTestTopologyStore{},
+		graph:    &syncTestGraphStore{},
+	}
+
+	// The source-of-truth sync feeds pulled events through ProcessBatch.
+	proc := newSyncProcessor(cfg, stor)
+	batch := []*models.Event{{
+		ID:         "evt-sync",
+		Timestamp:  time.Now(),
+		Kind:       models.EventKindLog,
+		Service:    "worker",
+		Provenance: "collector",
+		Raw: map[string]any{
+			"email": "bob@example.com",
+			"note":  "contact bob@example.com for details",
+		},
+	}}
+	if err := proc.ProcessBatch(context.Background(), batch); err != nil {
+		t.Fatalf("process batch: %v", err)
+	}
+	if len(events.saved) != 1 || len(events.saved[0]) != 1 {
+		t.Fatalf("expected one saved batch event, got %+v", events.saved)
+	}
+	raw := events.saved[0][0].Raw
+	if got := raw["email"]; got != "[REDACTED]" {
+		t.Fatalf("sync email not redacted: %v", got)
+	}
+	if got := raw["note"]; got != "contact [REDACTED] for details" {
+		t.Fatalf("sync pattern PII not redacted: %v", got)
 	}
 }

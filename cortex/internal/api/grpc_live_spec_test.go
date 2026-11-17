@@ -9,7 +9,6 @@ import (
 
 	"github.com/astraive/loza/cortex/internal/config"
 	"github.com/astraive/loza/cortex/internal/models"
-	"github.com/astraive/loza/cortex/internal/redaction"
 	"github.com/astraive/loza/cortex/internal/storage"
 	lozav1 "github.com/astraive/loza/gen/go/loza/core"
 	"github.com/stretchr/testify/require"
@@ -34,7 +33,7 @@ func TestGRPCServerAcceptsCollectorStyleBatch(t *testing.T) {
 	defer stor.Close()
 
 	srv := grpc.NewServer()
-	NewGRPCServer(cfg, stor, redaction.Config{}).RegisterServer(srv)
+	NewGRPCServer(cfg, stor).RegisterServer(srv)
 
 	lis, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
@@ -85,7 +84,7 @@ func TestGRPCServerProvenanceIsGrpc(t *testing.T) {
 	defer stor.Close()
 
 	srv := grpc.NewServer()
-	NewGRPCServer(cfg, stor, redaction.Config{}).RegisterServer(srv)
+	NewGRPCServer(cfg, stor).RegisterServer(srv)
 
 	lis, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
@@ -155,7 +154,7 @@ func TestGRPCServerRejectsEmptyIngestEventRequest(t *testing.T) {
 	defer stor.Close()
 
 	srv := grpc.NewServer()
-	NewGRPCServer(cfg, stor, redaction.Config{}).RegisterServer(srv)
+	NewGRPCServer(cfg, stor).RegisterServer(srv)
 
 	lis, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)

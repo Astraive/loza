@@ -16,7 +16,6 @@ import (
 	"github.com/astraive/loza/cortex/internal/models"
 	"github.com/astraive/loza/cortex/internal/processor"
 	"github.com/astraive/loza/cortex/internal/reconstructor"
-	"github.com/astraive/loza/cortex/internal/redaction"
 	"github.com/astraive/loza/cortex/internal/storage"
 	"github.com/astraive/loza/cortex/internal/topology"
 	lozav1 "github.com/astraive/loza/gen/go/loza/core"
@@ -41,7 +40,7 @@ type GRPCServer struct {
 	ready       bool
 }
 
-func NewGRPCServer(cfg *config.Config, stor storage.Storage, redactCfg redaction.Config) *GRPCServer {
+func NewGRPCServer(cfg *config.Config, stor storage.Storage) *GRPCServer {
 	topology := topology.NewResolver(stor.Topology())
 	graphBuilder := graph.NewBuilder(stor.Graph())
 	matching, err := matcher.NewConfiguredSignatureMatcher(stor.Signatures(), cfg.Matcher)
@@ -51,10 +50,7 @@ func NewGRPCServer(cfg *config.Config, stor storage.Storage, redactCfg redaction
 	}
 	remediation := learner.NewLearner(stor.Remediations(), stor.Feedback(), stor.Signatures())
 	recon := reconstructor.NewIncidentReconstructor(graphBuilder, matching, remediation, stor.Incidents())
-	eventProc := processor.NewEventProcessor(stor.Events(), stor.Topology(), stor.Graph())
-	if cfg.PIIRedaction.Enabled {
-		eventProc = eventProc.WithConfigurableRedaction(redactCfg)
-	}
+	eventProc := processor.NewConfiguredEventProcessor(stor.Events(), stor.Topology(), stor.Graph(), cfg.PIIRedaction)
 
 	return &GRPCServer{
 		config:      cfg,
