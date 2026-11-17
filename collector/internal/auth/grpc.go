@@ -256,7 +256,9 @@ func extractIPFromPeer(ctx context.Context, trustedProxies []*net.IPNet) string 
 				}
 			}
 			if xri := getMetadataValue(md, "x-real-ip"); xri != "" {
-				return strings.TrimSpace(xri)
+				if ip := net.ParseIP(strings.TrimSpace(xri)); ip != nil {
+					return ip.String()
+				}
 			}
 		}
 	}

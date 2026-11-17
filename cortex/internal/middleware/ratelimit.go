@@ -154,7 +154,9 @@ func (rl *RateLimiter) extractClientIP(r *http.Request) string {
 			}
 		}
 		if xri := r.Header.Get("X-Real-IP"); xri != "" {
-			return strings.TrimSpace(xri)
+			if ip := net.ParseIP(strings.TrimSpace(xri)); ip != nil {
+				return ip.String()
+			}
 		}
 	}
 
