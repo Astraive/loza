@@ -1,4 +1,4 @@
-use std::cmp::Ordering;
+use std::cmp::{Ordering, Reverse};
 use std::collections::BinaryHeap;
 
 use crate::signature::Signature;
@@ -35,6 +35,52 @@ impl Ord for PQItem {
             .partial_cmp(&self.score)
             .unwrap_or(Ordering::Equal)
     }
+}
+
+/// Retain the `k` highest `(score, signature_id)` pairs using a min-heap.
+///
+/// `BinaryHeap` is a max-heap, so items are wrapped in [`Reverse`] to make
+/// `peek()` return the *smallest* stored score. A new candidate evicts that
+/// smallest element only when it scores higher, leaving the k highest scores.
+fn retain_top_k<I>(scored: I, k: usize, threshold: f64) -> Vec<ScoredMatch>
+where
+    I: IntoIterator<Item = (f64, String)>,
+{
+    if k == 0 {
+        return Vec::new();
+    }
+
+    let mut heap: BinaryHeap<Reverse<PQItem>> = BinaryHeap::with_capacity(k);
+
+    for (score, signature_id) in scored {
+        if score < threshold {
+            continue;
+        }
+
+        let item = Reverse(PQItem {
+            score,
+            signature_id,
+        });
+
+        if heap.len() < k {
+            heap.push(item);
+        } else if score > heap.peek().map(|p| p.0.score).unwrap_or(f64::NEG_INFINITY) {
+            heap.pop();
+            heap.push(item);
+        }
+    }
+
+    let mut results: Vec<ScoredMatch> = heap
+        .into_iter()
+        .map(|item| ScoredMatch::new(item.0.signature_id, item.0.score))
+        .collect();
+
+    results.sort_by(|a, b| {
+        b.similarity
+            .partial_cmp(&a.similarity)
+            .unwrap_or(Ordering::Equal)
+    });
+    results
 }
 
 /// Efficient top-k matching using priority queue
@@ -82,40 +128,14 @@ impl TopK {
             return Vec::new();
         }
 
-        let mut heap = BinaryHeap::with_capacity(k);
-
-        for cand in candidates {
-            let score = similarity::score(query, cand, &self.metric);
-
-            if score < self.threshold {
-                continue;
-            }
-
-            if heap.len() < k {
-                heap.push(PQItem {
-                    score,
-                    signature_id: cand.shape.clone(),
-                });
-            } else if score > heap.peek().map(|p| p.score).unwrap_or(0.0) {
-                heap.pop();
-                heap.push(PQItem {
-                    score,
-                    signature_id: cand.shape.clone(),
-                });
-            }
-        }
-
-        let mut results: Vec<ScoredMatch> = heap
-            .into_iter()
-            .map(|item| ScoredMatch::new(item.signature_id, item.score))
-            .collect();
-
-        results.sort_by(|a, b| {
-            b.similarity
-                .partial_cmp(&a.similarity)
-                .unwrap_or(Ordering::Equal)
+        let scored = candidates.iter().map(|cand| {
+            (
+                similarity::score(query, cand, &self.metric),
+                cand.shape.clone(),
+            )
         });
-        results
+
+        retain_top_k(scored, k, self.threshold)
     }
 
     /// Batch search for multiple queries
@@ -320,5 +340,134 @@ mod tests {
         for r in &results {
             assert!(r.similarity >= 0.5);
         }
+    }
+
+    fn match_ids(matches: &[ScoredMatch]) -> Vec<&str> {
+        matches.iter().map(|m| m.signature_id.as_str()).collect()
+    }
+
+    /// Candidate whose cosine similarity against `[1.0, 0.0]` is exactly `score`.
+    fn cosine_candidate(score: f64, id: &str) -> Signature {
+        let mut sig = Signature::new();
+        sig.shape = id.to_string();
+        sig.feature_vector = vec![score, (1.0 - score * score).sqrt()];
+        sig
+    }
+
+    #[test]
+    fn test_topk_retains_highest_scores() {
+        // Worked example from the bug report: 5, 3, 8, 1 with k=2 must
+        // retain 8 and 5 (the old max-heap kept 8 and 3).
+        let scored = vec![
+            (5.0, "5".to_string()),
+            (3.0, "3".to_string()),
+            (8.0, "8".to_string()),
+            (1.0, "1".to_string()),
+        ];
+
+        let results = retain_top_k(scored, 2, 0.0);
+
+        assert_eq!(match_ids(&results), vec!["8", "5"]);
+        assert_eq!(results[0].similarity, 8.0);
+        assert_eq!(results[1].similarity, 5.0);
+    }
+
+    #[test]
+    fn test_topk_search_uses_highest_scores() {
+        // Same worked example exercised through the full scoring path.
+        let mut query = Signature::new();
+        query.feature_vector = vec![1.0, 0.0];
+
+        let candidates = vec![
+            cosine_candidate(0.5, "5"),
+            cosine_candidate(0.3, "3"),
+            cosine_candidate(0.8, "8"),
+            cosine_candidate(0.1, "1"),
+        ];
+
+        let results = TopK::new(2)
+            .with_metric("cosine")
+            .search(&query, &candidates);
+
+        assert_eq!(match_ids(&results), vec!["8", "5"]);
+        assert!((results[0].similarity - 0.8).abs() < 1e-6);
+        assert!((results[1].similarity - 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_topk_k_one() {
+        let scored = vec![
+            (5.0, "a".to_string()),
+            (3.0, "b".to_string()),
+            (8.0, "c".to_string()),
+            (1.0, "d".to_string()),
+        ];
+
+        let results = retain_top_k(scored, 1, 0.0);
+
+        assert_eq!(match_ids(&results), vec!["c"]);
+        assert_eq!(results[0].similarity, 8.0);
+    }
+
+    #[test]
+    fn test_topk_k_greater_than_count() {
+        let scored = vec![
+            (1.0, "a".to_string()),
+            (3.0, "b".to_string()),
+            (2.0, "c".to_string()),
+        ];
+
+        let results = retain_top_k(scored, 10, 0.0);
+
+        assert_eq!(match_ids(&results), vec!["b", "c", "a"]);
+    }
+
+    #[test]
+    fn test_topk_ties() {
+        let scored = vec![
+            (7.0, "a".to_string()),
+            (7.0, "b".to_string()),
+            (7.0, "c".to_string()),
+            (1.0, "d".to_string()),
+        ];
+
+        let results = retain_top_k(scored, 2, 0.0);
+
+        assert_eq!(results.len(), 2);
+        assert!(results
+            .iter()
+            .all(|m| (m.similarity - 7.0).abs() < f64::EPSILON));
+    }
+
+    #[test]
+    fn test_topk_negative_scores() {
+        let scored = vec![
+            (-1.0, "a".to_string()),
+            (-5.0, "b".to_string()),
+            (-3.0, "c".to_string()),
+            (-9.0, "d".to_string()),
+        ];
+
+        let results = retain_top_k(scored, 2, f64::NEG_INFINITY);
+
+        assert_eq!(match_ids(&results), vec!["a", "c"]);
+        assert_eq!(results[0].similarity, -1.0);
+        assert_eq!(results[1].similarity, -3.0);
+    }
+
+    #[test]
+    fn test_ann_index_search_retains_highest() {
+        let mut query = Signature::new();
+        query.feature_vector = vec![1.0, 0.0];
+        let candidates = vec![
+            cosine_candidate(0.2, "a"),
+            cosine_candidate(0.9, "b"),
+            cosine_candidate(0.4, "c"),
+        ];
+
+        let index = ANNIndex::build(&candidates, 10);
+        let results = index.search(&query, 2, "cosine");
+
+        assert_eq!(match_ids(&results), vec!["b", "c"]);
     }
 }

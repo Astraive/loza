@@ -122,6 +122,8 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 mod tests {
     use super::*;
     use signature::{Signature, SymptomClass};
+    use signature::Signature;
+    use std::cmp::Ordering;
 
     #[test]
     fn test_matcher_interface() {
@@ -327,5 +329,99 @@ mod tests {
     #[test]
     fn test_version() {
         assert!(!VERSION.is_empty());
+    }
+
+    fn strings(vals: &[&str]) -> Vec<String> {
+        vals.iter().map(|s| s.to_string()).collect()
+    }
+
+    fn varied_candidates() -> Vec<Signature> {
+        let symptom_sets: &[&[&str]] = &[
+            &["latency_spike"],
+            &["error_rate"],
+            &["timeout"],
+            &["deploy_failed"],
+            &["latency_spike", "error_rate"],
+            &["timeout", "deploy_failed"],
+        ];
+        symptom_sets
+            .iter()
+            .enumerate()
+            .map(|(i, symptoms)| {
+                let mut sig = Signature::from_incident(
+                    &strings(&["deploy"]),
+                    &strings(&["api"]),
+                    &strings(*symptoms),
+                    &strings(&["rollback"]),
+                );
+                sig.shape = format!("cand-{}", i);
+                sig
+            })
+            .collect()
+    }
+
+    /// Assert the caller returned the k highest scores. Comparison is by score
+    /// (not id) because a tie at the k boundary may keep either tied candidate.
+    fn assert_matches_brute(
+        actual: &[ScoredMatch],
+        query: &Signature,
+        candidates: &[Signature],
+        k: usize,
+        metric: &str,
+    ) {
+        let mut all: Vec<f64> = candidates
+            .iter()
+            .map(|cand| similarity::score(query, cand, metric))
+            .collect();
+        all.sort_by(|a, b| b.partial_cmp(a).unwrap_or(Ordering::Equal));
+
+        let expected_len = all.len().min(k);
+        assert_eq!(actual.len(), expected_len);
+
+        let mut got: Vec<f64> = actual.iter().map(|m| m.similarity).collect();
+        got.sort_by(|a, b| b.partial_cmp(a).unwrap_or(Ordering::Equal));
+        for (g, e) in got.iter().zip(all.iter().take(expected_len)) {
+            assert!((g - e).abs() < 1e-9, "expected {}, got {}", e, g);
+        }
+
+        // No excluded candidate may outrank a returned one.
+        if expected_len < all.len() {
+            let min_returned = *got.last().unwrap();
+            let max_excluded = all[expected_len];
+            assert!(min_returned + 1e-9 >= max_excluded);
+        }
+    }
+
+    fn sample_query() -> Signature {
+        Signature::from_incident(
+            &strings(&["deploy"]),
+            &strings(&["api"]),
+            &strings(&["latency_spike"]),
+            &strings(&["rollback"]),
+        )
+    }
+
+    #[test]
+    fn test_matcher_top_k_returns_highest_scores() {
+        let query = sample_query();
+        let candidates = varied_candidates();
+        let results = Matcher::new().with_k(3).top_k(&query, &candidates);
+        assert_matches_brute(&results, &query, &candidates, 3, "shape");
+    }
+
+    #[test]
+    fn test_match_incident_returns_highest_scores() {
+        let query = sample_query();
+        let candidates = varied_candidates();
+        let results = match_incident(&query, &candidates, 3);
+        assert_matches_brute(&results, &query, &candidates, 3, "shape");
+    }
+
+    #[test]
+    fn test_match_topology_independent_returns_highest_scores() {
+        let query = sample_query();
+        let candidates = varied_candidates();
+        let results = match_topology_independent(&query, &candidates, 3);
+        assert_matches_brute(&results, &query, &candidates, 3, "topology");
     }
 }
