@@ -22,6 +22,10 @@ type RunnerConfig struct {
 }
 
 func Run(ctx context.Context, cfg RunnerConfig) (Report, error) {
+	if cfg.BatchSize <= 0 {
+		return Report{}, fmt.Errorf("batch size must be greater than zero")
+	}
+
 	client := &http.Client{Timeout: 30 * time.Second}
 	var accepted atomic.Int64
 	var rejected atomic.Int64
