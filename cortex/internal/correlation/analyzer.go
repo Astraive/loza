@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"sync/atomic"
 	"time"
 
 	"github.com/astraive/loza/cortex/internal/models"
@@ -20,6 +21,16 @@ const (
 	// run when the configured maximum is not positive. It is deliberately well
 	// above the old hard-coded 10,000 single-page cap.
 	defaultMaxEvents = 100000
+// State describes the lifecycle state of the correlation analyzer.
+type State string
+
+const (
+	// StateDisabled means correlation analysis is turned off by configuration.
+	StateDisabled State = "disabled"
+	// StateStopped means the analyzer is enabled but not currently running.
+	StateStopped State = "stopped"
+	// StateRunning means the analyzer background loop is active.
+	StateRunning State = "running"
 )
 
 // Config holds correlation analysis parameters.
@@ -65,22 +76,49 @@ type Analyzer struct {
 	cfg        Config
 	eventStore storage.EventStore
 	graphStore storage.GraphStore
+	state      atomic.Value
 }
 
 // NewAnalyzer creates a new CorrelationAnalyzer.
 func NewAnalyzer(cfg Config, eventStore storage.EventStore, graphStore storage.GraphStore) *Analyzer {
-	return &Analyzer{
+	a := &Analyzer{
 		cfg:        cfg,
 		eventStore: eventStore,
 		graphStore: graphStore,
 	}
+	if cfg.Enabled {
+		a.state.Store(StateStopped)
+	} else {
+		a.state.Store(StateDisabled)
+	}
+	return a
+}
+
+// Enabled reports whether correlation analysis is configured on.
+func (a *Analyzer) Enabled() bool { return a.cfg.Enabled }
+
+// State returns the current lifecycle state of the analyzer.
+func (a *Analyzer) State() State {
+	v := a.state.Load()
+	if v == nil {
+		if a.cfg.Enabled {
+			return StateStopped
+		}
+		return StateDisabled
+	}
+	state, _ := v.(State)
+	return state
 }
 
 // Run starts the background analysis loop. Blocks until ctx is cancelled.
 func (a *Analyzer) Run(ctx context.Context) {
 	if !a.cfg.Enabled {
+		a.state.Store(StateDisabled)
 		return
 	}
+
+	a.state.Store(StateRunning)
+	defer a.state.Store(StateStopped)
 
 	log.Info().Dur("interval", a.cfg.AnalysisInterval).Msg("Starting correlation analyzer")
 	ticker := time.NewTicker(a.cfg.AnalysisInterval)

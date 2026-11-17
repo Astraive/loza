@@ -207,6 +207,67 @@ func TestAnalyzeFallsBackToDefaultLimitsForNonPositiveConfig(t *testing.T) {
 	}
 	if len(store.limits) != 1 || store.limits[0] != defaultListPageSize {
 		t.Fatalf("expected fallback page size %d, got limits %v", defaultListPageSize, store.limits)
+// emptyEventStore overrides only List; the analyzer analysis path needs no
+// other event-store methods.
+type emptyEventStore struct {
+	storage.EventStore
+}
+
+func (emptyEventStore) List(context.Context, int, int) ([]*models.Event, error) {
+	return nil, nil
+}
+
+func TestAnalyzerStateTransitionsWithManagedContext(t *testing.T) {
+	analyzer := NewAnalyzer(DefaultConfig(), emptyEventStore{}, &failingGraphStore{})
+	if !analyzer.Enabled() {
+		t.Fatal("expected analyzer to be enabled")
+	}
+	if got := analyzer.State(); got != StateStopped {
+		t.Fatalf("new enabled analyzer state = %q, want %q", got, StateStopped)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		analyzer.Run(ctx)
+	}()
+
+	deadline := time.Now().Add(time.Second)
+	for analyzer.State() != StateRunning && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if got := analyzer.State(); got != StateRunning {
+		t.Fatalf("running analyzer state = %q, want %q", got, StateRunning)
+	}
+
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("analyzer did not stop after context cancellation")
+	}
+	if got := analyzer.State(); got != StateStopped {
+		t.Fatalf("stopped analyzer state = %q, want %q", got, StateStopped)
+	}
+}
+
+func TestDisabledAnalyzerReportsDisabledAndExitsImmediately(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Enabled = false
+	analyzer := NewAnalyzer(cfg, nil, nil)
+	if analyzer.Enabled() {
+		t.Fatal("expected analyzer to be disabled")
+	}
+	if got := analyzer.State(); got != StateDisabled {
+		t.Fatalf("disabled analyzer state = %q, want %q", got, StateDisabled)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	analyzer.Run(ctx) // Must return immediately.
+	if got := analyzer.State(); got != StateDisabled {
+		t.Fatalf("disabled analyzer state after Run = %q, want %q", got, StateDisabled)
 	}
 }
 
