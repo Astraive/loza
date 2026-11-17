@@ -40,6 +40,13 @@ auth:
   server_secret: ${COLLECTOR_AUTH_SERVER_SECRET}
   cache_ttl: 5m
   negative_cache_ttl: 30s
+  # Required when identity.mode is jwt. Tokens must carry a matching "iss"
+  # and an "aud" containing at least one configured audience; "sub" is
+  # validated only when set.
+  jwt:
+    issuer: ""
+    audience: []
+    subject: ""
   keys:
     - name: collector-ingest
       key_id: kingest

@@ -976,3 +976,48 @@ func TestLoadCollectorConfigQueueModeFromEnv(t *testing.T) {
 		t.Fatalf("unexpected worker poll timeout: %s", cfg.workerPollTimeout)
 	}
 }
+
+func TestValidateFileConfigJWTModeRequiresIssuerAndAudience(t *testing.T) {
+	cfg := validFileConfig()
+	cfg.Identity.Mode = "jwt"
+	cfg.Auth.JWT.Issuer = "https://issuer.loza.test"
+	cfg.Auth.JWT.Audience = []string{"loza-collector"}
+	if err := validateFileConfig(cfg); err != nil {
+		t.Fatalf("valid jwt identity config rejected: %v", err)
+	}
+
+	cfg.Auth.JWT.Issuer = ""
+	if err := validateFileConfig(cfg); err == nil || !strings.Contains(err.Error(), "auth.jwt.issuer") {
+		t.Fatalf("expected jwt issuer validation error, got: %v", err)
+	}
+
+	cfg.Auth.JWT.Issuer = "https://issuer.loza.test"
+	cfg.Auth.JWT.Audience = []string{"  "}
+	if err := validateFileConfig(cfg); err == nil || !strings.Contains(err.Error(), "auth.jwt.audience") {
+		t.Fatalf("expected jwt audience validation error, got: %v", err)
+	}
+}
+
+func TestLoadCollectorConfigJWTClaimsFromEnv(t *testing.T) {
+	t.Setenv("COLLECTOR_IDENTITY_MODE", "jwt")
+	t.Setenv("COLLECTOR_JWT_ISSUER", "https://issuer.loza.test")
+	t.Setenv("COLLECTOR_JWT_AUDIENCE", "loza-collector, loza-admin")
+	t.Setenv("COLLECTOR_JWT_SUBJECT", "ingest-service")
+
+	cfg, err := loadCollectorConfigFromArgs(nil)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	if cfg.identityMode != "jwt" {
+		t.Fatalf("expected jwt identity mode, got %q", cfg.identityMode)
+	}
+	if cfg.jwtIssuer != "https://issuer.loza.test" {
+		t.Fatalf("unexpected jwt issuer: %q", cfg.jwtIssuer)
+	}
+	if len(cfg.jwtAudience) != 2 || cfg.jwtAudience[0] != "loza-collector" || cfg.jwtAudience[1] != "loza-admin" {
+		t.Fatalf("unexpected jwt audience: %#v", cfg.jwtAudience)
+	}
+	if cfg.jwtSubject != "ingest-service" {
+		t.Fatalf("unexpected jwt subject: %q", cfg.jwtSubject)
+	}
+}

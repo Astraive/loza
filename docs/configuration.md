@@ -95,6 +95,24 @@ auth:
       allowed_envs: [prod]
 ```
 
+When `identity.mode` is `jwt`, the API key value is the JWT verification key
+(an HMAC secret or a PEM public key/certificate). The following protected
+claims are validated in addition to `exp`, `nbf` and `iat`:
+
+```yaml
+auth:
+  jwt:
+    issuer: "https://issuer.loza.test"  # required: exact "iss" match
+    audience: ["loza-collector"]        # required: token "aud" must contain at least one
+    subject: "ingest-service"           # optional: exact "sub" match when set
+```
+
+The same values can be supplied through `COLLECTOR_JWT_ISSUER`,
+`COLLECTOR_JWT_AUDIENCE` (comma-separated) and `COLLECTOR_JWT_SUBJECT`.
+Startup fails when `identity.mode: jwt` is configured without a non-empty
+issuer and audience. Tokens with a missing, incorrect, or otherwise unbound
+issuer/audience are rejected.
+
 `secret_env` is the secret segment of
 `lz_{kind}_live_{key_id}_{secret}`, not the full token. Key IDs are unique;
 `kind` must be `sec` or `pub`; `mode` is `private` or `public`; public
@@ -316,7 +334,7 @@ Tenant/service identity resolution.
 
 ```yaml
 identity:
-  mode: payload                        # payload | auth | service | bound
+  mode: payload                        # payload | api_key | jwt | mtls
   auth_identity_wins: true             # Prefer auth header identity
   allow_payload_identity: true         # Allow identity from event
   

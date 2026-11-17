@@ -72,6 +72,10 @@ func (s *collectorState) authorizeJWT(r *http.Request) bool {
 		s.logAuthFailure(r, "jwt_verification_key_unconfigured")
 		return false
 	}
+	if s.cfg.jwtIssuer == "" || len(s.cfg.jwtAudience) == 0 {
+		s.logAuthFailure(r, "jwt_expected_claims_unconfigured")
+		return false
+	}
 
 	parsed, err := jwt.ParseSigned(token, jwtSignatureAlgorithms(key))
 	if err != nil {
@@ -84,7 +88,13 @@ func (s *collectorState) authorizeJWT(r *http.Request) bool {
 		s.logAuthFailure(r, "jwt_claims_failed")
 		return false
 	}
-	if err := claims.Validate(jwt.Expected{Time: time.Now()}); err != nil {
+	expected := jwt.Expected{
+		Time:        time.Now(),
+		Issuer:      s.cfg.jwtIssuer,
+		AnyAudience: jwt.Audience(s.cfg.jwtAudience),
+		Subject:     s.cfg.jwtSubject,
+	}
+	if err := claims.Validate(expected); err != nil {
 		s.logAuthFailure(r, "jwt_validation_failed")
 		return false
 	}
