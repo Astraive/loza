@@ -65,9 +65,24 @@ def _mask(value: Any, prefix: int = 2, suffix: int = 2) -> str:
 
 
 def _matches_key(key: str, wanted: set[str]) -> bool:
+    """Return True when ``key`` names a sensitive field.
+
+    Field names are frequently compound, and the sensitive term is not always
+    the final segment (e.g. ``password_confirmation``, ``secret_value``,
+    ``access_token_claims``). Match each wanted term against any whole run of
+    tokens delimited by separators, so compound wanted terms such as
+    ``api_key`` are also found inside ``user_api_key``.
+    """
     lowered = key.lower()
-    pieces = [lowered, lowered.split(".")[-1], lowered.split("_")[-1], lowered.split("-")[-1]]
-    return any(piece in wanted for piece in pieces)
+    if lowered in wanted:
+        return True
+    for term in wanted:
+        if not term:
+            continue
+        pattern = rf"(?:^|[_.-]){re.escape(term)}(?:$|[_.-])"
+        if re.search(pattern, lowered):
+            return True
+    return False
 
 
 def redact(*keys: str) -> Redactor:
