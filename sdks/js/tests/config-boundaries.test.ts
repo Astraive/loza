@@ -95,6 +95,34 @@ describe('Config boundaries', () => {
     assert.equal(validateConfig(localhost), localhost);
   });
 
+  it('requires HTTPS for API-key credentials on non-local hosts', () => {
+    const apiKeyOnly = defaultConfig();
+    apiKeyOnly.collectorUrl = 'http://collector.example/events';
+    apiKeyOnly.apiKey = 'secret-key';
+    assert.throws(() => validateConfig(apiKeyOnly), /require HTTPS/);
+
+    const apiKeyAndBasic = defaultConfig();
+    apiKeyAndBasic.collectorUrl = 'http://collector.example/events';
+    apiKeyAndBasic.apiKey = 'secret-key';
+    apiKeyAndBasic.username = 'user';
+    apiKeyAndBasic.password = 'pass';
+    assert.throws(() => validateConfig(apiKeyAndBasic), /require HTTPS/);
+
+    const localhost = defaultConfig();
+    localhost.collectorUrl = 'http://localhost:9308/events';
+    localhost.apiKey = 'secret-key';
+    assert.equal(validateConfig(localhost), localhost);
+
+    const https = defaultConfig();
+    https.collectorUrl = 'https://collector.example/events';
+    https.apiKey = 'secret-key';
+    assert.equal(validateConfig(https), https);
+
+    const noCredentials = defaultConfig();
+    noCredentials.collectorUrl = 'http://collector.example/events';
+    assert.equal(validateConfig(noCredentials), noCredentials);
+  });
+
   it('handles collector DSNs with public capabilities', () => {
     const cfg = withOptions(defaultConfig(), {
       collectorUrl: 'loza://lz_pub_capability:@localhost:9308/project?service=payments&env=staging',
