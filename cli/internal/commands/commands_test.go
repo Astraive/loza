@@ -100,6 +100,30 @@ func TestEmitSampleSendsAPIKeyFromEnv(t *testing.T) {
 	}
 }
 
+func TestBenchCommandRejectsNonPositiveNumericFlags(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+		want string
+	}{
+		{name: "zero rate", args: []string{"--rate", "0"}, want: "rate must be greater than zero"},
+		{name: "negative rate", args: []string{"--rate", "-1"}, want: "rate must be greater than zero"},
+		{name: "zero size", args: []string{"--size", "0"}, want: "size must be greater than zero"},
+		{name: "negative size", args: []string{"--size", "-1"}, want: "size must be greater than zero"},
+		{name: "zero batch size", args: []string{"--batch-size", "0"}, want: "batch size must be greater than zero"},
+		{name: "negative batch size", args: []string{"--batch-size", "-1"}, want: "batch size must be greater than zero"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := BenchCommand(context.Background(), config.Config{}, tt.args)
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("BenchCommand() error = %v, want error containing %q", err, tt.want)
+			}
+		})
+	}
+}
+
 func TestSchemaListHitsCollectorAPI(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/schema" {

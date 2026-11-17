@@ -21,6 +21,15 @@ func BenchCommand(ctx context.Context, cfg config.Config, args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
+	if *rate <= 0 {
+		return fmt.Errorf("rate must be greater than zero")
+	}
+	if *size <= 0 {
+		return fmt.Errorf("size must be greater than zero")
+	}
+	if *batchSize <= 0 {
+		return fmt.Errorf("batch size must be greater than zero")
+	}
 
 	totalEvents := *rate * int(duration.Seconds())
 	if totalEvents <= 0 {
