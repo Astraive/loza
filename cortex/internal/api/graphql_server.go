@@ -140,6 +140,11 @@ func (s *GraphQLServer) handleGraphQL(w http.ResponseWriter, r *http.Request) {
 			s.writeError(w, http.StatusBadRequest, "query exceeds maximum complexity")
 			return
 		}
+	// Check query depth before executing (the WebSocket path applies the same
+	// validation inside executeQuery).
+	if err := validateGraphQLQueryDepth(req.Query); err != nil {
+		s.writeError(w, http.StatusBadRequest, err.Error())
+		return
 	}
 
 	if s.schemaErr != nil {
@@ -162,6 +167,34 @@ func (s *GraphQLServer) writeError(w http.ResponseWriter, status int, message st
 	}
 }
 
+// validateGraphQLQueryDepth enforces the query nesting limit for every
+// GraphQL entry point. Both handleGraphQL (HTTP) and executeQuery (HTTP and
+// GraphQL-over-WebSocket) call it so no path can bypass the check.
+func validateGraphQLQueryDepth(query string) error {
+	if queryDepth(query) > maxGraphQLDepth {
+		return newGraphQLClientError("query exceeds maximum depth")
+	}
+	return nil
+}
+
+// queryDepth counts the maximum nesting depth of curly braces in a GraphQL query.
+func queryDepth(query string) int {
+	maxDepth := 0
+	depth := 0
+	for _, c := range query {
+		switch c {
+		case '{':
+			depth++
+			if depth > maxDepth {
+				maxDepth = depth
+			}
+		case '}':
+			depth--
+		}
+	}
+	return maxDepth
+}
+
 // isIntrospectionQuery blocks the reserved GraphQL introspection fields.
 func isIntrospectionQuery(query string) bool {
 	return containsWord(query, "__schema") ||
@@ -172,6 +205,11 @@ func isIntrospectionQuery(query string) bool {
 func (s *GraphQLServer) executeQuery(ctx context.Context, query string, vars map[string]interface{}, operationName string) *graphql.Result {
 	if isIntrospectionQuery(query) {
 		return &graphql.Result{Errors: []gqlerrors.FormattedError{{Message: "introspection is not allowed"}}}
+	}
+	// Enforce the shared query-depth limit here as well, so the
+	// GraphQL-over-WebSocket path cannot bypass the HTTP-level check.
+	if err := validateGraphQLQueryDepth(query); err != nil {
+		return &graphql.Result{Errors: []gqlerrors.FormattedError{{Message: err.Error()}}}
 	}
 	return graphql.Do(graphql.Params{
 		Schema:         s.schema,
@@ -526,9 +564,9 @@ func (s *GraphQLServer) handleServiceGraph(ctx context.Context, vars map[string]
 		return nil, newGraphQLClientError("service required")
 	}
 
-	depth := 3
+	depth := defaultGraphDepth
 	if d, ok := vars["depth"].(int); ok {
-		depth = d
+		depth = clampedGraphDepth(depthFromContext(ctx), d)
 	}
 
 	graphView, err := s.graph.GetServiceGraph(ctx, service, depth)
@@ -545,9 +583,9 @@ func (s *GraphQLServer) handleIncidentGraph(ctx context.Context, vars map[string
 		return nil, newGraphQLClientError("incidentId required")
 	}
 
-	depth := 3
+	depth := defaultGraphDepth
 	if d, ok := vars["depth"].(int); ok {
-		depth = d
+		depth = clampedGraphDepth(depthFromContext(ctx), d)
 	}
 
 	graphView, err := s.graph.GetIncidentGraph(ctx, incidentID, depth)

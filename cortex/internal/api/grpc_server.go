@@ -380,10 +380,11 @@ func (s *GRPCServer) GetGraph(ctx context.Context, req *lozav1.GetGraphRequest) 
 	var graphView *models.GraphView
 	var err error
 
+	depth := clampedGraphDepth(depthTransportGRPC, int(req.Depth))
 	if req.Service != "" {
-		graphView, err = s.graph.GetServiceGraph(ctx, req.Service, int(req.Depth))
+		graphView, err = s.graph.GetServiceGraph(ctx, req.Service, depth)
 	} else if req.IncidentId != "" {
-		graphView, err = s.graph.GetIncidentGraph(ctx, req.IncidentId, int(req.Depth))
+		graphView, err = s.graph.GetIncidentGraph(ctx, req.IncidentId, depth)
 	} else {
 		return &lozav1.GetGraphResponse{}, nil
 	}

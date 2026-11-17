@@ -121,23 +121,9 @@ func (s *Server) executeWebSocketAction(ctx context.Context, req transportcontra
 		}
 		return s.recon.ReconstructFast(ctx, req.IncidentID)
 	case "service_graph":
-		depth := req.Depth
-		if depth <= 0 {
-			depth = 3
-		}
-		if depth > 100 {
-			depth = 100
-		}
-		return s.graph.GetServiceGraph(ctx, req.Service, depth)
+		return s.graph.GetServiceGraph(ctx, req.Service, clampedGraphDepth(depthTransportWebSocket, req.Depth))
 	case "incident_graph":
-		depth := req.Depth
-		if depth <= 0 {
-			depth = 3
-		}
-		if depth > 100 {
-			depth = 100
-		}
-		return s.graph.GetIncidentGraph(ctx, req.IncidentID, depth)
+		return s.graph.GetIncidentGraph(ctx, req.IncidentID, clampedGraphDepth(depthTransportWebSocket, req.Depth))
 	case "graphql":
 		query := req.Query
 		vars := req.Variables
@@ -146,7 +132,9 @@ func (s *Server) executeWebSocketAction(ctx context.Context, req transportcontra
 				query = candidate
 			}
 		}
-		return s.graphql.executeQuery(ctx, query, vars, req.OperationName), nil
+		// Route GraphQL-over-WebSocket through the shared query-depth
+		// validation and label over-limit traversals with its own transport.
+		return s.graphql.executeQuery(withDepthTransport(ctx, depthTransportGraphQLWebSocket), query, vars, req.OperationName), nil
 	default:
 		return nil, fmt.Errorf("unknown websocket action %q", req.Action)
 	}
