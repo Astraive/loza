@@ -138,6 +138,7 @@ class CollectorClient:
     ) -> None:
         _validate_collector_endpoint(endpoint)
         _validate_basic_auth_endpoint(endpoint, username, password)
+        _validate_auth_requires_https(endpoint, api_key=api_key, username=username, password=password)
         self.endpoint = endpoint
         self.api_key = api_key
         self.auth_header = auth_header
@@ -305,6 +306,9 @@ def _validate_collector_endpoint(endpoint: str) -> None:
             raise ValueError("collector endpoint resolves to a non-public address")
 
 
+_LOCAL_AUTH_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
+
+
 def _validate_basic_auth_endpoint(endpoint: str, username: str, password: str) -> None:
     if not username and password:
         raise ValueError("collector basic auth password requires a username")
@@ -313,8 +317,21 @@ def _validate_basic_auth_endpoint(endpoint: str, username: str, password: str) -
     if not username:
         return
     parsed = urlparse(endpoint)
-    if parsed.scheme == "http" and (parsed.hostname or "").lower() not in {"localhost", "127.0.0.1", "::1"}:
+    if parsed.scheme == "http" and (parsed.hostname or "").lower() not in _LOCAL_AUTH_HOSTS:
         raise ValueError("collector basic auth requires HTTPS except for local endpoints")
+
+
+def _validate_auth_requires_https(endpoint: str, *, api_key: str = "", username: str = "", password: str = "") -> None:
+    """Reject cleartext HTTP for non-local endpoints carrying a credential.
+
+    Basic auth, Bearer tokens, and custom API-key headers must never be sent
+    over an unencrypted connection. Loopback hosts stay allowed for local dev.
+    """
+    if not (api_key or username or password):
+        return
+    parsed = urlparse(endpoint)
+    if parsed.scheme == "http" and (parsed.hostname or "").lower() not in _LOCAL_AUTH_HOSTS:
+        raise ValueError("authenticated collector endpoints require HTTPS except for local endpoints")
 
 
 def _private_endpoint_allowed() -> bool:

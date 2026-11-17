@@ -20,6 +20,7 @@ from ...core.http_client import (
     _parse_collector_response_body,
     _parse_retry_after,
     _retry_delay,
+    _validate_auth_requires_https,
     _validate_basic_auth_endpoint,
     _validate_collector_endpoint,
 )
@@ -55,6 +56,9 @@ class HTTPBatchSink:
     def __post_init__(self) -> None:
         _validate_collector_endpoint(self.endpoint)
         _validate_basic_auth_endpoint(self.endpoint, self.username, self.password)
+        _validate_auth_requires_https(
+            self.endpoint, api_key=self.api_key, username=self.username, password=self.password
+        )
 
     def _auth_headers(self) -> dict[str, str]:
         if self.api_key:
