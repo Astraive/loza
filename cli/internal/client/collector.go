@@ -8,10 +8,10 @@ import (
 	"io"
 	"math"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -377,16 +377,11 @@ func RotateAPIKey(ctx context.Context, baseURL, id string) ([]byte, error) {
 func WatchStream(ctx context.Context, baseURL string, filters map[string]string) (io.ReadCloser, error) {
 	base := strings.TrimRight(baseURL, "/") + "/tail"
 	if len(filters) > 0 {
-		keys := make([]string, 0, len(filters))
-		for k := range filters {
-			keys = append(keys, k)
+		values := make(url.Values, len(filters))
+		for k, v := range filters {
+			values.Set(k, v)
 		}
-		sort.Strings(keys)
-		params := make([]string, 0, len(keys))
-		for _, k := range keys {
-			params = append(params, k+"="+filters[k])
-		}
-		base += "?" + strings.Join(params, "&")
+		base += "?" + values.Encode()
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base, nil)
 	if err != nil {

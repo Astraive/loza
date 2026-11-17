@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -79,5 +80,44 @@ func TestTestSinkPostsToCollectorEndpoint(t *testing.T) {
 	}
 	if !strings.Contains(string(resp), `"status":"ok"`) {
 		t.Fatalf("unexpected response: %s", string(resp))
+	}
+}
+
+func TestWatchStreamEscapesFilterParameters(t *testing.T) {
+	queries := make(chan url.Values, 1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/tail" {
+			t.Errorf("unexpected path %q", r.URL.Path)
+		}
+		queries <- r.URL.Query()
+		_, _ = w.Write([]byte(""))
+	}))
+	defer srv.Close()
+
+	filters := map[string]string{
+		"service":   "a&debug=1",
+		"level=x&y": "info",
+	}
+	conn, err := WatchStream(context.Background(), srv.URL, filters)
+	if err != nil {
+		t.Fatalf("watch stream: %v", err)
+	}
+	defer conn.Close()
+
+	got := <-queries
+	if len(got) != len(filters) {
+		t.Fatalf("expected exactly %d query params, got %d: %v", len(filters), len(got), got)
+	}
+	if v := got.Get("service"); v != "a&debug=1" {
+		t.Fatalf("service param = %q, want %q", v, "a&debug=1")
+	}
+	if _, ok := got["debug"]; ok {
+		t.Fatalf("query parameter injection: unexpected %q param in %v", "debug", got)
+	}
+	if _, ok := got["y"]; ok {
+		t.Fatalf("query parameter injection: unexpected %q param in %v", "y", got)
+	}
+	if v := got.Get("level=x&y"); v != "info" {
+		t.Fatalf("escaped key param = %q, want %q", v, "info")
 	}
 }
