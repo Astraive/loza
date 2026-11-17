@@ -99,3 +99,53 @@ func TestClientQueryReturnsStableTimeoutCategory(t *testing.T) {
 		t.Fatalf("error = %v, category = %q", err, ErrorCategoryOf(err))
 	}
 }
+
+// Regression: a Bearer API key must never be sent over plaintext HTTP to a
+// non-local endpoint. The old guard only checked basic auth (and was gated on
+// an empty API key), so API-key credentials reached the Authorization header
+// over an http:// connection.
+func TestNewRequiresTLSForCredentialsOnNonLocalEndpoints(t *testing.T) {
+	cases := []struct {
+		name    string
+		config  ConnectionConfig
+		wantErr bool
+	}{
+		{
+			name:    "API key with plaintext HTTP endpoint",
+			config:  ConnectionConfig{Endpoint: "http://example.com", Collector: "demo", APIKey: "secret-key"},
+			wantErr: true,
+		},
+		{
+			name:    "API key with tls=false DSN to non-local host",
+			config:  ConnectionConfig{DSN: "loza://example.com/demo?tls=false", APIKey: "secret-key"},
+			wantErr: true,
+		},
+		{
+			name:    "basic auth with plaintext HTTP endpoint",
+			config:  ConnectionConfig{Endpoint: "http://example.com", Collector: "demo", Username: "private", Password: "secret"},
+			wantErr: true,
+		},
+		{
+			name:   "API key with HTTPS endpoint",
+			config: ConnectionConfig{Endpoint: "https://example.com", Collector: "demo", APIKey: "secret-key"},
+		},
+		{
+			name:   "API key with plaintext HTTP localhost endpoint",
+			config: ConnectionConfig{Endpoint: "http://127.0.0.1:9308", Collector: "demo", APIKey: "secret-key"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := New(tc.config)
+			if tc.wantErr {
+				if err == nil || ErrorCategoryOf(err) != ErrorInvalidConfiguration {
+					t.Fatalf("New() error = %v, category = %q; want invalid configuration", err, ErrorCategoryOf(err))
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("New() unexpected error: %v", err)
+			}
+		})
+	}
+}
