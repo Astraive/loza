@@ -91,6 +91,9 @@ func (m *Message) decision() (nacked bool, nackErr error) {
 	return m.nacked, m.nackErr
 }
 
+func (m *Message) Ack(_ context.Context) error           { return nil }
+func (m *Message) Nack(_ context.Context, _ error) error { return nil }
+
 // New creates a new memory bus.
 func New(_ context.Context, cfg eventbus.Config) (eventbus.Bus, error) {
 	return &Bus{

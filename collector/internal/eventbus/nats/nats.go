@@ -76,6 +76,8 @@ type natsBus struct {
 type subscription struct {
 	cancel context.CancelFunc
 	stop   func()
+	subs   []*jetstream.Consumer
+	cancel context.CancelFunc
 }
 
 // New creates a new NATS JetStream event bus.
@@ -235,6 +237,11 @@ func consumeMessages(ctx context.Context, closed *atomic.Bool, iter messageItera
 		if err != nil {
 			if closed.Load() || ctx.Err() != nil {
 				return
+			busMsg := &natsMessage{
+				id:    env.ID,
+				topic: subject,
+				env:   env,
+				msg:   msg,
 			}
 			if !sleep(ctx, backoff) || closed.Load() {
 				return

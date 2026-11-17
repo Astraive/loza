@@ -529,7 +529,7 @@ func TestHTTPTransport_RequestBodyPreservedOnRetry(t *testing.T) {
 		count := attempts.Add(1)
 		body, _ := io.ReadAll(r.Body)
 		receivedBodies = append(receivedBodies, string(body))
-		
+
 		if count < 3 {
 			w.WriteHeader(http.StatusTooManyRequests)
 			return
@@ -541,7 +541,7 @@ func TestHTTPTransport_RequestBodyPreservedOnRetry(t *testing.T) {
 	transport := NewHTTPTransport(HTTPTransportConfig{
 		MaxRetries: 3,
 	})
-	
+
 	expectedBody := "test request body"
 	req, err := http.NewRequest(http.MethodPost, server.URL, strings.NewReader(expectedBody))
 	if err != nil {

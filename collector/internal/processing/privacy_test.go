@@ -48,19 +48,19 @@ func TestRedactPIIBlocklist(t *testing.T) {
 			name: "redact multiple fields",
 			input: map[string]interface{}{
 				"user": map[string]interface{}{
-					"name":   "Alice",
-					"email":  "alice@example.com",
-					"ssn":    "123-45-6789",
-					"phone":  "555-1234",
+					"name":  "Alice",
+					"email": "alice@example.com",
+					"ssn":   "123-45-6789",
+					"phone": "555-1234",
 				},
 			},
 			blocklist: []string{"email", "ssn", "phone"},
 			expected: map[string]interface{}{
 				"user": map[string]interface{}{
-					"name":   "Alice",
-					"email":  "[REDACTED]",
-					"ssn":    "[REDACTED]",
-					"phone":  "[REDACTED]",
+					"name":  "Alice",
+					"email": "[REDACTED]",
+					"ssn":   "[REDACTED]",
+					"phone": "[REDACTED]",
 				},
 			},
 		},
@@ -109,10 +109,10 @@ func TestRedactPIIAllowlist(t *testing.T) {
 	}
 
 	input := map[string]interface{}{
-		"name":   "Alice",
-		"age":    30,
-		"email":  "alice@example.com",
-		"ssn":    "123-45-6789",
+		"name":  "Alice",
+		"age":   30,
+		"email": "alice@example.com",
+		"ssn":   "123-45-6789",
 	}
 
 	inputJSON, _ := json.Marshal(input)

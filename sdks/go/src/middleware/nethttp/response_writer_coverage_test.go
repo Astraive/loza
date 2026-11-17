@@ -11,45 +11,55 @@ import (
 )
 
 type maskFH struct{ *baseTestWriter }
-func (*maskFH) Flush() {}
+
+func (*maskFH) Flush()                                       {}
 func (*maskFH) Hijack() (net.Conn, *bufio.ReadWriter, error) { return nil, nil, context.Canceled }
 
 type maskFP struct{ *baseTestWriter }
-func (*maskFP) Flush() {}
+
+func (*maskFP) Flush()                               {}
 func (*maskFP) Push(string, *http.PushOptions) error { return nil }
 
 type maskFR struct{ *baseTestWriter }
-func (*maskFR) Flush() {}
+
+func (*maskFR) Flush()                              {}
 func (*maskFR) ReadFrom(r io.Reader) (int64, error) { return io.Copy(io.Discard, r) }
 
 type maskHP struct{ *baseTestWriter }
+
 func (*maskHP) Hijack() (net.Conn, *bufio.ReadWriter, error) { return nil, nil, context.Canceled }
-func (*maskHP) Push(string, *http.PushOptions) error { return nil }
+func (*maskHP) Push(string, *http.PushOptions) error         { return nil }
 
 type maskHR struct{ *baseTestWriter }
+
 func (*maskHR) Hijack() (net.Conn, *bufio.ReadWriter, error) { return nil, nil, context.Canceled }
-func (*maskHR) ReadFrom(r io.Reader) (int64, error) { return io.Copy(io.Discard, r) }
+func (*maskHR) ReadFrom(r io.Reader) (int64, error)          { return io.Copy(io.Discard, r) }
 
 type maskPR struct{ *baseTestWriter }
+
 func (*maskPR) Push(string, *http.PushOptions) error { return nil }
-func (*maskPR) ReadFrom(r io.Reader) (int64, error) { return io.Copy(io.Discard, r) }
+func (*maskPR) ReadFrom(r io.Reader) (int64, error)  { return io.Copy(io.Discard, r) }
 
 type maskFHP struct{ *baseTestWriter }
-func (*maskFHP) Flush() {}
+
+func (*maskFHP) Flush()                                       {}
 func (*maskFHP) Hijack() (net.Conn, *bufio.ReadWriter, error) { return nil, nil, context.Canceled }
-func (*maskFHP) Push(string, *http.PushOptions) error { return nil }
+func (*maskFHP) Push(string, *http.PushOptions) error         { return nil }
 
 type maskFHR struct{ *baseTestWriter }
-func (*maskFHR) Flush() {}
+
+func (*maskFHR) Flush()                                       {}
 func (*maskFHR) Hijack() (net.Conn, *bufio.ReadWriter, error) { return nil, nil, context.Canceled }
-func (*maskFHR) ReadFrom(r io.Reader) (int64, error) { return io.Copy(io.Discard, r) }
+func (*maskFHR) ReadFrom(r io.Reader) (int64, error)          { return io.Copy(io.Discard, r) }
 
 type maskFPR struct{ *baseTestWriter }
-func (*maskFPR) Flush() {}
+
+func (*maskFPR) Flush()                               {}
 func (*maskFPR) Push(string, *http.PushOptions) error { return nil }
-func (*maskFPR) ReadFrom(r io.Reader) (int64, error) { return io.Copy(io.Discard, r) }
+func (*maskFPR) ReadFrom(r io.Reader) (int64, error)  { return io.Copy(io.Discard, r) }
 
 type inflatedReaderFrom struct{ *baseTestWriter }
+
 func (*inflatedReaderFrom) ReadFrom(r io.Reader) (int64, error) {
 	_, _ = io.Copy(io.Discard, r)
 	return 2, nil
@@ -73,15 +83,16 @@ func (*zeroReportingReaderFrom) ReadFrom(r io.Reader) (int64, error) {
 }
 
 type maskHPR struct{ *baseTestWriter }
+
 func (*maskHPR) Hijack() (net.Conn, *bufio.ReadWriter, error) { return nil, nil, context.Canceled }
-func (*maskHPR) Push(string, *http.PushOptions) error { return nil }
-func (*maskHPR) ReadFrom(r io.Reader) (int64, error) { return io.Copy(io.Discard, r) }
+func (*maskHPR) Push(string, *http.PushOptions) error         { return nil }
+func (*maskHPR) ReadFrom(r io.Reader) (int64, error)          { return io.Copy(io.Discard, r) }
 
 func TestResponseWriterCoversEveryOptionalInterfaceCombination(t *testing.T) {
 	cases := []struct {
-		name string
+		name   string
 		writer http.ResponseWriter
-		mask int
+		mask   int
 	}{
 		{"fh", &maskFH{newBaseTestWriter()}, optionalFlusher | optionalHijacker},
 		{"fp", &maskFP{newBaseTestWriter()}, optionalFlusher | optionalPusher},

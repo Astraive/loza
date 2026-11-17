@@ -6,25 +6,25 @@ import (
 )
 
 var (
-	ErrEmptyID         = errors.New("event ID cannot be empty")
-	ErrInvalidTimestamp = errors.New("timestamp cannot be in the future")
-	ErrInvalidKind     = errors.New("invalid event kind")
-	ErrEmptyService    = errors.New("service cannot be empty")
+	ErrEmptyID           = errors.New("event ID cannot be empty")
+	ErrInvalidTimestamp  = errors.New("timestamp cannot be in the future")
+	ErrInvalidKind       = errors.New("invalid event kind")
+	ErrEmptyService      = errors.New("service cannot be empty")
 	ErrInvalidProvenance = errors.New("invalid provenance")
 )
 
 type EventKind string
 
 const (
-	EventKindDeploy          EventKind = "deploy"
+	EventKindDeploy         EventKind = "deploy"
 	EventKindLog            EventKind = "log"
 	EventKindMetric         EventKind = "metric"
-	EventKindTrace           EventKind = "trace"
-	EventKindTopology        EventKind = "topology"
+	EventKindTrace          EventKind = "trace"
+	EventKindTopology       EventKind = "topology"
 	EventKindIncidentSignal EventKind = "incident_signal"
-	EventKindRemediation     EventKind = "remediation"
-	EventKindLozaEvent     EventKind = "loza_event"
-	EventKindOTELLog       EventKind = "otel_log"
+	EventKindRemediation    EventKind = "remediation"
+	EventKindLozaEvent      EventKind = "loza_event"
+	EventKindOTELLog        EventKind = "otel_log"
 	EventKindOTELSpan       EventKind = "otel_span"
 	EventKindCollectorEvent EventKind = "collector_event"
 	EventKindHTTP           EventKind = "http"
@@ -37,7 +37,7 @@ const (
 )
 
 var validEventKinds = map[EventKind]bool{
-	EventKindDeploy:          true,
+	EventKindDeploy:         true,
 	EventKindLog:            true,
 	EventKindMetric:         true,
 	EventKindTrace:          true,
@@ -59,9 +59,9 @@ var validEventKinds = map[EventKind]bool{
 
 // EventCheckpoint represents a named breadcrumb at a point in time
 type EventCheckpoint struct {
-	Name      string                 `json:"name"`
-	AtMs      int64                  `json:"at_ms"`
-	Attrs     map[string]interface{} `json:"attrs,omitempty"`
+	Name  string                 `json:"name"`
+	AtMs  int64                  `json:"at_ms"`
+	Attrs map[string]interface{} `json:"attrs,omitempty"`
 }
 
 // EventProcess represents an ordered numbered step inside an event
@@ -137,14 +137,14 @@ type Event struct {
 	Release     string    `json:"release,omitempty" db:"release"`
 
 	// Event fields
-	SchemaVersion string     `json:"schema_version,omitempty" db:"schema_version"`
-	EventVersion  string     `json:"event_version,omitempty" db:"event_version"`
-	Version       string     `json:"version,omitempty" db:"version"`
-	Event         string     `json:"event,omitempty" db:"event"`
-	Kind          EventKind  `json:"kind" db:"kind"`
-	Level         string     `json:"level,omitempty" db:"level"`
-	Outcome       string     `json:"outcome,omitempty" db:"outcome"`
-	DurationMs    float64    `json:"duration_ms,omitempty" db:"duration_ms"`
+	SchemaVersion string    `json:"schema_version,omitempty" db:"schema_version"`
+	EventVersion  string    `json:"event_version,omitempty" db:"event_version"`
+	Version       string    `json:"version,omitempty" db:"version"`
+	Event         string    `json:"event,omitempty" db:"event"`
+	Kind          EventKind `json:"kind" db:"kind"`
+	Level         string    `json:"level,omitempty" db:"level"`
+	Outcome       string    `json:"outcome,omitempty" db:"outcome"`
+	DurationMs    float64   `json:"duration_ms,omitempty" db:"duration_ms"`
 
 	// Trace correlation
 	TraceID    string `json:"trace_id,omitempty" db:"trace_id"`
@@ -169,8 +169,8 @@ type Event struct {
 	Links       []*EventLink       `json:"links,omitempty" db:"-"`
 
 	// SDK metadata
-	SDKName    string `json:"sdk_name,omitempty" db:"sdk_name"`
-	SDKVersion string `json:"sdk_version,omitempty" db:"sdk_version"`
+	SDKName     string `json:"sdk_name,omitempty" db:"sdk_name"`
+	SDKVersion  string `json:"sdk_version,omitempty" db:"sdk_version"`
 	SDKLanguage string `json:"sdk_language,omitempty" db:"sdk_language"`
 
 	// Raw payload (original event JSON)
@@ -206,10 +206,10 @@ func (e *Event) Validate() error {
 
 var validProvenances = map[string]bool{
 	"loza":      true,
-	"otlp":     true,
+	"otlp":      true,
 	"collector": true,
-	"jsonl":    true,
-	"grpc":     true,
+	"jsonl":     true,
+	"grpc":      true,
 }
 
 func IsValidProvenance(p string) bool {
@@ -222,15 +222,15 @@ func IsValidKind(k EventKind) bool {
 
 // LifecycleSummary provides a queryable summary of event lifecycle primitives
 type LifecycleSummary struct {
-	EventID        string  `json:"event_id"`
-	Event          string  `json:"event"`
-	Service        string  `json:"service"`
-	Outcome        string  `json:"outcome"`
-	DurationMs     float64 `json:"duration_ms"`
-	CheckpointCount int    `json:"checkpoint_count"`
-	ProcessCount    int    `json:"process_count"`
-	GroupCount      int    `json:"group_count"`
-	TimerCount      int    `json:"timer_count"`
-	LinkCount       int    `json:"link_count"`
-	TraceID         string `json:"trace_id"`
+	EventID         string  `json:"event_id"`
+	Event           string  `json:"event"`
+	Service         string  `json:"service"`
+	Outcome         string  `json:"outcome"`
+	DurationMs      float64 `json:"duration_ms"`
+	CheckpointCount int     `json:"checkpoint_count"`
+	ProcessCount    int     `json:"process_count"`
+	GroupCount      int     `json:"group_count"`
+	TimerCount      int     `json:"timer_count"`
+	LinkCount       int     `json:"link_count"`
+	TraceID         string  `json:"trace_id"`
 }

@@ -334,19 +334,19 @@ func (e *Event) Add(key string, value interface{}) error {
 	if key == "" {
 		return nil
 	}
-	
+
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	
+
 	if err := e.ensureMutableLocked(); err != nil {
 		return err
 	}
-	
+
 	// Transition to active state if in created state
 	if e.state == "" || e.state == EventStateCreated {
 		e.setStateLocked(EventStateActive)
 	}
-	
+
 	// Find existing attribute with this key
 	for i := range e.Attrs {
 		if e.Attrs[i].Key == key {
@@ -401,7 +401,7 @@ func (e *Event) Add(key string, value interface{}) error {
 			}
 		}
 	}
-	
+
 	// Key doesn't exist - create new array field
 	e.Attrs = append(e.Attrs, Attr{
 		Key:   key,
@@ -422,7 +422,7 @@ func (e *Event) Set(attrs ...Attr) error {
 	if err := e.ensureMutableLocked(); err != nil {
 		return err
 	}
-	
+
 	// Transition to active state if in created state
 	if e.state == "" || e.state == EventStateCreated {
 		e.setStateLocked(EventStateActive)
@@ -1210,7 +1210,7 @@ func canonicalInt64(v any) (int64, bool) {
 	default:
 		return 0, false
 	}
-}	// ── Canonical key lookup ──────────────────────────────────────────────────────
+} // ── Canonical key lookup ──────────────────────────────────────────────────────
 
 var canonicalKeys = map[string]struct{}{
 	"timestamp": {}, "schema_version": {}, "event_version": {}, "event_id": {}, "request_id": {}, "trace_id": {},

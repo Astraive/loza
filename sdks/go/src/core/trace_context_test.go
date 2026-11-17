@@ -218,17 +218,17 @@ func TestTraceContextPropagation(t *testing.T) {
 // Requirements: 39.6
 func TestGenerateTraceID(t *testing.T) {
 	traceID := GenerateTraceID()
-	
+
 	// Verify length (32 hex characters = 16 bytes)
 	if len(traceID) != 32 {
 		t.Errorf("expected trace_id length 32, got %d", len(traceID))
 	}
-	
+
 	// Verify it's valid hex
 	if !IsValidTraceID(traceID) {
 		t.Errorf("expected valid trace_id, got %q", traceID)
 	}
-	
+
 	// Verify uniqueness (generate multiple and check they're different)
 	ids := make(map[string]bool)
 	for i := 0; i < 100; i++ {
@@ -244,17 +244,17 @@ func TestGenerateTraceID(t *testing.T) {
 // Requirements: 39.6
 func TestGenerateSpanID(t *testing.T) {
 	spanID := GenerateSpanID()
-	
+
 	// Verify length (16 hex characters = 8 bytes)
 	if len(spanID) != 16 {
 		t.Errorf("expected span_id length 16, got %d", len(spanID))
 	}
-	
+
 	// Verify it's valid hex
 	if !IsValidSpanID(spanID) {
 		t.Errorf("expected valid span_id, got %q", spanID)
 	}
-	
+
 	// Verify uniqueness (generate multiple and check they're different)
 	ids := make(map[string]bool)
 	for i := 0; i < 100; i++ {
@@ -281,7 +281,7 @@ func TestIsValidTraceID(t *testing.T) {
 		{"invalid characters", "0af7651916cd43dd8448eb211c80319g", false},
 		{"empty", "", false},
 	}
-	
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			result := IsValidTraceID(tt.traceID)
@@ -307,7 +307,7 @@ func TestIsValidSpanID(t *testing.T) {
 		{"invalid characters", "00f067aa0ba902bz", false},
 		{"empty", "", false},
 	}
-	
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			result := IsValidSpanID(tt.spanID)

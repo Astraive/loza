@@ -46,6 +46,12 @@ type MemoryKeyCache struct {
 	stopCleanup      chan struct{}
 	closeOnce        sync.Once
 	cleanupWG        sync.WaitGroup
+	mu              sync.RWMutex
+	defaultTTL      time.Duration
+	negativeTTL     time.Duration
+	cleanupInterval time.Duration
+	stopCleanup     chan struct{}
+	cleanupWG       sync.WaitGroup
 }
 
 // NewMemoryKeyCache creates a new cache with the given TTLs and the default

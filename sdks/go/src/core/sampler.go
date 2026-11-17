@@ -247,6 +247,7 @@ func SampleRateLimited(rate float64, window time.Duration) Sampler {
 //   - http.header.<name>
 //   - http.headers.<name>
 //   - <name>
+//
 // where <name> is lower-cased with "_" converted to "-".
 func SampleByHeader(header, value string) Sampler {
 	h := normalizeHeaderKey(header)

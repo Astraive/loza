@@ -245,6 +245,25 @@ func serviceRole(name string) string {
 
 	for _, rp := range rolePatterns {
 		for _, pattern := range rp.patterns {
+	rolePatterns := map[string][]string{
+		"database":     {"db", "database", "postgres", "mysql", "mongo", "redis", "dynamodb", "cockroach"},
+		"cache":        {"cache", "redis", "memcached", "memcache"},
+		"queue":        {"queue", "kafka", "rabbit", "sqs", "pubsub", "broker", "event"},
+		"api":          {"api", "gateway", "proxy", "edge", "frontend", "web", "app"},
+		"worker":       {"worker", "job", "task", "cron", "scheduler", "processor"},
+		"storage":      {"storage", "s3", "blob", "file", "blob", "gcs"},
+		"auth":         {"auth", "login", "oauth", "identity", "iam"},
+		"search":       {"search", "elastic", "solr", "index"},
+		"analytics":    {"analytics", "metric", "monitor", "telemetry", "trace"},
+		"notification": {"notification", "email", "sms", "push", "alert"},
+		"shipping":     {"shipping", "delivery", "logistics", "tracking"},
+		"payment":      {"payment", "billing", "checkout", "stripe", "paypal"},
+		"inventory":    {"inventory", "stock", "catalog", "product"},
+		"user":         {"user", "profile", "account", "member", "customer"},
+	}
+
+	for role, patterns := range rolePatterns {
+		for _, pattern := range patterns {
 			if strings.Contains(lower, pattern) {
 				return rp.role
 			}

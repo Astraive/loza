@@ -95,7 +95,7 @@ func TestRedisPublishSubscribe(t *testing.T) {
 		Topic:         topic,
 		ConsumerGroup: group,
 		Redis: eventbus.RedisConfig{
-			Addr:  redisAddr(),
+			Addr:   redisAddr(),
 			Stream: topic,
 			Group:  group,
 		},

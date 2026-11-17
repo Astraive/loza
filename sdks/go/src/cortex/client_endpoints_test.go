@@ -24,7 +24,7 @@ func TestClientEndpointVariantsAndOptions(t *testing.T) {
 		}
 	}))
 	defer srv.Close()
-	c := NewClient(srv.URL+"/").WithAPIKey("secret").WithAuthHeader("Authorization").WithHTTPClient(srv.Client())
+	c := NewClient(srv.URL + "/").WithAPIKey("secret").WithAuthHeader("Authorization").WithHTTPClient(srv.Client())
 	if c == nil {
 		t.Fatal("options returned nil client")
 	}

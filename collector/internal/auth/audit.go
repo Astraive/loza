@@ -64,12 +64,12 @@ func (l *SlogAuditLogger) LogAudit(ctx context.Context, event AuditEvent) {
 
 // Audit event names.
 const (
-	AuditKeyAuthenticated  = "key.authenticated"
-	AuditKeyFailed         = "key.failed"
-	AuditKeyRateLimited    = "key.rate_limited"
+	AuditKeyAuthenticated    = "key.authenticated"
+	AuditKeyFailed           = "key.failed"
+	AuditKeyRateLimited      = "key.rate_limited"
 	AuditKeyPermissionDenied = "key.permission_denied"
-	AuditKeyEnvDenied      = "key.env_denied"
-	AuditKeyOriginDenied   = "key.origin_denied"
-	AuditKeyIPDenied       = "key.ip_denied"
-	AuditKeyPayloadTooLarge = "key.payload_too_large"
+	AuditKeyEnvDenied        = "key.env_denied"
+	AuditKeyOriginDenied     = "key.origin_denied"
+	AuditKeyIPDenied         = "key.ip_denied"
+	AuditKeyPayloadTooLarge  = "key.payload_too_large"
 )

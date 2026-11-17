@@ -16,20 +16,20 @@ type CausalEvent struct {
 }
 
 type RemediationAction struct {
-	Action      string `json:"action"`
-	Description string `json:"description"`
-	SuccessRate float64 `json:"success_rate"`
-	AvgTimeToResolve int64 `json:"avg_time_to_resolve_seconds"`
-	Priority    int    `json:"priority"`
+	Action           string  `json:"action"`
+	Description      string  `json:"description"`
+	SuccessRate      float64 `json:"success_rate"`
+	AvgTimeToResolve int64   `json:"avg_time_to_resolve_seconds"`
+	Priority         int     `json:"priority"`
 }
 
 type IncidentContext struct {
 	IncidentID       string              `json:"incident_id"`
 	Timestamp        time.Time           `json:"timestamp"`
-	CausalChain     []*CausalEvent      `json:"causal_chain"`
-	RelatedServices []string           `json:"related_services"`
-	SimilarIncidents []*SimilarIncident `json:"similar_incidents"`
-	Symptoms       []Symptom          `json:"symptoms"`
+	CausalChain      []*CausalEvent      `json:"causal_chain"`
+	RelatedServices  []string            `json:"related_services"`
+	SimilarIncidents []*SimilarIncident  `json:"similar_incidents"`
+	Symptoms         []Symptom           `json:"symptoms"`
 	SuggestedActions []RemediationAction `json:"suggested_actions"`
 	Confidence    float64            `json:"confidence"`
 	Explain       string             `json:"explain"`
@@ -42,14 +42,17 @@ type IncidentContext struct {
 	Partial bool `json:"partial,omitempty"`
 	// Warnings holds a human-readable diagnostic for every failed subsystem.
 	Warnings []string `json:"warnings,omitempty"`
+	Confidence       float64             `json:"confidence"`
+	Explain          string              `json:"explain"`
+	ExplainReport    *ExplainReport      `json:"explain_report,omitempty"`
 }
 
 type ExplainReport struct {
-	Narrative              string              `json:"narrative"`
-	ConfidenceBreakdown    ConfidenceBreakdown `json:"confidence_breakdown"`
-	KeyFindings            []string            `json:"key_findings"`
-	DataGaps               []string            `json:"data_gaps"`
-	AlternativeHypotheses  []string            `json:"alternative_hypotheses"`
+	Narrative             string              `json:"narrative"`
+	ConfidenceBreakdown   ConfidenceBreakdown `json:"confidence_breakdown"`
+	KeyFindings           []string            `json:"key_findings"`
+	DataGaps              []string            `json:"data_gaps"`
+	AlternativeHypotheses []string            `json:"alternative_hypotheses"`
 }
 
 type ConfidenceBreakdown struct {

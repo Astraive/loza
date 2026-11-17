@@ -28,18 +28,18 @@ func (s *benchKeyStore) FindByKeyID(_ context.Context, _ string) (*auth.KeyRecor
 func makeBenchKeyRecord() *auth.KeyRecord {
 	hash := auth.HashSecret("bench_secret_value", benchServerSecret)
 	return &auth.KeyRecord{
-		ID:           "rec_bench",
-		OrgID:        "org_bench",
-		ProjectID:    "proj_bench",
-		KeyID:        "kBenchKey",
-		SecretHash:   hash,
-		Kind:         auth.KeyKindSecret,
-		Roles:        []auth.Role{auth.RoleIngestServer},
-		AllowedEnvs:     []string{"live", "test"},
-		AllowedServices: []string{"bench-service"},
-		MaxPayloadBytes:     262144,
+		ID:                   "rec_bench",
+		OrgID:                "org_bench",
+		ProjectID:            "proj_bench",
+		KeyID:                "kBenchKey",
+		SecretHash:           hash,
+		Kind:                 auth.KeyKindSecret,
+		Roles:                []auth.Role{auth.RoleIngestServer},
+		AllowedEnvs:          []string{"live", "test"},
+		AllowedServices:      []string{"bench-service"},
+		MaxPayloadBytes:      262144,
 		MaxRequestsPerMinute: 999999999,
-		MaxEventsPerMinute:  999999999,
+		MaxEventsPerMinute:   999999999,
 	}
 }
 

@@ -48,6 +48,7 @@ func AllSampler(samplers ...core.Sampler) core.Sampler { return core.AllSampler(
 
 // NotSampler inverts the decision of the wrapped sampler.
 func NotSampler(s core.Sampler) core.Sampler { return core.NotSampler(s) }
+
 // SampleFeatureFlag keeps events where a feature flag matches value.
 func SampleFeatureFlag(name string, value any) core.Sampler {
 	return core.SampleFeatureFlag(name, value)

@@ -271,7 +271,7 @@ func TestFullPipelineIngestToQuery(t *testing.T) {
 
 	// Verify the event data
 	var raw string
-	err = db.QueryRow("SELECT "+cfg.duckDBRawColumn+" FROM "+cfg.duckDBTable+" WHERE event_id = 'pipeline-1'").Scan(&raw)
+	err = db.QueryRow("SELECT " + cfg.duckDBRawColumn + " FROM " + cfg.duckDBTable + " WHERE event_id = 'pipeline-1'").Scan(&raw)
 	if err != nil {
 		t.Fatalf("query raw: %v", err)
 	}

@@ -46,22 +46,25 @@ func TestParseLozaDSNResolvesDefaultsAndOverrides(t *testing.T) {
 		service  string
 	}{
 		{
-			name: "secure default",
-			dsn: "loza://user:secret@example.com/demo",
-			baseURL: "https://example.com:443",
+			name:     "secure default",
+			dsn:      "loza://user:secret@example.com/demo",
+			baseURL:  "https://example.com:443",
 			username: "user", password: "secret", env: "default",
 		},
 		{
 			name: "public key with empty password",
 			dsn: "loza://lz_pub_key:@example.com/demo?tls=false&transport=http&env=prod&service=api",
 			baseURL: "http://example.com:80",
+			name:     "public key with empty password",
+			dsn:      "loza://lz_pub_key:@example.com/demo?tls=false&transport=grpc&env=prod&service=api",
+			baseURL:  "http://example.com:80",
 			username: "lz_pub_key", env: "prod", service: "api",
 		},
 		{
-			name: "localhost auto port",
-			dsn: "loza://localhost/demo",
+			name:    "localhost auto port",
+			dsn:     "loza://localhost/demo",
 			baseURL: "http://localhost:9308",
-			env: "default",
+			env:     "default",
 		},
 		{
 			name: "uppercase localhost auto port",
@@ -73,13 +76,16 @@ func TestParseLozaDSNResolvesDefaultsAndOverrides(t *testing.T) {
 			name: "explicit tls port and IPv6",
 			dsn: "loza://user:secret@[::1]:9443/demo?tls=true&transport=http",
 			baseURL: "https://[::1]:9443",
+			name:     "explicit tls port and IPv6",
+			dsn:      "loza://user:secret@[::1]:9443/demo?tls=true&transport=otlp",
+			baseURL:  "https://[::1]:9443",
 			username: "user", password: "secret", env: "default",
 		},
 		{
-			name: "localhost secure override",
-			dsn: "loza://localhost:9443/demo?tls=true",
+			name:    "localhost secure override",
+			dsn:     "loza://localhost:9443/demo?tls=true",
 			baseURL: "https://localhost:9443",
-			env: "default",
+			env:     "default",
 		},
 	}
 	for _, tc := range cases {
@@ -113,17 +119,17 @@ func TestNewResolvesEnvironmentAndPrecedence(t *testing.T) {
 	}
 
 	explicitClient, err := New(ConnectionConfig{
-		DSN: "loza://dsn-user:dsn-pass@example.com/dsn-collector?env=dsn-env&service=dsn-service",
-		Endpoint: "http://localhost:8080/",
-		Collector: "explicit",
-		APIKey: "explicit-key",
-		Username: "explicit-user",
-		Password: "explicit-pass",
-		Env: "explicit-env",
-		Service: "explicit-service",
-		Timeout: time.Second,
+		DSN:              "loza://dsn-user:dsn-pass@example.com/dsn-collector?env=dsn-env&service=dsn-service",
+		Endpoint:         "http://localhost:8080/",
+		Collector:        "explicit",
+		APIKey:           "explicit-key",
+		Username:         "explicit-user",
+		Password:         "explicit-pass",
+		Env:              "explicit-env",
+		Service:          "explicit-service",
+		Timeout:          time.Second,
 		MaxResponseBytes: 42,
-		HTTPClient: &http.Client{},
+		HTTPClient:       &http.Client{},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -189,9 +195,9 @@ func TestNewRejectsBearerOverPlaintext(t *testing.T) {
 
 func TestNewAcceptsPublicBasicUserAndLocalHTTP(t *testing.T) {
 	client, err := New(ConnectionConfig{
-		Endpoint: "http://127.0.0.1:9308/",
+		Endpoint:  "http://127.0.0.1:9308/",
 		Collector: "demo_1",
-		Username: "lz_pub_key",
+		Username:  "lz_pub_key",
 	})
 	if err != nil {
 		t.Fatal(err)

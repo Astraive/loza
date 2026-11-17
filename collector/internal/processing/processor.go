@@ -127,12 +127,12 @@ func (o DeliveryOutcome) FirstError() error {
 }
 
 type Result struct {
-	Accepted   bool
-	Invalid    bool
+	Accepted    bool
+	Invalid     bool
 	Quarantined bool
-	Deduped    bool
-	Outcome    DeliveryOutcome
-	Err        error
+	Deduped     bool
+	Outcome     DeliveryOutcome
+	Err         error
 }
 
 // appendWriter is the minimal file surface used by the DLQ and quarantine
