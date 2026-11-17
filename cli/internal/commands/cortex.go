@@ -282,11 +282,13 @@ func RunCortexReconstruct(ctx context.Context, cfg config.Config, args []string)
 		return fmt.Errorf("decode response: %w", err)
 	}
 
-	outputIncidentContext(context)
+	if err := outputIncidentContext(context); err != nil {
+		return err
+	}
 	return nil
 }
 
-func outputIncidentContext(ctx map[string]interface{}) {
+func outputIncidentContext(ctx map[string]interface{}) error {
 	output.PrintSection("Incident Context")
 
 	fmt.Printf("Incident ID: %s\n", ctx["incident_id"])
@@ -329,9 +331,15 @@ func outputIncidentContext(ctx map[string]interface{}) {
 				} else {
 					fmt.Printf("  - %s\n", action["action"])
 				}
+				rate, ok := action["success_rate"].(float64)
+				if !ok {
+					return fmt.Errorf("suggested action %v: missing or invalid success_rate", action["action"])
+				}
+				fmt.Printf("  - %s (success rate: %.1f%%)\n", action["action"], rate*100)
 			}
 		}
 	}
+	return nil
 }
 
 func RunCortexSimilar(ctx context.Context, cfg config.Config, args []string) error {
@@ -502,6 +510,11 @@ func RunCortexGraph(ctx context.Context, cfg config.Config, args []string) error
 	edges, ok := graph["edges"].([]interface{})
 	if !ok {
 		return fmt.Errorf("decode graph: missing or invalid 'edges' field (expected an array)")
+		return fmt.Errorf("graph response: missing or invalid 'nodes' array")
+	}
+	edges, ok := graph["edges"].([]interface{})
+	if !ok {
+		return fmt.Errorf("graph response: missing or invalid 'edges' array")
 	}
 
 	fmt.Printf("Graph: %d nodes, %d edges\n", len(nodes), len(edges))

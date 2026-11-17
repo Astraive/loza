@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/url"
 	"regexp"
+	"strings"
 
 	"github.com/astraive/loza/cli/internal/client"
 	"github.com/astraive/loza/cli/internal/config"
@@ -29,6 +30,12 @@ func SinksCommand(ctx context.Context, cfg config.Config, args []string) error {
 	if len(args) > 0 && len(args[0]) > 0 && args[0][0] != '-' {
 		sub = args[0]
 		args = args[1:]
+	if len(args) > 0 {
+		candidate := strings.TrimSpace(args[0])
+		if candidate != "" && !strings.HasPrefix(candidate, "-") {
+			sub = candidate
+			args = args[1:]
+		}
 	}
 
 	switch sub {

@@ -244,5 +244,67 @@ func TestRunBatchesEventsWithPositiveBatchSize(t *testing.T) {
 	defer mu.Unlock()
 	if requests != 2 {
 		t.Fatalf("expected 2 batched requests, got %d", requests)
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+)
+
+// TestRunnerConfigValidateRejectsInvalidNumbers covers the divide-by-zero at
+// runner.go:32 (Workers == 0) and other numeric inputs that would panic or
+// produce nonsense. Each case must yield an error, never a panic.
+func TestRunnerConfigValidateRejectsInvalidNumbers(t *testing.T) {
+	tests := []struct {
+		name    string
+		cfg     RunnerConfig
+		wantErr string
+	}{
+		{"zero workers", RunnerConfig{Events: 10, Workers: 0, BatchSize: 1}, "workers"},
+		{"negative workers", RunnerConfig{Events: 10, Workers: -1, BatchSize: 1}, "workers"},
+		{"zero events", RunnerConfig{Events: 0, Workers: 1, BatchSize: 1}, "events"},
+		{"negative events", RunnerConfig{Events: -1, Workers: 1, BatchSize: 1}, "events"},
+		{"zero batch size", RunnerConfig{Events: 10, Workers: 1, BatchSize: 0}, "batch size"},
+		{"negative body size", RunnerConfig{Events: 10, Workers: 1, BatchSize: 1, BodySize: -1}, "body size"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.cfg.Validate()
+			if err == nil {
+				t.Fatalf("expected an error for %+v, got nil", tt.cfg)
+			}
+			if !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("expected error containing %q, got %v", tt.wantErr, err)
+			}
+		})
+	}
+}
+
+// TestRunRejectsZeroWorkers ensures Run itself guards the division, not just
+// direct Validate callers.
+func TestRunRejectsZeroWorkers(t *testing.T) {
+	_, err := Run(context.Background(), RunnerConfig{Events: 10, Workers: 0, BatchSize: 1})
+	if err == nil || !strings.Contains(err.Error(), "workers") {
+		t.Fatalf("expected a workers error, got %v", err)
+	}
+}
+
+func TestRunAcceptsValidConfig(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	defer srv.Close()
+
+	report, err := Run(context.Background(), RunnerConfig{
+		URL:       srv.URL,
+		Events:    4,
+		Workers:   2,
+		BatchSize: 2,
+		BodySize:  16,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if report.Accepted != 4 {
+		t.Fatalf("expected 4 accepted events, got %d", report.Accepted)
 	}
 }
