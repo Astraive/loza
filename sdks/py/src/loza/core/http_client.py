@@ -545,6 +545,21 @@ def _quote_segment(value: Any) -> str:
     ``safe`` set neutralizes ``/``, ``?`` and ``#`` (and other reserved bytes).
     """
     return quote(str(value), safe="")
+def _collector_path(*segments: Any) -> str:
+    """Build a collector control-plane path from literal and ID segments.
+
+    Every segment is percent-encoded with ``safe=""`` so caller-supplied IDs
+    containing ``/``, ``?``, ``#`` or similar characters cannot alter the
+    request target. ``quote`` treats ``.`` as unreserved, so a lone ``.`` or
+    ``..`` segment is encoded explicitly to prevent path traversal.
+    """
+    encoded: list[str] = []
+    for segment in segments:
+        value = quote(str(segment), safe="")
+        if value in {".", ".."}:
+            value = value.replace(".", "%2E")
+        encoded.append(value)
+    return "/" + "/".join(encoded)
 
 
 def _collector_request(
@@ -595,6 +610,13 @@ def _collector_delete(self, **params):
     user_id = params.get("user_id")
     if user_id:
         return _collector_request(self, "DELETE", f"/events/by-user/{_quote_segment(user_id)}")
+        return _collector_request(self, "DELETE", _collector_path("events", event_id))
+    tenant_id = params.get("tenant_id")
+    if tenant_id:
+        return _collector_request(self, "DELETE", _collector_path("events", "by-tenant", tenant_id))
+    user_id = params.get("user_id")
+    if user_id:
+        return _collector_request(self, "DELETE", _collector_path("events", "by-user", user_id))
     raise ValueError("delete requires one of: event_id/id, tenant_id, user_id")
 
 
@@ -612,6 +634,11 @@ def _collector_dlq_read(self, dlq_id):
 
 def _collector_dlq_replay(self, dlq_id):
     return _collector_request(self, "POST", f"/dlq/{_quote_segment(dlq_id)}/replay")
+    return _collector_request(self, "GET", _collector_path("dlq", dlq_id))
+
+
+def _collector_dlq_replay(self, dlq_id):
+    return _collector_request(self, "POST", _collector_path("dlq", dlq_id, "replay"))
 
 
 def _collector_keys_create(self, **params):
@@ -624,6 +651,11 @@ def _collector_keys_revoke(self, key_id):
 
 def _collector_keys_rotate(self, key_id):
     return _collector_request(self, "POST", f"/keys/{_quote_segment(key_id)}/rotate")
+    return _collector_request(self, "DELETE", _collector_path("keys", key_id))
+
+
+def _collector_keys_rotate(self, key_id):
+    return _collector_request(self, "POST", _collector_path("keys", key_id, "rotate"))
 
 
 def _collector_sinks_list(self):
@@ -632,6 +664,7 @@ def _collector_sinks_list(self):
 
 def _collector_sinks_test(self, name):
     return _collector_request(self, "POST", f"/sinks/{_quote_segment(name)}/test")
+    return _collector_request(self, "POST", _collector_path("sinks", name, "test"))
 
 
 def _collector_policy_validate(self, policy):
