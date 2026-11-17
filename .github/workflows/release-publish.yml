@@ -59,17 +59,27 @@ jobs:
 
       - run: python scripts/release/validate-manifests.py
 
+      - name: Validate workflow inputs
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+          RELEASE_COMPONENTS: ${{ inputs.components }}
+        run: python scripts/release/validate-inputs.py
+
       - id: plan
         shell: bash
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+          RELEASE_COMPONENTS: ${{ inputs.components }}
         run: |
           python - <<'PY' >> "$GITHUB_OUTPUT"
           import json
+          import os
           import re
           import sys
           import yaml
 
-          version = "${{ inputs.version }}"
-          selected = [item.strip() for item in "${{ inputs.components }}".split(",") if item.strip()]
+          version = os.environ["RELEASE_VERSION"]
+          selected = [item.strip() for item in os.environ["RELEASE_COMPONENTS"].split(",") if item.strip()]
           if not re.match(r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$", version):
               sys.exit("manual publish version must be X.Y.Z without leading v")
 

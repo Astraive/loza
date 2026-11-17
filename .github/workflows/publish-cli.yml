@@ -107,6 +107,10 @@ jobs:
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.11"
+      - name: Validate workflow inputs
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: python scripts/release/validate-inputs.py
       - name: Use local spec module for dry run
         if: inputs.dry_run == true
         run: go mod edit "-replace=github.com/astraive/loza/spec=../spec"
@@ -116,15 +120,18 @@ jobs:
         working-directory: cli
         env:
           OUTPUT: ../dist/loza${{ matrix.extension }}
+          RELEASE_VERSION: ${{ inputs.version }}
         run: |
           mkdir -p ../dist
           CGO_ENABLED=1 go build -trimpath \
-            -ldflags "-s -w -X github.com/astraive/loza/cli/internal/version.Version=${{ inputs.version }}" \
+            -ldflags "-s -w -X github.com/astraive/loza/cli/internal/version.Version=${RELEASE_VERSION}" \
             -o "$OUTPUT" ./cmd/loza
       - name: Smoke test native CLI
         shell: bash
         working-directory: cli
-        run: ../dist/loza${{ matrix.extension }} > ../dist/smoke.txt
+        env:
+          EXTENSION: ${{ matrix.extension }}
+        run: ../dist/loza${EXTENSION} > ../dist/smoke.txt
       - name: Package native CLI
         shell: bash
         env:
@@ -206,6 +213,11 @@ jobs:
           python-version: "3.11"
       - run: python -m pip install pyyaml
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+      - name: Validate workflow inputs
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: python scripts/release/validate-inputs.py
+      - uses: actions/download-artifact@v4
         with:
           pattern: loza-*
           merge-multiple: true
@@ -226,11 +238,13 @@ jobs:
           gh api --method POST "repos/${GITHUB_REPOSITORY}/git/refs" -f "ref=refs/tags/${tag}" -f "sha=${GITHUB_SHA}"
       - name: Verify go install target
         shell: bash
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
         run: |
           set -euo pipefail
           for attempt in {1..12}; do
             if GOWORK=off GOPROXY=https://proxy.golang.org,direct \
-              go install github.com/astraive/loza/cli/cmd/loza@v${{ inputs.version }}; then
+              go install github.com/astraive/loza/cli/cmd/loza@v${RELEASE_VERSION}; then
               exit 0
             fi
             if [[ "$attempt" == "12" ]]; then

@@ -51,13 +51,22 @@ jobs:
       - run: python -m pip install pyyaml
         working-directory: .
 
+      - name: Validate workflow inputs
+        working-directory: .
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+          RELEASE_COMPONENT: ${{ inputs.component }}
+        run: python scripts/release/validate-inputs.py
+
       - run: python scripts/release/validate-manifests.py --component sdk-js
         working-directory: .
 
       - name: Enforce Bun package identity
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
         run: |
           test "$(bun -e "console.log((await Bun.file('package.json').json()).name)")" = "@astraive/loza"
-          test "$(bun -e "console.log((await Bun.file('package.json').json()).version)")" = "${{ inputs.version }}"
+          test "$(bun -e "console.log((await Bun.file('package.json').json()).version)")" = "$RELEASE_VERSION"
 
       - run: bun install --frozen-lockfile
       - run: bun run build

@@ -42,6 +42,12 @@ jobs:
       - name: Install manifest tooling
         run: python -m pip install pyyaml
 
+      - name: Validate workflow inputs
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+          RELEASE_COMPONENT: ${{ inputs.component }}
+        run: python scripts/release/validate-inputs.py
+
       - name: Validate manifest
         run: python scripts/release/validate-manifests.py --component sdk-go
 
@@ -65,6 +71,8 @@ jobs:
       - name: Verify published module resolution
         if: inputs.dry_run != true
         shell: bash
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
         run: |
           set -euo pipefail
           tmp="$(mktemp -d)"
@@ -73,7 +81,7 @@ jobs:
           go mod init verify-loza-sdk
           for attempt in {1..12}; do
             if GOWORK=off GOPROXY=https://proxy.golang.org,direct \
-              go get "github.com/astraive/loza/sdks/go@v${{ inputs.version }}" && \
+              go get "github.com/astraive/loza/sdks/go@v${RELEASE_VERSION}" && \
               go list -m github.com/astraive/loza/sdks/go; then
               exit 0
             fi
