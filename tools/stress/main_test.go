@@ -283,5 +283,39 @@ func TestErrorRate(t *testing.T) {
 				t.Errorf("errorRate(%d, %d) = %v, want %v", tt.errors, tt.total, got, tt.want)
 			}
 		})
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+func TestFallbackVersionMatchesCurrentRelease(t *testing.T) {
+	if fallbackVersion != "0.4.1" {
+		t.Fatalf("fallbackVersion = %q, want current release 0.4.1", fallbackVersion)
+	}
+}
+
+func TestDefaultOutputPathIsPortable(t *testing.T) {
+	if filepath.IsAbs(defaultOutputPath) {
+		t.Fatalf("defaultOutputPath %q must be relative", defaultOutputPath)
+	}
+	if strings.Contains(defaultOutputPath, ":") || strings.HasPrefix(defaultOutputPath, `\\`) {
+		t.Fatalf("defaultOutputPath %q must not contain a Windows drive or UNC prefix", defaultOutputPath)
+	}
+}
+
+func TestWriteResultsJSONCreatesParentDirectories(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "reports", "nested", "stress-test-results.json")
+
+	if err := writeResultsJSON(target, []byte(`{"ok":true}`)); err != nil {
+		t.Fatalf("writeResultsJSON: %v", err)
+	}
+	got, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatalf("read results: %v", err)
+	}
+	if string(got) != `{"ok":true}` {
+		t.Fatalf("results = %q, want %q", got, `{"ok":true}`)
 	}
 }

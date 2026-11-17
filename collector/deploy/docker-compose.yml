@@ -3,9 +3,10 @@ services:
     build:
       context: ../..
       dockerfile: collector/deploy/Dockerfile.collector
-    command: ["./loza-collector", "run", "-c", "/app/build/loza-collector.yaml"]
+    command: ["./loza-collector", "run", "-c", "/app/configs/loza.local.yaml"]
     environment:
       LOZA_LQL_BINARY: /usr/local/bin/lql
+      LOZA_STORAGE_ENCRYPTION_KEY: dev-only-not-for-production
     ports:
       - "9308:9308"
     volumes:
@@ -23,7 +24,7 @@ services:
       collector:
         condition: service_healthy
     volumes:
-      - ../build:/payload
+      - ../deploy:/payload
     entrypoint:
       - /bin/sh
       - -c

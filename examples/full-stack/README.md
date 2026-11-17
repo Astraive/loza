@@ -20,10 +20,10 @@ docker compose up -d
 
 ```bash
 # Collector health
-curl http://localhost:9308/healthz
+curl http://localhost:9308/health
 
-# Prometheus targets
-curl http://localhost:9311/core/metrics
+# Collector metrics (Prometheus exposition)
+curl http://localhost:9308/metrics
 
 # Grafana dashboards
 open http://localhost:3000

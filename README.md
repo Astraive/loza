@@ -375,6 +375,7 @@ Run it locally:
 ```bash
 docker run --rm \
   -p 9308:9308 \
+  -e LOZA_STORAGE_ENCRYPTION_KEY=dev-only-not-for-production \
   -v "$PWD/collector/configs:/configs:ro" \
   astraive/loza:latest \
   run -c /configs/loza.local.yaml

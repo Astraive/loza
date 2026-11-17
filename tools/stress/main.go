@@ -10,6 +10,7 @@ import (
 	"math/rand"
 	"net/http"
 	"os"
+	"path/filepath"
 	"runtime"
 	"sort"
 	"strings"
@@ -17,7 +18,8 @@ import (
 	"time"
 )
 
-const fallbackVersion = "0.2.6"
+const fallbackVersion = "0.4.1"
+const defaultOutputPath = "docs/stress-test-results.json"
 
 // defaultJSONOutputPath is a repo-relative path (unlike the old hardcoded
 // absolute Windows-style path) so results are written where they are expected
@@ -274,6 +276,9 @@ func writeAndReportJSONResults(out io.Writer, path string, results map[string]an
 }
 
 func main() {
+	outputPath := flag.String("output", defaultOutputPath, "path to write the JSON results (relative to the current directory)")
+	flag.Parse()
+
 	// Limit OS threads on Windows to avoid thread exhaustion
 	runtime.GOMAXPROCS(32)
 	jsonOutputPath := flag.String("json-output", defaultJSONOutputPath, "path to write the JSON stress test results")
@@ -838,6 +843,10 @@ func main() {
 
 	// Write JSON results to the configured path, reporting failures honestly.
 	results := map[string]any{
+	fmt.Printf("Error Rate:     %.4f%%\n", float64(totalErrors)/float64(totalReqs)*100)
+
+	// Write JSON results
+	jsonData, _ := json.MarshalIndent(map[string]any{
 		"date":         time.Now().Format(time.RFC3339),
 		"target":       "localhost",
 		"collector":    collectorURL,
@@ -853,6 +862,20 @@ func main() {
 		"error_rate":  errorRate(totalErrors, totalReqs) * 100,
 		"tests":       jsonResults,
 	}, "", "  ")
-	os.WriteFile("/e/astraive/loza/docs/stress-test-results.json", jsonData, 0644)
-	fmt.Println("\nJSON results written to docs/stress-test-results.json")
+	if err := writeResultsJSON(*outputPath, jsonData); err != nil {
+		fmt.Printf("\nFailed to write JSON results to %s: %v\n", *outputPath, err)
+		return
+	}
+	fmt.Printf("\nJSON results written to %s\n", *outputPath)
+}
+
+// writeResultsJSON writes stress-test results to path, creating parent
+// directories so a portable relative default works from a fresh clone.
+func writeResultsJSON(path string, data []byte) error {
+	if dir := filepath.Dir(path); dir != "." {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return err
+		}
+	}
+	return os.WriteFile(path, data, 0o644)
 }
