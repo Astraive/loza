@@ -1,6 +1,6 @@
 # API Reference
 
-Cortex exposes HTTP REST, gRPC, WebSocket, and GraphQL APIs. This document covers the HTTP REST endpoints.
+Cortex exposes HTTP REST, gRPC, WebSocket, and GraphQL APIs. REST endpoints are documented below; gRPC authentication is described in [gRPC Authentication](#grpc-authentication).
 
 ## Authentication
 
@@ -15,6 +15,28 @@ The `/healthz`, `/readyz`, and `/metrics` endpoints do not require authenticatio
 ## Rate Limiting
 
 When `rate_limit.enabled` is true, requests are throttled per API key and per IP address. Limits are configured via `rate_limit.per_api_key_rpm` and `rate_limit.per_ip_rpm`.
+
+## gRPC Authentication
+
+The gRPC API (port 9313 by default) is protected by unary and stream interceptors installed when the server is constructed. Both interceptors use the same `Auth` component, API keys, and rate limiter as the HTTP API, so a single configuration covers both transports.
+
+When `authentication.enabled` is true, **every** gRPC RPC — including `StreamEvents` and `Healthz` — rejects calls with missing or invalid credentials. Unlike the HTTP `/healthz` probe, gRPC health checks are authenticated by design (deny by default). Kubernetes probes use the HTTP endpoint, so this does not affect liveness/readiness checks.
+
+Pass credentials in incoming gRPC metadata using either form:
+
+```
+x-api-key: <api-key>
+authorization: Bearer <api-key>
+```
+
+Roles mirror the HTTP route policy:
+
+| Required role | gRPC methods |
+|---|---|
+| `writer` | `IngestEvent`, `IngestBatch`, `RecordFeedback` |
+| `reader` | `Reconstruct`, `GetGraph`, `StreamEvents`, `QueryLifecycle`, `Healthz` |
+
+A caller's role is checked with the same `reader < writer < admin` hierarchy as HTTP: `reader` keys can only call reader methods, `writer` keys can call both, and `admin` keys can call all methods. Insufficient roles return `PermissionDenied`; missing/invalid credentials return `Unauthenticated`. Rate limiting (`rate_limit.enabled`) applies to gRPC calls per API key and per peer IP, returning `ResourceExhausted` when exceeded. TLS encrypts the transport but does not replace credential validation; mTLS identities are not yet mapped to roles, so an API key or bearer token is still required when authentication is enabled.
 
 ## Endpoints
 

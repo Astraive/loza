@@ -3,7 +3,10 @@ package grpcserver
 import (
 	"github.com/astraive/loza/cortex/internal/api"
 	"github.com/astraive/loza/cortex/internal/config"
+	"github.com/astraive/loza/cortex/internal/middleware"
+	"github.com/astraive/loza/cortex/internal/redaction"
 	"github.com/astraive/loza/cortex/internal/storage"
+	"google.golang.org/grpc"
 )
 
 func New(cfg *config.Config, stor storage.Storage) *api.GRPCServer {
@@ -32,4 +35,24 @@ func redactionConfig(cfg *config.Config) redaction.Config {
 	}
 	return redactCfg
 	return api.NewGRPCServer(cfg, stor)
+}
+
+// ServerOptions returns the gRPC server options that install the shared auth,
+// role and rate-limit interceptors. The server binary applies these at
+// construction so every registered RPC is protected by default.
+func ServerOptions(cfg *config.Config) []grpc.ServerOption {
+	if cfg == nil {
+		return nil
+	}
+
+	var rateLimit *middleware.RateLimiter
+	if cfg.RateLimit.Enabled {
+		rateLimit = middleware.NewRateLimiter(cfg.RateLimit.PerAPIKeyRPM, cfg.RateLimit.PerIPRPM)
+	}
+
+	interceptor := middleware.NewGRPCAuthInterceptor(middleware.NewAuth(&cfg.Authentication), rateLimit)
+	return []grpc.ServerOption{
+		grpc.ChainUnaryInterceptor(interceptor.Unary),
+		grpc.ChainStreamInterceptor(interceptor.Stream),
+	}
 }

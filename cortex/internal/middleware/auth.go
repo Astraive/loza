@@ -55,6 +55,8 @@ func NewAuth(cfg *config.AuthenticationConfig) *Auth {
 	a.enabled = cfg.Enabled
 	if len(cfg.APIKeys) == 0 {
 		return a
+	if a.cfg == nil || len(a.cfg.APIKeys) == 0 {
+		return
 	}
 
 	// Determine HMAC secret: use explicit config or auto-generate from API keys.
@@ -118,13 +120,26 @@ func (a *Auth) authenticate(r *http.Request) *AuthResult {
 	apiKeyHeader := "X-API-Key"
 
 	providedKey := strings.TrimSpace(r.Header.Get(apiKeyHeader))
+	providedKey := strings.TrimSpace(r.Header.Get("X-API-Key"))
 	if providedKey == "" {
 		authHeader := strings.TrimSpace(r.Header.Get("Authorization"))
 		if strings.HasPrefix(strings.ToLower(authHeader), "bearer ") {
 			providedKey = strings.TrimSpace(authHeader[len("Bearer "):])
 		}
 	}
+	return a.AuthenticateToken(providedKey)
+}
 
+// AuthenticateToken validates a raw credential (an API key or the value of a
+// bearer token) with the same constant-time HMAC comparison used by the HTTP
+// middleware. It is shared with the gRPC interceptors so both transports
+// enforce a single authentication policy.
+func (a *Auth) AuthenticateToken(providedKey string) *AuthResult {
+	a.once.Do(a.init)
+
+	result := &AuthResult{Authorized: false}
+
+	providedKey = strings.TrimSpace(providedKey)
 	if providedKey == "" {
 		result.Failure = "missing credentials"
 		result.FailureCode = "missing"
@@ -150,7 +165,12 @@ func (a *Auth) authenticate(r *http.Request) *AuthResult {
 }
 
 func (a *Auth) authorizeRole(r *http.Request, requiredRole string) bool {
-	result := GetAuthResult(r.Context())
+	return a.AuthorizeRole(GetAuthResult(r.Context()), requiredRole)
+}
+
+// AuthorizeRole reports whether a validated auth result satisfies the
+// required role using the same reader < writer < admin hierarchy as HTTP.
+func (a *Auth) AuthorizeRole(result *AuthResult, requiredRole string) bool {
 	if result == nil {
 		return false
 	}
