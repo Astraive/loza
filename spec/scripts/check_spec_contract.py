@@ -207,16 +207,19 @@ def check_strict_schema_contract() -> list[str]:
     """Conformance must use the published strict schema definition."""
     errors: list[str] = []
     strict_schema = _load_json(CANONICAL_SCHEMA_DIR / "event.strict.schema.json")
-    branches = strict_schema.get("allOf", [])
-    has_ref = any(
-        isinstance(branch, dict) and "$ref" in branch for branch in branches
-    )
-    has_unevaluated = any(
-        isinstance(branch, dict) and branch.get("unevaluatedProperties") is False
-        for branch in branches
-    )
-    if not (has_ref and has_unevaluated):
-        errors.append("published strict schema must use allOf with $ref and unevaluatedProperties: false")
+    event_schema = _load_json(CANONICAL_SCHEMA_DIR / "event.schema.json")
+    # Self-contained definition: re-declare the base schema with a closed root.
+    # An allOf + sibling unevaluatedProperties definition is not portable
+    # (jsonschema 4.26 does not propagate $ref properties annotations across
+    # allOf branches, so every valid event is rejected).
+    if strict_schema.get("additionalProperties") is not False:
+        errors.append("published strict schema must set root additionalProperties: false")
+    if strict_schema.get("properties") != event_schema.get("properties"):
+        errors.append("published strict schema properties drifted from the canonical event schema")
+    if strict_schema.get("required") != event_schema.get("required"):
+        errors.append("published strict schema required fields drifted from the canonical event schema")
+    if "$ref" in strict_schema or "allOf" in strict_schema:
+        errors.append("published strict schema must be self-contained, not an allOf/$ref wrapper")
 
     manifest = _load_json(SPEC_ROOT / "conformance" / "manifest.json")
     expected = "../schemas/json/event.strict.schema.json"

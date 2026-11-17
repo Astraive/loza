@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import importlib.util
 import json
-from copy import deepcopy
 from pathlib import Path
 
 import pytest
@@ -49,15 +48,15 @@ def test_published_strict_schema_enforces_strictness() -> None:
     pytest.importorskip("jsonschema")
     from jsonschema import Draft202012Validator
 
-    strict = deepcopy(
-        _load_json(SPEC_ROOT / "schemas" / "json" / "event.strict.schema.json")
-    )
-    event = _load_json(SPEC_ROOT / "schemas" / "json" / "event.schema.json")
-    assert isinstance(strict, dict) and isinstance(event, dict)
-    strict["allOf"][0] = event  # inline the $ref target
+    strict = _load_json(SPEC_ROOT / "schemas" / "json" / "event.strict.schema.json")
+    assert isinstance(strict, dict)
     validator = Draft202012Validator(strict)
 
     alias = _load_json(SPEC_ROOT / "fixtures" / "invalid" / "strict_event_type_alias.json")
+    loose_alias = _load_json(SPEC_ROOT / "fixtures" / "valid" / "loose_event_type_alias.json")
     minimal = _load_json(SPEC_ROOT / "fixtures" / "valid" / "minimal_event.json")
+    http_success = _load_json(SPEC_ROOT / "fixtures" / "valid" / "http_success.json")
     assert list(validator.iter_errors(alias)), "strict schema must reject the legacy alias"
+    assert list(validator.iter_errors(loose_alias)), "strict schema must reject the loose-only alias"
     assert not list(validator.iter_errors(minimal)), "strict schema must accept canonical events"
+    assert not list(validator.iter_errors(http_success)), "strict schema must accept all canonical fields"
