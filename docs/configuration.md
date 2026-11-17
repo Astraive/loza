@@ -577,6 +577,32 @@ export LOZA_LOGGING_LEVEL="debug"
 export LOZA_RELIABILITY_MODE="spool"
 ```
 
+## Cortex TLS
+
+Cortex serves both HTTP and gRPC over plaintext by default (`tls.enabled: false`).
+To protect API keys and incident data, enable TLS and provide a server key pair:
+
+```yaml
+tls:
+  enabled: true
+  cert_file: /etc/loza/cortex/tls.crt
+  key_file: /etc/loza/cortex/tls.key
+  min_version: "1.2"      # "1.2" (default) or "1.3"
+  mutual_tls: false
+  client_ca_file: ""
+```
+
+When `tls.enabled: true`, the HTTP listener uses `ListenAndServeTLS` and gRPC
+uses the same TLS settings, so both enforce `min_version`. Setting
+`mutual_tls: true` requires `client_ca_file` and makes Cortex require verified
+client certificates signed by that CA. Missing or invalid cert/key/CA settings
+fail startup with a clear error; Cortex never silently falls back to plaintext
+when TLS is enabled.
+
+`CORTEX_TLS_ENABLED`, `CORTEX_TLS_CERT_FILE`, and `CORTEX_TLS_KEY_FILE` override
+the corresponding fields at runtime. `min_version`, `mutual_tls`, and
+`client_ca_file` are configured in the YAML file.
+
 ## Default Configuration
 
 The default configuration is embedded in LOZA binaries. To see defaults:

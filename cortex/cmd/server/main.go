@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"crypto/tls"
 	"flag"
 	"fmt"
 	"net"
@@ -94,10 +95,19 @@ func main() {
 	var grpcReady <-chan *grpc.Server
 	if cfg.GRPC.Enabled {
 		grpcReady = startGRPCServer(cfg, stor)
+	// Build the TLS config once so an invalid configuration fails startup
+	// before any listener is opened, and so HTTP and gRPC share the same
+	// MinVersion / mTLS posture.
+	tlsCfg, err := config.BuildTLSConfig(cfg.TLS)
+	if err != nil {
+		log.Fatal().Err(err).Msg("Invalid TLS configuration")
 	}
 
-	addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)
-	log.Info().Str("addr", addr).Msg("Starting HTTP server")
+	if cfg.GRPC.Enabled {
+		go startGRPCServer(cfg, stor, tlsCfg)
+	}
+
+	log.Info().Str("addr", httpAddr(cfg)).Msg("Starting HTTP server")
 
 	cortexServer := httpserver.New(cfg, stor)
 	defer cortexServer.Stop()
@@ -122,6 +132,36 @@ func main() {
 		stopSignals()
 	case <-processCtx.Done():
 		log.Info().Msg("Shutting down server...")
+	httpSrv := newHTTPServer(cfg, tlsCfg, httpserver.Handler(cfg, stor))
+
+	go func() {
+		var err error
+		if cfg.TLS.Enabled {
+			err = httpSrv.ListenAndServeTLS(cfg.TLS.CertFile, cfg.TLS.KeyFile)
+		} else {
+			err = httpSrv.ListenAndServe()
+		}
+		if err != nil && err != http.ErrServerClosed {
+			log.Fatal().Err(err).Msg("Server failed")
+		}
+	}()
+
+	<-processCtx.Done()
+	log.Info().Msg("Shutting down server...")
+
+	if grpcServer != nil {
+		stopped := make(chan struct{})
+		go func() {
+			grpcServer.GracefulStop()
+			close(stopped)
+		}()
+		select {
+		case <-stopped:
+			log.Info().Msg("gRPC server stopped")
+		case <-time.After(10 * time.Second):
+			log.Warn().Msg("gRPC graceful stop timed out, forcing")
+			grpcServer.Stop()
+		}
 	}
 
 	shutdownGRPCServer(grpcReady)
@@ -196,6 +236,54 @@ func startGRPCServer(cfg *config.Config, stor storage.Storage) <-chan *grpc.Serv
 			// so min_version and mutual TLS are enforced on gRPC too.
 			opts = append(opts, grpc.Creds(credentials.NewTLS(grpcTLSCfg)))
 		}
+// httpAddr returns the configured HTTP listen address.
+func httpAddr(cfg *config.Config) string {
+	return fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)
+}
+
+// newHTTPServer builds the HTTP server and attaches the shared TLS config so
+// that ListenAndServeTLS enforces MinVersion and mTLS. A nil tlsCfg means TLS
+// is disabled and the caller serves plaintext. The config is cloned because
+// net/http mutates NextProtos when it enables HTTP/2.
+func newHTTPServer(cfg *config.Config, tlsCfg *tls.Config, handler http.Handler) *http.Server {
+	var serverTLS *tls.Config
+	if tlsCfg != nil {
+		serverTLS = tlsCfg.Clone()
+	}
+	return &http.Server{
+		Addr:         httpAddr(cfg),
+		Handler:      handler,
+		ReadTimeout:  cfg.Server.ReadTimeout,
+		WriteTimeout: cfg.Server.WriteTimeout,
+		TLSConfig:    serverTLS,
+	}
+}
+
+// grpcServerOptions derives the gRPC server options from the same TLS config
+// used by HTTP, so MinVersion and mTLS apply to both transports.
+func grpcServerOptions(cfg *config.Config, tlsCfg *tls.Config) ([]grpc.ServerOption, error) {
+	if !cfg.TLS.Enabled {
+		return nil, nil
+	}
+	if tlsCfg == nil {
+		var err error
+		tlsCfg, err = config.BuildTLSConfig(cfg.TLS)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return []grpc.ServerOption{grpc.Creds(credentials.NewTLS(tlsCfg.Clone()))}, nil
+}
+
+func startGRPCServer(cfg *config.Config, stor storage.Storage, tlsCfg *tls.Config) {
+	grpcAddr := fmt.Sprintf("%s:%d", cfg.GRPC.Host, cfg.GRPC.Port)
+	log.Info().Str("addr", grpcAddr).Msg("Starting gRPC server")
+
+	opts, err := grpcServerOptions(cfg, tlsCfg)
+	if err != nil {
+		log.Error().Err(err).Msg("Invalid TLS configuration for gRPC")
+		return
+	}
 
 		listener, err := net.Listen("tcp", grpcAddr)
 		if err != nil {

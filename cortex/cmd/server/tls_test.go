@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -94,6 +95,97 @@ func tlsTestFiles(t *testing.T) (certFile, keyFile, caFile, clientCertFile, clie
 
 func freePort(t *testing.T) int {
 	t.Helper()
+	"google.golang.org/grpc/credentials"
+)
+
+func testCACert(t *testing.T) (*x509.Certificate, *ecdsa.PrivateKey, []byte) {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmpl := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "loza-test-ca"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(time.Hour),
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cert, err := x509.ParseCertificate(der)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return cert, key, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
+}
+
+func testLeafCert(t *testing.T, ca *x509.Certificate, caKey *ecdsa.PrivateKey, cn string, usage x509.ExtKeyUsage) ([]byte, []byte) {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(time.Now().UnixNano()),
+		Subject:      pkix.Name{CommonName: cn},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{usage},
+		DNSNames:     []string{"localhost"},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, ca, &key.PublicKey, caKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyDER, err := x509.MarshalECPrivateKey(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}),
+		pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER})
+}
+
+func testWriteFile(t *testing.T, dir, name string, contents []byte) string {
+	t.Helper()
+	path := filepath.Join(dir, name)
+	if err := os.WriteFile(path, contents, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func testTLSConfig(t *testing.T, minVersion string, mutualTLS bool) (config.TLSConfig, []byte) {
+	cfg, caPEM, _, _ := testTLSConfigWithCA(t, minVersion, mutualTLS)
+	return cfg, caPEM
+}
+
+func testTLSConfigWithCA(t *testing.T, minVersion string, mutualTLS bool) (config.TLSConfig, []byte, *x509.Certificate, *ecdsa.PrivateKey) {
+	t.Helper()
+	dir := t.TempDir()
+	ca, caKey, caPEM := testCACert(t)
+	certPEM, keyPEM := testLeafCert(t, ca, caKey, "localhost", x509.ExtKeyUsageServerAuth)
+	cfg := config.TLSConfig{
+		Enabled:    true,
+		CertFile:   testWriteFile(t, dir, "server.crt", certPEM),
+		KeyFile:    testWriteFile(t, dir, "server.key", keyPEM),
+		MinVersion: minVersion,
+		MutualTLS:  mutualTLS,
+	}
+	if mutualTLS {
+		cfg.ClientCAFile = testWriteFile(t, dir, "ca.crt", caPEM)
+	}
+	return cfg, caPEM, ca, caKey
+}
+
+func startTLSServer(t *testing.T, cfg config.Config, tlsCfg *tls.Config, handler http.Handler) string {
+	t.Helper()
+	srv := newHTTPServer(&cfg, tlsCfg, handler)
 	lis, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -293,5 +385,165 @@ func TestStartGRPCServerUsesSharedTLSConfig(t *testing.T) {
 	unauth.Close()
 	if err == nil {
 		t.Fatal("gRPC accepted a client without a certificate despite mutual_tls")
+	go func() {
+		_ = srv.ServeTLS(lis, cfg.TLS.CertFile, cfg.TLS.KeyFile)
+	}()
+	t.Cleanup(func() { _ = srv.Close() })
+	return lis.Addr().String()
+}
+
+func httpsClient(t *testing.T, caPEM []byte, clientCert, clientKey []byte, maxVersion uint16) *http.Client {
+	t.Helper()
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM(caPEM) {
+		t.Fatal("failed to parse test CA")
+	}
+	tlsCfg := &tls.Config{RootCAs: pool, ServerName: "localhost", MinVersion: tls.VersionTLS12, MaxVersion: maxVersion}
+	if len(clientCert) > 0 {
+		cert, err := tls.X509KeyPair(clientCert, clientKey)
+		if err != nil {
+			t.Fatal(err)
+		}
+		tlsCfg.Certificates = []tls.Certificate{cert}
+	}
+	return &http.Client{
+		Transport: &http.Transport{TLSClientConfig: tlsCfg},
+		Timeout:   2 * time.Second,
+	}
+}
+
+func TestNewHTTPServerAttachesSharedTLSConfig(t *testing.T) {
+	cfg := config.Default()
+	plain := newHTTPServer(cfg, nil, nil)
+	if plain.TLSConfig != nil {
+		t.Fatal("plaintext server should not have a TLS config")
+	}
+
+	tlsSettings, _ := testTLSConfig(t, "1.3", false)
+	cfg.TLS = tlsSettings
+	tlsCfg, err := config.BuildTLSConfig(cfg.TLS)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secure := newHTTPServer(cfg, tlsCfg, nil)
+	if secure.TLSConfig == nil {
+		t.Fatal("HTTP server did not attach a TLS config")
+	}
+	if secure.TLSConfig.MinVersion != tls.VersionTLS13 {
+		t.Fatalf("MinVersion = %x, want TLS 1.3", secure.TLSConfig.MinVersion)
+	}
+	if len(secure.TLSConfig.Certificates) != 1 {
+		t.Fatal("HTTP server TLS config is missing the server key pair")
+	}
+	if tlsCfg.MinVersion != tls.VersionTLS13 {
+		t.Fatal("newHTTPServer mutated the shared TLS config")
+	}
+}
+
+func TestHTTPSServerEnforcesMinimumVersion(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		minVersion string
+	}{
+		{name: "tls12", minVersion: "1.2"},
+		{name: "tls13", minVersion: "1.3"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := config.Default()
+			cfg.TLS, caPEM = testTLSConfig(t, tc.minVersion, false)
+			tlsCfg, err := config.BuildTLSConfig(cfg.TLS)
+			if err != nil {
+				t.Fatal(err)
+			}
+			addr := startTLSServer(t, *cfg, tlsCfg, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				_, _ = io.WriteString(w, "ok")
+			}))
+
+			resp, err := httpsClient(t, caPEM, nil, nil, 0).Get("https://" + addr)
+			if err != nil {
+				t.Fatalf("HTTPS request failed: %v", err)
+			}
+			defer resp.Body.Close()
+			body, err := io.ReadAll(resp.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(body) != "ok" {
+				t.Fatalf("response body = %q, want ok", body)
+			}
+
+			// Plaintext must not be served on the TLS listener. Go's HTTP
+			// server answers a plaintext request with 400 rather than serving it.
+			if plainResp, err := http.Get("http://" + addr); err == nil {
+				plainResp.Body.Close()
+				if plainResp.StatusCode == http.StatusOK {
+					t.Fatal("plaintext request was served on the TLS listener")
+				}
+			}
+
+			if tc.minVersion == "1.3" {
+				// A client capped at TLS 1.2 must be rejected when 1.3 is required.
+				if _, err := httpsClient(t, caPEM, nil, nil, tls.VersionTLS12).Get("https://" + addr); err == nil {
+					t.Fatal("TLS 1.2 client was accepted with min_version 1.3")
+				}
+			}
+		})
+	}
+}
+
+func TestHTTPSServerMutualTLS(t *testing.T) {
+	cfg := config.Default()
+	cfg.TLS, caPEM, ca, caKey := testTLSConfigWithCA(t, "1.2", true)
+	tlsCfg, err := config.BuildTLSConfig(cfg.TLS)
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := startTLSServer(t, *cfg, tlsCfg, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, "ok")
+	}))
+
+	if _, err := httpsClient(t, caPEM, nil, nil, 0).Get("https://" + addr); err == nil {
+		t.Fatal("mTLS listener accepted a client without a certificate")
+	}
+
+	clientCert, clientKey := testLeafCert(t, ca, caKey, "loza-client", x509.ExtKeyUsageClientAuth)
+	resp, err := httpsClient(t, caPEM, clientCert, clientKey, 0).Get("https://" + addr)
+	if err != nil {
+		t.Fatalf("mTLS request with a valid client certificate failed: %v", err)
+	}
+	defer resp.Body.Close()
+}
+
+func TestGRPCServerOptionsUseSharedTLSConfig(t *testing.T) {
+	cfg := config.Default()
+	if opts, err := grpcServerOptions(cfg, nil); err != nil || len(opts) != 0 {
+		t.Fatalf("disabled TLS: opts = %d, err = %v; want 0 options and no error", len(opts), err)
+	}
+
+	cfg.TLS, _ = testTLSConfig(t, "1.3", true)
+	tlsCfg, err := config.BuildTLSConfig(cfg.TLS)
+	if err != nil {
+		t.Fatal(err)
+	}
+	opts, err := grpcServerOptions(cfg, tlsCfg)
+	if err != nil {
+		t.Fatalf("grpcServerOptions() error = %v", err)
+	}
+	if len(opts) != 1 {
+		t.Fatalf("enabled TLS: got %d options, want 1", len(opts))
+	}
+	// credentials.NewTLS consumes the same config, including MinVersion/mTLS.
+	creds := credentials.NewTLS(tlsCfg)
+	if creds.Info().SecurityProtocol != "tls" {
+		t.Fatalf("gRPC credentials protocol = %q, want tls", creds.Info().SecurityProtocol)
+	}
+	if tlsCfg.MinVersion != tls.VersionTLS13 || tlsCfg.ClientAuth != tls.RequireAndVerifyClientCert {
+		t.Fatalf("gRPC TLS config lost settings: %+v", tlsCfg)
+	}
+
+	// gRPC must fail fast on an invalid config too, even without a shared config.
+	cfg.TLS.CertFile = filepath.Join(t.TempDir(), "missing.crt")
+	if _, err := grpcServerOptions(cfg, nil); err == nil || !strings.Contains(err.Error(), "load tls key pair") {
+		t.Fatalf("invalid TLS config: err = %v, want key pair load error", err)
 	}
 }
