@@ -321,6 +321,47 @@ const logger = createLoza({ service: 'checkout', sink });
 const events = sink.getEvents();
 ```
 
+### Bounded async buffer and overflow policy
+
+`async.queueSize` (default `8192`) is a hard cap on the number of events the HTTP
+batch sink holds while waiting for delivery. The buffer never grows past this
+cap, including when a delivery fails and the failed batch is re-queued. Choose
+what happens at capacity with `overflowPolicy`:
+
+- `drop-oldest` (default) — evict the oldest buffered event to accept a new one.
+- `drop-newest` — discard the incoming event; keep what is already buffered.
+- `block` — apply backpressure and wait for a flush to free capacity, for at
+  most `blockTimeoutMs` (default `1000` ms) before shedding the event.
+
+```typescript
+const cfg = production('checkout')
+  .withQueueSize(4096)
+  .withOverflowPolicy('drop-oldest');
+```
+
+The same knobs can be set on a sink directly:
+
+```typescript
+const sink = httpBatchSink({
+  endpoint: 'http://collector:9308/events',
+  maxQueueSize: 4096,      // `queueSize` is accepted as an alias
+  overflowPolicy: 'drop-oldest',
+  statsHandler: {
+    onBufferOverflow({ dropped, policy }) { /* alert on shedding */ },
+  },
+});
+
+sink.metrics;
+// { queued, capacity, dropped, droppedOnOverflow, droppedOnDeliveryFailure }
+```
+
+In YAML, use `async.queue_size` (or top-level `max_buffer_size`) and
+`async.overflow_policy`.
+
+Dropped events are counted in `sink.metrics.dropped` (with separate
+`droppedOnOverflow` / `droppedOnDeliveryFailure` counters) and reported through
+`statsHandler.onBufferOverflow`.
+
 ## Sampling
 
 ```typescript

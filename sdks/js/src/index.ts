@@ -125,7 +125,7 @@ export {
   WithCollectorEndpoint, WithDuplicatePolicy, WithStatsHandler,
   WithDeploymentID, WithIncludeHost, WithPanicRecovery,
   WithApiKey, WithBasicAuth,
-  WithRelease, WithNamespace, WithOtelBridge, WithRetry, WithTimeout, WithQueueSize, WithLogger,
+  WithRelease, WithNamespace, WithOtelBridge, WithRetry, WithTimeout, WithQueueSize, WithOverflowPolicy, WithLogger,
 } from './config/config.ts';
 export type { Config, AsyncConfig, SecurityConfig, ConfigOptions } from './config/config.ts';
 
@@ -150,6 +150,7 @@ export {
   health as sinkHealth,
 } from './sinks/standard-sinks.ts';
 export type { StatsHandler, DeliveryFailureHandler, HTTPBatchSinkOptions, KafkaSinkOptions } from './sinks/standard-sinks.ts';
+export type { StatsHandler, DeliveryFailureHandler, HTTPBatchSinkOptions, OverflowPolicy, SinkMetrics } from './sinks/standard-sinks.ts';
 
 // --- Redactor ---
 export {
