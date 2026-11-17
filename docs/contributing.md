@@ -130,6 +130,9 @@ python conformance/verify.py
 | JavaScript | `prettier`     | `eslint`           | `sdks/js/.eslintrc`     |
 
 All Go code must pass `gofmt -s` and `golangci-lint run` before submission. CI enforces both.
+Run `make fmt` to format all Go source files in place, and `make fmt-check` to verify
+formatting without modifying files. `make fmt-check` is the same check enforced by the Go CI
+workflows; it fails if any Go file is not gofmt-clean.
 
 Python code uses `ruff` for formatting and linting with `mypy` for type checking. Configuration lives in `pyproject.toml`.
 
@@ -231,6 +234,7 @@ Every pull request must pass:
 3. **Benchmarks**: `bench/run-all.sh` for performance-sensitive changes
 4. **Doc Lint**: Markdown lint and link checks
 5. **Lint**: Language-specific linter (golangci-lint, ruff, clippy, eslint)
+6. **Go formatting**: `make fmt-check` (gofmt) passes for all Go source files
 
 ### Review
 

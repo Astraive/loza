@@ -1,5 +1,6 @@
 .PHONY: bootstrap proto-tools proto lint clean check-proto
 .PHONY: proto bootstrap lint clean check-proto
+.PHONY: proto lint clean check-proto fmt fmt-check
 
 # Directories
 PROTO_DIR := proto
@@ -60,6 +61,16 @@ PROTOC_GEN_GO_GRPC_VERSION := v1.6.2
 # Uses protoc directly; buf users get the same output with `cd proto && buf generate`
 # (see proto/buf.gen.yaml). Generated files are committed, so a fresh clone does
 # not need to run this target in order to build collector and cortex.
+# Format all Go source files in place.
+fmt:
+	gofmt -w .
+
+# Fail if any Go source file is not gofmt-clean (used by CI).
+fmt-check:
+	bash scripts/fmt-check.sh
+
+# Generate Go protobuf code from proto/loza/core/*.proto into gen/go/loza/core/
+# Uses protoc directly (buf is optional, see proto/buf.gen.yaml for buf config)
 proto:
 	@mkdir -p $(GEN_DIR)/loza/core
 	protoc $(PROTO_INCLUDES) \
