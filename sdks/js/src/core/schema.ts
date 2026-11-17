@@ -1,5 +1,6 @@
 import type { EventView } from './event-view.ts';
 import { levelName } from './level.ts';
+import { setSafePath } from './prototype-safe.ts';
 
 /** Schema interface — controls how events are encoded. */
 export interface Schema {
@@ -32,6 +33,9 @@ function setNestedValue(obj: Record<string, any>, key: string, value: any): void
     current = current[part];
   }
   current[parts[parts.length - 1]] = value;
+/** Set a value in a nested object using dot-separated key path (prototype-pollution safe). */
+function setNestedValue(obj: Record<string, any>, key: string, value: any): void {
+  setSafePath(obj, key, value);
 }
 
 /** Known group prefixes for routing attrs to top-level objects. */
