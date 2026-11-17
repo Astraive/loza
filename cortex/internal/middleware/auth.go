@@ -3,12 +3,12 @@ package middleware
 import (
 	"context"
 	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"sort"
 	"strings"
 
 	"github.com/astraive/loza/cortex/internal/config"
@@ -21,6 +21,8 @@ type Auth struct {
 	enabled    bool
 	keyCache   map[string]*hashedAPIKey
 	hmacSecret []byte
+	initErr    error
+	once       sync.Once
 }
 
 type hashedAPIKey struct {
@@ -37,11 +39,23 @@ func AutoGenerateHMACSecret(keys []config.APIKey) []byte {
 	var parts []string
 	for _, k := range keys {
 		parts = append(parts, k.Key)
+// hmacSecretBytes is the size (in bytes) of a generated HMAC secret: 256 bits
+// matches the strength of the HMAC-SHA256 construction that consumes it.
+const hmacSecretBytes = 32
+
+// generateHMACSecret is a seam for tests; production code always uses
+// GenerateHMACSecret.
+var generateHMACSecret = GenerateHMACSecret
+
+// GenerateHMACSecret returns a cryptographically random HMAC key. It is used
+// when no explicit secret is configured, so the key has entropy independent of
+// the configured API keys and cannot be recomputed from a leaked key.
+func GenerateHMACSecret() ([]byte, error) {
+	secret := make([]byte, hmacSecretBytes)
+	if _, err := rand.Read(secret); err != nil {
+		return nil, err
 	}
-	sort.Strings(parts)
-	combined := strings.Join(parts, "|")
-	sum := sha256.Sum256([]byte(combined))
-	return sum[:]
+	return secret, nil
 }
 
 // NewAuth builds an Auth from cfg. The raw API keys are read only here and are
@@ -51,6 +65,12 @@ func NewAuth(cfg *config.AuthenticationConfig) *Auth {
 	a := &Auth{}
 	if cfg == nil {
 		return a
+	return &Auth{cfg: cfg}
+}
+
+func (a *Auth) init() {
+	if a.keyCache != nil || a.initErr != nil {
+		return
 	}
 
 	a.enabled = cfg.Enabled
@@ -65,6 +85,20 @@ func NewAuth(cfg *config.AuthenticationConfig) *Auth {
 		a.hmacSecret = []byte(cfg.HMACSecret)
 	} else {
 		a.hmacSecret = AutoGenerateHMACSecret(cfg.APIKeys)
+	// Use the explicitly configured secret when present. Otherwise generate a
+	// cryptographically random secret with independent entropy. Never derive it
+	// from the API keys: that would let a single leaked key reconstruct the HMAC
+	// key and defeat the separation between the two authentication layers.
+	// Production deployments must configure an explicit secret (see config.Validate).
+	if a.cfg.HMACSecret != "" {
+		a.hmacSecret = []byte(a.cfg.HMACSecret)
+	} else {
+		secret, err := generateHMACSecret()
+		if err != nil {
+			a.initErr = err
+			return
+		}
+		a.hmacSecret = secret
 	}
 
 	a.keyCache = make(map[string]*hashedAPIKey, len(cfg.APIKeys))
@@ -117,6 +151,12 @@ func (a *Auth) Middleware(next http.Handler) http.Handler {
 
 func (a *Auth) authenticate(r *http.Request) *AuthResult {
 	result := &AuthResult{Authorized: false}
+	if a.initErr != nil {
+		// Fail closed if no usable HMAC secret could be obtained.
+		result.Failure = "hmac secret unavailable"
+		result.FailureCode = "secret_error"
+		return result
+	}
 
 	apiKeyHeader := "X-API-Key"
 

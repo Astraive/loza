@@ -865,6 +865,31 @@ func TestParseAPIKeys(t *testing.T) {
 			raw:     "my-service:sk_abc123:writer,bad:key:with:colon,read-only:sk_def456:reader",
 			wantErr: true,
 		},
+func TestValidateProductionRequiresExplicitHMACSecret(t *testing.T) {
+	base := func() Config {
+		return Config{
+			Server:  ServerConfig{Port: 9312},
+			Storage: StorageConfig{Backend: "duckdb", DuckDB: DuckDBConfig{Path: "./cortex.db"}},
+			Matcher: MatcherConfig{Mode: "go"},
+			Logging: LoggingConfig{Level: "info", Format: "json"},
+			Authentication: AuthenticationConfig{
+				Enabled: true,
+				APIKeys: []APIKey{{Name: "service", Key: "secret", Role: "writer"}},
+			},
+		}
+	}
+
+	tests := []struct {
+		name        string
+		environment string
+		secret      string
+		wantErr     bool
+	}{
+		{name: "production without secret", environment: "production", wantErr: true},
+		{name: "prod without secret", environment: "prod", wantErr: true},
+		{name: "production with secret", environment: "production", secret: "explicit-secret"},
+		{name: "development without secret", environment: "development"},
+		{name: "environment unset without secret"},
 	}
 
 	for _, tc := range tests {
@@ -923,6 +948,39 @@ func TestLoadAppliesValidAPIKeysFromEnv(t *testing.T) {
 	want := []APIKey{{Name: "my-service", Key: "sk_abc123", Role: "writer"}}
 	if !reflect.DeepEqual(cfg.Authentication.APIKeys, want) {
 		t.Fatalf("API keys = %+v, want %+v", cfg.Authentication.APIKeys, want)
+			cfg := base()
+			cfg.Environment = tc.environment
+			cfg.Authentication.HMACSecret = tc.secret
+			err := cfg.Validate()
+			if tc.wantErr && err == nil {
+				t.Fatal("expected validation error for production without HMAC secret")
+			}
+			if !tc.wantErr && err != nil {
+				t.Fatalf("Validate: %v", err)
+			}
+		})
+	}
+}
+
+func TestValidateProductionWithoutAuthentication(t *testing.T) {
+	cfg := Config{
+		Environment: "production",
+		Server:      ServerConfig{Port: 9312},
+		Storage:     StorageConfig{Backend: "duckdb", DuckDB: DuckDBConfig{Path: "./cortex.db"}},
+		Matcher:     MatcherConfig{Mode: "go"},
+		Logging:     LoggingConfig{Level: "info", Format: "json"},
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+}
+
+func TestCORTEXEnvOverride(t *testing.T) {
+	t.Setenv("CORTEX_ENV", " Production ")
+	cfg := &Config{}
+	applyEnvOverrides(cfg)
+	if cfg.Environment != "production" {
+		t.Fatalf("Environment = %q, want production", cfg.Environment)
 	}
 }
 
