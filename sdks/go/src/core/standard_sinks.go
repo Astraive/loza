@@ -35,6 +35,25 @@ func hasNonEmptyHeader(headers map[string]string, name string) bool {
 	return false
 }
 
+// bearerCredential returns a Bearer token supplied through an Authorization
+// header, or an empty string when no Bearer credential is present. Sink callers
+// may pass an API key via Headers rather than a dedicated field, so the token
+// must be surfaced to validateCollectorCredentials to enforce TLS.
+func bearerCredential(headers map[string]string) string {
+	const prefix = "Bearer "
+	for key, value := range headers {
+		if !strings.EqualFold(key, "Authorization") {
+			continue
+		}
+		if len(value) >= len(prefix) && strings.EqualFold(value[:len(prefix)], prefix) {
+			if token := strings.TrimSpace(value[len(prefix):]); token != "" {
+				return token
+			}
+		}
+	}
+	return ""
+}
+
 // ── stdout / stderr sinks ─────────────────────────────────────────────────────
 
 type writerSink struct {
@@ -306,6 +325,7 @@ func CollectorSink(cfg CollectorSinkConfig) (Sink, error) {
 		cfg.Endpoint,
 		cfg.BasicUsername,
 		cfg.BasicPassword,
+		bearerCredential(cfg.Headers),
 		cfg.Insecure,
 	); err != nil {
 		return nil, err
@@ -555,6 +575,7 @@ func HTTPBatchSink(cfg HTTPBatchSinkConfig) (Sink, error) {
 		cfg.Endpoint,
 		cfg.BasicUsername,
 		cfg.BasicPassword,
+		bearerCredential(cfg.Headers),
 		cfg.Insecure,
 	); err != nil {
 		return nil, err

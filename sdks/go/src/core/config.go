@@ -590,13 +590,17 @@ func (c Config) Validate() error {
 			Problem: "basic auth username requires a password unless it is an lz_pub_ capability",
 		}
 	}
-	if c.DSNUsername != "" {
-		if strings.ContainsAny(c.DSNUsername, ":\t\r\n ") {
-			return &ConfigValidationError{
-				Field:   "DSNUsername",
-				Problem: "basic auth username must not contain ':' or whitespace",
-			}
+	if c.DSNUsername != "" && strings.ContainsAny(c.DSNUsername, ":\t\r\n ") {
+		return &ConfigValidationError{
+			Field:   "DSNUsername",
+			Problem: "basic auth username must not contain ':' or whitespace",
 		}
+	}
+	// Bearer API keys and Basic-auth credentials are both secrets. Require TLS
+	// whenever either is configured, unless Insecure is explicitly enabled for
+	// a local development host. Without this, a config that only sets APIKey
+	// could send "Authorization: Bearer <key>" over plaintext HTTP.
+	if c.DSNUsername != "" || c.APIKey != "" {
 		if endpointURL, err := url.Parse(strings.TrimSpace(c.CollectorURL)); err == nil &&
 			strings.EqualFold(endpointURL.Scheme, "http") &&
 			(!c.Insecure || !isLocalCollectorHost(endpointURL.Hostname())) {
@@ -673,7 +677,7 @@ func isLocalCollectorHost(host string) bool {
 	}
 }
 
-func validateCollectorCredentials(endpoint, username, password string, insecure bool) error {
+func validateCollectorCredentials(endpoint, username, password, apiKey string, insecure bool) error {
 	if endpointURL, err := url.Parse(strings.TrimSpace(endpoint)); err == nil &&
 		endpointURL.User != nil {
 		return fmt.Errorf("loza: collector credentials must not be embedded in the endpoint URL")
@@ -684,16 +688,18 @@ func validateCollectorCredentials(endpoint, username, password string, insecure 
 	if username != "" && password == "" && !dsn.IsPublicCredentialUsername(username) {
 		return fmt.Errorf("loza: basic auth username requires a password unless it is an lz_pub_ capability")
 	}
-	if username == "" {
-		return nil
-	}
-	if strings.ContainsAny(username, ":\t\r\n ") {
+	if username != "" && strings.ContainsAny(username, ":\t\r\n ") {
 		return fmt.Errorf("loza: basic auth username must not contain ':' or whitespace")
 	}
-	if endpointURL, err := url.Parse(strings.TrimSpace(endpoint)); err == nil &&
-		strings.EqualFold(endpointURL.Scheme, "http") &&
-		(!insecure || !isLocalCollectorHost(endpointURL.Hostname())) {
-		return fmt.Errorf("loza: credentialed collector endpoints require TLS (set Insecure only for local development)")
+	// A Bearer API key is as sensitive as Basic-auth credentials. Apply the
+	// same TLS requirement whenever either credential is present, instead of
+	// returning early when no Basic-auth username was supplied.
+	if username != "" || apiKey != "" {
+		if endpointURL, err := url.Parse(strings.TrimSpace(endpoint)); err == nil &&
+			strings.EqualFold(endpointURL.Scheme, "http") &&
+			(!insecure || !isLocalCollectorHost(endpointURL.Hostname())) {
+			return fmt.Errorf("loza: credentialed collector endpoints require TLS (set Insecure only for local development)")
+		}
 	}
 	return nil
 }

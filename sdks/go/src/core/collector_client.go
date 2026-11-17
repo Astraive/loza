@@ -46,6 +46,7 @@ func NewCollectorClient(cfg CollectorClientConfig) *CollectorClient {
 		cfg.Endpoint,
 		cfg.BasicUsername,
 		cfg.BasicPassword,
+		cfg.APIKey,
 		cfg.Insecure,
 	)
 	if cfg.Client == nil {
