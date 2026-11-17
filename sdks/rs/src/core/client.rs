@@ -369,7 +369,8 @@ impl CollectorHttpClient {
 
     /// Delete events from the collector by event ID.
     pub fn delete(&self, event_id: &str) -> Result<CollectorResponse, String> {
-        self.request("DELETE", &format!("/events/{}", event_id), None)
+        let segment = encode_path_segment(event_id)?;
+        self.request("DELETE", &format!("/events/{segment}"), None)
     }
 
     /// Replay events from the dead-letter queue.
@@ -388,7 +389,8 @@ impl CollectorHttpClient {
 
     /// Read a dead-letter queue entry.
     pub fn dlq_read(&self, entry_id: &str) -> Result<CollectorResponse, String> {
-        self.request("GET", &format!("/dlq/{}", entry_id), None)
+        let segment = encode_path_segment(entry_id)?;
+        self.request("GET", &format!("/dlq/{segment}"), None)
     }
 
     /// Replay specific dead-letter queue entries.
@@ -407,7 +409,8 @@ impl CollectorHttpClient {
 
     /// Revoke an API key.
     pub fn keys_revoke(&self, key_id: &str) -> Result<CollectorResponse, String> {
-        self.request("DELETE", &format!("/keys/{}", key_id), None)
+        let segment = encode_path_segment(key_id)?;
+        self.request("DELETE", &format!("/keys/{segment}"), None)
     }
 
     /// List configured sinks on the collector.
@@ -417,12 +420,14 @@ impl CollectorHttpClient {
 
     /// Test a configured sink on the collector.
     pub fn sinks_test(&self, name: &str) -> Result<CollectorResponse, String> {
-        self.request("POST", &format!("/sinks/{}/test", name), None)
+        let segment = encode_path_segment(name)?;
+        self.request("POST", &format!("/sinks/{segment}/test"), None)
     }
 
     /// Rotate an API key.
     pub fn keys_rotate(&self, key_id: &str) -> Result<CollectorResponse, String> {
-        self.request("POST", &format!("/keys/{}/rotate", key_id), None)
+        let segment = encode_path_segment(key_id)?;
+        self.request("POST", &format!("/keys/{segment}/rotate"), None)
     }
 
     /// Validate an event governance policy.
@@ -462,11 +467,14 @@ impl CollectorHttpClient {
                 None,
             ));
         }
-        let route = self
-            .collector_name
-            .as_ref()
-            .map(|collector| format!("/collectors/{collector}/lql/query"))
-            .unwrap_or_else(|| "/lql/query".to_string());
+        let route = match &self.collector_name {
+            Some(collector) => {
+                let segment = encode_path_segment(collector)
+                    .map_err(|error| QueryLqlError::new("invalid_configuration", &error, None))?;
+                format!("/collectors/{segment}/lql/query")
+            }
+            None => "/lql/query".to_string(),
+        };
         let response = self
             .request(
                 "POST",
@@ -691,6 +699,36 @@ fn infer_service(events: &[Value]) -> Option<String> {
         }
     }
     None
+}
+
+/// Percent-encode a single URL path segment.
+///
+/// Untrusted identifiers are interpolated into request paths below. Without
+/// encoding, a value such as `../keys`, `?x=1` or `#frag` would change the
+/// request target, allowing path/query injection on the collector. Every byte
+/// outside the RFC 3986 unreserved set is escaped.
+///
+/// A bare `.` or `..` is rejected: URL parsers normalize dot segments (even
+/// percent-encoded ones such as `%2E%2E`) away, so these cannot be represented
+/// safely as a single path segment.
+fn encode_path_segment(value: &str) -> Result<String, String> {
+    if matches!(value, "." | "..") {
+        return Err(format!(
+            "invalid path segment {value:?}: dot segments are not allowed"
+        ));
+    }
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+    let mut encoded = String::with_capacity(value.len());
+    for &byte in value.as_bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~') {
+            encoded.push(byte as char);
+        } else {
+            encoded.push('%');
+            encoded.push(HEX[(byte >> 4) as usize] as char);
+            encoded.push(HEX[(byte & 0x0F) as usize] as char);
+        }
+    }
+    Ok(encoded)
 }
 
 fn normalize_collector_endpoint(endpoint: String) -> String {
