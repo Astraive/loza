@@ -1,8 +1,13 @@
 use std::collections::VecDeque;
-use std::fs::{self};
+use std::fs::{self, OpenOptions};
+use std::io::{ErrorKind, Write};
 use std::mem;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+
+/// Process-wide sequence used to give every queued event its own file name.
+static ENQUEUE_SEQ: AtomicU64 = AtomicU64::new(0);
 
 pub trait WritableSink {
     fn write(&self, encoded: &str) -> Result<(), String>;
@@ -133,10 +138,32 @@ impl DiskOfflineBuffer {
         Self { dir, max_files }
     }
 
+    /// Build a path that is unique even for enqueues in the same millisecond
+    /// or from different `DiskOfflineBuffer` instances in this process.
+    ///
+    /// The timestamp is zero-padded so `drain`'s lexicographic sort keeps the
+    /// chronological order, and the sequence disambiguates writes that share
+    /// the same millisecond.
+    fn next_path(&self) -> PathBuf {
+        let millis = crate::internal::clock::unix_millis();
+        let seq = ENQUEUE_SEQ.fetch_add(1, Ordering::Relaxed);
+        self.dir.join(format!("{:020}-{:016x}.json", millis, seq))
+    }
+
     pub fn enqueue(&self, event: &str) -> std::io::Result<()> {
-        let filename = format!("{}.json", crate::internal::clock::unix_millis());
-        let path = self.dir.join(filename);
-        fs::write(path, event)?;
+        // `create_new` is a final guard against silent data loss: if a path
+        // ever collides (e.g. with a stale file from another process), retry
+        // with the next sequence number instead of truncating that file.
+        let mut file = loop {
+            let path = self.next_path();
+            match OpenOptions::new().write(true).create_new(true).open(path) {
+                Ok(file) => break file,
+                Err(err) if err.kind() == ErrorKind::AlreadyExists => continue,
+                Err(err) => return Err(err),
+            }
+        };
+        file.write_all(event.as_bytes())?;
+        drop(file);
         self.evict_old_files();
         Ok(())
     }

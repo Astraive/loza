@@ -150,6 +150,27 @@ mod tests {
     }
 
     #[test]
+    fn disk_buffer_keeps_events_enqueued_in_the_same_millisecond() {
+        let dir =
+            std::env::temp_dir().join(format!("loza-rs-queue-same-ms-{}", std::process::id()));
+        std::fs::remove_dir_all(&dir).ok();
+        let disk = queue::DiskOfflineBuffer::new(&dir, 16);
+
+        // With the clock frozen, the old `{millis}.json` naming scheme made
+        // every write target the same path and overwrite the previous event.
+        clock::freeze_at(1_700_000_000_000);
+        for index in 0..3 {
+            disk.enqueue(&format!("event-{index}")).unwrap();
+        }
+        clock::unfreeze();
+
+        let mut drained = disk.drain().unwrap();
+        drained.sort();
+        assert_eq!(drained, vec!["event-0", "event-1", "event-2"]);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
     fn internal_queue_and_transport_cover_delivery_and_http_shapes() {
         let mut batcher = queue::ByteBatcher::with_limits(3, 2);
         assert!(batcher.push("ab".into()).is_none());
