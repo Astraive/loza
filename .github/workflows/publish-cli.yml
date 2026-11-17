@@ -15,23 +15,20 @@ on:
         default: false
 
 permissions:
-  contents: write
-  actions: read
-  id-token: write
-  attestations: write
+  contents: read
 
 jobs:
   validate:
     if: inputs.component == 'cli'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: 11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
-      - uses: actions/setup-go@v5
+      - uses: 40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version-file: cli/go.mod
-      - uses: actions/setup-python@v5
+      - uses: a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.11"
       - run: python -m pip install pyyaml
@@ -71,6 +68,10 @@ jobs:
 
   build:
     needs: validate
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
     strategy:
       fail-fast: false
       matrix:
@@ -99,11 +100,11 @@ jobs:
     env:
       GOWORK: off
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: 11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: 40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version-file: cli/go.mod
-      - uses: actions/setup-python@v5
+      - uses: a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.11"
       - name: Use local spec module for dry run
@@ -173,10 +174,10 @@ jobs:
               encoding="utf-8",
           )
           PY
-      - uses: actions/attest-build-provenance@v2
+      - uses: e8998f949152b193b063cb0ec769d69d929409be # v2
         with:
           subject-path: dist/loza_*
-      - uses: actions/upload-artifact@v4
+      - uses: ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: loza-${{ matrix.goos }}-${{ matrix.goarch }}
           path: |
@@ -190,24 +191,27 @@ jobs:
     if: inputs.dry_run != true
     needs: build
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: 11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
-      - uses: actions/setup-go@v5
+      - uses: 40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version-file: cli/go.mod
-      - uses: actions/setup-python@v5
+      - uses: a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.11"
       - run: python -m pip install pyyaml
-      - uses: actions/download-artifact@v4
+      - uses: d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           pattern: loza-*
           merge-multiple: true
           path: artifacts
       - name: Publish CLI release assets
-        uses: softprops/action-gh-release@v2
+        uses: 3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           tag_name: v${{ inputs.version }}
           target_commitish: ${{ github.sha }}

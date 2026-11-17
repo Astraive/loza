@@ -6,5 +6,6 @@ CI and release scripts for the LOZA monorepo.
 |--------|-------------|
 | `ci-bench.sh` | CI entry point for benchmark workflow |
 | `ci-conformance.sh` | CI entry point for conformance workflow |
+| `check-workflow-security.py` | Fails on unpinned actions or broad top-level permissions |
 | `lint-docs.sh` | Runs doc link + kebab-case checks |
 | `release-all.sh` | Orchestrates release for all components |
