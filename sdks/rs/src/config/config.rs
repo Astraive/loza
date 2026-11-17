@@ -814,12 +814,39 @@ fn is_local_endpoint(endpoint: &str) -> bool {
     matches!(host, "localhost" | "127.0.0.1" | "::1")
 }
 
+/// Percent-encode `value` so it forms exactly one URI path segment.
+///
+/// Only RFC 3986 unreserved characters are left as-is; everything else
+/// (including `/`, `?`, `#`, `%` and whitespace) is escaped. This prevents a
+/// caller-supplied collector name from breaking out of its path segment and
+/// injecting a query, fragment or extra path components.
+fn percent_encode_path_segment(value: &str) -> String {
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+    let mut encoded = String::with_capacity(value.len());
+    for &byte in value.as_bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
+                encoded.push(byte as char);
+            }
+            _ => {
+                encoded.push('%');
+                encoded.push(HEX[(byte >> 4) as usize] as char);
+                encoded.push(HEX[(byte & 0x0F) as usize] as char);
+            }
+        }
+    }
+    encoded
+}
+
 pub(crate) fn collector_events_endpoint(endpoint: &str, collector_name: &str) -> String {
     let base = endpoint.trim().trim_end_matches('/');
     if collector_name.is_empty() {
         return base.to_string();
     }
-    format!("{base}/collectors/{collector_name}/events")
+    format!(
+        "{base}/collectors/{}/events",
+        percent_encode_path_segment(collector_name)
+    )
 }
 fn load_file_config(path: impl AsRef<Path>) -> Result<FileConfig, std::io::Error> {
     let raw = fs::read_to_string(path)?;
@@ -856,4 +883,57 @@ fn find_user_config_file() -> Option<PathBuf> {
     [cwd.join(".loza-rs.yaml"), cwd.join("loza.yaml")]
         .into_iter()
         .find(|candidate| candidate.exists())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{collector_events_endpoint, percent_encode_path_segment};
+
+    #[test]
+    fn collector_events_endpoint_keeps_safe_names_verbatim() {
+        assert_eq!(
+            collector_events_endpoint("http://localhost:9308/", "my-collector_1.v2"),
+            "http://localhost:9308/collectors/my-collector_1.v2/events"
+        );
+    }
+
+    #[test]
+    fn collector_events_endpoint_with_empty_name_returns_base() {
+        assert_eq!(
+            collector_events_endpoint("  http://localhost:9308///  ", ""),
+            "http://localhost:9308"
+        );
+    }
+
+    #[test]
+    fn collector_events_endpoint_encodes_query_and_fragment_injection() {
+        assert_eq!(
+            collector_events_endpoint("http://localhost:9308", "x?y=z"),
+            "http://localhost:9308/collectors/x%3Fy%3Dz/events"
+        );
+        assert_eq!(
+            collector_events_endpoint("http://localhost:9308", "x#f"),
+            "http://localhost:9308/collectors/x%23f/events"
+        );
+    }
+
+    #[test]
+    fn collector_events_endpoint_encodes_path_traversal() {
+        assert_eq!(
+            collector_events_endpoint("http://localhost:9308", "../admin"),
+            "http://localhost:9308/collectors/..%2Fadmin/events"
+        );
+    }
+
+    #[test]
+    fn percent_encode_path_segment_escapes_reserved_and_percent_bytes() {
+        assert_eq!(percent_encode_path_segment("a/b c%d"), "a%2Fb%20c%25d");
+    }
+
+    #[test]
+    fn percent_encode_path_segment_preserves_unreserved_and_utf8() {
+        assert_eq!(percent_encode_path_segment("AZaz09-._~"), "AZaz09-._~");
+        // Multi-byte UTF-8 is escaped byte-by-byte, producing a valid segment.
+        assert_eq!(percent_encode_path_segment("é"), "%C3%A9");
+    }
 }
