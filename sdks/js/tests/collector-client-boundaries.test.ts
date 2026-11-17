@@ -49,6 +49,35 @@ describe('CollectorClient boundaries', () => {
     }
   });
 
+  it('rejects credentials over plaintext HTTP to non-loopback hosts', () => {
+    // An API key is sent in a header by sendBatch()/request(); allowing it with
+    // an http: URL leaked the secret in cleartext. Every credential shape must
+    // be gated, not just Basic auth.
+    assert.throws(
+      () => new CollectorClient({ url: 'http://collector.example.com', apiKey: 'super-secret' }),
+      /require HTTPS/,
+    );
+    assert.throws(
+      () => new CollectorClient({ url: 'http://collector.example.com', apiKey: 'super-secret', authHeader: 'Authorization' }),
+      /require HTTPS/,
+    );
+    assert.throws(
+      () => new CollectorClient({ url: 'http://collector.example.com:9308', username: 'lz_pub_capability' }),
+      /require HTTPS/,
+    );
+    assert.throws(
+      () => new CollectorClient({ url: 'http://collector.example.com', username: 'u', password: 'p' }),
+      /require HTTPS/,
+    );
+
+    // HTTPS, loopback HTTP, and uncredentialed remote HTTP remain valid.
+    assert.doesNotThrow(() => new CollectorClient({ url: 'https://collector.example.com', apiKey: 'super-secret' }));
+    assert.doesNotThrow(() => new CollectorClient({ url: 'http://localhost:9308', apiKey: 'super-secret' }));
+    assert.doesNotThrow(() => new CollectorClient({ url: 'http://127.0.0.1:9308', apiKey: 'super-secret' }));
+    assert.doesNotThrow(() => new CollectorClient({ url: 'http://[::1]:9308', apiKey: 'super-secret' }));
+    assert.doesNotThrow(() => new CollectorClient({ url: 'http://collector.example.com' }));
+  });
+
   it('sends batches, validates events, and invokes admin API endpoints', async () => {
     const paths: string[] = [];
     const { server, url } = await startCollector((req, res) => {

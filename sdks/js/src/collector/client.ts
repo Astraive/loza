@@ -76,10 +76,15 @@ export class CollectorClient {
     if (this.username && !this.password && !isPublicDSNUsername(this.username)) {
       throw new Error('invalid CollectorClient options: Basic credentials require a password unless username is an lz_pub_ capability');
     }
-    if (!this.apiKey && this.username &&
-      endpoint.protocol === 'http:' &&
-      !['localhost', '127.0.0.1', '::1'].includes(endpoint.hostname)) {
-      throw new Error('invalid CollectorClient options: Basic credentials require HTTPS (HTTP is allowed only for localhost)');
+    // Every credential (API key, Basic pair, or lz_pub_ capability) travels in
+    // a request header. Sending any of them over plain HTTP to a non-loopback
+    // host exposes the secret on the wire, so validate all credential shapes
+    // here rather than only the Basic-enabled case.
+    const hostname = endpoint.hostname.replace(/^\[|\]$/g, '');
+    const isLoopback = hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1';
+    const hasCredentials = Boolean(this.apiKey) || Boolean(this.username);
+    if (hasCredentials && endpoint.protocol === 'http:' && !isLoopback) {
+      throw new Error('invalid CollectorClient options: credentials require HTTPS (HTTP is allowed only for localhost)');
     }
     this.authHeader = opts.authHeader || 'x-loza-api-key';
     this.timeout = opts.timeout || 5000;
