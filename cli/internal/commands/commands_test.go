@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/astraive/loza/cli/internal/client"
 	"github.com/astraive/loza/cli/internal/config"
 	"github.com/astraive/loza/cli/internal/output"
 )
@@ -149,6 +150,8 @@ func TestEmitSampleSendsAPIKeyFromEnv(t *testing.T) {
 		_, _ = w.Write([]byte(`{"status":"accepted"}`))
 	}))
 	defer srv.Close()
+	client.SetAllowedOrigins(srv.URL)
+	t.Cleanup(func() { client.SetAllowedOrigins() })
 
 	cfg := config.Config{CollectorURL: srv.URL}
 	if err := EmitCommand(cfg, []string{"sample", "--service", "checkout", "--event", "payment.completed"}); err != nil {

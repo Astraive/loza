@@ -707,6 +707,16 @@ func parseRetryAfter(value string) time.Duration {
 func applyAPIKeyAuth(req *http.Request) error {
 	if req == nil || req.URL == nil {
 		return nil
+func applyAPIKeyAuth(req *http.Request) {
+	if req == nil || req.URL == nil {
+		return
+	}
+	// Never attach credentials to a host that was not explicitly configured.
+	// This prevents a malicious --url/--collector-url (or config file) from
+	// exfiltrating LOZA_API_KEY to an attacker-controlled endpoint.
+	origin, ok := normalizeOrigin(req.URL.String())
+	if !ok || !isAllowedOrigin(origin) {
+		return
 	}
 	apiKey := getConfiguredAPIKey(req.URL.Host)
 	if apiKey == "" {
