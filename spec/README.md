@@ -13,9 +13,13 @@ LOZA Spec defines the shared contract between SDKs and collectors.
 - **Ingest API Version**: `v1`
 - **Status**: Active, stable-v1 emitter contract
 
-The canonical schemas live in [`schemas/json/`](schemas/json/). The `schema/`,
-`v1/`, and `releases/v1/` trees are deprecated compatibility mirrors/archives;
-see [`MIGRATION_GUIDE.md`](MIGRATION_GUIDE.md).
+The canonical schemas live in [`schemas/json/`](schemas/json/), and the
+canonical collector contract is [`openapi/collector.openapi.yaml`](openapi/collector.openapi.yaml).
+The `schema/` and `v1/` trees are deprecated compatibility mirrors/archives.
+The `releases/v1/` tree is a frozen, immutable snapshot that intentionally
+retains its legacy `$ref` paths and `X-LOZA-API-Key` header; it is explicitly
+excluded from the active contract checks in `scripts/check_spec_contract.py`.
+Do not use it for new integrations. See [`MIGRATION_GUIDE.md`](MIGRATION_GUIDE.md).
 
 ## Stable-v1 SDK Contract
 

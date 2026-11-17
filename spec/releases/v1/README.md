@@ -1,9 +1,4 @@
-# v1/ — Release Snapshot (Immutable, Deprecated)
-
-> **DEPRECATED:** This is an archived v1 snapshot. The canonical event model is
-> `spec/schemas/json/event.schema.json` and the canonical collector contract is
-> `spec/openapi/collector.openapi.yaml`. Do not use this snapshot for new
-> integrations; see the migration path below.
+# v1/ — Release Snapshot (Immutable)
 
 This folder contains the **immutable snapshot of Loza v1**.
 

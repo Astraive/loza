@@ -8,6 +8,11 @@ Checks (stdlib only, safe to run offline in CI):
 * a single auth mechanism (``Authorization: Bearer``) is documented
 * the published registry manifest matches the artifact it describes
 * conformance uses the published strict schema instead of a synthesized copy
+
+The frozen ``releases/`` tree is intentionally excluded: those snapshots are
+immutable and are not part of the active contract. The active contract is
+documented in ``spec/README.md`` and the legacy trees are marked deprecated
+there and in ``v1/README.md``.
 """
 
 from __future__ import annotations
@@ -27,9 +32,9 @@ if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
 SPEC_ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = SPEC_ROOT.parent
 CANONICAL_SCHEMA_DIR = SPEC_ROOT / "schemas" / "json"
+ARCHIVE_DIR = SPEC_ROOT / "releases"
 OPENAPI_FILES = (
     SPEC_ROOT / "openapi" / "collector.openapi.yaml",
-    SPEC_ROOT / "releases" / "v1" / "openapi" / "collector.openapi.yaml",
 )
 AUTH_DOCS = (
     SPEC_ROOT / "auth" / "spec.md",
@@ -47,6 +52,11 @@ def _load_json(path: Path) -> Any:
 
 def _is_remote(ref: str) -> bool:
     return ref.startswith(("http://", "https://", "urn:"))
+
+
+def _is_archived(path: Path) -> bool:
+    """Frozen release snapshots are immutable and not subject to active checks."""
+    return path.is_relative_to(ARCHIVE_DIR)
 
 
 def _resolve_pointer(document: Any, pointer: str) -> Any:
@@ -83,6 +93,8 @@ def check_refs() -> list[str]:
     errors: list[str] = []
 
     for path in sorted(SPEC_ROOT.rglob("*.json")):
+        if _is_archived(path):
+            continue
         try:
             document = _load_json(path)
         except (OSError, json.JSONDecodeError) as exc:
@@ -100,6 +112,8 @@ def check_refs() -> list[str]:
                 errors.append(f"unresolved $ref {ref} in {path.relative_to(SPEC_ROOT)}")
 
     for path in sorted(SPEC_ROOT.rglob("*.yaml")) + sorted(SPEC_ROOT.rglob("*.yml")):
+        if _is_archived(path):
+            continue
         text = path.read_text(encoding="utf-8")
         for ref in _YAML_REF.findall(text):
             if _is_remote(ref) or ref.startswith("#"):
