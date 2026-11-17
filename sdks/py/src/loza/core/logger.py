@@ -166,14 +166,21 @@ class Logger:
     def append(self, ctx: EventContext, *attrs: Attr, **named: Any) -> None:
         self.enrich(ctx, *attrs, **named)
 
-    def _apply_attr(self, ctx: EventContext, attr: Attr) -> None:
+    @staticmethod
+    def _register_policy_keys(ctx: EventContext, attr: Attr) -> bool:
+        """Register drop/hash/sensitive flags for a key. Returns True when the attr is dropped."""
         if attr.drop:
             ctx._drop_keys.add(attr.key)
-            return
+            return True
         if attr.hash_value:
             ctx._hash_keys.add(attr.key)
         if attr.sensitive:
             ctx._sensitive_keys.add(attr.key)
+        return False
+
+    def _apply_attr(self, ctx: EventContext, attr: Attr) -> None:
+        if self._register_policy_keys(ctx, attr):
+            return
         if attr.key.startswith("user."):
             self._set_path(ctx.user, attr.key.removeprefix("user."), attr.value, self._config.duplicate_policy)
             return
@@ -190,6 +197,8 @@ class Logger:
 
     def checkpoint(self, ctx: EventContext, name: str, *attrs: Attr, **named: Any) -> None:
         data = {a.key: a.value for a in attrs}
+        for attr in attrs:
+            self._register_policy_keys(ctx, attr)
         data.update(named)
         ctx.checkpoint(name, **data)
 
@@ -557,6 +566,9 @@ class Logger:
             snapshot.started_at = ctx.started_at
             snapshot.finished_at = now
             snapshot.event_state = EVENT_FINISHED
+            snapshot._drop_keys = set(ctx._drop_keys)
+            snapshot._hash_keys = set(ctx._hash_keys)
+            snapshot._sensitive_keys = set(ctx._sensitive_keys)
             snapshot.attrs = {key: value for key, value in checkpoint.items() if key not in {"name", "at_ms"}}
             safe_snapshot = self._sanitize_event(snapshot)
             payload = self._config.schema.encode(EventView(safe_snapshot))
@@ -710,7 +722,27 @@ class Logger:
         for key in ctx._sensitive_keys:
             bucket, local = self._resolve_bucket(safe, key)
             self._redact_at_path(bucket, local)
+        for checkpoint in safe.checkpoints:
+            self._sanitize_checkpoint(checkpoint, ctx._drop_keys, ctx._hash_keys, ctx._sensitive_keys)
         return safe
+
+    @staticmethod
+    def _sanitize_checkpoint(
+        checkpoint: dict[str, object],
+        drop_keys: set[str],
+        hash_keys: set[str],
+        sensitive_keys: set[str],
+    ) -> None:
+        """Apply the same drop/hash/sensitive policies to a checkpoint payload."""
+        for key in drop_keys:
+            checkpoint.pop(key, None)
+        for key in hash_keys:
+            value = checkpoint.get(key)
+            if value is not None:
+                checkpoint[key] = hashlib.sha256(str(value).encode("utf-8")).hexdigest()
+        for key in sensitive_keys:
+            if checkpoint.get(key) is not None:
+                checkpoint[key] = "[REDACTED]"
 
     @staticmethod
     def _hash_at_path(target: dict[str, Any], key: str) -> None:
