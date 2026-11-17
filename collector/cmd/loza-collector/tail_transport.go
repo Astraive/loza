@@ -21,15 +21,11 @@ import (
 
 // The tail WebSocket feature is not yet wired into the router.
 // Keeping the implementation for future use.
-//lint:ignore U1000 tail transport
 
-//nolint:unused
-var tailWSUpgrader = websocket.Upgrader{
-	ReadBufferSize:  16 * 1024,
-	WriteBufferSize: 16 * 1024,
-	CheckOrigin: func(r *http.Request) bool {
-		return serverruntime.NewWebSocketUpgrader(nil).CheckOrigin(r)
-	},
+// tailWebSocketUpgrader builds the tail WebSocket upgrader from the configured
+// HTTP settings so that allowed_origins and the development flag are honored.
+func tailWebSocketUpgrader(cfg serverruntime.HTTPConfig) websocket.Upgrader {
+	return serverruntime.NewWebSocketUpgrader(cfg.AllowedOrigins, cfg.DevAllowLocalhostOrigins)
 }
 
 //nolint:unused
@@ -44,7 +40,8 @@ func (s *collectorState) handleTailWebSocket(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	conn, err := tailWSUpgrader.Upgrade(w, r, nil)
+	upgrader := tailWebSocketUpgrader(s.cfg.serverConfig.HTTP)
+	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		return
 	}

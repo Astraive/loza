@@ -49,6 +49,10 @@ type HTTPConfig struct {
 	RateLimitRPS         float64
 	RateLimitBurst       int
 	AllowedOrigins       []string
+	// DevAllowLocalhostOrigins permits loopback origins and Origin-less requests
+	// on the tail WebSocket. It is intended for local development only and must
+	// remain false in production.
+	DevAllowLocalhostOrigins bool
 }
 
 type GRPCConfig struct {
