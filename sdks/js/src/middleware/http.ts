@@ -1,5 +1,6 @@
 import { Logger } from '../core/logger.ts';
 import { String as AttrString, Int as AttrInt } from '../core/event.ts';
+import { runWithEvent } from '../core/context.ts';
 
 export interface HttpMiddlewareOptions {
   service?: string;
@@ -34,6 +35,9 @@ export function lozaHttpMiddleware(opts: HttpMiddlewareOptions = {}) {
       finalize();
       loza.emit(ev).catch(() => {});
     };
+    // Scope downstream request handling to this event with run(); the context
+    // is restored once next() and its async children complete.
+    runWithEvent(ev, () => next());
 
     const originalEnd = res.end;
     res.end = function (...args: any[]) {

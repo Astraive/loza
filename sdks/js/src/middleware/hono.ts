@@ -1,5 +1,6 @@
 import { Logger } from '../core/logger.ts';
 import { String as AttrString, Int as AttrInt } from '../core/event.ts';
+import { runWithEvent } from '../core/context.ts';
 
 export interface HonoMiddlewareOptions {
   service?: string;
@@ -33,7 +34,8 @@ export function lozaHonoMiddleware(opts: HonoMiddlewareOptions = {}) {
     );
 
     try {
-      await next();
+      // Scope downstream handling with run(); context is restored afterwards.
+      await runWithEvent(ev, () => next());
       const durationMs = Date.now() - startedAt;
       const outcome = c.res.status >= 500 ? 'error' : 'success';
       loza.finish(ev, outcome,

@@ -1,5 +1,6 @@
 import { Logger } from '../core/logger.ts';
 import { String as AttrString, Int as AttrInt } from '../core/event.ts';
+import { runWithEvent } from '../core/context.ts';
 
 export interface ExpressMiddlewareOptions {
   service?: string;
@@ -39,6 +40,10 @@ export function lozaMiddleware(opts: ExpressMiddlewareOptions = {}) {
         loza.emit(ctx).catch(() => {});
       }
     };
+    // Scope downstream request handling to this event with run(). The context
+    // is restored when next() and its async children complete, so it cannot
+    // bleed into unrelated work or a later request.
+    runWithEvent(ctx, () => next());
 
     const originalEnd = res.end;
     res.end = function (...args: any[]) {
@@ -58,7 +63,5 @@ export function lozaMiddleware(opts: ExpressMiddlewareOptions = {}) {
     res.on('error', (err: Error) => {
       settle(() => loza.finishError(ctx, err));
     });
-
-    next();
   };
 }

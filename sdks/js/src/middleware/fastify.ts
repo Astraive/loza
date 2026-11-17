@@ -17,6 +17,11 @@ export function lozaFastifyPlugin(opts: FastifyPluginOptions = {}) {
     // when it is unavailable, fall back to the query-stripped pathname.
     const route = request.routeOptions?.url || path;
 
+    // The event is passed explicitly to finish/emit below. Fastify runs
+    // downstream handlers after this hook returns, so there is no callback to
+    // scope with runWithEvent here; unlike Express/Koa/Hono/Next, this hook
+    // does not install an async context (which was the source of the
+    // cross-request bleed caused by enterWith).
     const ev = loza.startHTTPEvent({
       event: `${request.method} ${route}`,
       kind: 'http',

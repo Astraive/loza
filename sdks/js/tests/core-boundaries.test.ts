@@ -8,7 +8,7 @@ import { LozaError, DuplicateEmitError, EventClosedError, EventAlreadyFinishedEr
 import { Event, String, SensitiveString, HashString, resetClock, setClock } from '../src/core/event.ts';
 import { sanitizeEvent } from '../src/core/sanitize.ts';
 import { setPath, getPath, deletePath } from '../src/core/paths.ts';
-import { storeEvent, getEvent, hasEvent, eventId, runWithEvent, requestIdFromContext, traceIdFromContext } from '../src/core/context.ts';
+import { getEvent, hasEvent, eventId, runWithEvent, withoutEvent, requestIdFromContext, traceIdFromContext } from '../src/core/context.ts';
 import { encodeJSON, encodePrettyJSON } from '../src/jsonenc/encoder.ts';
 import { MetricsCollector, RenderPrometheus } from '../src/metrics.ts';
 import { SecurityLimiter } from '../src/config/security.ts';
@@ -47,6 +47,8 @@ describe('Core boundaries', () => {
 
   it('returns default context values when run with an undefined event', () => {
     runWithEvent(undefined as never, () => {
+  it('has no event in context by default', () => {
+    withoutEvent(() => {
       assert.equal(getEvent(), undefined);
       assert.equal(hasEvent(), false);
       assert.equal(eventId(), '');
@@ -55,15 +57,17 @@ describe('Core boundaries', () => {
     });
   });
 
-  it('stores and restores async event context', () => {
+  it('scopes and restores async event context', () => {
     const event = makeEvent();
     assert.equal(hasEvent(), false);
-    storeEvent(event);
-    assert.equal(getEvent(), event);
-    assert.equal(hasEvent(), true);
-    assert.equal(eventId(), event.eventId);
-    assert.equal(requestIdFromContext(), 'req');
-    assert.equal(traceIdFromContext(), 'trace');
+    runWithEvent(event, () => {
+      assert.equal(getEvent(), event);
+      assert.equal(hasEvent(), true);
+      assert.equal(eventId(), event.eventId);
+      assert.equal(requestIdFromContext(), 'req');
+      assert.equal(traceIdFromContext(), 'trace');
+    });
+    assert.equal(hasEvent(), false);
     assert.equal(runWithEvent(event, () => getEvent()), event);
   });
 

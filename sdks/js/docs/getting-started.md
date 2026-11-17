@@ -90,7 +90,7 @@ main().catch(console.error);
 | Step | Call | Purpose |
 |------|------|---------|
 | configure | `configure(production(...))` | Sets up the default `loza` instance with service name, sink, sampler, and redactor. |
-| startEvent | `loza.startEvent({ event, kind })` | Creates a new event with a UUIDv7 ID and stores it in async context. |
+| startEvent | `loza.startEvent({ event, kind })` | Creates a new event with a UUIDv7 ID. Scope it with `runWithEvent`/`runEvent` to expose it as the current context. |
 | enrich | `loza.enrich(ctx, ...attrs)` | Adds typed attributes (userId, string, int, etc.) to the event. |
 | checkpoint | `loza.checkpoint(ctx, name)` | Records a named checkpoint with a timestamp for mid-flow milestones. |
 | finish | `loza.finish(ctx, outcome, ...attrs)` | Marks the event as finished, records outcome and duration. |

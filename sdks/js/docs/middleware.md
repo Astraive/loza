@@ -49,16 +49,20 @@ const server = http.createServer((req, res) => {
 
 ## AsyncLocalStorage Context
 
-The SDK uses Node.js `AsyncLocalStorage` to propagate event context across async operations. This means `getEvent()` works in any async function within the same request:
+The SDK uses Node.js `AsyncLocalStorage` to propagate event context across async operations. Context is always **scoped with `runWithEvent`** (which uses `AsyncLocalStorage.run()`), so it is available to any async function inside the scoped callback and is automatically restored when that work completes. `startEvent` returns the event but does **not** install an ambient context:
 
 ```typescript
-import { startEvent, enrich, getEvent, hasEvent, finish, emit } from '@astraive/loza';
+import { startEvent, enrich, getEvent, hasEvent, finish, emit, runWithEvent } from '@astraive/loza';
 
 async function handleRequest() {
   const ctx = startEvent({ event: 'request', kind: 'http' });
 
-  // In any async function within this context:
-  await someAsyncWork();
+  // Scope the event to this request's work. The context is restored when the
+  // callback (and its async children) complete, so it cannot bleed into a
+  // later/unrelated request in a long-lived process.
+  await runWithEvent(ctx, () => someAsyncWork());
+  finish(ctx, 'success');
+  await emit(ctx);
 }
 
 async function someAsyncWork() {
@@ -68,6 +72,8 @@ async function someAsyncWork() {
   }
 }
 ```
+
+> **Context lifecycle:** framework middleware wraps downstream request handling in `runWithEvent` for you. If you manage the lifecycle yourself, use `runEvent` or `runWithEvent` and keep all work that needs `getEvent()` inside the callback. Do not install an event with `AsyncLocalStorage.enterWith` — an undisposed `enterWith` context leaks into unrelated work across requests. Use `withoutEvent(fn)` to deliberately run a callback with no event context.
 
 ## Framework-Specific Notes
 

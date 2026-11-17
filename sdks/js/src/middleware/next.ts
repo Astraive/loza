@@ -1,5 +1,6 @@
 import { Logger } from '../core/logger.ts';
 import { String as AttrString, Int as AttrInt } from '../core/event.ts';
+import { runWithEvent } from '../core/context.ts';
 
 export interface NextMiddlewareOptions {
   service?: string;
@@ -85,7 +86,8 @@ export function lozaNextMiddleware(opts: NextMiddlewareOptions = {}) {
     );
 
     try {
-      const response = await event();
+      // Scope downstream handling with run(); context is restored afterwards.
+      const response = await runWithEvent(ev, () => event());
       const durationMs = Date.now() - startedAt;
       const outcome = response.status >= 500 ? 'error' : 'success';
       loza.finish(ev, outcome,
