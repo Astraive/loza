@@ -127,8 +127,8 @@ class Client:
             raise QueryError("invalid LQL connection configuration: collector slug is required", category=ErrorCategory.INVALID_CONFIGURATION)
         if config.username and not config.password and not config.username.startswith("lz_pub_"):
             raise QueryError("invalid LQL connection configuration: basic username requires a password", category=ErrorCategory.INVALID_CONFIGURATION)
-        if config.username and not config.api_key and parsed_endpoint.scheme == "http" and not _is_localhost(parsed_endpoint.hostname or ""):
-            raise QueryError("invalid LQL connection configuration: basic authentication requires TLS", category=ErrorCategory.INVALID_CONFIGURATION)
+        if (config.api_key or config.username) and parsed_endpoint.scheme == "http" and not _is_localhost(parsed_endpoint.hostname or ""):
+            raise QueryError("invalid LQL connection configuration: authentication requires TLS", category=ErrorCategory.INVALID_CONFIGURATION)
         self._endpoint = endpoint
         self._collector = config.collector
         self._api_key = config.api_key

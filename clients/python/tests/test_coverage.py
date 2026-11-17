@@ -175,6 +175,26 @@ def test_invalid_client_configuration_is_categorized(config: ConnectionConfig) -
         Client(config)
     assert caught.value.category == ErrorCategory.INVALID_CONFIGURATION
 
+
+@pytest.mark.parametrize(
+    "credentials",
+    [
+        {"api_key": "secret"},
+        {"api_key": "secret", "username": "user", "password": "pass"},
+    ],
+)
+def test_credentials_over_remote_http_require_tls(credentials: dict[str, Any]) -> None:
+    with pytest.raises(QueryError) as caught:
+        Client(ConnectionConfig(endpoint="http://collector.example", collector="demo", **credentials))
+    assert caught.value.category == ErrorCategory.INVALID_CONFIGURATION
+
+
+@pytest.mark.parametrize("endpoint", ["http://localhost:9308", "http://127.0.0.1:9308", "http://[::1]:9308", "https://collector.example"])
+def test_api_key_over_localhost_or_https_is_allowed(endpoint: str) -> None:
+    client = Client(ConnectionConfig(endpoint=endpoint, collector="demo", api_key="secret"))
+    assert client._api_key == "secret"
+
+
 def test_client_uses_dsn_username_when_password_is_already_configured() -> None:
     client = Client(
         ConnectionConfig(
