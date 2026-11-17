@@ -1,5 +1,8 @@
 # Variable Manager Report
 
+> [!WARNING]
+> **Status: HISTORICAL — applies to v0.2.4 only.** This report is a point-in-time snapshot retained for audit history; its findings and verdicts may have been remediated in later releases. Do not use it to triage current risk. For the current security posture and the list of still-open findings, see [Security](security.md) and [Open security findings](open-security-findings.md). Current release: **0.4.1** ([CHANGELOG.md](../CHANGELOG.md)).
+
 ## Summary
 Fixed configuration and variable issues found in the Loza v0.2.4 audit. Applied 3 fixes and verified 1 false positive.
 

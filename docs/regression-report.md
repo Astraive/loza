@@ -1,10 +1,18 @@
 # Loza v0.2.0 Pre-Release Regression Report
 
+> [!WARNING]
+> **Status: HISTORICAL — applies to v0.2.4 only.** This report is a point-in-time snapshot retained for audit history; its findings and verdicts may have been remediated in later releases. Do not use it to triage current risk. For the current security posture and the list of still-open findings, see [Security](security.md) and [Open security findings](open-security-findings.md). Current release: **0.4.1** ([CHANGELOG.md](../CHANGELOG.md)).
+
 **Date:** 2026-05-27
 **Branch:** main
 **Commit:** e6780e6
 **Target:** Local builds (E:\astraive\loza)
 **Mode:** Full regression QA
+
+## Reconciliation notes (added 2026-11-17)
+
+- **Version discrepancy:** the title says "v0.2.0" although this report covers the v0.2.4-era tree; the original title is preserved here for audit integrity. The current release is 0.4.1.
+- **Conformance contradiction:** this report records `spec/conformance/runner.py` and "48/48 checks PASS" (see below), while `benchmark-report.md` from the same date/commit says the runner is missing (FINDING-007). Current `main` contains `spec/conformance/runner.py` and `.github/workflows/spec-ci.yml` runs it, so the 48/48 result below is the accurate one and the benchmark report's finding is stale.
 
 ---
 

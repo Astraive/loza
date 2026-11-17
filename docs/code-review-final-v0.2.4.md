@@ -1,8 +1,15 @@
 # Code Review: Loza v0.2.4 Final Release Audit
 
+> [!WARNING]
+> **Status: HISTORICAL — applies to v0.2.4 only.** This report is a point-in-time snapshot retained for audit history; its findings and verdicts may have been remediated in later releases. Do not use it to triage current risk. For the current security posture and the list of still-open findings, see [Security](security.md) and [Open security findings](open-security-findings.md). Current release: **0.4.1** ([CHANGELOG.md](../CHANGELOG.md)).
+
 **Reviewer**: Code Reviewer Agent
 **Date**: 2026-05-28
 **Scope**: Full project -- collector, cortex, cli, lql, all SDKs (go, py, js, rs), lozana, eventbus, spec, examples, shipping infrastructure, documentation
+
+## Disposition of the BLOCK verdict (verified against current `main`, 2026-11-17)
+
+The **BLOCK** verdict and the CRITICAL findings below applied to the v0.2.4 tree only. The headline issues have since been remediated: SDK ingest envelopes stamp the current version at runtime (no hardcoded `0.2.0` defaults remain in SDK runtime source), and the production Dockerfiles expose the canonical ports (collector 9308–9311, cortex 9312/9313). Findings that are still open are listed in [Open security findings](open-security-findings.md).
 
 ---
 

@@ -1,0 +1,40 @@
+name: Docs CI
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "docs/**"
+      - "README.md"
+      - "CHANGELOG.md"
+      - "scripts/check_docs_versions.py"
+      - "scripts/tests/test_check_docs_versions.py"
+      - ".github/workflows/docs-ci.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "docs/**"
+      - "README.md"
+      - "CHANGELOG.md"
+      - "scripts/check_docs_versions.py"
+      - "scripts/tests/test_check_docs_versions.py"
+      - ".github/workflows/docs-ci.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  version-drift:
+    name: Check doc version drift and historical banners
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Check version claims and historical banners
+        run: python scripts/check_docs_versions.py
+      - name: Install test dependencies
+        run: python -m pip install --quiet pytest
+      - name: Test the docs check
+        run: python -m pytest -q scripts/tests/test_check_docs_versions.py

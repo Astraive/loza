@@ -1,5 +1,11 @@
 # Security
 
+<!-- current-release: 0.4.1 -->
+<!-- Kept in sync with the top entry in CHANGELOG.md and checked by scripts/check_docs_versions.py. -->
+
+For the current list of open security work, see [Open security findings](open-security-findings.md).
+Historical v0.2.4-era audit/review reports are marked *Status: HISTORICAL* and are not a statement of current risk.
+
 ## Architecture
 
 ```
@@ -109,10 +115,13 @@ All auth decisions follow default-deny. Unknown roles, missing permissions, miss
 
 ## Audit Events
 
-All auth-sensitive actions emit audit events: `key.authenticated`, `key.failed`, `key.rate_limited`, `key.permission_denied`, `key.env_denied`, `key.origin_denied`, `key.payload_too_large`.
+The intended audit events are `key.authenticated`, `key.failed`, `key.rate_limited`, `key.permission_denied`, `key.env_denied`, `key.origin_denied`, and `key.payload_too_large`.
+
+> **Status: OPEN.** `AuditLogger` (`collector/internal/auth/audit.go`) is defined but is not yet invoked from the production auth middleware, so these events are not currently emitted. See [OPEN-001 in the tracker](open-security-findings.md#open-findings).
 
 ## Further Reading
 
 - [Authentication](authentication.md) — Key types, format, SDK configuration, and token storage
 - [Authorization](authorization.md) — RBAC roles, permissions, ABAC restrictions, and audit events
 - [Full Spec](../spec/auth/spec.md) — Complete authentication specification
+- [Open security findings](open-security-findings.md) — authoritative, current security work tracker
