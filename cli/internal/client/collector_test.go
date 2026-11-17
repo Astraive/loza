@@ -381,5 +381,114 @@ func TestAPIKeyAuthRequiresTLSForNonLocalHosts(t *testing.T) {
 		if got := req.Header.Get("Authorization"); got != "Bearer lz_sec_live_key" {
 			t.Fatalf("Authorization = %q for %s", got, endpoint)
 		}
+type capturedRequest struct {
+	method      string
+	escapedPath string
+	rawQuery    string
+	query       url.Values
+}
+
+func newCaptureServer(t *testing.T, captured *capturedRequest) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		*captured = capturedRequest{
+			method:      r.Method,
+			escapedPath: r.URL.EscapedPath(),
+			rawQuery:    r.URL.RawQuery,
+			query:       r.URL.Query(),
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"status":"ok"}`))
+	}))
+}
+
+// TestClientEscapesPathSegments exercises every client function that places a
+// user-supplied ID into a URL path. PathEscape leaves "/" out of a segment, so
+// the ID must stay inside exactly one segment and must not open a query or
+// fragment. "&" is safe inside a path segment and stays put, but must never be
+// reinterpreted as a query separator.
+func TestClientEscapesPathSegments(t *testing.T) {
+	const id = "a/b ?#&c"
+	const escaped = "a%2Fb%20%3F%23&c"
+
+	tests := []struct {
+		name     string
+		wantPath string
+		call     func(string) error
+	}{
+		{"FetchDLQItem", "/dlq/" + escaped, func(base string) error { _, err := FetchDLQItem(base, id); return err }},
+		{"ReplayDLQItem", "/dlq/" + escaped + "/replay", func(base string) error { _, err := ReplayDLQItem(context.Background(), base, id); return err }},
+		{"DeleteDLQItem", "/dlq/" + escaped, func(base string) error { _, err := DeleteDLQItem(context.Background(), base, id); return err }},
+		{"DeleteEventsByTenant", "/events/by-tenant/" + escaped, func(base string) error {
+			_, err := DeleteEventsByTenant(context.Background(), base, id, "r")
+			return err
+		}},
+		{"DeleteEventsByUser", "/events/by-user/" + escaped, func(base string) error { _, err := DeleteEventsByUser(context.Background(), base, id, "r"); return err }},
+		{"DeleteEventByID", "/events/" + escaped, func(base string) error { _, err := DeleteEventByID(context.Background(), base, id, "r"); return err }},
+		{"FetchSinkHealth", "/sinks/" + escaped, func(base string) error { _, err := FetchSinkHealth(base, id); return err }},
+		{"TestSink", "/sinks/" + escaped + "/test", func(base string) error { _, err := TestSink(context.Background(), base, id); return err }},
+		{"RevokeAPIKey", "/keys/" + escaped + "/revoke", func(base string) error { _, err := RevokeAPIKey(context.Background(), base, id); return err }},
+		{"RotateAPIKey", "/keys/" + escaped + "/rotate", func(base string) error { _, err := RotateAPIKey(context.Background(), base, id); return err }},
+		{"ReplayQuarantineItem", "/quarantine/" + escaped + "/replay", func(base string) error { _, err := ReplayQuarantineItem(context.Background(), base, id); return err }},
+		{"DeleteQuarantineItem", "/quarantine/" + escaped, func(base string) error { _, err := DeleteQuarantineItem(context.Background(), base, id); return err }},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var captured capturedRequest
+			srv := newCaptureServer(t, &captured)
+			defer srv.Close()
+
+			if err := tc.call(srv.URL); err != nil {
+				t.Fatalf("call failed: %v", err)
+			}
+			if captured.escapedPath != tc.wantPath {
+				t.Errorf("escaped path = %q, want %q", captured.escapedPath, tc.wantPath)
+			}
+			if captured.rawQuery != "" {
+				t.Errorf("unexpected query injected by ID: %q", captured.rawQuery)
+			}
+		})
+	}
+}
+
+// TestWatchStreamEscapesFilters verifies that both filter keys and values are
+// encoded with url.Values, so "&", "=", "/", "?", "#", and spaces cannot split
+// a filter into extra query parameters.
+func TestWatchStreamEscapesFilters(t *testing.T) {
+	const wantQuery = "evil%26inject%3D1=yes&q=a%2Fb+%3F%23%26c&tenant=x+y%26z"
+
+	var captured capturedRequest
+	srv := newCaptureServer(t, &captured)
+	defer srv.Close()
+
+	filters := map[string]string{
+		"q":             "a/b ?#&c",
+		"tenant":        "x y&z",
+		"evil&inject=1": "yes",
+	}
+	body, err := WatchStream(context.Background(), srv.URL, filters)
+	if err != nil {
+		t.Fatalf("watch stream: %v", err)
+	}
+	defer body.Close()
+
+	if captured.escapedPath != "/tail" {
+		t.Errorf("escaped path = %q, want /tail", captured.escapedPath)
+	}
+	if captured.rawQuery != wantQuery {
+		t.Errorf("raw query = %q, want %q", captured.rawQuery, wantQuery)
+	}
+	if len(captured.query) != 3 {
+		t.Fatalf("query has %d params, want 3: %v", len(captured.query), captured.query)
+	}
+	if got := captured.query.Get("q"); got != "a/b ?#&c" {
+		t.Errorf("q = %q, want %q", got, "a/b ?#&c")
+	}
+	if got := captured.query.Get("evil&inject=1"); got != "yes" {
+		t.Errorf("evil key = %q, want yes", got)
+	}
+	if captured.query.Has("inject") {
+		t.Errorf("filter injected an unexpected 'inject' query parameter: %v", captured.query)
 	}
 }

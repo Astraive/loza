@@ -144,29 +144,29 @@ func ReconstructCortexIncident(ctx context.Context, baseURL, incidentID, mode st
 	if err != nil {
 		return nil, err
 	}
-	return postCortexJSON(ctx, baseURL, "/reconstruct", raw)
+	return postCortexJSON(ctx, buildURL(baseURL, []string{"reconstruct"}, nil), raw)
 }
 
 func RecordCortexRemediation(ctx context.Context, baseURL string, payload []byte) ([]byte, error) {
-	return postCortexJSON(ctx, baseURL, "/feedback/remediation", payload)
+	return postCortexJSON(ctx, buildURL(baseURL, []string{"feedback", "remediation"}, nil), payload)
 }
 
 func RecordCortexFeedback(ctx context.Context, baseURL string, payload []byte) ([]byte, error) {
-	return postCortexJSON(ctx, baseURL, "/feedback/incident", payload)
+	return postCortexJSON(ctx, buildURL(baseURL, []string{"feedback", "incident"}, nil), payload)
 }
 
 func FetchCortexServiceGraph(ctx context.Context, baseURL, service string, depth int) ([]byte, error) {
-	path := "/graph/service/" + url.PathEscape(service) + "?depth=" + url.QueryEscape(fmt.Sprint(clampDepth(depth)))
-	return getCortexJSON(ctx, baseURL, path)
+	query := url.Values{"depth": []string{fmt.Sprint(clampDepth(depth))}}
+	return getCortexJSON(ctx, buildURL(baseURL, []string{"graph", "service", service}, query))
 }
 
 func FetchCortexIncidentGraph(ctx context.Context, baseURL, incidentID string, depth int) ([]byte, error) {
-	path := "/graph/incident/" + url.PathEscape(incidentID) + "?depth=" + url.QueryEscape(fmt.Sprint(clampDepth(depth)))
-	return getCortexJSON(ctx, baseURL, path)
+	query := url.Values{"depth": []string{fmt.Sprint(clampDepth(depth))}}
+	return getCortexJSON(ctx, buildURL(baseURL, []string{"graph", "incident", incidentID}, query))
 }
 
-func getCortexJSON(ctx context.Context, baseURL, path string) ([]byte, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(baseURL, "/")+path, nil)
+func getCortexJSON(ctx context.Context, rawURL string) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -197,7 +197,7 @@ func QueryCortexGraphQL(ctx context.Context, baseURL, query string, variables ma
 	if err != nil {
 		return nil, err
 	}
-	return postCortexJSON(ctx, baseURL, "/graphql", raw)
+	return postCortexJSON(ctx, buildURL(baseURL, []string{"graphql"}, nil), raw)
 }
 
 func FetchSignatures(ctx context.Context, baseURL string, limit int) ([]byte, error) {
@@ -225,11 +225,11 @@ func clampLimit(limit, fallback, max int) int {
 	return limit
 }
 
-func postCortexJSON(ctx context.Context, baseURL, path string, payload []byte) ([]byte, error) {
+func postCortexJSON(ctx context.Context, rawURL string, payload []byte) ([]byte, error) {
 	if payload == nil {
 		payload = []byte("{}")
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(baseURL, "/")+path, bytes.NewReader(payload))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, rawURL, bytes.NewReader(payload))
 	if err != nil {
 		return nil, err
 	}

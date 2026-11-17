@@ -312,51 +312,53 @@ func ReplayEvents(baseURL string, payload []byte) error {
 }
 
 func FetchDLQ(baseURL string) ([]byte, error) {
-	return getJSON(baseURL, "/dlq")
+	return getJSON(buildURL(baseURL, []string{"dlq"}, nil))
 }
 
 func FetchDLQItem(baseURL, id string) ([]byte, error) {
 	return getJSON(baseURL, "/dlq/"+url.PathEscape(id))
+	return getJSON(buildURL(baseURL, []string{"dlq", id}, nil))
 }
 
 func ReplayDLQ(ctx context.Context, baseURL string) ([]byte, error) {
-	return postJSON(ctx, baseURL, "/dlq/replay", nil)
+	return postJSON(ctx, buildURL(baseURL, []string{"dlq", "replay"}, nil), nil)
 }
 
 func ReplayDLQItem(ctx context.Context, baseURL, id string) ([]byte, error) {
 	return postJSON(ctx, baseURL, "/dlq/"+url.PathEscape(id)+"/replay", nil)
+	return postJSON(ctx, buildURL(baseURL, []string{"dlq", id, "replay"}, nil), nil)
 }
 
 func FetchSchema(baseURL string) ([]byte, error) {
-	return getJSON(baseURL, "/schema")
+	return getJSON(buildURL(baseURL, []string{"schema"}, nil))
 }
 
 func DiffSchema(ctx context.Context, baseURL string, payload []byte) ([]byte, error) {
-	return postJSON(ctx, baseURL, "/schema/diff", payload)
+	return postJSON(ctx, buildURL(baseURL, []string{"schema", "diff"}, nil), payload)
 }
 
 func PublishSchema(ctx context.Context, baseURL string, payload []byte) ([]byte, error) {
-	return postJSON(ctx, baseURL, "/schema/publish", payload)
+	return postJSON(ctx, buildURL(baseURL, []string{"schema", "publish"}, nil), payload)
 }
 
 func ValidateCollectorPayload(ctx context.Context, baseURL string, payload []byte) ([]byte, error) {
-	return postJSON(ctx, baseURL, "/validate", payload)
+	return postJSON(ctx, buildURL(baseURL, []string{"validate"}, nil), payload)
 }
 
 func CheckSchema(ctx context.Context, baseURL string, payload []byte) ([]byte, error) {
-	return postJSON(ctx, baseURL, "/schema/check", payload)
+	return postJSON(ctx, buildURL(baseURL, []string{"schema", "check"}, nil), payload)
 }
 
 func ValidatePolicy(ctx context.Context, baseURL string, payload []byte) ([]byte, error) {
-	return postJSON(ctx, baseURL, "/policy/validate", payload)
+	return postJSON(ctx, buildURL(baseURL, []string{"policy", "validate"}, nil), payload)
 }
 
 func ApplyRetention(ctx context.Context, baseURL string, payload []byte) ([]byte, error) {
-	return postJSON(ctx, baseURL, "/retention/apply", payload)
+	return postJSON(ctx, buildURL(baseURL, []string{"retention", "apply"}, nil), payload)
 }
 
 func AuditPII(ctx context.Context, baseURL string, payload []byte) ([]byte, error) {
-	return postJSON(ctx, baseURL, "/audit/pii", payload)
+	return postJSON(ctx, buildURL(baseURL, []string{"audit", "pii"}, nil), payload)
 }
 
 func DeleteEventsByTenant(ctx context.Context, baseURL, tenantID, reason string) ([]byte, error) {
@@ -369,10 +371,19 @@ func DeleteEventsByUser(ctx context.Context, baseURL, userID, reason string) ([]
 
 func DeleteEventByID(ctx context.Context, baseURL, eventID, reason string) ([]byte, error) {
 	return deleteJSON(ctx, baseURL, "/events/"+url.PathEscape(eventID), reason)
+	return deleteJSON(ctx, buildURL(baseURL, []string{"events", "by-tenant", tenantID}, nil), reason)
+}
+
+func DeleteEventsByUser(ctx context.Context, baseURL, userID, reason string) ([]byte, error) {
+	return deleteJSON(ctx, buildURL(baseURL, []string{"events", "by-user", userID}, nil), reason)
+}
+
+func DeleteEventByID(ctx context.Context, baseURL, eventID, reason string) ([]byte, error) {
+	return deleteJSON(ctx, buildURL(baseURL, []string{"events", eventID}, nil), reason)
 }
 
 func FetchSinks(baseURL string) ([]byte, error) {
-	return getJSON(baseURL, "/sinks")
+	return getJSON(buildURL(baseURL, []string{"sinks"}, nil))
 }
 
 func FetchSinkHealth(baseURL, name string) ([]byte, error) {
@@ -385,18 +396,27 @@ func TestSink(ctx context.Context, baseURL, name string) ([]byte, error) {
 
 func DeleteDLQItem(ctx context.Context, baseURL, id string) ([]byte, error) {
 	return deleteJSON(ctx, baseURL, "/dlq/"+url.PathEscape(id), "")
+	return getJSON(buildURL(baseURL, []string{"sinks", name}, nil))
+}
+
+func TestSink(ctx context.Context, baseURL, name string) ([]byte, error) {
+	return postJSON(ctx, buildURL(baseURL, []string{"sinks", name, "test"}, nil), nil)
+}
+
+func DeleteDLQItem(ctx context.Context, baseURL, id string) ([]byte, error) {
+	return deleteJSON(ctx, buildURL(baseURL, []string{"dlq", id}, nil), "")
 }
 
 func PublishBlueprint(ctx context.Context, baseURL string, payload []byte) ([]byte, error) {
-	return postJSON(ctx, baseURL, "/schema/blueprint", payload)
+	return postJSON(ctx, buildURL(baseURL, []string{"schema", "blueprint"}, nil), payload)
 }
 
 func ListBlueprints(ctx context.Context, baseURL string) ([]byte, error) {
-	return getJSON(baseURL, "/schema/blueprint")
+	return getJSON(buildURL(baseURL, []string{"schema", "blueprint"}, nil))
 }
 
 func FetchQuarantine(baseURL string) ([]byte, error) {
-	return getJSON(baseURL, "/quarantine")
+	return getJSON(buildURL(baseURL, []string{"quarantine"}, nil))
 }
 
 func ReplayQuarantineItem(ctx context.Context, baseURL, id string) ([]byte, error) {
@@ -405,10 +425,15 @@ func ReplayQuarantineItem(ctx context.Context, baseURL, id string) ([]byte, erro
 
 func DeleteQuarantineItem(ctx context.Context, baseURL, id string) ([]byte, error) {
 	return deleteJSON(ctx, baseURL, "/quarantine/"+url.PathEscape(id), "")
+	return postJSON(ctx, buildURL(baseURL, []string{"quarantine", id, "replay"}, nil), nil)
+}
+
+func DeleteQuarantineItem(ctx context.Context, baseURL, id string) ([]byte, error) {
+	return deleteJSON(ctx, buildURL(baseURL, []string{"quarantine", id}, nil), "")
 }
 
 func CreateAPIKey(ctx context.Context, baseURL string, payload []byte) ([]byte, error) {
-	return postJSON(ctx, baseURL, "/keys", payload)
+	return postJSON(ctx, buildURL(baseURL, []string{"keys"}, nil), payload)
 }
 
 func RevokeAPIKey(ctx context.Context, baseURL, id string) ([]byte, error) {
@@ -429,6 +454,16 @@ func WatchStream(ctx context.Context, baseURL string, filters map[string]string)
 		base += "?" + values.Encode()
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base, nil)
+	return postJSON(ctx, buildURL(baseURL, []string{"keys", id, "revoke"}, nil), nil)
+}
+
+func RotateAPIKey(ctx context.Context, baseURL, id string) ([]byte, error) {
+	return postJSON(ctx, buildURL(baseURL, []string{"keys", id, "rotate"}, nil), nil)
+}
+
+func WatchStream(ctx context.Context, baseURL string, filters map[string]string) (io.ReadCloser, error) {
+	target := buildURL(baseURL, []string{"tail"}, valuesFromStringMap(filters))
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -492,9 +527,10 @@ func sleepContext(ctx context.Context, d time.Duration) error {
 }
 
 func getJSON(baseURL, path string) ([]byte, error) {
+func getJSON(rawURL string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), defaultTimeout)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(baseURL, "/")+path, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -516,11 +552,11 @@ func getJSON(baseURL, path string) ([]byte, error) {
 	return body, nil
 }
 
-func postJSON(ctx context.Context, baseURL, path string, payload []byte) ([]byte, error) {
+func postJSON(ctx context.Context, rawURL string, payload []byte) ([]byte, error) {
 	if payload == nil {
 		payload = []byte("{}")
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(baseURL, "/")+path, bytes.NewReader(payload))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, rawURL, bytes.NewReader(payload))
 	if err != nil {
 		return nil, err
 	}
@@ -543,7 +579,7 @@ func postJSON(ctx context.Context, baseURL, path string, payload []byte) ([]byte
 	return body, nil
 }
 
-func deleteJSON(ctx context.Context, baseURL, path, reason string) ([]byte, error) {
+func deleteJSON(ctx context.Context, rawURL, reason string) ([]byte, error) {
 	payload := []byte("{}")
 	if strings.TrimSpace(reason) != "" {
 		raw, err := json.Marshal(map[string]string{"reason": reason})
@@ -552,7 +588,7 @@ func deleteJSON(ctx context.Context, baseURL, path, reason string) ([]byte, erro
 		}
 		payload = raw
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, strings.TrimRight(baseURL, "/")+path, bytes.NewReader(payload))
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, rawURL, bytes.NewReader(payload))
 	if err != nil {
 		return nil, err
 	}
