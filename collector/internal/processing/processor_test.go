@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"net"
+	"math/rand"
 	"os"
 	"path/filepath"
 	"strings"
@@ -283,5 +284,64 @@ func TestProcessorRedisDedupeUsesCallerDeadline(t *testing.T) {
 	}
 	if elapsed > 2*time.Second {
 		t.Fatalf("Process blocked for %v despite a 200ms caller deadline", elapsed)
+// alwaysFailSink returns an error on every write so that all retry attempts
+// (and therefore retry jitter) are exercised on every Process call.
+type alwaysFailSink struct {
+	err error
+}
+
+func (s *alwaysFailSink) Name() string { return "always-fail" }
+
+func (s *alwaysFailSink) WriteEvent(context.Context, []byte, *collectorevent.Event) error {
+	return s.err
+}
+func (s *alwaysFailSink) Flush(context.Context) error { return nil }
+func (s *alwaysFailSink) Close(context.Context) error { return nil }
+
+// TestProcessorConcurrentRetryJitter exercises retry jitter from many
+// goroutines against a single Processor sharing one *rand.Rand. Under
+// `go test -race` this detects the data race on math/rand.Rand's internal
+// state that occurs when Process is called concurrently by request handlers.
+func TestProcessorConcurrentRetryJitter(t *testing.T) {
+	primary := &alwaysFailSink{err: errors.New("primary failed")}
+	p, err := New(Config{
+		DeliveryPolicy:      "require_primary",
+		RetryEnabled:        true,
+		RetryMaxAttempts:    3,
+		RetryInitialBackoff: time.Microsecond,
+		RetryMaxBackoff:     time.Millisecond,
+		RetryJitter:         true,
+		ValidateJSONObjects: true,
+	}, primary, nil, nil, rand.New(rand.NewSource(1)))
+	if err != nil {
+		t.Fatalf("new processor: %v", err)
+	}
+	defer func() { _ = p.Close() }()
+
+	const (
+		goroutines = 64
+		iterations = 32
+	)
+	raw := []byte(`{"event_id":"evt-jitter","event":"a"}`)
+
+	var wg sync.WaitGroup
+	errCh := make(chan error, goroutines)
+	for i := 0; i < goroutines; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < iterations; j++ {
+				res := p.Process(context.Background(), raw)
+				if res.Err == nil {
+					errCh <- errors.New("expected processing error from always-failing sink")
+					return
+				}
+			}
+		}()
+	}
+	wg.Wait()
+	close(errCh)
+	for err := range errCh {
+		t.Error(err)
 	}
 }

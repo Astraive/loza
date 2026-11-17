@@ -150,6 +150,8 @@ type Processor struct {
 	fallbackSink   *NamedSink
 	rng            *rand.Rand
 	dlqFile        appendWriter
+	rngMu          sync.Mutex
+	dlqFile        *os.File
 	dlqMu          sync.Mutex
 	quarantineFile appendWriter
 	quarantineMu   sync.Mutex
@@ -589,7 +591,13 @@ func (p *Processor) deliverWithRetry(ctx context.Context, raw []byte) (DeliveryO
 		}
 		sleep := backoff
 		if sleep > 0 && p.cfg.RetryJitter {
-			sleep = time.Duration(float64(sleep) * (0.8 + 0.4*p.rng.Float64()))
+			// math/rand.Rand is not safe for concurrent use. Process() may be
+			// called by multiple request handlers under a shared read lock, so
+			// guard the RNG access with a mutex.
+			p.rngMu.Lock()
+			jitter := p.rng.Float64()
+			p.rngMu.Unlock()
+			sleep = time.Duration(float64(sleep) * (0.8 + 0.4*jitter))
 		}
 		if sleep > 0 {
 			if err := sleepContext(ctx, sleep); err != nil {
