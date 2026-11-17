@@ -193,6 +193,16 @@ describe('Config boundaries', () => {
     assert.throws(() => validateConfig(remote), /require HTTPS/);
   });
 
+  it('rejects API-key auth over plaintext HTTP on non-local endpoints', () => {
+    const remote = withOptions(defaultConfig(), { collectorUrl: 'http://collector.example/events' });
+    assert.throws(() => validateConfig({ ...remote, apiKey: 'lz_sec_live_key' }), /require HTTPS/);
+    assert.throws(() => withOptions(defaultConfig(), { apiKey: 'lz_sec_live_key', collectorUrl: 'http://collector.example/events' }), /require HTTPS/);
+    const plaintextDSN = withOptions(defaultConfig(), { collectorUrl: 'loza://collector.example/events?tls=false' });
+    assert.throws(() => validateConfig({ ...plaintextDSN, apiKey: 'lz_sec_live_key' }), /require HTTPS/);
+    // Loopback remains allowed for local development.
+    assert.doesNotThrow(() => validateConfig({ ...defaultConfig(), collectorUrl: 'http://localhost:9308', apiKey: 'local-key' }));
+  });
+
   it('handles collector DSNs with public capabilities', () => {
     const cfg = withOptions(defaultConfig(), {
       collectorUrl: 'loza://lz_pub_capability:@localhost:9308/project?service=payments&env=staging',

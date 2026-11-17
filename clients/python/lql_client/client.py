@@ -129,6 +129,7 @@ class Client:
             raise QueryError("invalid LQL connection configuration: basic username requires a password", category=ErrorCategory.INVALID_CONFIGURATION)
         if (config.api_key or config.username) and parsed_endpoint.scheme == "http" and not _is_localhost(parsed_endpoint.hostname or ""):
             raise QueryError("invalid LQL connection configuration: authentication requires TLS", category=ErrorCategory.INVALID_CONFIGURATION)
+        _require_tls_for_credentials(parsed_endpoint, config.api_key, config.username)
         self._endpoint = endpoint
         self._collector = config.collector
         self._api_key = config.api_key
@@ -228,6 +229,24 @@ def _valid_collector(value: str) -> bool:
 
 def _is_localhost(host: str) -> bool:
     return host in {"localhost", "127.0.0.1", "::1"}
+
+
+def _require_tls_for_credentials(
+    endpoint: urllib.parse.SplitResult, api_key: str, username: str
+) -> None:
+    """Single URL validation gate: never send credentials over plaintext HTTP.
+
+    Bearer API keys are as sensitive as Basic credentials. A loza:// DSN with
+    tls=false resolves to an http endpoint and is rejected here whenever a
+    credential is present, unless the target is a loopback host.
+    """
+    if not (api_key or username):
+        return
+    if endpoint.scheme == "http" and not _is_localhost(endpoint.hostname or ""):
+        raise QueryError(
+            "invalid LQL connection configuration: credentials require TLS for non-local endpoints",
+            category=ErrorCategory.INVALID_CONFIGURATION,
+        )
 
 
 def _infer_type(value: Any) -> str:

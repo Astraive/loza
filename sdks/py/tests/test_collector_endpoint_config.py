@@ -2,6 +2,7 @@ import pytest
 
 from loza.core.client import Logger as ClientLogger
 from loza.core.config import Config
+from loza.core.http_client import CollectorClient
 from loza.core.logger import Logger
 from loza.sinks.httpbatch import HTTPBatchSink
 
@@ -42,6 +43,19 @@ def test_credentialed_dsn_installs_scoped_credential_free_endpoint(dsn, username
     assert sink.username == username
     assert sink.password == password
     assert username not in sink.endpoint
+
+
+def test_api_key_requires_https_for_non_local_endpoints() -> None:
+    with pytest.raises(ValueError, match="require HTTPS"):
+        Config.dev("checkout").with_collector_endpoint("http://collector.example:80").with_api_key("lz_sec_live_key").validate()
+    with pytest.raises(ValueError, match="require HTTPS"):
+        Config.dev("checkout").with_collector_endpoint("loza://collector.example/events?tls=false").with_api_key("lz_sec_live_key").validate()
+    with pytest.raises(ValueError, match="require HTTPS"):
+        CollectorClient("http://collector.example/events", api_key="lz_sec_live_key")
+
+    # Loopback remains permitted for local development.
+    Config.dev("checkout").with_collector_endpoint("http://localhost:9308").with_api_key("local-key").validate()
+    CollectorClient("http://localhost:9308/events", api_key="local-key")
 
 
 def test_api_key_precedes_public_basic_auth() -> None:

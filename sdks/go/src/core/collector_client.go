@@ -44,6 +44,7 @@ func NewCollectorClient(cfg CollectorClientConfig) *CollectorClient {
 	endpoint := safeCollectorEndpoint(cfg.Endpoint)
 	initErr := validateCollectorCredentials(
 		cfg.Endpoint,
+		cfg.APIKey,
 		cfg.BasicUsername,
 		cfg.BasicPassword,
 		cfg.APIKey,

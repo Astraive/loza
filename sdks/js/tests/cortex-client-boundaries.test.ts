@@ -143,6 +143,17 @@ describe('Cortex client boundaries', () => {
     assert.doesNotThrow(() => normalizeGraphView(graph));
     assert.equal(graph.nodes[1].id, 'node');
     assert.throws(() => validateGraphView(graph), /node 0 missing 'id'/);
+  it('rejects API-key auth over non-local plaintext HTTP', () => {
+    assert.throws(
+      () => new CortexClient({ url: 'http://cortex.example', apiKey: 'lz_sec_live_key' }),
+      /requires HTTPS/
+    );
+    assert.throws(
+      () => new CortexClient({ url: 'loza://cortex.example' }),
+      /must use HTTP\(S\)/
+    );
+    assert.doesNotThrow(() => new CortexClient({ url: 'http://127.0.0.1:9308', apiKey: 'local-key' }));
+    assert.doesNotThrow(() => new CortexClient({ url: 'https://cortex.example', apiKey: 'lz_sec_live_key' }));
   });
 
   it('calls health, readiness, ingest, graph, reconstruction, and feedback APIs', async () => {

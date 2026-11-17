@@ -51,6 +51,10 @@ export interface Feedback {
   notes?: string;
 }
 
+function isLocalhost(host: string): boolean {
+  return host === 'localhost' || host === '127.0.0.1' || host === '::1';
+}
+
 // --- Normalization ---
 
 function normalizeTimestamp(ts: string): string {
@@ -159,8 +163,19 @@ export class CortexClient {
   private maxResponseBytes: number;
 
   constructor(opts: CortexClientOptions) {
-    this.url = opts.url.replace(/\/$/, '');
-    this.apiKey = opts.apiKey || '';
+    const endpoint = new URL(opts.url);
+    if (endpoint.protocol !== 'http:' && endpoint.protocol !== 'https:') {
+      throw new Error('cortex: URL must use HTTP(S)');
+    }
+    if (endpoint.username || endpoint.password) {
+      throw new Error('cortex: credentials must not be embedded in the URL');
+    }
+    const apiKey = opts.apiKey || '';
+    if (apiKey && endpoint.protocol === 'http:' && !isLocalhost(endpoint.hostname)) {
+      throw new Error('cortex: API key authentication requires HTTPS for non-local hosts');
+    }
+    this.url = endpoint.toString().replace(/\/$/, '');
+    this.apiKey = apiKey;
     this.timeout = opts.timeout || 5000;
     this.maxResponseBytes = opts.maxResponseBytes || 10 * 1024 * 1024;
     // Fail fast rather than transmitting the API key in cleartext to a remote host.

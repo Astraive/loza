@@ -308,3 +308,22 @@ func TestCredentialedDSNRejectsRemotePlaintext(t *testing.T) {
 		t.Fatal("expected remote plaintext Basic-auth DSN to be rejected")
 	}
 }
+
+func TestAPIKeyRejectsRemotePlaintext(t *testing.T) {
+	t.Setenv("LOZA_API_KEY", "")
+	cases := []Config{
+		ApplyConfig(Config{}, WithCollectorURL("http://collector.example.com"), WithAPIKey("lz_sec_live_key")),
+		ApplyConfig(Config{}, WithDSN("loza://collector.example.com/project?tls=false"), WithAPIKey("lz_sec_live_key")),
+	}
+	for _, cfg := range cases {
+		if err := cfg.Validate(); err == nil {
+			t.Fatalf("expected API key over plaintext %q to be rejected", cfg.CollectorURL)
+		}
+	}
+
+	// Loopback remains permitted for local development.
+	local := ApplyConfig(Config{}, WithCollectorURL("http://localhost:9308"), WithAPIKey("local-key"), WithInsecure(true))
+	if err := local.Validate(); err != nil {
+		t.Fatalf("loopback API key config rejected: %v", err)
+	}
+}

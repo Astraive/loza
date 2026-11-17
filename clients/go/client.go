@@ -192,6 +192,8 @@ func New(config ConnectionConfig) (*Client, error) {
 	}
 	if (config.APIKey != "" || config.Username != "") && endpoint.Scheme == "http" && !isLocalhost(endpoint.Hostname()) {
 		return nil, newConfigError("authentication credentials require TLS for non-local endpoints")
+	if err := requireTLSForCredentials(endpoint, config.APIKey, config.Username); err != nil {
+		return nil, err
 	}
 	if config.Timeout <= 0 {
 		config.Timeout = 30 * time.Second
@@ -218,6 +220,20 @@ func isLocalhost(host string) bool {
 	return strings.EqualFold(host, "localhost") ||
 		strings.EqualFold(host, "127.0.0.1") ||
 		strings.EqualFold(host, "::1")
+}
+
+// requireTLSForCredentials is the single URL validation gate for all credentialed
+// requests. Bearer API keys are as sensitive as Basic credentials, so neither may
+// be sent over plaintext HTTP to a non-loopback host. DSNs with tls=false resolve
+// to an http endpoint and are rejected here whenever credentials are present.
+func requireTLSForCredentials(endpoint *url.URL, apiKey, username string) error {
+	if apiKey == "" && username == "" {
+		return nil
+	}
+	if endpoint.Scheme == "http" && !isLocalhost(endpoint.Hostname()) {
+		return newConfigError("authentication credentials require TLS for non-local endpoints")
+	}
+	return nil
 }
 
 // Query forwards source and typed named parameters to Collector's scoped route.

@@ -607,6 +607,14 @@ For security vulnerabilities, see [`SECURITY.md`](SECURITY.md).
 
 Do not open a public issue for security reports.
 
+**Credential transport:** API keys (Bearer tokens) and Basic credentials are
+high-value, long-lived secrets. All Loza clients, SDKs, and the CLI require
+HTTPS/WSS whenever credentials are configured and the target host is not a
+loopback address (`localhost`, `127.0.0.1`, `::1`). Plaintext HTTP is accepted
+only for loopback development, including DSNs that specify `tls=false`.
+Configuration that would send a credential over plaintext HTTP to a remote host
+is rejected before any request is made.
+
 ## License
 
 LOZA is licensed under the [`MIT License`](LICENSE).

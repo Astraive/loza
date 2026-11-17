@@ -289,7 +289,9 @@ class Config:
             raise ValueError("collector basic auth password requires a username")
         if self.username and not self.password and not is_public_dsn_username(self.username):
             raise ValueError("collector basic auth requires a password unless username is an lz_pub_ capability")
-        if self.username and self.collector_endpoint.lower().startswith("http://"):
+        # Bearer API keys are as sensitive as Basic credentials. A loza:// DSN
+        # with tls=false resolves to an http endpoint and is rejected here too.
+        if (self.username or self.api_key) and self.collector_endpoint.lower().startswith("http://"):
             from urllib.parse import urlparse
 
             host = (urlparse(self.collector_endpoint).hostname or "").lower()
@@ -300,6 +302,7 @@ class Config:
         _validate_auth_requires_https(
             self.collector_endpoint.strip(), api_key=self.api_key, username=self.username, password=self.password
         )
+                raise ValueError("collector credentials require HTTPS except for local endpoints")
 
 
 def load_layered_config() -> Config:

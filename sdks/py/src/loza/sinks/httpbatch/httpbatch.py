@@ -25,6 +25,7 @@ from ...core.http_client import (
     _retry_delay,
     _validate_auth_requires_https,
     _validate_basic_auth_endpoint,
+    _validate_credentialed_endpoint,
     _validate_collector_endpoint,
 )
 from ...version import SDK_VERSION
@@ -65,6 +66,7 @@ class HTTPBatchSink:
         # A negative count makes range(retries + 1) empty, sending no request and
         # silently dropping the batch. Treat it as "no retries" instead.
         self.retries = max(0, self.retries)
+        _validate_credentialed_endpoint(self.endpoint, self.api_key, self.username, self.password)
 
     def _auth_headers(self) -> dict[str, str]:
         if self.api_key:

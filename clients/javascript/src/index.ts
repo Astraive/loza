@@ -157,6 +157,7 @@ function resolveConfig(input: ConnectionConfig): ResolvedConfig {
   if ((apiKey || username) && endpointURL.protocol === 'http:' && !isLocalhost(endpointURL.hostname)) {
     throw new QueryError('invalid LQL connection configuration: credentials require TLS', ErrorCategory.InvalidConfiguration);
   }
+  requireTLSForCredentials(endpointURL, apiKey, username);
   return {
     endpoint: endpoint.replace(/\/$/, ''), collector, apiKey, username, password, env, service,
     timeoutMs: input.timeoutMs && input.timeoutMs > 0 ? input.timeoutMs : 30_000,
@@ -250,6 +251,13 @@ function isRecord(value: unknown): value is Record<string, unknown> { return typ
 function isQueryValue(value: unknown): value is QueryValue { return isRecord(value) && typeof value.type === 'string' && 'value' in value; }
 function inferType(value: unknown): string { return value === null ? 'null' : typeof value === 'boolean' ? 'bool' : typeof value === 'number' ? (Number.isInteger(value) ? 'int' : 'float') : 'string'; }
 function isLocalhost(host: string): boolean { return host === 'localhost' || host === '127.0.0.1' || host === '::1'; }
+
+/** Single URL validation gate: credentials require TLS on non-loopback hosts. */
+function requireTLSForCredentials(endpoint: URL, apiKey: string, username: string): void {
+  if ((apiKey || username) && endpoint.protocol === 'http:' && !isLocalhost(endpoint.hostname)) {
+    throw new QueryError('invalid LQL connection configuration: credentials require TLS for non-local endpoints', ErrorCategory.InvalidConfiguration);
+  }
+}
 function readEnv(name: string): string { return typeof process !== 'undefined' ? process.env[name] || '' : ''; }
 function base64(value: string): string {
   if (typeof btoa !== 'function') {

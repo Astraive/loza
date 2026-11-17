@@ -148,6 +148,8 @@ func TestNewRejectsInvalidConfiguration(t *testing.T) {
 		{"invalid collector", ConnectionConfig{Endpoint: "https://example.com", Collector: "bad/collector"}},
 		{"basic password required", ConnectionConfig{Endpoint: "https://example.com", Collector: "demo", Username: "private"}},
 		{"basic auth requires TLS", ConnectionConfig{Endpoint: "http://example.com", Collector: "demo", Username: "private", Password: "secret"}},
+		{"api key requires TLS", ConnectionConfig{Endpoint: "http://example.com", Collector: "demo", APIKey: "secret-key"}},
+		{"dsn tls=false with api key requires TLS", ConnectionConfig{DSN: "loza://example.com/demo?tls=false", APIKey: "secret-key"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -156,6 +158,32 @@ func TestNewRejectsInvalidConfiguration(t *testing.T) {
 				t.Fatalf("New(%s) error = %v, category = %q", tc.name, err, ErrorCategoryOf(err))
 			}
 		})
+	}
+}
+
+func TestNewRejectsBearerOverPlaintext(t *testing.T) {
+	cases := []struct {
+		name   string
+		config ConnectionConfig
+	}{
+		{"explicit plaintext endpoint", ConnectionConfig{Endpoint: "http://collector.example", Collector: "demo", APIKey: "lz_sec_live_key"}},
+		{"tls=false DSN with bearer key", ConnectionConfig{DSN: "loza://collector.example/demo?tls=false", APIKey: "lz_sec_live_key"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := New(tc.config)
+			if err == nil {
+				t.Fatalf("New(%s) accepted a bearer/basic credential over plaintext HTTP", tc.name)
+			}
+			if ErrorCategoryOf(err) != ErrorInvalidConfiguration {
+				t.Fatalf("category = %q, want %q", ErrorCategoryOf(err), ErrorInvalidConfiguration)
+			}
+		})
+	}
+
+	// Loopback remains permitted for local development.
+	if _, err := New(ConnectionConfig{Endpoint: "http://127.0.0.1:9308", Collector: "demo", APIKey: "local-key"}); err != nil {
+		t.Fatalf("loopback plaintext with API key was rejected: %v", err)
 	}
 }
 

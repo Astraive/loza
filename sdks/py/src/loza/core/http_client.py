@@ -142,6 +142,7 @@ class CollectorClient:
         _validate_collector_endpoint(endpoint)
         _validate_basic_auth_endpoint(endpoint, username, password)
         _validate_auth_requires_https(endpoint, api_key=api_key, username=username, password=password)
+        _validate_credentialed_endpoint(endpoint, api_key, username, password)
         self.endpoint = endpoint
         self.api_key = api_key
         self.auth_header = auth_header
@@ -330,15 +331,19 @@ _LOCAL_AUTH_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
 
 
 def _validate_basic_auth_endpoint(endpoint: str, username: str, password: str) -> None:
+def _validate_credentialed_endpoint(endpoint: str, api_key: str, username: str, password: str) -> None:
+    """Single URL-validation gate for Bearer and Basic collector credentials."""
     if not username and password:
         raise ValueError("collector basic auth password requires a username")
     if username and not password and not is_public_dsn_username(username):
         raise ValueError("collector basic auth requires a password unless username is an lz_pub_ capability")
-    if not username:
+    if not api_key and not username:
         return
     parsed = urlparse(endpoint)
     if parsed.scheme == "http" and (parsed.hostname or "").lower() not in _LOCAL_AUTH_HOSTS:
         raise ValueError("collector basic auth requires HTTPS except for local endpoints")
+    if parsed.scheme == "http" and (parsed.hostname or "").lower() not in {"localhost", "127.0.0.1", "::1"}:
+        raise ValueError("collector credentials require HTTPS except for local endpoints")
 
 
 def _validate_auth_requires_https(endpoint: str, *, api_key: str = "", username: str = "", password: str = "") -> None:
