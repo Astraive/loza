@@ -45,6 +45,9 @@ var tableIdentPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
 // New creates a Postgres sink.
 func New(ctx context.Context, cfg Config) (collectorevent.Sink, error) {
+	if cfg.EncryptRaw && strings.TrimSpace(cfg.EncryptKey) == "" {
+		return nil, fmt.Errorf("postgres: encrypt_key must not be empty when encrypt_raw is enabled")
+	}
 	if cfg.DSN == "" {
 		return nil, fmt.Errorf("postgres: DSN is required")
 	}

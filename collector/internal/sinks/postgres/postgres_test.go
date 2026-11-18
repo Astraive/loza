@@ -6,6 +6,34 @@ import (
 	"testing"
 )
 
+func TestNewRejectsBlankEncryptionKeyWhenRawEncryptionEnabled(t *testing.T) {
+	for _, key := range []string{"", "   ", "\t\n"} {
+		_, err := New(context.Background(), Config{
+			DSN:        "postgres://user:pass@localhost:5432/test?sslmode=disable",
+			EncryptRaw: true,
+			EncryptKey: key,
+		})
+		if err == nil || !strings.Contains(err.Error(), "encrypt_key") {
+			t.Fatalf("expected blank encryption key error for key %q, got %v", key, err)
+		}
+	}
+}
+
+func TestNewAllowsRawEncryptionWithKey(t *testing.T) {
+	sink, err := New(context.Background(), Config{
+		DSN:        "postgres://user:pass@localhost:5432/test?sslmode=disable",
+		EncryptRaw: true,
+		EncryptKey: "a-valid-encryption-key",
+	})
+	if err != nil {
+		t.Fatalf("expected no error with a valid encryption key, got %v", err)
+	}
+	if sink == nil {
+		t.Fatalf("expected a non-nil sink")
+	}
+	t.Cleanup(func() { _ = sink.Close(context.Background()) })
+}
+
 func TestNewRejectsInvalidTableIdentifier(t *testing.T) {
 	_, err := New(context.Background(), Config{
 		DSN:   "postgres://user:pass@localhost:5432/test?sslmode=disable",
