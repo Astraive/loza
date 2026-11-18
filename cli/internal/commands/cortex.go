@@ -266,7 +266,11 @@ func outputIncidentContext(ctx map[string]interface{}) {
 		fmt.Println("\nSuggested Actions:")
 		for _, a := range actions {
 			if action, ok := a.(map[string]interface{}); ok {
-				fmt.Printf("  - %s (success rate: %.1f%%)\n", action["action"], action["success_rate"].(float64)*100)
+				if rate, ok := action["success_rate"].(float64); ok {
+					fmt.Printf("  - %s (success rate: %.1f%%)\n", action["action"], rate*100)
+				} else {
+					fmt.Printf("  - %s\n", action["action"])
+				}
 			}
 		}
 	}
