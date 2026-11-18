@@ -847,7 +847,7 @@ impl ProcessHandle {
         entry.insert("ended_at_ms".to_string(), Value::Number(ended_ms.into()));
         entry.insert(
             "duration_ms".to_string(),
-            Value::Number((ended_ms - self.started_at_ms).into()),
+            Value::Number(ended_ms.saturating_sub(self.started_at_ms).into()),
         );
         for attr in attrs {
             if attr.key == "status_code" {
@@ -921,7 +921,7 @@ impl GroupHandle {
         entry.insert("ended_at_ms".to_string(), Value::Number(ended_ms.into()));
         entry.insert(
             "duration_ms".to_string(),
-            Value::Number((ended_ms - self.started_at_ms).into()),
+            Value::Number(ended_ms.saturating_sub(self.started_at_ms).into()),
         );
         for attr in attrs {
             if attr.key == "status_code" {
@@ -981,5 +981,68 @@ fn apply_hash_dotted_or_flat(obj: &mut Map<String, Value>, key: &str) {
                 hash_in_map(map, key);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Regression test for MASS-0756: finishing a handle after a backward clock
+    /// adjustment (or against a different event) used to subtract a larger
+    /// `started_at_ms` from a smaller `ended_ms`, panicking in debug builds and
+    /// wrapping to a huge value in release builds. The duration must saturate
+    /// at zero instead.
+    #[test]
+    fn process_finish_duration_saturates_when_end_precedes_start() {
+        let mut event = EventContext::new("test", Params::new("test"));
+        let handle = ProcessHandle {
+            name: "backwards".to_string(),
+            step: 1,
+            started_at_instant: std::time::Instant::now(),
+            started_at_ms: u64::MAX,
+        };
+
+        handle.finish(&mut event, &[]);
+
+        let duration = event.processes[0]
+            .get("duration_ms")
+            .and_then(|v| v.as_u64())
+            .expect("duration_ms must be present");
+        assert_eq!(duration, 0, "duration must saturate to zero, not underflow");
+    }
+
+    #[test]
+    fn group_finish_duration_saturates_when_end_precedes_start() {
+        let mut event = EventContext::new("test", Params::new("test"));
+        let handle = GroupHandle {
+            name: "backwards".to_string(),
+            started_at_instant: std::time::Instant::now(),
+            started_at_ms: u64::MAX,
+        };
+
+        handle.finish(&mut event, &[]);
+
+        let duration = event.groups[0]
+            .get("duration_ms")
+            .and_then(|v| v.as_u64())
+            .expect("duration_ms must be present");
+        assert_eq!(duration, 0, "duration must saturate to zero, not underflow");
+    }
+
+    #[test]
+    fn process_finish_duration_still_normal_when_end_follows_start() {
+        let mut event = EventContext::new("test", Params::new("test"));
+        let handle = event.start_process("normal");
+        handle.finish(&mut event, &[]);
+
+        let duration = event.processes[0]
+            .get("duration_ms")
+            .and_then(|v| v.as_u64())
+            .expect("duration_ms must be present");
+        assert!(
+            duration < 60_000,
+            "normal duration must not wrap to a huge value"
+        );
     }
 }
