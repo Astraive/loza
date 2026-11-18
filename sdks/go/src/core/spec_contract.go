@@ -16,13 +16,14 @@ const (
 )
 
 // ValidateIngestEnvelopeBytes validates a runtime envelope payload against the
-// generated contract before it is sent to the collector.
+// generated contract before it is sent to the collector. When strict is true,
+// each event in the envelope is validated the same way as ValidateEventBytes.
 func ValidateIngestEnvelopeBytes(raw []byte, strict bool) error {
 	var payload map[string]any
 	if err := json.Unmarshal(bytes.TrimSpace(raw), &payload); err != nil {
 		return err
 	}
-	return validateIngestEnvelopeShape(payload)
+	return validateIngestEnvelopeShape(payload, strict)
 }
 
 // ValidateEventBytes validates a single event JSON payload against the spec contract.
@@ -31,6 +32,12 @@ func ValidateEventBytes(raw []byte, strict bool) error {
 	if err := json.Unmarshal(bytes.TrimSpace(raw), &payload); err != nil {
 		return fmt.Errorf("loza: event must be valid JSON: %w", err)
 	}
+	return validateEventShape(payload, strict)
+}
+
+// validateEventShape applies the per-event checks shared by the standalone
+// event validator and each event of an ingest envelope.
+func validateEventShape(payload map[string]any, strict bool) error {
 	if strict {
 		eventName, ok := payload["event"].(string)
 		if !ok || strings.TrimSpace(eventName) == "" {
@@ -40,7 +47,7 @@ func ValidateEventBytes(raw []byte, strict bool) error {
 	return nil
 }
 
-func validateIngestEnvelopeShape(payload map[string]any) error {
+func validateIngestEnvelopeShape(payload map[string]any, strict bool) error {
 	if version, ok := payload["api_version"].(string); !ok || strings.TrimSpace(version) != LOZA_INGEST_API_VERSION {
 		return fmt.Errorf("collector envelope must include api_version %q", LOZA_INGEST_API_VERSION)
 	}
@@ -64,8 +71,12 @@ func validateIngestEnvelopeShape(payload map[string]any) error {
 		return fmt.Errorf("collector envelope must include at least one event")
 	}
 	for idx, event := range events {
-		if _, ok := event.(map[string]any); !ok {
+		eventMap, ok := event.(map[string]any)
+		if !ok {
 			return fmt.Errorf("collector envelope events[%d] must be JSON objects", idx)
+		}
+		if err := validateEventShape(eventMap, strict); err != nil {
+			return fmt.Errorf("collector envelope events[%d]: %w", idx, err)
 		}
 	}
 	return nil
