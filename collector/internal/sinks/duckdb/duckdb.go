@@ -308,6 +308,13 @@ func (s *sink) WriteEvent(ctx context.Context, encoded []byte, _ *collectorevent
 		return pendingErr
 	}
 	if err := s.acquireFlush(ctx); err != nil {
+		// The batch was already detached from s.buffer. Restore it so the
+		// events are not silently lost when the flush lock cannot be acquired
+		// (for example, ctx canceled while waiting on flushMu). Keep the batch
+		// ahead of any events buffered concurrently to preserve their order.
+		s.mu.Lock()
+		s.buffer = append(batch, s.buffer...)
+		s.mu.Unlock()
 		return errors.Join(pendingErr, err)
 	}
 	defer s.releaseFlush()
