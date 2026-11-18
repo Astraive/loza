@@ -12,13 +12,13 @@ import (
 
 // eventbusQueueReader implements queueReader using the eventbus abstraction.
 type eventbusQueueReader struct {
-	bus     eventbus.Bus
-	topic   string
-	group   string
-	ch      chan queueRecord
-	mu      sync.Mutex
-	closed  bool
-	cancel  context.CancelFunc
+	bus    eventbus.Bus
+	topic  string
+	group  string
+	ch     chan queueRecord
+	mu     sync.Mutex
+	closed bool
+	cancel context.CancelFunc
 }
 
 func newEventbusQueueReader(bus eventbus.Bus, topic, group string) *eventbusQueueReader {
@@ -49,13 +49,21 @@ func (r *eventbusQueueReader) Poll(ctx context.Context, timeout time.Duration) (
 			if err != nil {
 				return msg.Nack(hCtx, err)
 			}
-			r.ch <- queueRecord{
+			rec := queueRecord{
 				value: value,
 				commit: func(cCtx context.Context) error {
 					return msg.Ack(cCtx)
 				},
 			}
-			return nil
+			select {
+			case r.ch <- rec:
+				return nil
+			case <-hCtx.Done():
+				// Backpressure or Close cancelled the subscription while the
+				// buffer was full. Returning an error lets the adapter Nack /
+				// redeliver instead of leaking this consume goroutine.
+				return hCtx.Err()
+			}
 		}
 
 		if err := r.bus.Subscribe(subCtx, r.topic, r.group, handler); err != nil {
