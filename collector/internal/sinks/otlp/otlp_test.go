@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"go.opentelemetry.io/otel/sdk/log"
+	"go.opentelemetry.io/otel/sdk/resource"
 )
 
 func TestNewRejectsUnsupportedProtocol(t *testing.T) {
@@ -64,6 +65,57 @@ func TestResolveConfigAppliesDefaults(t *testing.T) {
 	}
 	if !cfg.Retry.Enabled || cfg.Retry.InitialInterval <= 0 || cfg.Retry.MaxInterval < cfg.Retry.InitialInterval {
 		t.Fatalf("unexpected default retry config: %+v", cfg.Retry)
+	}
+}
+
+func TestNewResourceHonorsCallerResourceAttributes(t *testing.T) {
+	res, err := newResource(context.Background(), resolvedConfig{
+		Logger: "logger-service",
+		ResourceAttributes: map[string]string{
+			"service.name":       "caller-service",
+			"telemetry.sdk.name": "caller-sdk",
+			"custom.attribute":   "custom-value",
+		},
+	})
+	if err != nil {
+		t.Fatalf("new resource: %v", err)
+	}
+
+	got := resourceAttributes(res)
+	assertResourceAttribute(t, got, "service.name", "caller-service")
+	assertResourceAttribute(t, got, "telemetry.sdk.name", "caller-sdk")
+	assertResourceAttribute(t, got, "custom.attribute", "custom-value")
+	// Keys the caller did not override still come from the defaults.
+	assertResourceAttribute(t, got, "telemetry.sdk.language", "go")
+}
+
+func TestNewResourceAppliesDefaultsWithoutCallerAttributes(t *testing.T) {
+	res, err := newResource(context.Background(), resolvedConfig{Logger: "logger-service"})
+	if err != nil {
+		t.Fatalf("new resource: %v", err)
+	}
+
+	got := resourceAttributes(res)
+	assertResourceAttribute(t, got, "service.name", "logger-service")
+	assertResourceAttribute(t, got, "telemetry.sdk.name", "opentelemetry")
+	assertResourceAttribute(t, got, "telemetry.sdk.language", "go")
+	if got["telemetry.sdk.version"] == "" {
+		t.Fatalf("expected SDK version to be set by WithTelemetrySDK")
+	}
+}
+
+func resourceAttributes(res *resource.Resource) map[string]string {
+	attrs := make(map[string]string)
+	for _, kv := range res.Attributes() {
+		attrs[string(kv.Key)] = kv.Value.AsString()
+	}
+	return attrs
+}
+
+func assertResourceAttribute(t *testing.T, attrs map[string]string, key, want string) {
+	t.Helper()
+	if got := attrs[key]; got != want {
+		t.Fatalf("resource attribute %q: got %q, want %q", key, got, want)
 	}
 }
 

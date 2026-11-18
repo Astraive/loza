@@ -36,7 +36,9 @@ type Config struct {
 	// HTTPOptions are HTTP exporter options.
 	HTTPOptions []otlploghttp.Option
 	Logger      string
-	// ResourceAttributes are attached to the OTLP Resource.
+	// ResourceAttributes are attached to the OTLP Resource. They take
+	// precedence over the Logger-derived service.name and the SDK-managed
+	// telemetry.sdk.* attributes when the same keys are supplied.
 	ResourceAttributes map[string]string
 }
 
@@ -97,11 +99,7 @@ func New(ctx context.Context, cfg Config) (collectorevent.Sink, error) {
 		return nil, fmt.Errorf("otlp: create exporter: %w", err)
 	}
 
-	res, err := resource.New(ctx,
-		resource.WithAttributes(mapToAttributes(resolved.ResourceAttributes)...),
-		resource.WithAttributes(semconv.ServiceName(resolved.Logger)),
-		resource.WithTelemetrySDK(),
-	)
+	res, err := newResource(ctx, resolved)
 	if err != nil {
 		return nil, fmt.Errorf("otlp: create resource: %w", err)
 	}
@@ -115,6 +113,22 @@ func New(ctx context.Context, cfg Config) (collectorevent.Sink, error) {
 		provider: provider,
 		logger:   provider.Logger(resolved.Logger),
 	}, nil
+}
+
+// newResource builds the resource attached to exported logs. The options are
+// ordered from lowest to highest precedence: SDK-managed telemetry.sdk.* defaults,
+// the Logger-derived service.name, then caller-supplied ResourceAttributes.
+//
+// resource.New evaluates detectors in option order and merges them with
+// last-value-wins, so caller attributes must come last. Otherwise a caller
+// supplying a reserved key (for example "service.name" or "telemetry.sdk.name")
+// would have it silently overwritten by a later detector.
+func newResource(ctx context.Context, resolved resolvedConfig) (*resource.Resource, error) {
+	return resource.New(ctx,
+		resource.WithTelemetrySDK(),
+		resource.WithAttributes(semconv.ServiceName(resolved.Logger)),
+		resource.WithAttributes(mapToAttributes(resolved.ResourceAttributes)...),
+	)
 }
 
 func (s *sink) Name() string { return "otlp" }
