@@ -177,7 +177,12 @@ fn default_logger() -> Logger {
 
 pub fn set_global_logger(logger: Logger) {
     let lock = GLOBAL_LOGGER.get_or_init(|| RwLock::new(Logger::new(Config::dev("loza"))));
-    *write_global_logger(lock) = logger;
+    let mut guard = write_global_logger(lock);
+    // Shut down the previous logger before replacing it so a buffered async
+    // worker flushes its pending events instead of losing them when the old
+    // AsyncRuntime's sender is dropped. Mirrors `configure`.
+    let _ = guard.shutdown();
+    *guard = logger;
 }
 
 fn read_global_logger(lock: &RwLock<Logger>) -> RwLockReadGuard<'_, Logger> {
