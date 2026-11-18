@@ -49,7 +49,10 @@ func TestServerHealthAndReadiness(t *testing.T) {
 }
 
 func TestReadyzHonorsReadyFlag(t *testing.T) {
-	cfg := config.Default()
+	cfg, err := config.Default()
+	if err != nil {
+		t.Fatalf("Default: %v", err)
+	}
 	cfg.Storage.DuckDB.Path = filepath.Join(t.TempDir(), "readiness-cortex.duckdb")
 	stor, err := storage.NewStorage(cfg)
 	if err != nil {

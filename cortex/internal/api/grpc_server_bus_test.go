@@ -17,7 +17,8 @@ import (
 // publishing more events than the configured size the number of buffered
 // events must equal that configured size (not the hardcoded default of 128).
 func TestNewGRPCServerAppliesConfiguredSubscriberBufferSize(t *testing.T) {
-	cfg := config.Default()
+	cfg, err := config.Default()
+	require.NoError(t, err)
 	cfg.Storage.Backend = "duckdb"
 	cfg.Storage.DuckDB.Path = filepath.Join(t.TempDir(), "cortex.duckdb")
 	cfg.Collector.SourceOfTruth = false

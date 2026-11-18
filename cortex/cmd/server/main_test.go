@@ -93,7 +93,10 @@ func TestShutdownGRPCServerNilChannel(t *testing.T) {
 func TestStartGRPCServerClosesChannelOnSetupFailure(t *testing.T) {
 	// TLS setup fails before a listener or server is created. The returned
 	// channel must close without a value so callers never block on it.
-	cfg := config.Default()
+	cfg, err := config.Default()
+	if err != nil {
+		t.Fatalf("Default: %v", err)
+	}
 	cfg.TLS.Enabled = true
 	cfg.TLS.CertFile = "/nonexistent/loza-cert.pem"
 	cfg.TLS.KeyFile = "/nonexistent/loza-key.pem"
