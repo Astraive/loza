@@ -1,6 +1,8 @@
 package otlpconv
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"strconv"
@@ -27,6 +29,10 @@ func ConvertExportLogsRequest(req *collectorlogsv1.ExportLogsServiceRequest, cfg
 
 func convertResourceLogs(resourceLogs []*logsv1.ResourceLogs, cfg Config) ([][]byte, error) {
 	out := make([][]byte, 0)
+	// Only the timestamp was used to build event_id previously, so every record
+	// sharing a timestamp collided. Track how often each deterministic base ID
+	// occurs within this request so even byte-identical records get unique IDs.
+	idOccurrences := make(map[string]int)
 	for _, resourceLog := range resourceLogs {
 		resourceAttrs := kvToMap(nil, resourceLog.GetResource().GetAttributes())
 		service := stringValue(resourceAttrs["service.name"])
@@ -35,11 +41,18 @@ func convertResourceLogs(resourceLogs []*logsv1.ResourceLogs, cfg Config) ([][]b
 		for _, scopeLogs := range resourceLog.GetScopeLogs() {
 			for _, record := range scopeLogs.GetLogRecords() {
 				attrs := kvToMap(resourceAttrs, record.GetAttributes())
+				baseID := eventIDFromRecord(record, attrs)
+				occurrence := idOccurrences[baseID]
+				idOccurrences[baseID] = occurrence + 1
+				eventID := baseID
+				if occurrence > 0 {
+					eventID = fmt.Sprintf("%s_%d", baseID, occurrence)
+				}
 				event := map[string]any{
 					"schema_version": cfg.SchemaVersion,
 					"event_version":  cfg.EventVersion,
 					"timestamp":      timestampFromNano(record.GetTimeUnixNano(), record.GetObservedTimeUnixNano()),
-					"event_id":       fmt.Sprintf("otlp_%d", record.GetTimeUnixNano()),
+					"event_id":       eventID,
 					"service":        fallbackString(service, cfg.DefaultService, "otlp"),
 					"event":          bodyToEventName(record.GetBody()),
 					"kind":           "log",
@@ -72,6 +85,41 @@ func convertResourceLogs(resourceLogs []*logsv1.ResourceLogs, cfg Config) ([][]b
 		}
 	}
 	return out, nil
+}
+
+// eventIDFromRecord builds a deterministic, content-based event ID. The
+// timestamp alone is not unique: batched and replayed exports frequently carry
+// many records with an identical TimeUnixNano. Hashing every field that
+// distinguishes a record keeps IDs stable across replays (so idempotency and
+// deduplication still work) while giving distinct records distinct IDs.
+func eventIDFromRecord(record *logsv1.LogRecord, attrs map[string]any) string {
+	timestamp := record.GetTimeUnixNano()
+	fingerprint := struct {
+		TimeUnixNano         uint64         `json:"t"`
+		ObservedTimeUnixNano uint64         `json:"o"`
+		Body                 any            `json:"b"`
+		SeverityText         string         `json:"s"`
+		SeverityNumber       int32          `json:"n"`
+		Flags                uint32         `json:"f"`
+		Attributes           map[string]any `json:"a"`
+	}{
+		TimeUnixNano:         timestamp,
+		ObservedTimeUnixNano: record.GetObservedTimeUnixNano(),
+		Body:                 anyValue(record.GetBody()),
+		SeverityText:         record.GetSeverityText(),
+		SeverityNumber:       int32(record.GetSeverityNumber()),
+		Flags:                record.GetFlags(),
+		Attributes:           attrs,
+	}
+	// encoding/json emits map keys in sorted order, so equal records always
+	// produce the same digest. Marshaling these primitive/map fields cannot
+	// fail in practice; fall back to the old timestamp-only form if it does.
+	raw, err := json.Marshal(fingerprint)
+	if err != nil {
+		return fmt.Sprintf("otlp_%d", timestamp)
+	}
+	sum := sha256.Sum256(raw)
+	return fmt.Sprintf("otlp_%d_%s", timestamp, hex.EncodeToString(sum[:16]))
 }
 
 func outcomeFromAttrs(attrs map[string]any) string {
