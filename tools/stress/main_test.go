@@ -6,7 +6,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func TestDefaultJSONOutputPathIsRelative(t *testing.T) {
@@ -90,5 +92,70 @@ func TestWriteAndReportJSONResultsMarshalFailure(t *testing.T) {
 	}
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
 		t.Errorf("file unexpectedly exists at %q (stat err: %v)", path, err)
+	}
+}
+
+// TestSubmitResultBlocksInsteadOfDropping reproduces the reported defect: with
+// a full results buffer the old non-blocking `select { case results <- r:
+// default: }` discarded the measurement. submitResult must instead block until
+// the collector has room, so no result is ever silently lost.
+func TestSubmitResultBlocksInsteadOfDropping(t *testing.T) {
+	results := make(chan Result, 1)
+	results <- Result{StatusCode: 200, Duration: time.Millisecond} // fill the buffer
+
+	returned := make(chan struct{})
+	go func() {
+		submitResult(results, Result{StatusCode: 201, Duration: 2 * time.Millisecond})
+		close(returned)
+	}()
+
+	select {
+	case <-returned:
+		t.Fatal("submitResult returned while the buffer was full; the result was dropped")
+	case <-time.After(50 * time.Millisecond):
+		// Expected: the blocking send is waiting for the collector.
+	}
+
+	// Free one slot; the pending result must be delivered, not lost.
+	if got := <-results; got.StatusCode != 200 {
+		t.Fatalf("first result status = %d, want 200", got.StatusCode)
+	}
+	select {
+	case got := <-results:
+		if got.StatusCode != 201 {
+			t.Fatalf("deferred result status = %d, want 201", got.StatusCode)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("deferred result was never delivered to the collector")
+	}
+	select {
+	case <-returned:
+	case <-time.After(time.Second):
+		t.Fatal("submitResult did not return after the result was consumed")
+	}
+}
+
+// TestRunLoadTestNoDroppedResults checks the end-to-end invariant: every
+// request made must be reflected in the statistics, with an explicit zero
+// dropped count under sustained load.
+func TestRunLoadTestNoDroppedResults(t *testing.T) {
+	var generated int64
+	tr := runLoadTest("no-drop", 4, 60*time.Millisecond, func() Result {
+		atomic.AddInt64(&generated, 1)
+		return Result{StatusCode: 200, Duration: time.Microsecond}
+	})
+
+	got := atomic.LoadInt64(&generated)
+	if got == 0 {
+		t.Fatal("reqFunc was never called; test is inconclusive")
+	}
+	if tr.TotalReqs != got {
+		t.Fatalf("TotalReqs = %d, want %d (every request result must be counted)", tr.TotalReqs, got)
+	}
+	if tr.DroppedReqs != 0 {
+		t.Fatalf("DroppedReqs = %d, want 0", tr.DroppedReqs)
+	}
+	if tr.SuccessReqs != got {
+		t.Fatalf("SuccessReqs = %d, want %d", tr.SuccessReqs, got)
 	}
 }

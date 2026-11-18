@@ -63,6 +63,7 @@ type TestResult struct {
 	Concurrency int
 	Duration    time.Duration
 	TotalReqs   int64
+	DroppedReqs int64
 	SuccessReqs int64
 	ErrorReqs   int64
 	StatusCodes map[int]int64
@@ -82,6 +83,7 @@ func (tr *TestResult) String() string {
 	sb.WriteString(fmt.Sprintf("Concurrency: %d\n", tr.Concurrency))
 	sb.WriteString(fmt.Sprintf("Duration:    %v\n", tr.Duration))
 	sb.WriteString(fmt.Sprintf("Total Reqs:  %d\n", tr.TotalReqs))
+	sb.WriteString(fmt.Sprintf("Dropped:     %d\n", tr.DroppedReqs))
 	sb.WriteString(fmt.Sprintf("Success:     %d\n", tr.SuccessReqs))
 	sb.WriteString(fmt.Sprintf("Errors:      %d\n", tr.ErrorReqs))
 	sb.WriteString(fmt.Sprintf("RPS:         %.2f\n", tr.RPS))
@@ -107,6 +109,15 @@ func (tr *TestResult) String() string {
 	return sb.String()
 }
 
+// submitResult hands a measurement to the collector. It deliberately uses a
+// blocking send so that a full results buffer applies backpressure to the
+// worker instead of silently discarding the measurement. Dropping results
+// under sustained load undercounts TotalReqs and skews latency percentiles and
+// RPS, so every request result must reach the collector.
+func submitResult(results chan<- Result, r Result) {
+	results <- r
+}
+
 func runLoadTest(name string, concurrency int, duration time.Duration, reqFunc func() Result) *TestResult {
 	results := make(chan Result, concurrency*100)
 	ctx, cancel := context.WithTimeout(context.Background(), duration)
@@ -127,11 +138,7 @@ func runLoadTest(name string, concurrency int, duration time.Duration, reqFunc f
 				default:
 					r := reqFunc()
 					atomic.AddInt64(&totalReqs, 1)
-					select {
-					case results <- r:
-					default:
-						// Drop if channel full
-					}
+					submitResult(results, r)
 				}
 			}
 		}()
@@ -156,6 +163,9 @@ func runLoadTest(name string, concurrency int, duration time.Duration, reqFunc f
 		Name:        name,
 		Concurrency: concurrency,
 		Duration:    duration,
+		// Every generated request must be collected; any gap is an explicit,
+		// reported drop rather than a silent one.
+		DroppedReqs: atomic.LoadInt64(&totalReqs) - int64(len(collected)),
 		StatusCodes: make(map[int]int64),
 		MinLatency:  time.Hour,
 	}
@@ -201,16 +211,16 @@ func runLoadTest(name string, concurrency int, duration time.Duration, reqFunc f
 
 func sampleEvent(id int) map[string]any {
 	return map[string]any{
-		"event_id":      fmt.Sprintf("evt_stress_%06d", id),
-		"event":         "checkout.completed",
-		"event_version": "v1",
-		"timestamp":     time.Now().UTC().Format(time.RFC3339Nano),
-		"service":       "stress-test-api",
-		"level":         "info",
-		"outcome":       "success",
-		"kind":          "event",
+		"event_id":       fmt.Sprintf("evt_stress_%06d", id),
+		"event":          "checkout.completed",
+		"event_version":  "v1",
+		"timestamp":      time.Now().UTC().Format(time.RFC3339Nano),
+		"service":        "stress-test-api",
+		"level":          "info",
+		"outcome":        "success",
+		"kind":           "event",
 		"schema_version": "v1",
-		"duration_ms":   rand.Intn(500) + 10,
+		"duration_ms":    rand.Intn(500) + 10,
 		"http": map[string]any{
 			"method": "POST",
 			"path":   "/api/checkout",
@@ -270,18 +280,19 @@ func main() {
 		allResults = append(allResults, tr)
 		fmt.Print(tr)
 		jr := map[string]any{
-			"name":        tr.Name,
-			"concurrency": tr.Concurrency,
-			"duration_s":  tr.Duration.Seconds(),
-			"total_reqs":  tr.TotalReqs,
-			"success":     tr.SuccessReqs,
-			"errors":      tr.ErrorReqs,
-			"rps":         tr.RPS,
-			"avg_ms":      float64(tr.AvgLatency.Microseconds()) / 1000.0,
-			"p50_ms":      float64(tr.P50Latency.Microseconds()) / 1000.0,
-			"p95_ms":      float64(tr.P95Latency.Microseconds()) / 1000.0,
-			"p99_ms":      float64(tr.P99Latency.Microseconds()) / 1000.0,
-			"max_ms":      float64(tr.MaxLatency.Microseconds()) / 1000.0,
+			"name":         tr.Name,
+			"concurrency":  tr.Concurrency,
+			"duration_s":   tr.Duration.Seconds(),
+			"total_reqs":   tr.TotalReqs,
+			"dropped":      tr.DroppedReqs,
+			"success":      tr.SuccessReqs,
+			"errors":       tr.ErrorReqs,
+			"rps":          tr.RPS,
+			"avg_ms":       float64(tr.AvgLatency.Microseconds()) / 1000.0,
+			"p50_ms":       float64(tr.P50Latency.Microseconds()) / 1000.0,
+			"p95_ms":       float64(tr.P95Latency.Microseconds()) / 1000.0,
+			"p99_ms":       float64(tr.P99Latency.Microseconds()) / 1000.0,
+			"max_ms":       float64(tr.MaxLatency.Microseconds()) / 1000.0,
 			"status_codes": tr.StatusCodes,
 		}
 		jsonResults = append(jsonResults, jr)
