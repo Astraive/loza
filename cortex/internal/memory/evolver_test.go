@@ -3,7 +3,9 @@ package memory
 import (
 	"context"
 	"errors"
+	"math"
 	"testing"
+	"time"
 
 	"github.com/astraive/loza/cortex/internal/models"
 	"github.com/astraive/loza/cortex/internal/storage"
@@ -153,5 +155,122 @@ func TestEvolveTemporalMergeDoesNotCollapseIncidents(t *testing.T) {
 	}
 	if len(sigs) != 3 {
 		t.Fatalf("stored signatures = %d, want 3 (parent + two distinct children)", len(sigs))
+	}
+}
+
+// stubSignatureStore is a minimal in-memory SignatureStore for Decay tests.
+type stubSignatureStore struct {
+	sigs         []*models.IncidentSignature
+	decayUpdates map[string]float64
+}
+
+func (s *stubSignatureStore) Save(context.Context, *models.IncidentSignature) error { return nil }
+
+func (s *stubSignatureStore) Get(context.Context, string) (*models.IncidentSignature, error) {
+	return nil, nil
+}
+
+func (s *stubSignatureStore) List(context.Context, int) ([]*models.IncidentSignature, error) {
+	return s.sigs, nil
+}
+
+func (s *stubSignatureStore) FindSimilar(context.Context, *models.IncidentSignature, int) ([]*models.SimilarIncident, error) {
+	return nil, nil
+}
+
+func (s *stubSignatureStore) FindByBehavioralHash(context.Context, string) ([]*models.IncidentSignature, error) {
+	return nil, nil
+}
+
+func (s *stubSignatureStore) UpdateDecay(_ context.Context, signatureID string, factor float64) error {
+	if s.decayUpdates == nil {
+		s.decayUpdates = make(map[string]float64)
+	}
+	s.decayUpdates[signatureID] = factor
+	return nil
+}
+
+func (s *stubSignatureStore) ArchiveStale(context.Context, float64) (int, error) { return 0, nil }
+
+func (s *stubSignatureStore) UpdateLastMatched(context.Context, string) error { return nil }
+
+var _ storage.SignatureStore = (*stubSignatureStore)(nil)
+
+func decayTestSignature(id string, matchedAt time.Time) *models.IncidentSignature {
+	return &models.IncidentSignature{
+		SignatureID:   id,
+		DecayFactor:   1.0,
+		LastMatchedAt: &matchedAt,
+	}
+}
+
+// TestDecayNonPositivePeriodDoesNotPanic reproduces the reported integer
+// divide-by-zero: a zero (or negative) DecayPeriod must never reach the
+// elapsed/DecayPeriod division in Decay.
+func TestDecayNonPositivePeriodDoesNotPanic(t *testing.T) {
+	for _, period := range []time.Duration{0, -time.Hour} {
+		t.Run(period.String(), func(t *testing.T) {
+			past := time.Now().Add(-time.Hour)
+			store := &stubSignatureStore{
+				sigs: []*models.IncidentSignature{decayTestSignature("sig-1", past)},
+			}
+			ev := NewSignatureEvolver(Config{
+				DecayPeriod:      period,
+				DecayRate:        0.1,
+				ArchiveThreshold: 0.1,
+			}, store, nil)
+
+			count, err := ev.Decay(context.Background())
+			if err != nil {
+				t.Fatalf("Decay returned error with period %v: %v", period, err)
+			}
+			if count != 0 {
+				t.Fatalf("expected 0 affected signatures with period %v, got %d", period, count)
+			}
+			if len(store.decayUpdates) != 0 {
+				t.Fatalf("expected no decay updates with period %v, got %v", period, store.decayUpdates)
+			}
+		})
+	}
+}
+
+// TestDecayValidPeriodStillApplies guards against over-correcting the fix:
+// with a positive period, decay must still be applied as before.
+func TestDecayValidPeriodStillApplies(t *testing.T) {
+	past := time.Now().Add(-3*time.Hour - time.Minute)
+	store := &stubSignatureStore{
+		sigs: []*models.IncidentSignature{decayTestSignature("sig-1", past)},
+	}
+	ev := NewSignatureEvolver(Config{
+		DecayPeriod:      time.Hour,
+		DecayRate:        0.5,
+		ArchiveThreshold: 0.1,
+	}, store, nil)
+
+	count, err := ev.Decay(context.Background())
+	if err != nil {
+		t.Fatalf("Decay returned error: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("expected 1 affected signature, got %d", count)
+	}
+	factor, ok := store.decayUpdates["sig-1"]
+	if !ok {
+		t.Fatal("expected a decay update for sig-1")
+	}
+	// Three elapsed periods at rate 0.5: 1.0 * (1-0.5)^3 = 0.125.
+	if math.Abs(factor-0.125) > 1e-9 {
+		t.Fatalf("expected decay factor 0.125, got %v", factor)
+	}
+}
+
+// TestFromConfigNormalizesNonPositiveDecayPeriod verifies that config built
+// through FromConfig never carries a non-positive DecayPeriod.
+func TestFromConfigNormalizesNonPositiveDecayPeriod(t *testing.T) {
+	for _, period := range []time.Duration{0, -time.Hour} {
+		cfg := FromConfig(period, 0.1, 0.1, 0.3, 0.1)
+		if cfg.DecayPeriod <= 0 {
+			t.Fatalf("FromConfig(%v) produced non-positive DecayPeriod %v", period, cfg.DecayPeriod)
+		}
 	}
 }
