@@ -62,7 +62,9 @@ impl Matcher {
         candidates: &[Signature],
         metric: &str,
     ) -> Vec<ScoredMatch> {
-        let tk = TopK::new(self.topk.k()).with_metric(metric);
+        // Carry over the full configured state (notably the threshold) while
+        // allowing the caller to override the metric for this search.
+        let tk = self.topk.clone().with_metric(metric);
         tk.search(query, candidates)
     }
 }
@@ -182,6 +184,37 @@ mod tests {
         assert!(
             (topology_score - similarity::score(&query, &candidate, "topology")).abs() < 1e-6
         );
+    }
+
+    #[test]
+    fn test_search_respects_configured_threshold() {
+        // A threshold configured on the matcher must also be honoured when
+        // searching via `search` with an explicit metric. The metric may be
+        // overridden, but the threshold must be carried over.
+        let matcher = Matcher::new().with_k(10).with_threshold(0.9);
+
+        let mut query = Signature::new();
+        query.feature_vector = vec![1.0, 0.0];
+
+        let mut high = Signature::new();
+        high.shape = "high".to_string();
+        high.feature_vector = vec![1.0, 0.0]; // cosine = 1.0
+
+        let mut medium = Signature::new();
+        medium.shape = "medium".to_string();
+        medium.feature_vector = vec![0.5, 0.5]; // cosine ~= 0.707
+
+        let mut low = Signature::new();
+        low.shape = "low".to_string();
+        low.feature_vector = vec![0.0, 1.0]; // cosine = 0.0
+
+        let candidates = vec![high, medium, low];
+
+        let matches = matcher.search(&query, &candidates, "cosine");
+
+        assert_eq!(matches.len(), 1, "low-similarity matches must be filtered");
+        assert_eq!(matches[0].signature_id, "high");
+        assert!(matches[0].similarity >= 0.9);
     }
 
     #[test]
