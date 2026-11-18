@@ -192,6 +192,21 @@ func (c *Client) streamTailHTTP(ctx context.Context, handle func(*models.Event) 
 	}
 	return scanner.Err()
 }
+
+// webSocketDialer returns a websocket dialer that reuses the TLS configuration
+// of the collector HTTP client so that the CA configured via TLSCAFile is also
+// honoured by the websocket tail transport (websocket.DefaultDialer has no
+// TLSClientConfig and would reject a collector using a private/self-signed CA).
+func (c *Client) webSocketDialer() *websocket.Dialer {
+	dialer := *websocket.DefaultDialer
+	if c.httpClient != nil {
+		if transport, ok := c.httpClient.Transport.(*http.Transport); ok {
+			dialer.TLSClientConfig = transport.TLSClientConfig
+		}
+	}
+	return &dialer
+}
+
 func (c *Client) streamTailWebSocket(ctx context.Context, handle func(*models.Event) error) error {
 	if c.initErr != nil {
 		return c.initErr
@@ -199,7 +214,7 @@ func (c *Client) streamTailWebSocket(ctx context.Context, handle func(*models.Ev
 	header := http.Header{}
 	setCollectorAuth(header, c.cfg)
 	setCollectorScope(header, c.cfg)
-	conn, _, err := websocket.DefaultDialer.DialContext(ctx, c.tailURL("/ws/tail", true), header)
+	conn, _, err := c.webSocketDialer().DialContext(ctx, c.tailURL("/ws/tail", true), header)
 	if err != nil {
 		return err
 	}
