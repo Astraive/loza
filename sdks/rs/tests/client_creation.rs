@@ -21,3 +21,47 @@ fn direct_basic_auth_rejects_remote_plaintext_http() {
         "unexpected error: {error}"
     );
 }
+
+#[test]
+fn direct_api_key_auth_rejects_remote_plaintext_http() {
+    let client = loza::core::CollectorHttpClient::new("http://collector.example.com")
+        .with_api_key("lz_sec_live_secret");
+    let error = client
+        .ingest(&[])
+        .expect_err("remote Bearer API key auth must not use plaintext HTTP");
+    assert!(
+        error.contains("credentialed HTTP requires TLS"),
+        "unexpected error: {error}"
+    );
+}
+
+#[test]
+fn direct_api_key_auth_allows_loopback_plaintext_http() {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::thread;
+
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind test server");
+    let addr = listener.local_addr().expect("local addr");
+    let handle = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().expect("accept");
+        let mut buf = [0_u8; 1024];
+        let _ = stream.read(&mut buf);
+        let body = r#"{"status":"ok"}"#;
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        let _ = stream.write_all(response.as_bytes());
+    });
+
+    let client = loza::core::CollectorHttpClient::new(format!("http://{addr}"))
+        .with_api_key("lz_sec_live_secret")
+        .with_timeout_ms(1_000);
+    let response = client
+        .health()
+        .expect("loopback Bearer auth over HTTP must stay allowed");
+    assert_eq!(response.status_code, 200);
+    handle.join().expect("server thread");
+}

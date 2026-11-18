@@ -289,17 +289,21 @@ impl CollectorHttpClient {
         let client = HTTPClient::with_timeout_ms(self.timeout_ms);
         let mut request = HTTPRequest::new(method, &url);
 
+        // Any configured credential (Bearer API key or Basic auth) must never be
+        // transmitted to a remote collector over plaintext HTTP. Validate the
+        // endpoint before either auth branch adds the credential to the request.
+        let has_api_key = self.api_key.is_some();
+        let has_basic_auth = self.basic_username.is_some() && self.basic_password.is_some();
+        if has_api_key || has_basic_auth {
+            validate_credentialed_endpoint(&self.endpoint, self.insecure)?;
+        }
+
         if let Some(api_key) = &self.api_key {
             request = request.with_header(&self.auth_header, format!("Bearer {}", api_key));
         } else {
             match (&self.basic_username, &self.basic_password) {
                 (Some(username), Some(password)) => {
-                    validate_basic_auth_endpoint(
-                        &self.endpoint,
-                        username,
-                        password,
-                        self.insecure,
-                    )?;
+                    validate_basic_auth_username(username)?;
                     let token = base64::engine::general_purpose::STANDARD
                         .encode(format!("{username}:{password}"));
                     request = request.with_header(&self.auth_header, format!("Basic {token}"));
@@ -640,18 +644,12 @@ pub fn inject_http_headers(request: &mut HTTPRequest, event: &crate::EventContex
         .insert("x-request-id".to_string(), event.request_id.clone());
 }
 
-/// Extract trace context from HTTP headers.
-fn validate_basic_auth_endpoint(
-    endpoint: &str,
-    username: &str,
-    _password: &str,
-    insecure: bool,
-) -> Result<(), String> {
-    if username.is_empty() || username.contains(':') || username.chars().any(char::is_whitespace) {
-        return Err(
-            "basic auth username must be non-empty and contain no ':' or whitespace".into(),
-        );
-    }
+/// Reject endpoint configurations that would expose credentials in cleartext.
+///
+/// Applies to every authenticated request, whether the credential is a Bearer
+/// API key or HTTP Basic auth. HTTPS is always allowed; plaintext HTTP is only
+/// permitted for explicit loopback endpoints or when `insecure` is set.
+fn validate_credentialed_endpoint(endpoint: &str, insecure: bool) -> Result<(), String> {
     let Some((scheme, rest)) = endpoint.split_once("://") else {
         return Ok(());
     };
@@ -671,6 +669,15 @@ fn validate_basic_auth_endpoint(
         return Ok(());
     }
     Err("credentialed HTTP requires TLS (set insecure explicitly for local development)".into())
+}
+
+fn validate_basic_auth_username(username: &str) -> Result<(), String> {
+    if username.is_empty() || username.contains(':') || username.chars().any(char::is_whitespace) {
+        return Err(
+            "basic auth username must be non-empty and contain no ':' or whitespace".into(),
+        );
+    }
+    Ok(())
 }
 
 pub fn extract_http_headers(
