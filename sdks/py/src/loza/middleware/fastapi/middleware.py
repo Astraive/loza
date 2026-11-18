@@ -61,7 +61,9 @@ class Middleware:
                 Int("response_bytes", response_bytes),
                 Int("duration_ms", int((time.perf_counter() - started) * 1000)),
             )
-        except Exception as exc:
+        except BaseException as exc:
+            # asyncio.CancelledError (a BaseException since 3.8) must finish the
+            # event with an error too, otherwise `finally` emits it incomplete.
             FinishError(ctx, exc, Bool("panic", True))
             raise
         finally:
