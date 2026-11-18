@@ -19,7 +19,7 @@ except ImportError:  # pragma: no cover
 
 
 ROOT = Path(__file__).resolve().parents[2]
-SEMVER_RE = re.compile(r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:[-+][0-9A-Za-z.-]+)?$")
+SEMVER_RE = re.compile(r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$")
 REQUIRED_FIELDS = ("name", "kind", "version", "description", "license", "repository", "module")
 KNOWN_KINDS = {"spec", "docker", "cli", "sdk", "package", "release"}
 KNOWN_LANGUAGES = {"go", "javascript", "python", "rust"}

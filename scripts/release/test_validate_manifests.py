@@ -13,6 +13,35 @@ assert SPEC is not None and SPEC.loader is not None
 validate_manifests = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(validate_manifests)
 
+CHANGED_COMPONENTS_PATH = Path(__file__).with_name("changed-components.py")
+CHANGED_SPEC = importlib.util.spec_from_file_location("changed_components", CHANGED_COMPONENTS_PATH)
+assert CHANGED_SPEC is not None and CHANGED_SPEC.loader is not None
+changed_components = importlib.util.module_from_spec(CHANGED_SPEC)
+CHANGED_SPEC.loader.exec_module(changed_components)
+
+
+def write_release_manifest(directory: Path, version: str) -> Path:
+    manifest_path = directory / "release.yaml"
+    manifest_path.write_text(
+        "\n".join(
+            [
+                "name: loza",
+                "kind: release",
+                f"version: {version}",
+                "description: test manifest",
+                "license: Apache-2.0",
+                "repository: https://github.com/Astraive/loza",
+                "module: github.com/Astraive/loza",
+                "publish:",
+                "  github_release:",
+                "    tag_prefix: v",
+                "    owner: astraive",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    return manifest_path
+
 
 class JavaScriptPackageIdentityTests(unittest.TestCase):
     def test_scoped_package_metadata_matches_native_manifest(self) -> None:
@@ -63,6 +92,28 @@ class NonDictPathsTests(unittest.TestCase):
             errors = validate_manifests.validate_component("docker", str(manifest_path))
 
         self.assertIn("docker: paths must be a mapping when present", errors)
+
+
+class SemverValidationTests(unittest.TestCase):
+    def test_prerelease_and_build_version_validates(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            manifest_path = write_release_manifest(Path(temporary_directory), "1.2.3-rc.1+build.5")
+            errors = validate_manifests.validate_component("loza", manifest_path.as_posix())
+
+        self.assertEqual(errors, [])
+
+    def test_semver_regex_accepts_prerelease_and_build(self) -> None:
+        pattern = validate_manifests.SEMVER_RE
+        self.assertTrue(pattern.match("1.2.3"))
+        self.assertTrue(pattern.match("1.2.3-rc.1"))
+        self.assertTrue(pattern.match("1.2.3+build.5"))
+        self.assertTrue(pattern.match("1.2.3-rc.1+build.5"))
+        self.assertFalse(pattern.match("v1.2.3"))
+        self.assertFalse(pattern.match("01.2.3"))
+
+    def test_changed_components_parses_prerelease_and_build(self) -> None:
+        version = "1.2.3-rc.1+build.5"
+        self.assertEqual(changed_components.parse_semver(version, "loza"), (1, 2, 3, version))
 
 
 if __name__ == "__main__":
