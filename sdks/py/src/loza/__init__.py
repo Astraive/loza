@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import sys
 from collections.abc import Callable
 from dataclasses import replace
 from typing import Optional
@@ -833,9 +832,17 @@ def run_event(params: Params, fn: Callable[[EventContext], Any], *attrs: Attr, *
         fn(ctx)
         _default.finish(ctx, "success", *attrs, **named)
         return _default.emit(ctx)
-    except BaseException:
-        _default.finish_error(ctx, sys.exc_info()[1] if sys.exc_info()[1] else Exception("unknown error"))
-        return _default.emit(ctx)
+    except BaseException as exc:
+        _default.finish_error(ctx, exc if exc else Exception("unknown error"))
+        emitted = _default.emit(ctx)
+        # Always finish/emit the event first, but never swallow control-flow
+        # exceptions (KeyboardInterrupt, SystemExit, GeneratorExit). Callers
+        # rely on these reaching the interpreter so Ctrl+C / sys.exit() can
+        # terminate the program. Ordinary Exception subclasses keep the
+        # historical behavior of being recorded and returning the payload.
+        if not isinstance(exc, Exception):
+            raise
+        return emitted
 
 
 def run(ctx: EventContext, fn: Callable[[EventContext], Any], *attrs: Attr, **named: Any) -> str:
@@ -844,9 +851,12 @@ def run(ctx: EventContext, fn: Callable[[EventContext], Any], *attrs: Attr, **na
         fn(ctx)
         _default.finish(ctx, "success", *attrs, **named)
         return _default.emit(ctx)
-    except BaseException:
-        _default.finish_error(ctx, sys.exc_info()[1] if sys.exc_info()[1] else Exception("unknown error"))
-        return _default.emit(ctx)
+    except BaseException as exc:
+        _default.finish_error(ctx, exc if exc else Exception("unknown error"))
+        emitted = _default.emit(ctx)
+        if not isinstance(exc, Exception):
+            raise
+        return emitted
 
 
 def from_request(req: Any, logger: Optional[Logger] = None) -> EventContext:
