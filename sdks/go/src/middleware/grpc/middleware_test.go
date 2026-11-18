@@ -3,6 +3,7 @@ package grpc
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	loza "github.com/astraive/loza/sdks/go"
@@ -100,6 +101,49 @@ func TestUnaryAndStreamInterceptorsRecoverPanics(t *testing.T) {
 	}
 	if store.Len() != 6 {
 		t.Fatalf("events = %d, want 6", store.Len())
+	}
+}
+
+func TestRecoveredPanicIsNotLeakedToGRPCClients(t *testing.T) {
+	store := configureGRPC(t, true)
+
+	const panicValue = "super-secret-connection-string"
+	const wantMessage = "internal server error"
+
+	info := &grpcpkg.UnaryServerInfo{FullMethod: "/demo.Service/Call"}
+	_, err := UnaryInterceptor()(context.Background(), nil, info, func(context.Context, any) (any, error) {
+		panic(panicValue)
+	})
+	if status.Code(err) != codes.Internal {
+		t.Fatalf("unary panic code = %v", status.Code(err))
+	}
+	if got := status.Convert(err).Message(); got != wantMessage {
+		t.Fatalf("unary panic message = %q, want %q", got, wantMessage)
+	}
+
+	streamInfo := &grpcpkg.StreamServerInfo{FullMethod: "/demo.Service/Stream"}
+	stream := fakeStream{ctx: context.Background()}
+	streamErr := StreamInterceptor()(nil, stream, streamInfo, func(_ any, _ grpcpkg.ServerStream) error {
+		panic(panicValue)
+	})
+	if status.Code(streamErr) != codes.Internal {
+		t.Fatalf("stream panic code = %v", status.Code(streamErr))
+	}
+	if got := status.Convert(streamErr).Message(); got != wantMessage {
+		t.Fatalf("stream panic message = %q, want %q", got, wantMessage)
+	}
+
+	if flushErr := loza.Flush(context.Background()); flushErr != nil {
+		t.Fatalf("Flush: %v", flushErr)
+	}
+	logged := false
+	for _, ev := range store.Events() {
+		if ev.Error != nil && strings.Contains(ev.Error.Message, panicValue) {
+			logged = true
+		}
+	}
+	if !logged {
+		t.Fatal("panic value was not recorded in server-side telemetry")
 	}
 }
 
