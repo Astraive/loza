@@ -7,6 +7,9 @@ mod tests {
     use std::thread;
     use std::time::Duration;
 
+    // Serializes the tests that mutate the process-wide custom id generator.
+    static ID_GEN_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     #[test]
     fn internal_core_helpers_cover_parsing_and_transitions() {
         assert_eq!(core::level::Level::parse("DEBUG").as_str(), "debug");
@@ -89,6 +92,7 @@ mod tests {
                 .is_err()
         );
 
+        let _id_gen_guard = ID_GEN_TEST_LOCK.lock().unwrap();
         clock::freeze_at(1234);
         assert_eq!(clock::unix_millis(), 1234);
         clock::unfreeze();
@@ -97,6 +101,33 @@ mod tests {
         assert_eq!(core::uuidv7::new_event_id(), "evt_test");
         core::uuidv7::reset_id_generator();
         assert!(core::uuidv7::new_event_id().starts_with("evt_"));
+    }
+
+    #[test]
+    fn reentrant_id_generator_does_not_deadlock() {
+        let _id_gen_guard = ID_GEN_TEST_LOCK.lock().unwrap();
+
+        core::uuidv7::set_id_generator(Box::new(|| {
+            // These re-acquire the same mutex `new_event_id` used to hold
+            // while calling this closure. With the lock held, either call
+            // deadlocked; with the fix they return normally.
+            core::uuidv7::reset_id_generator();
+            core::uuidv7::set_id_generator(Box::new(|| "inner".to_string()));
+            "outer".to_string()
+        }));
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        let handle = thread::spawn(move || {
+            tx.send(core::uuidv7::new_event_id()).unwrap();
+        });
+
+        let id = rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("new_event_id deadlocked while calling a reentrant generator");
+        handle.join().unwrap();
+        assert_eq!(id, "outer");
+
+        core::uuidv7::reset_id_generator();
     }
 
     #[test]
