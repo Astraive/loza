@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -22,6 +23,21 @@ func newTestCollectorState() *collectorState {
 		keyStore:     store,
 		serverSecret: serverSecret,
 	}
+}
+
+// failingRevokeKeyStore wraps a real store but fails revocation for one key,
+// simulating a key store that cannot revoke the key being rotated out.
+type failingRevokeKeyStore struct {
+	*memoryKeyStore
+	failKeyID string
+	err       error
+}
+
+func (s *failingRevokeKeyStore) RevokeKey(keyID string) error {
+	if keyID == s.failKeyID {
+		return s.err
+	}
+	return s.memoryKeyStore.RevokeKey(keyID)
 }
 
 func TestHandleKeyCreate_StoresKeyWithCorrectHash(t *testing.T) {
@@ -200,6 +216,78 @@ func TestHandleKeyRotate_CreatesNewAndRevokesOld(t *testing.T) {
 	}
 	if newRec.RevokedAt != nil {
 		t.Fatal("new key should not be revoked")
+	}
+}
+
+func TestHandleKeyRotate_RevocationFailureIsReported(t *testing.T) {
+	state := newTestCollectorState()
+
+	// Create initial key
+	body := map[string]any{"kind": "sec", "env": "live"}
+	payload, _ := json.Marshal(body)
+	createReq := httptest.NewRequest(http.MethodPost, "/admin/keys", bytes.NewReader(payload))
+	createReq.Header.Set("Content-Type", "application/json")
+	createRec := httptest.NewRecorder()
+	state.handleKeyCreate(createRec, createReq)
+
+	var createResp map[string]any
+	_ = json.Unmarshal(createRec.Body.Bytes(), &createResp)
+	oldKeyID, _ := createResp["key_id"].(string)
+	if oldKeyID == "" {
+		t.Fatal("create key: expected key_id")
+	}
+
+	// Make revocation of the old key fail during rotation.
+	store := &failingRevokeKeyStore{
+		memoryKeyStore: state.keyStore.(*memoryKeyStore),
+		failKeyID:      oldKeyID,
+		err:            errors.New("revocation backend unavailable"),
+	}
+	state.keyStore = store
+
+	rotateReq := httptest.NewRequest(http.MethodPost, "/admin/keys/"+oldKeyID+"/rotate", nil)
+	rotateReq.SetPathValue("id", oldKeyID)
+	rotateRec := httptest.NewRecorder()
+	state.handleKeyRotate(rotateRec, rotateReq)
+
+	if rotateRec.Code != http.StatusInternalServerError {
+		t.Fatalf("rotate: expected 500 when revocation fails, got %d: %s", rotateRec.Code, rotateRec.Body.String())
+	}
+
+	var rotateResp map[string]any
+	if err := json.Unmarshal(rotateRec.Body.Bytes(), &rotateResp); err != nil {
+		t.Fatalf("decode rotate response: %v", err)
+	}
+	if rotateResp["error"] != "old_key_revocation_failed" {
+		t.Errorf("error = %v, want old_key_revocation_failed", rotateResp["error"])
+	}
+	if rotated, ok := rotateResp["rotated"].(bool); !ok || rotated {
+		t.Errorf("rotated = %v, want false", rotateResp["rotated"])
+	}
+	if active, ok := rotateResp["old_key_active"].(bool); !ok || !active {
+		t.Errorf("old_key_active = %v, want true", rotateResp["old_key_active"])
+	}
+
+	// The old key must still be active in the store (it was not revoked).
+	oldRec, _ := store.FindByKeyID(context.Background(), oldKeyID)
+	if oldRec == nil {
+		t.Fatal("old key should still exist")
+	}
+	if oldRec.RevokedAt != nil {
+		t.Fatal("old key must remain active when its revocation failed")
+	}
+
+	// The new key was created first (never leave zero keys) and is reported.
+	newKeyID, _ := rotateResp["new_key_id"].(string)
+	if newKeyID == "" || newKeyID == oldKeyID {
+		t.Fatalf("new_key_id = %q, want a distinct key id", newKeyID)
+	}
+	newRec, _ := store.FindByKeyID(context.Background(), newKeyID)
+	if newRec == nil {
+		t.Fatal("new key should exist in store")
+	}
+	if newRec.RevokedAt != nil {
+		t.Fatal("new key should be active")
 	}
 }
 

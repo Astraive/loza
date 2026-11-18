@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
@@ -12,6 +13,15 @@ import (
 	"github.com/astraive/loza/collector/internal/auth"
 	speccontract "github.com/astraive/loza/spec/generated/go/contract"
 )
+
+// adminKeyStore is the subset of key-store operations needed by the admin
+// handlers. Keeping it as an interface lets tests exercise store failure paths.
+// It satisfies auth.KeyStore because FindByKeyID is part of its method set.
+type adminKeyStore interface {
+	FindByKeyID(ctx context.Context, keyID string) (*auth.KeyRecord, error)
+	CreateKey(rec *auth.KeyRecord) error
+	RevokeKey(keyID string) error
+}
 
 func (s *collectorState) handleValidate(w http.ResponseWriter, r *http.Request) {
 	if !s.isAuthorized(r) {
@@ -124,12 +134,12 @@ func (s *collectorState) handleKeyCreate(w http.ResponseWriter, r *http.Request)
 			keyKind = auth.KeyKindPublic
 		}
 		newKey := &auth.KeyRecord{
-			ID:           keyID,
-			KeyID:        keyID,
-			SecretHash:   secretHash,
-			Kind:         keyKind,
-			Roles:        []auth.Role{auth.RoleIngestServer},
-			AllowedEnvs:  []string{env},
+			ID:          keyID,
+			KeyID:       keyID,
+			SecretHash:  secretHash,
+			Kind:        keyKind,
+			Roles:       []auth.Role{auth.RoleIngestServer},
+			AllowedEnvs: []string{env},
 		}
 		if err := s.keyStore.CreateKey(newKey); err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "key_store_error"})
@@ -209,19 +219,31 @@ func (s *collectorState) handleKeyRotate(w http.ResponseWriter, r *http.Request)
 	// Store the NEW key FIRST, then revoke old (order matters: never leave zero keys)
 	secretHash := auth.HashSecret(newSecret, s.serverSecret)
 	newKey := &auth.KeyRecord{
-		ID:           newKeyID,
-		KeyID:        newKeyID,
-		SecretHash:   secretHash,
-		Kind:         oldRecord.Kind,
-		Roles:        []auth.Role{auth.RoleIngestServer},
-		AllowedEnvs:  []string{env},
+		ID:          newKeyID,
+		KeyID:       newKeyID,
+		SecretHash:  secretHash,
+		Kind:        oldRecord.Kind,
+		Roles:       []auth.Role{auth.RoleIngestServer},
+		AllowedEnvs: []string{env},
 	}
 	if err := s.keyStore.CreateKey(newKey); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "key_store_error"})
 		return
 	}
-	// Revoke old key AFTER new key is stored
-	_ = s.keyStore.RevokeKey(oldKeyID)
+	// Revoke old key AFTER new key is stored. A failed revocation means the old
+	// (potentially compromised) key is still active, so this is not a successful
+	// rotation and must not be reported as one.
+	if err := s.keyStore.RevokeKey(oldKeyID); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{
+			"error":          "old_key_revocation_failed",
+			"message":        "new key was created but the old key could not be revoked and is still active",
+			"rotated":        false,
+			"old_key_id":     oldKeyID,
+			"new_key_id":     newKeyID,
+			"old_key_active": true,
+		})
+		return
+	}
 
 	// Invalidate cache for old key
 	if s.keyCache != nil {

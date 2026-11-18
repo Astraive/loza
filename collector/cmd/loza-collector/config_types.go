@@ -353,7 +353,7 @@ type collectorState struct {
 	retentionStop       chan struct{}
 	closeOnce           sync.Once
 	eventBus            eventbus.Bus
-	keyStore            *memoryKeyStore
+	keyStore            adminKeyStore
 	keyCache            *auth.MemoryKeyCache
 	keyRateLimiter      *auth.KeyRateLimiter
 	serverSecret        []byte
