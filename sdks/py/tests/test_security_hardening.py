@@ -1,12 +1,45 @@
 import pytest
 
+import loza
+from loza.core.client import Logger as ClientLogger
 from loza.core.config import Config
 from loza.core.http_client import CollectorClient
-from loza.core.config import Config
+from loza.core.logger import Logger
 from loza.cortex.client import CortexClient
 from loza.core.pipeline import DiskOfflineBuffer
 from loza.sinks.file import FileSink
 from loza.sinks.httpbatch import HTTPBatchSink
+
+
+def _attr_leaf_count(bucket):
+    """Independent flattened leaf count used to verify the limit enforcement."""
+    total = 0
+    for value in bucket.values():
+        if isinstance(value, dict) and value:
+            total += _attr_leaf_count(value)
+        else:
+            total += 1
+    return total
+
+
+def _assert_nested_dotted_attrs_respect_limit(logger_cls) -> None:
+    max_attrs = 5
+    cfg = loza.Config.test("nested-limit").with_sink(loza.MemorySink())
+    cfg.security = loza.SecurityConfig(max_attr_count=max_attrs)
+    logger = logger_cls(cfg)
+    ctx = logger.start_event(loza.Params(event="nested"))
+    # All these attributes collapse into one top-level "payload" key once the
+    # dotted keys are expanded by _set_path, so counting top-level keys misses them.
+    for i in range(20):
+        logger.enrich(ctx, **{f"payload.field{i}": i})
+
+    logger._enforce_attr_limit(ctx)
+
+    buckets = (ctx.attrs, ctx.user, ctx.tenant, ctx.resource, ctx.http)
+    # The _truncated marker is added after enforcement and counts as one attribute.
+    assert sum(_attr_leaf_count(bucket) for bucket in buckets) <= max_attrs + 1
+    assert ctx.attrs.get("_truncated") is True
+    assert len(ctx.attrs["payload"]) <= max_attrs
 
 
 def test_collector_client_rejects_metadata_endpoint():
@@ -69,3 +102,11 @@ def test_config_repr_does_not_leak_api_key() -> None:
     assert cfg.username == "secret-user"
     assert cfg.password == "secret-pass"
     assert cfg.with_service("other").api_key == api_key
+
+
+def test_max_attr_count_counts_nested_dotted_keys() -> None:
+    _assert_nested_dotted_attrs_respect_limit(Logger)
+
+
+def test_max_attr_count_counts_nested_dotted_keys_legacy_client() -> None:
+    _assert_nested_dotted_attrs_respect_limit(ClientLogger)

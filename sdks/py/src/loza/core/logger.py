@@ -693,27 +693,51 @@ class Logger:
             return
 
         buckets: list[dict[str, Any]] = [ctx.attrs, ctx.user, ctx.tenant, ctx.resource, ctx.http]
-        total = sum(len(bucket) for bucket in buckets)
+        total = sum(Logger._attr_leaf_count(value) for bucket in buckets for value in bucket.values())
         if total <= max_attr_count:
             return
 
-        remaining = max_attr_count
+        remaining = [max_attr_count]
         truncated = False
         for bucket in buckets:
-            if remaining <= 0:
-                if bucket:
-                    bucket.clear()
-                    truncated = True
-                continue
-            if len(bucket) > remaining:
-                kept = list(bucket.items())[:remaining]
-                bucket.clear()
-                bucket.update(kept)
+            if Logger._keep_attr_leaves(bucket, remaining):
                 truncated = True
-            remaining -= len(bucket)
 
         if truncated and "_truncated" not in ctx.attrs:
             ctx.attrs["_truncated"] = True
+
+    @staticmethod
+    def _attr_leaf_count(value: Any) -> int:
+        """Count attribute leaves, descending into nested (dotted-key) dicts."""
+        if isinstance(value, dict) and value:
+            return sum(Logger._attr_leaf_count(child) for child in value.values())
+        return 1
+
+    @staticmethod
+    def _keep_attr_leaves(target: dict[str, Any], budget: list[int]) -> bool:
+        """Keep at most ``budget[0]`` leaves in ``target`` in insertion order.
+
+        Nested dicts are descended into so dotted keys are accounted for, and
+        parent dicts left empty by truncation are removed. ``budget`` is a
+        one-element list so the shared cross-bucket allowance can be decremented
+        in place. Returns True when any leaf was removed.
+        """
+        removed = False
+        for key in list(target.keys()):
+            if budget[0] <= 0:
+                del target[key]
+                removed = True
+                continue
+            value = target[key]
+            if isinstance(value, dict) and value:
+                if Logger._keep_attr_leaves(value, budget):
+                    removed = True
+                if not value:
+                    del target[key]
+                    removed = True
+            else:
+                budget[0] -= 1
+        return removed
 
     @staticmethod
     def _resolve_bucket(ctx: EventContext, key: str) -> tuple[dict[str, Any], str]:
