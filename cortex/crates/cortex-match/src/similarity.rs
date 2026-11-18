@@ -23,8 +23,10 @@ pub mod similarity {
             .map(|(x, y)| x * y)
             .sum();
 
-        let a_mag = a.iter().map(|x| x * x).sum::<f64>().sqrt();
-        let b_mag = b.iter().map(|x| x * x).sum::<f64>().sqrt();
+        // Magnitudes must cover the same prefix as the dot product; otherwise
+        // extra dimensions inflate the denominator and corrupt the similarity.
+        let a_mag = a.iter().take(min_len).map(|x| x * x).sum::<f64>().sqrt();
+        let b_mag = b.iter().take(min_len).map(|x| x * x).sum::<f64>().sqrt();
 
         if a_mag == 0.0 || b_mag == 0.0 {
             return 0.0;
@@ -208,6 +210,20 @@ mod tests {
 
         assert!((similarity::cosine(&a, &b) - 1.0).abs() < 1e-6);
         assert!((similarity::cosine(&a, &c) - 0.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_cosine_different_lengths_uses_common_prefix() {
+        // Identical prefixes must score 1.0 regardless of trailing dimensions.
+        let short = vec![1.0];
+        let long = vec![1.0, 1.0, 1.0];
+
+        assert!((similarity::cosine(&short, &long) - 1.0).abs() < 1e-6);
+        assert!((similarity::cosine(&long, &short) - 1.0).abs() < 1e-6);
+
+        // Orthogonal prefixes must score 0.0 even if the trailing tail is large.
+        let orthogonal = vec![0.0, 5.0, 5.0];
+        assert!((similarity::cosine(&short, &orthogonal) - 0.0).abs() < 1e-6);
     }
 
     #[test]
