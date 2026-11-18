@@ -108,7 +108,14 @@ func NewPostgresStorage(cfg config.PostgresConfig) (*PostgresStorage, error) {
 		return nil, fmt.Errorf("invalid postgres configuration: %w", err)
 	}
 
-	db, err := sql.Open("postgres", dsn)
+	return newPostgresStorage("postgres", dsn, cfg)
+}
+
+// newPostgresStorage opens and verifies a postgres connection pool. The driver
+// name is a parameter so the lifecycle, including cleanup when Ping fails, can
+// be exercised in tests with a fake driver.
+func newPostgresStorage(driverName, dsn string, cfg config.PostgresConfig) (*PostgresStorage, error) {
+	db, err := sql.Open(driverName, dsn)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open postgres: %w", err)
 	}
@@ -118,6 +125,10 @@ func NewPostgresStorage(cfg config.PostgresConfig) (*PostgresStorage, error) {
 	db.SetConnMaxLifetime(cfg.ConnMaxLifetime)
 
 	if err := db.Ping(); err != nil {
+		// sql.Open starts a connection-opener goroutine and Ping may leave a
+		// connection in the idle pool. Close the pool so neither is leaked when
+		// startup fails.
+		_ = db.Close()
 		return nil, fmt.Errorf("failed to ping postgres: %w", err)
 	}
 

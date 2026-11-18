@@ -40,6 +40,7 @@ func NewStorage(cfg *config.Config) (Storage, error) {
 			return nil, fmt.Errorf("failed to open collector db: %w", err)
 		}
 		if err := db.Ping(); err != nil {
+			_ = db.Close()
 			return nil, fmt.Errorf("failed to ping collector db: %w", err)
 		}
 		base = NewDuckDBStorageFromDB(db)
