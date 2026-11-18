@@ -218,6 +218,12 @@ func (s *Server) Readyz(w http.ResponseWriter, r *http.Request) {
 	ready := true
 	checks := map[string]string{}
 
+	// Honor the explicit readiness flag so the service can be drained.
+	if !s.ready {
+		ready = false
+		checks["ready"] = "not_ready"
+	}
+
 	// Check if graph engine is initialized
 	if s.graph == nil {
 		ready = false
