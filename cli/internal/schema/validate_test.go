@@ -5,18 +5,21 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
+
+	speccontract "github.com/astraive/loza/spec/generated/go/contract"
 )
 
 type conformanceManifest struct {
-	Valid                  []string `json:"valid"`
-	LooseOnlyValid         []string `json:"loose_only_valid"`
-	Invalid                []string `json:"invalid"`
-	StrictOnlyInvalid      []string `json:"strict_only_invalid"`
-	InvalidIngest          []string `json:"invalid_ingest"`
-	InvalidCollector       []string `json:"invalid_collector_response"`
-	InvalidLimits          []string `json:"invalid_limits"`
-	ManifestDirectory      string
+	Valid             []string `json:"valid"`
+	LooseOnlyValid    []string `json:"loose_only_valid"`
+	Invalid           []string `json:"invalid"`
+	StrictOnlyInvalid []string `json:"strict_only_invalid"`
+	InvalidIngest     []string `json:"invalid_ingest"`
+	InvalidCollector  []string `json:"invalid_collector_response"`
+	InvalidLimits     []string `json:"invalid_limits"`
+	ManifestDirectory string
 }
 
 func TestValidateSpecAssets(t *testing.T) {
@@ -43,7 +46,7 @@ func TestValidateGoldenFixtures(t *testing.T) {
 	}
 
 	invalidPaths := resolveFixturePaths(t, manifest.ManifestDirectory,
-		append(append(append(manifest.Invalid, manifest.StrictOnlyInvalid...), manifest.InvalidIngest...), manifest.InvalidCollector...),
+		append(append(append(append(manifest.Invalid, manifest.StrictOnlyInvalid...), manifest.InvalidIngest...), manifest.InvalidCollector...), manifest.InvalidLimits...),
 	)
 	if len(invalidPaths) == 0 {
 		t.Fatal("expected invalid fixtures")
@@ -66,8 +69,31 @@ func TestValidateGoldenFixtures(t *testing.T) {
 		})
 	}
 
+	// The invalid_limits fixtures are now validated alongside the other invalid
+	// cases above; keep an explicit presence guard so an empty manifest list is
+	// still reported instead of silently passing.
 	if len(resolveFixturePaths(t, manifest.ManifestDirectory, manifest.InvalidLimits)) == 0 {
 		t.Fatal("expected invalid_limits fixtures")
+	}
+}
+
+// TestValidateOversizedPayload is a focused regression test for max-size
+// enforcement. It guards against the same blind spot that let the
+// invalid_limits fixtures go unvalidated: a payload exceeding MaxEventBytes
+// must be rejected, while an otherwise identical in-limit event must pass.
+func TestValidateOversizedPayload(t *testing.T) {
+	inLimit := []byte(`{"schema_version":"v1","event_version":"v1","timestamp":"2026-05-12T00:00:00Z","event_id":"evt_1","service":"checkout","event":"checkout.request","kind":"http"}`)
+	if err := ValidateEventBytes(inLimit); err != nil {
+		t.Fatalf("in-limit payload should pass: %v", err)
+	}
+
+	oversized := []byte(`{"schema_version":"v1","event_version":"v1","timestamp":"2026-05-12T00:00:00Z","event_id":"evt_oversized","service":"checkout","event":"checkout.request","kind":"http","message":"` +
+		strings.Repeat("x", speccontract.MaxEventBytes) + `"}`)
+	if len(oversized) <= speccontract.MaxEventBytes {
+		t.Fatalf("test setup: payload size %d must exceed MaxEventBytes %d", len(oversized), speccontract.MaxEventBytes)
+	}
+	if err := ValidateEventBytes(oversized); err == nil {
+		t.Fatal("expected oversized payload to be rejected by max_event_size_bytes")
 	}
 }
 
