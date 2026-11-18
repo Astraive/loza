@@ -2,6 +2,7 @@ package cortex
 
 import (
 	"fmt"
+	"math"
 )
 
 func edgeHasKey(edge map[string]any, key string) bool {
@@ -20,7 +21,7 @@ func ValidateIncidentContext(ctx *IncidentContext) error {
 	if ctx.Timestamp == "" {
 		return fmt.Errorf("cortex: timestamp is required")
 	}
-	if ctx.Confidence < 0 || ctx.Confidence > 1 {
+	if math.IsNaN(ctx.Confidence) || ctx.Confidence < 0 || ctx.Confidence > 1 {
 		return fmt.Errorf("cortex: confidence must be in [0.0, 1.0], got %f", ctx.Confidence)
 	}
 	return nil
