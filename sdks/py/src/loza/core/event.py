@@ -341,7 +341,27 @@ def sanitize_event(ctx: EventContext) -> EventContext:
     for key in ctx._sensitive_keys:
         bucket, local = _resolve_bucket(safe, key)
         _redact_at_path(bucket, local)
+    for checkpoint in safe.checkpoints:
+        _sanitize_checkpoint(checkpoint, ctx._drop_keys, ctx._hash_keys, ctx._sensitive_keys)
     return safe
+
+
+def _sanitize_checkpoint(
+    checkpoint: dict[str, Any],
+    drop_keys: set[str],
+    hash_keys: set[str],
+    sensitive_keys: set[str],
+) -> None:
+    """Apply the same drop/hash/sensitive policies to a checkpoint payload."""
+    for key in drop_keys:
+        checkpoint.pop(key, None)
+    for key in hash_keys:
+        value = checkpoint.get(key)
+        if value is not None:
+            checkpoint[key] = hashlib.sha256(str(value).encode("utf-8")).hexdigest()
+    for key in sensitive_keys:
+        if checkpoint.get(key) is not None:
+            checkpoint[key] = "[REDACTED]"
 
 
 def _hash_at_path(target: dict[str, Any], key: str) -> None:
