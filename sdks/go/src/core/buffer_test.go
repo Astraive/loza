@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -193,6 +194,67 @@ func TestEventBuffer_CloseFlush(t *testing.T) {
 
 	if flushedEvents.Load() != 7 {
 		t.Errorf("Expected 7 flushed events, got %d", flushedEvents.Load())
+	}
+}
+
+// TestEventBuffer_AddAfterClose verifies that events added after Close are
+// rejected rather than buffered with no flush loop left to drain them.
+func TestEventBuffer_AddAfterClose(t *testing.T) {
+	var flushCount atomic.Int32
+	var flushedEvents atomic.Int32
+
+	buf := NewEventBuffer(EventBufferConfig{
+		BatchSize:     100,
+		FlushInterval: time.Hour, // Long interval to avoid time-based flushes
+		MaxBufferSize: 1000,
+		FlushFunc: func(ctx context.Context, events []*Event, encoded [][]byte) error {
+			flushCount.Add(1)
+			flushedEvents.Add(int32(len(events)))
+			return nil
+		},
+	})
+
+	ctx := context.Background()
+
+	// Add events before close; they should be flushed by Close.
+	for i := 0; i < 3; i++ {
+		ev := &Event{EventID: NewUUIDv7()}
+		if err := buf.Add(ctx, ev, []byte("test")); err != nil {
+			t.Fatalf("Add before close failed: %v", err)
+		}
+	}
+
+	if err := buf.Close(ctx); err != nil {
+		t.Fatalf("Close failed: %v", err)
+	}
+
+	flushCountAfterClose := flushCount.Load()
+	flushedEventsAfterClose := flushedEvents.Load()
+	if flushCountAfterClose != 1 || flushedEventsAfterClose != 3 {
+		t.Fatalf("Expected Close to flush 3 events once, got %d flushes / %d events",
+			flushCountAfterClose, flushedEventsAfterClose)
+	}
+
+	// Adding after Close must be rejected, not silently buffered.
+	ev := &Event{EventID: NewUUIDv7()}
+	if err := buf.Add(ctx, ev, []byte("test")); !errors.Is(err, ErrBufferClosed) {
+		t.Fatalf("Expected ErrBufferClosed after Close, got %v", err)
+	}
+
+	// The rejected event must not be stranded in the buffer.
+	if buf.Size() != 0 {
+		t.Errorf("Expected empty buffer after rejected Add, got size %d", buf.Size())
+	}
+
+	// A second Close must not flush any stranded events.
+	if err := buf.Close(ctx); err != nil {
+		t.Fatalf("Second Close failed: %v", err)
+	}
+	if got := flushCount.Load(); got != flushCountAfterClose {
+		t.Errorf("Expected no additional flushes after second Close, got %d -> %d", flushCountAfterClose, got)
+	}
+	if got := flushedEvents.Load(); got != flushedEventsAfterClose {
+		t.Errorf("Expected no additional flushed events after second Close, got %d -> %d", flushedEventsAfterClose, got)
 	}
 }
 

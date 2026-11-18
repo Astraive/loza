@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"time"
 )
@@ -21,8 +22,14 @@ type EventBuffer struct {
 	ticker        *time.Ticker
 	stopCh        chan struct{}
 	closeOnce     sync.Once
+	closed        bool
 	droppedCount  int64
 }
+
+// ErrBufferClosed is returned when adding an event after the buffer is closed.
+// Once closed, no background flush remains, so accepting new events would
+// strand them in the buffer without ever flushing.
+var ErrBufferClosed = errors.New("event buffer closed")
 
 // EventBufferConfig configures the event buffer.
 type EventBufferConfig struct {
@@ -84,7 +91,14 @@ func NewEventBuffer(cfg EventBufferConfig) *EventBuffer {
 // Requirements: 33.4, 33.8, 33.9
 func (b *EventBuffer) Add(ctx context.Context, ev *Event, encoded []byte) error {
 	b.mu.Lock()
-	
+
+	// Reject events added after Close: no flush goroutine remains to drain
+	// them, so accepting them would leave them stranded in the buffer.
+	if b.closed {
+		b.mu.Unlock()
+		return ErrBufferClosed
+	}
+
 	// Check if buffer is at max capacity
 	// Requirement 33.9: drop oldest events when buffer exceeds max_buffer_size
 	if len(b.events) >= b.maxBufferSize {
@@ -153,6 +167,12 @@ func (b *EventBuffer) flushLoop() {
 func (b *EventBuffer) Close(ctx context.Context) error {
 	var err error
 	b.closeOnce.Do(func() {
+		// Mark closed before stopping the flush loop so no new events can be
+		// accepted after the final flush. Flush() does not consult this flag,
+		// so the remaining buffered events are still drained below.
+		b.mu.Lock()
+		b.closed = true
+		b.mu.Unlock()
 		close(b.stopCh)
 		b.ticker.Stop()
 		err = b.Flush(ctx)
