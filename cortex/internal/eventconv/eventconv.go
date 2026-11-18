@@ -2,11 +2,12 @@ package eventconv
 
 import (
 	"fmt"
+	"math"
 	"strings"
 	"time"
 
-	speccontract "github.com/astraive/loza/spec/generated/go/contract"
 	"github.com/astraive/loza/cortex/internal/models"
+	speccontract "github.com/astraive/loza/spec/generated/go/contract"
 )
 
 func FromRawMap(raw map[string]any, defaultProvenance string) (*models.Event, error) {
@@ -36,7 +37,11 @@ func FromRawMap(raw map[string]any, defaultProvenance string) (*models.Event, er
 			event.Timestamp = t
 		}
 	} else if ts, ok := raw["timestamp"].(float64); ok {
-		event.Timestamp = time.Unix(int64(ts), 0).UTC()
+		// Split whole and fractional seconds so sub-second precision in JSON
+		// epoch numbers is preserved instead of being truncated by int64(ts).
+		// math.Round avoids off-by-one nanoseconds from binary float error.
+		sec, frac := math.Modf(ts)
+		event.Timestamp = time.Unix(int64(sec), int64(math.Round(frac*float64(time.Second)))).UTC()
 	}
 
 	// Schema & versioning
