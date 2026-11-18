@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import importlib
 import json
 
 import loza
+import pytest
 from loza.middleware.asgi import Middleware
 
 
@@ -124,3 +126,78 @@ def test_flask_middleware_closes_original_iterable_on_close() -> None:
     assert len(sink.events) == 1
     payload = json.loads(sink.events[0])
     assert payload["attrs"]["response_bytes"] == 5
+
+
+async def _run_starlette_app(app, messages):
+    starlette_module = importlib.import_module("loza.middleware.starlette.middleware")
+    sink = loza.MemorySink()
+    loza.Configure(loza.Test("checkout").with_sink(sink))
+    middleware = starlette_module.Middleware(app, service="checkout")
+
+    async def receive():
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    async def send(message):
+        messages.append(message)
+
+    await middleware(
+        {
+            "type": "http",
+            "method": "GET",
+            "path": "/boom",
+            "headers": [],
+            "client": ("127.0.0.1", 1234),
+        },
+        receive,
+        send,
+    )
+
+
+def test_starlette_emit_failure_does_not_mask_app_exception(monkeypatch) -> None:
+    starlette_module = importlib.import_module("loza.middleware.starlette.middleware")
+
+    def failing_emit(_ctx):
+        raise loza.EventClosedError("telemetry unavailable")
+
+    monkeypatch.setattr(starlette_module, "Emit", failing_emit)
+
+    async def app(_scope, _receive, _send):
+        raise RuntimeError("original application failure")
+
+    with pytest.raises(RuntimeError, match="original application failure"):
+        asyncio.run(_run_starlette_app(app, []))
+
+
+def test_starlette_emit_base_exception_does_not_mask_app_exception(monkeypatch) -> None:
+    starlette_module = importlib.import_module("loza.middleware.starlette.middleware")
+
+    class SinkBaseFailure(BaseException):
+        pass
+
+    def failing_emit(_ctx):
+        raise SinkBaseFailure("sink crashed")
+
+    monkeypatch.setattr(starlette_module, "Emit", failing_emit)
+
+    async def app(_scope, _receive, _send):
+        raise RuntimeError("original application failure")
+
+    with pytest.raises(RuntimeError, match="original application failure"):
+        asyncio.run(_run_starlette_app(app, []))
+
+
+def test_starlette_emit_failure_does_not_break_successful_request(monkeypatch) -> None:
+    starlette_module = importlib.import_module("loza.middleware.starlette.middleware")
+
+    def failing_emit(_ctx):
+        raise loza.EventValidationError("telemetry validation failed")
+
+    monkeypatch.setattr(starlette_module, "Emit", failing_emit)
+
+    async def app(_scope, _receive, send):
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        await send({"type": "http.response.body", "body": b"ok"})
+
+    messages = []
+    asyncio.run(_run_starlette_app(app, messages))
+    assert any(message.get("type") == "http.response.start" for message in messages)
