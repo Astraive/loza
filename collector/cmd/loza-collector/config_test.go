@@ -602,6 +602,54 @@ collector:
 	}
 }
 
+func TestLoadCollectorConfigFromArgsExplicitMissingConfigFileFails(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "does-not-exist.yaml")
+	_, err := loadCollectorConfigFromArgs([]string{"-c", missing})
+	if err == nil {
+		t.Fatal("expected an explicit -c pointing at a missing file to fail")
+	}
+	if !strings.Contains(err.Error(), "config file") || !strings.Contains(err.Error(), missing) {
+		t.Fatalf("expected an error identifying the missing config file, got: %v", err)
+	}
+}
+
+func TestLoadCollectorConfigFromArgsNoConfigFileUsesDefaults(t *testing.T) {
+	// The package working directory has no loza.yaml. Without an explicit -c,
+	// the loader must keep falling back to built-in defaults instead of failing.
+	if _, err := os.Stat("loza.yaml"); err == nil {
+		t.Skip("loza.yaml present in package directory; cannot exercise a missing default")
+	}
+	cfg, err := loadCollectorConfigFromArgs(nil)
+	if err != nil {
+		t.Fatalf("missing default config file should fall back to defaults: %v", err)
+	}
+	if cfg.duckDBPath == "" {
+		t.Fatal("expected built-in defaults to be applied when no -c is supplied")
+	}
+}
+
+func TestConfigCommandValidateExplicitMissingConfigFileFails(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "does-not-exist.yaml")
+	err := configCommand([]string{"validate", "-c", missing})
+	if err == nil {
+		t.Fatal("config validate must fail when -c points at a missing file")
+	}
+	if !strings.Contains(err.Error(), missing) {
+		t.Fatalf("expected the error to name the missing config file, got: %v", err)
+	}
+}
+
+func TestConfigCommandPrintExplicitMissingConfigFileFails(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "does-not-exist.yaml")
+	err := configCommand([]string{"print", "-c", missing})
+	if err == nil {
+		t.Fatal("config print must fail when -c points at a missing file")
+	}
+	if !strings.Contains(err.Error(), "config file") {
+		t.Fatalf("expected a config file error, got: %v", err)
+	}
+}
+
 func TestLoadCollectorConfigFromArgsFlushInterval(t *testing.T) {
 	cfg, err := loadCollectorConfigFromArgs([]string{"--flush-interval", "500ms"})
 	if err != nil {

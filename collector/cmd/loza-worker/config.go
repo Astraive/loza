@@ -131,6 +131,20 @@ func (c *workerConfig) buildEventBusConfig() eventbus.Config {
 	return cfg
 }
 
+// loadWorkerFileConfig overlays path on top of fc. An explicitly supplied -c
+// is mandatory: any stat, read, or parse failure is returned instead of being
+// silently ignored in favour of defaults. Without -c the previous best-effort
+// behaviour is kept, tolerating a missing default file.
+func loadWorkerFileConfig(fc *workerFileConfig, path string, cfgFileExplicit bool) error {
+	if _, err := os.Stat(path); err != nil {
+		if cfgFileExplicit {
+			return fmt.Errorf("config file %q: %w", path, err)
+		}
+		return nil
+	}
+	return collectorconfig.LoadFile(fc, path)
+}
+
 func loadWorkerConfigFromArgs(args []string) (workerConfig, error) {
 	cfgFile := "loza.yaml"
 	fs := flag.NewFlagSet("run", flag.ContinueOnError)
@@ -138,12 +152,16 @@ func loadWorkerConfigFromArgs(args []string) (workerConfig, error) {
 	if err := fs.Parse(args); err != nil {
 		return workerConfig{}, err
 	}
+	cfgFileExplicit := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "c" {
+			cfgFileExplicit = true
+		}
+	})
 
 	fc := collectorconfig.Default()
-	if _, err := os.Stat(cfgFile); err == nil {
-		if err := collectorconfig.LoadFile(&fc, cfgFile); err != nil {
-			return workerConfig{}, err
-		}
+	if err := loadWorkerFileConfig(&fc, cfgFile, cfgFileExplicit); err != nil {
+		return workerConfig{}, err
 	}
 	if err := applyWorkerEnvOverrides(&fc); err != nil {
 		return workerConfig{}, err
