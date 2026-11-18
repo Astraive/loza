@@ -68,7 +68,7 @@ pub mod axum_impl {
         let status = res.status().as_u16();
         let elapsed = started.elapsed().as_millis() as u64;
         let outcome = if status >= 500 { "error" } else { "success" };
-        crate::Append(&mut ctx, crate::Int("status_code", status as i64));
+        crate::middleware::record_status_code(&mut ctx, status);
         crate::Append(&mut ctx, crate::Int("duration_ms", elapsed as i64));
         let _ = logger.finish(&mut ctx, outcome);
         let _ = logger.emit(&ctx);
