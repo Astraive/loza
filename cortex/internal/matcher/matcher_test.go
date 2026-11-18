@@ -75,6 +75,32 @@ func (f *fakeSignatureStore) UpdateLastMatched(_ context.Context, id string) err
 	return nil
 }
 
+// TestServiceRoleDeterministicForOverlappingNames locks in a stable
+// classification for names whose patterns match more than one role. Before
+// serviceRole used an ordered slice, it ranged over a map, so Go's randomized
+// iteration order made these results vary between calls.
+func TestServiceRoleDeterministicForOverlappingNames(t *testing.T) {
+	cases := map[string]string{
+		"redis-cache":     "database", // "redis" (database) precedes "cache" (cache)
+		"event-processor": "queue",    // "event" (queue) precedes "processor" (worker)
+		"app-worker":      "api",      // "app" (api) precedes "worker" (worker)
+		"user-auth":       "auth",     // "auth" (auth) precedes "user" (user)
+		"memcached":       "cache",
+		"postgres-db":     "database",
+		"kafka-broker":    "queue",
+		"orders-api":      "api",
+		"mystery-svc":     "service",
+	}
+
+	for name, want := range cases {
+		for i := 0; i < 100; i++ {
+			if got := serviceRole(name); got != want {
+				t.Fatalf("serviceRole(%q) = %q on iteration %d, want %q", name, got, i, want)
+			}
+		}
+	}
+}
+
 func TestSimilarityHelpers(t *testing.T) {
 	if got := ComputeCosineSimilarity([]float64{1, 2}, []float64{1, 2}); got < 0.999 || got > 1.001 {
 		t.Fatalf("expected cosine similarity close to 1, got %v", got)
