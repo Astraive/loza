@@ -549,6 +549,84 @@ func TestHTTPTransport_CustomClientPreservesRetriesAndMetrics(t *testing.T) {
 	}
 }
 
+func TestHTTPTransport_NonRetryableError_NoRetries(t *testing.T) {
+	var attempts atomic.Int32
+	client := &http.Client{
+		Transport: roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+			attempts.Add(1)
+			// A permanent failure. http.Client.Do wraps this in a *url.Error
+			// whose Timeout() is false, so isRetryableError classifies it as
+			// non-retryable and the transport must fail fast.
+			return nil, errors.New("connection refused")
+		}),
+	}
+	transport := NewHTTPTransport(HTTPTransportConfig{
+		MaxRetries: 3,
+		MaxBackoff: 10 * time.Millisecond,
+		Client:     client,
+	})
+
+	req, err := http.NewRequest(http.MethodPost, "https://example.com", nil)
+	if err != nil {
+		t.Fatalf("failed to create request: %v", err)
+	}
+
+	resp, err := transport.Do(context.Background(), req)
+	if err == nil {
+		t.Fatal("expected error for non-retryable failure")
+	}
+	if resp != nil {
+		t.Fatalf("expected nil response for transport error, got %v", resp)
+	}
+	if !strings.Contains(err.Error(), "connection refused") {
+		t.Errorf("expected underlying error in message, got %v", err)
+	}
+	if got := attempts.Load(); got != 1 {
+		t.Errorf("expected exactly 1 attempt for non-retryable error, got %d", got)
+	}
+}
+
+func TestHTTPTransport_RetryableError_StillRetries(t *testing.T) {
+	var attempts atomic.Int32
+	client := &http.Client{
+		Transport: roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+			n := attempts.Add(1)
+			if n < 3 {
+				// A net.Error with Timeout()==true is retryable even after
+				// http.Client.Do wraps it in a *url.Error.
+				return nil, &timeoutError{}
+			}
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(strings.NewReader(`{"status":"ok"}`)),
+				Header:     make(http.Header),
+				Request:    req,
+			}, nil
+		}),
+	}
+	transport := NewHTTPTransport(HTTPTransportConfig{
+		MaxRetries: 3,
+		MaxBackoff: 10 * time.Millisecond,
+		Client:     client,
+	})
+
+	req, err := http.NewRequest(http.MethodPost, "https://example.com", nil)
+	if err != nil {
+		t.Fatalf("failed to create request: %v", err)
+	}
+
+	resp, err := transport.Do(context.Background(), req)
+	if err != nil {
+		t.Fatalf("expected success after retrying timeout errors, got %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", resp.StatusCode)
+	}
+	if got := attempts.Load(); got != 3 {
+		t.Errorf("expected 3 attempts for retryable error, got %d", got)
+	}
+}
+
 func TestHTTPTransport_IsRetryableError(t *testing.T) {
 	transport := NewHTTPTransport(HTTPTransportConfig{})
 
