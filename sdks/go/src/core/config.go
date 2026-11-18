@@ -1102,14 +1102,17 @@ func NewClient(cfg Config) (*Logger, error) {
 	// Step 3: Apply code-level config (highest precedence)
 	merged = mergeCodeConfig(merged, cfg)
 
+	// Step 4: Validate the final config before sanitizing the endpoint.
+	// safeCollectorEndpoint strips URL userinfo, so validating first keeps the
+	// embedded-credential rejection in Config.Validate reachable and avoids
+	// silently dropping credentials supplied in LOZA_COLLECTOR_URL.
+	if err := validateSDKConfig(merged); err != nil {
+		return nil, fmt.Errorf("loza: invalid configuration: %w", err)
+	}
+
 	merged.CollectorURL = safeCollectorEndpoint(merged.CollectorURL)
 	if strings.TrimSpace(merged.CollectorURL) == "" && strings.TrimSpace(merged.CollectorEndpoint) != "" {
 		merged.CollectorURL = safeCollectorEndpoint(merged.CollectorEndpoint)
-	}
-
-	// Step 4: Validate the final config
-	if err := validateSDKConfig(merged); err != nil {
-		return nil, fmt.Errorf("loza: invalid configuration: %w", err)
 	}
 
 	// If no explicit sink was configured, route events to the collector endpoint
