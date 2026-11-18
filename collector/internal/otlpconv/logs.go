@@ -96,19 +96,47 @@ func outcomeFromAttrs(attrs map[string]any) string {
 }
 
 func severityToOutcome(attrs map[string]any) string {
-	if sevNum, ok := attrs["severity_number"]; ok {
-		switch sevNum {
-		case float64(9), float64(10), float64(11), float64(12):
-			return "success"
-		case float64(13), float64(14), float64(15), float64(16):
-			return "partial"
-		case float64(17), float64(18), float64(19), float64(20):
-			return "error"
-		case float64(21), float64(22), float64(23), float64(24):
-			return "error"
-		}
+	sevNum, ok := attrs["severity_number"]
+	if !ok {
+		return "unknown"
+	}
+	n, ok := numericSeverity(sevNum)
+	if !ok {
+		return "unknown"
+	}
+	switch n {
+	case 9, 10, 11, 12:
+		return "success"
+	case 13, 14, 15, 16:
+		return "partial"
+	case 17, 18, 19, 20:
+		return "error"
+	case 21, 22, 23, 24:
+		return "error"
 	}
 	return "unknown"
+}
+
+// numericSeverity normalizes a severity_number attribute to an integer. OTLP
+// integer values decode to int64 while double values decode to float64; those
+// representations never compare equal in a Go interface switch (int64(9) !=
+// float64(9)), so both must be normalized before the outcome lookup.
+func numericSeverity(v any) (int64, bool) {
+	switch n := v.(type) {
+	case int64:
+		return n, true
+	case int32:
+		return int64(n), true
+	case int:
+		return int64(n), true
+	case float64:
+		if n != float64(int64(n)) {
+			return 0, false
+		}
+		return int64(n), true
+	default:
+		return 0, false
+	}
 }
 
 func errorsFromAttrs(attrs map[string]any) []any {
