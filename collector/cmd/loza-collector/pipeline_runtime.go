@@ -46,6 +46,11 @@ func (s *collectorState) acquireIngestCapacity(eventCount int, totalBytes int64)
 		return nil, func() {}
 	}
 
+	// Check and reserve the inflight capacity under one lock; otherwise two
+	// concurrent ingests can both observe a free slot and both reserve it.
+	s.inflightMu.Lock()
+	defer s.inflightMu.Unlock()
+
 	if s.cfg.maxInflightRequests > 0 && s.metrics.inflightRequests.Load() >= int64(s.cfg.maxInflightRequests) {
 		return &governanceError{
 			Code:      "backpressure",
