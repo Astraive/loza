@@ -109,8 +109,8 @@ func (s *failingSalienceStore) Save(context.Context, *models.SalienceScore) erro
 	return s.saveErr
 }
 
-func (*failingSalienceStore) Get(context.Context, string) (float64, error) {
-	return 0.5, nil
+func (*failingSalienceStore) Get(context.Context, string) (*models.SalienceScore, error) {
+	return &models.SalienceScore{Score: 0.5}, nil
 }
 
 func (*failingSalienceStore) List(context.Context, int) ([]*models.SalienceScore, error) {
