@@ -571,7 +571,10 @@ type HTTPBatchSinkConfig struct {
 	FlushInterval time.Duration
 	Gzip          bool
 	Client        *http.Client
-	OnError       func(error)
+	// Transport, when set, is used for delivery and supplies retry/backoff
+	// behavior in addition to the timeout/connection settings on Client.
+	Transport *HTTPTransport
+	OnError   func(error)
 }
 
 type httpBatchSink struct {
@@ -708,6 +711,17 @@ func (s *httpBatchSink) send(ctx context.Context, payload []byte) error {
 	for k, v := range s.cfg.Headers {
 		req.Header.Set(k, v)
 	}
+	if s.cfg.Transport != nil {
+		transportResp, err := s.cfg.Transport.Do(ctx, req)
+		if err != nil {
+			return err
+		}
+		if transportResp.StatusCode >= 300 {
+			return fmt.Errorf("httpbatch: unexpected status %d: %s", transportResp.StatusCode, truncateErrorBody(string(transportResp.Body)))
+		}
+		return nil
+	}
+
 	resp, err := s.cfg.Client.Do(req)
 	if err != nil {
 		return err
