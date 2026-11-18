@@ -271,7 +271,7 @@ func FetchDLQ(baseURL string) ([]byte, error) {
 }
 
 func FetchDLQItem(baseURL, id string) ([]byte, error) {
-	return getJSON(baseURL, "/dlq/"+id)
+	return getJSON(baseURL, "/dlq/"+url.PathEscape(id))
 }
 
 func ReplayDLQ(ctx context.Context, baseURL string) ([]byte, error) {
@@ -279,7 +279,7 @@ func ReplayDLQ(ctx context.Context, baseURL string) ([]byte, error) {
 }
 
 func ReplayDLQItem(ctx context.Context, baseURL, id string) ([]byte, error) {
-	return postJSON(ctx, baseURL, "/dlq/"+id+"/replay", nil)
+	return postJSON(ctx, baseURL, "/dlq/"+url.PathEscape(id)+"/replay", nil)
 }
 
 func FetchSchema(baseURL string) ([]byte, error) {
@@ -315,15 +315,15 @@ func AuditPII(ctx context.Context, baseURL string, payload []byte) ([]byte, erro
 }
 
 func DeleteEventsByTenant(ctx context.Context, baseURL, tenantID, reason string) ([]byte, error) {
-	return deleteJSON(ctx, baseURL, "/events/by-tenant/"+tenantID, reason)
+	return deleteJSON(ctx, baseURL, "/events/by-tenant/"+url.PathEscape(tenantID), reason)
 }
 
 func DeleteEventsByUser(ctx context.Context, baseURL, userID, reason string) ([]byte, error) {
-	return deleteJSON(ctx, baseURL, "/events/by-user/"+userID, reason)
+	return deleteJSON(ctx, baseURL, "/events/by-user/"+url.PathEscape(userID), reason)
 }
 
 func DeleteEventByID(ctx context.Context, baseURL, eventID, reason string) ([]byte, error) {
-	return deleteJSON(ctx, baseURL, "/events/"+eventID, reason)
+	return deleteJSON(ctx, baseURL, "/events/"+url.PathEscape(eventID), reason)
 }
 
 func FetchSinks(baseURL string) ([]byte, error) {
@@ -331,15 +331,15 @@ func FetchSinks(baseURL string) ([]byte, error) {
 }
 
 func FetchSinkHealth(baseURL, name string) ([]byte, error) {
-	return getJSON(baseURL, "/sinks/"+name)
+	return getJSON(baseURL, "/sinks/"+url.PathEscape(name))
 }
 
 func TestSink(ctx context.Context, baseURL, name string) ([]byte, error) {
-	return postJSON(ctx, baseURL, "/sinks/"+name+"/test", nil)
+	return postJSON(ctx, baseURL, "/sinks/"+url.PathEscape(name)+"/test", nil)
 }
 
 func DeleteDLQItem(ctx context.Context, baseURL, id string) ([]byte, error) {
-	return deleteJSON(ctx, baseURL, "/dlq/"+id, "")
+	return deleteJSON(ctx, baseURL, "/dlq/"+url.PathEscape(id), "")
 }
 
 func PublishBlueprint(ctx context.Context, baseURL string, payload []byte) ([]byte, error) {
@@ -355,11 +355,11 @@ func FetchQuarantine(baseURL string) ([]byte, error) {
 }
 
 func ReplayQuarantineItem(ctx context.Context, baseURL, id string) ([]byte, error) {
-	return postJSON(ctx, baseURL, "/quarantine/"+id+"/replay", nil)
+	return postJSON(ctx, baseURL, "/quarantine/"+url.PathEscape(id)+"/replay", nil)
 }
 
 func DeleteQuarantineItem(ctx context.Context, baseURL, id string) ([]byte, error) {
-	return deleteJSON(ctx, baseURL, "/quarantine/"+id, "")
+	return deleteJSON(ctx, baseURL, "/quarantine/"+url.PathEscape(id), "")
 }
 
 func CreateAPIKey(ctx context.Context, baseURL string, payload []byte) ([]byte, error) {
@@ -367,11 +367,11 @@ func CreateAPIKey(ctx context.Context, baseURL string, payload []byte) ([]byte, 
 }
 
 func RevokeAPIKey(ctx context.Context, baseURL, id string) ([]byte, error) {
-	return postJSON(ctx, baseURL, "/keys/"+id+"/revoke", nil)
+	return postJSON(ctx, baseURL, "/keys/"+url.PathEscape(id)+"/revoke", nil)
 }
 
 func RotateAPIKey(ctx context.Context, baseURL, id string) ([]byte, error) {
-	return postJSON(ctx, baseURL, "/keys/"+id+"/rotate", nil)
+	return postJSON(ctx, baseURL, "/keys/"+url.PathEscape(id)+"/rotate", nil)
 }
 
 func WatchStream(ctx context.Context, baseURL string, filters map[string]string) (io.ReadCloser, error) {
