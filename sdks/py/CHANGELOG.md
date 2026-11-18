@@ -1,5 +1,21 @@
 # Changelog
 
+## [Unreleased]
+
+### Security
+
+- `email_hash` and `ip_hash` now pseudonymize with keyed HMAC-SHA256 instead of
+  unkeyed SHA-256. Supply a private key with `LOZA_PII_HASH_SECRET` or the
+  `secret=` keyword; otherwise a random per-process key is used.
+
+### Migration
+
+- Pseudonym values are no longer equal to the plain SHA-256 digest of the
+  normalized value. Consumers that stored or compared previous hashes must
+  re-baseline them and should configure `LOZA_PII_HASH_SECRET` to keep
+  pseudonyms stable across processes and restarts. Existing call sites keep
+  working because the key is an optional keyword argument.
+
 ## [0.3.4] - 2026-08-26
 
 ### Changed
