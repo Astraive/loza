@@ -968,11 +968,19 @@ redactor := loza.ComposeRedactors(
 |---|---|
 | `DefaultRedactor()` | Redacts keys matching common PII patterns (password, secret, token, etc.) |
 | `RedactKeys(keys...)` | Replaces values with `[REDACTED]` |
-| `HashKeys(keys...)` | Replaces values with a SHA-256 hash |
+| `HashKeys(keys...)` | Replaces values with a keyed HMAC-SHA256 digest (ephemeral per-process key) |
+| `HashKeysWithSecret(secret, keys...)` | Same, with a caller-supplied secret for stable digests across processes |
 | `MaskKeys(keys...)` | Replaces values with `****` |
 | `DropKeys(keys...)` | Removes the attr entirely |
 | `RedactPatterns(patterns...)` | Redacts values matching regex patterns |
 | `ComposeRedactors(redactors...)` | Chains multiple redactors in order |
+
+`HashKeys` uses a keyed MAC (HMAC-SHA256), not a bare digest: an unkeyed hash of
+a low-entropy identifier (email, SSN, user ID) can be reversed with a dictionary
+or rainbow table. Its key is generated randomly once per process, so digests are
+stable within a run but cannot be compared across restarts or replicas. If you
+need stable cross-process pseudonyms, pass a secret loaded from your secret
+manager to `HashKeysWithSecret` and never hardcode that secret in source.
 
 ---
 

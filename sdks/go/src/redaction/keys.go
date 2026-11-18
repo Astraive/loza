@@ -19,6 +19,12 @@ func HashKeys(keys ...string) core.Redactor {
 	return core.HashKeys(keys...)
 }
 
+// HashKeysWithSecret returns a Redactor that hashes values with a caller-supplied
+// secret, producing stable digests across processes and restarts.
+func HashKeysWithSecret(secret []byte, keys ...string) core.Redactor {
+	return core.HashKeysWithSecret(secret, keys...)
+}
+
 // MaskKeys returns a Redactor that partially masks values for given keys.
 func MaskKeys(keys ...string) core.Redactor {
 	return core.MaskKeys(keys...)
