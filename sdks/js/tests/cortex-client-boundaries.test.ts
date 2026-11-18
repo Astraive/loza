@@ -2,7 +2,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import {
-  CortexClient, normalizeIncidentContext, normalizeGraphView, normalizeRemediation,
+  CortexClient, CortexHttpError, normalizeIncidentContext, normalizeGraphView, normalizeRemediation,
   validateIncidentContext, validateGraphView, validateRemediation, validateFeedback,
 } from '../src/cortex/client.ts';
 
@@ -76,6 +76,42 @@ describe('Cortex client boundaries', () => {
       await client.recordFeedback({ incident_id: 'id', outcome: 'resolved' });
       const unreachable = new CortexClient({ url: 'http://127.0.0.1:1', timeout: 10 });
       assert.equal(await unreachable.health(), false);
+    } finally {
+      await stopCortex(server);
+    }
+  });
+
+  it('rejects writes and reads when cortex returns an error status', async () => {
+    const server = http.createServer((_req, res) => {
+      res.statusCode = 500;
+      res.setHeader('content-type', 'application/json');
+      res.end(JSON.stringify({ error: 'bad api key' }));
+    });
+    const gate = Promise.withResolvers<void>();
+    server.once('error', gate.reject);
+    server.listen(0, '127.0.0.1', () => gate.resolve());
+    await gate.promise;
+    const address = server.address();
+    if (!address || typeof address === 'string') throw new Error('missing address');
+    const client = new CortexClient({ url: `http://127.0.0.1:${address.port}`, apiKey: 'bad' });
+    try {
+      // Every write/void caller must surface the failure instead of resolving silently.
+      await assert.rejects(client.ingestBatch([{ event: 'one' }]), (err: unknown) => {
+        assert.ok(err instanceof CortexHttpError);
+        assert.equal(err.status, 500);
+        assert.match(err.message, /cortex returned 500/);
+        assert.match(err.message, /bad api key/);
+        assert.match(err.body, /bad api key/);
+        return true;
+      });
+      await assert.rejects(client.ingestJsonl([{ event: 'one' }]), /cortex returned 500/);
+      await assert.rejects(client.recordRemediation({ incident_id: 'id', action: 'fix' }), /cortex returned 500/);
+      await assert.rejects(client.recordFeedback({ incident_id: 'id', outcome: 'resolved' }), /cortex returned 500/);
+      // Reads go through the same request path and must fail too.
+      await assert.rejects(client.reconstruct('incident'), /cortex returned 500/);
+      // Health/readiness probes still resolve to false rather than throwing.
+      assert.equal(await client.health(), false);
+      assert.equal(await client.ready(), false);
     } finally {
       await stopCortex(server);
     }

@@ -126,6 +126,20 @@ export function validateFeedback(f: any): void {
   if (!f.outcome) throw new Error('cortex: outcome is required');
 }
 
+/** Error thrown when cortex responds with a non-success HTTP status. */
+export class CortexHttpError extends Error {
+  readonly status: number;
+  readonly body: string;
+
+  constructor(status: number, body: string) {
+    const detail = body.length > 1000 ? `${body.slice(0, 1000)}…` : body;
+    super(`cortex returned ${status}: ${detail}`);
+    this.name = 'CortexHttpError';
+    this.status = status;
+    this.body = body;
+  }
+}
+
 /** Client for loza-cortex HTTP API. */
 export class CortexClient {
   private url: string;
@@ -258,7 +272,12 @@ export class CortexClient {
           data += chunk.toString();
         });
         res.on('end', () => {
-          resolve({ statusCode: res.statusCode || 0, body: data });
+          const statusCode = res.statusCode || 0;
+          if (statusCode >= 300) {
+            reject(new CortexHttpError(statusCode, data));
+            return;
+          }
+          resolve({ statusCode, body: data });
         });
       });
 
