@@ -2,18 +2,22 @@ package topology
 
 import (
 	"context"
+	"database/sql"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/astraive/loza/cortex/internal/models"
+	"github.com/astraive/loza/cortex/internal/storage"
 )
 
 type fakeTopologyStore struct {
 	aliasByKey map[string]*models.ServiceAlias
 	history    map[string][]*models.ServiceAlias
 	saved      []*models.ServiceAlias
+	aliasErr   error
 }
 
 func (f *fakeTopologyStore) SaveAlias(_ context.Context, alias *models.ServiceAlias) error {
@@ -22,10 +26,13 @@ func (f *fakeTopologyStore) SaveAlias(_ context.Context, alias *models.ServiceAl
 }
 
 func (f *fakeTopologyStore) GetAlias(_ context.Context, alias string, timestamp string) (*models.ServiceAlias, error) {
+	if f.aliasErr != nil {
+		return nil, f.aliasErr
+	}
 	if item, ok := f.aliasByKey[alias+"|"+timestamp]; ok {
 		return item, nil
 	}
-	return nil, errors.New("not found")
+	return nil, sql.ErrNoRows
 }
 
 func (f *fakeTopologyStore) GetHistory(_ context.Context, service string) ([]*models.ServiceAlias, error) {
@@ -50,6 +57,46 @@ func TestResolveService(t *testing.T) {
 	}
 	if got != "svc-b" {
 		t.Fatalf("expected canonical service, got %s", got)
+	}
+}
+
+func TestResolveServiceNotFoundFallsBackToAlias(t *testing.T) {
+	ts := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	tests := []struct {
+		name string
+		err  error
+	}{
+		{name: "no rows", err: sql.ErrNoRows},
+		{name: "wrapped no rows", err: fmt.Errorf("lookup: %w", sql.ErrNoRows)},
+		{name: "storage not found", err: storage.ErrNotFound},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resolver := NewResolver(&fakeTopologyStore{aliasErr: tt.err})
+			got, err := resolver.ResolveService(context.Background(), "svc-a", ts)
+			if err != nil {
+				t.Fatalf("resolve: %v", err)
+			}
+			if got != "svc-a" {
+				t.Fatalf("expected original alias as identity fallback, got %s", got)
+			}
+		})
+	}
+}
+
+func TestResolveServicePropagatesStorageError(t *testing.T) {
+	ts := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	storeErr := errors.New("db connection lost")
+	resolver := NewResolver(&fakeTopologyStore{aliasErr: storeErr})
+
+	got, err := resolver.ResolveService(context.Background(), "svc-a", ts)
+	if !errors.Is(err, storeErr) {
+		t.Fatalf("expected storage error to be propagated, got %v", err)
+	}
+	if got != "" {
+		t.Fatalf("expected empty result on error, got %s", got)
 	}
 }
 
