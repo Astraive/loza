@@ -2,9 +2,11 @@ package commands
 
 import (
 	"context"
+	"encoding/csv"
 	"encoding/json"
 	"flag"
 	"fmt"
+	"os"
 	"strconv"
 	"strings"
 
@@ -87,7 +89,6 @@ func QueryCommand(ctx context.Context, cfg config.Config, args []string) error {
 	}
 }
 
-
 func printCSV(result []byte) error {
 	var data map[string]any
 	if err := json.Unmarshal(result, &data); err != nil {
@@ -100,12 +101,18 @@ func printCSV(result []byte) error {
 	for _, c := range cols {
 		headers = append(headers, fmt.Sprintf("%v", c))
 	}
-	fmt.Println(strings.Join(headers, ","))
+	w := csv.NewWriter(os.Stdout)
+	if err := w.Write(headers); err != nil {
+		return err
+	}
 	for _, r := range rows {
 		cells := extractRow(r, cols)
-		fmt.Println(strings.Join(cells, ","))
+		if err := w.Write(cells); err != nil {
+			return err
+		}
 	}
-	return nil
+	w.Flush()
+	return w.Error()
 }
 
 func printTable(result []byte) error {
