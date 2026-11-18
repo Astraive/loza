@@ -49,6 +49,44 @@ func TestPrometheusStatsHandlerExposesMetrics(t *testing.T) {
 	}
 }
 
+// TestValidationErrorDoesNotLeakBufferSize reproduces the case where an event
+// is tracked by OnEventCreated but fails strict validation (and therefore only
+// reports through OnError). Without a matching decrement, buffer_size drifts
+// upward forever even though no event is queued for delivery.
+func TestValidationErrorDoesNotLeakBufferSize(t *testing.T) {
+	stats := NewPrometheusStatsHandler("loza_errbuf", 4)
+	cfg := Test()
+	cfg.Strict = true
+	cfg.Service = "test"
+	cfg.StatsHandler = stats
+
+	l, err := New(cfg)
+	if err != nil {
+		t.Fatalf("new logger: %v", err)
+	}
+
+	// The invalid custom attr key is rejected by strict validation, which
+	// reports through OnError without emitting or dropping the event.
+	ctx := l.StartEvent(context.Background(), Params{
+		Event:  "validation.error",
+		Custom: []Attr{String("bad key", "x")},
+	})
+	_ = l.Finish(ctx, "success")
+	if err := l.Emit(ctx); err == nil {
+		t.Fatalf("expected strict validation to reject the event")
+	}
+
+	rec := httptest.NewRecorder()
+	stats.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	body := rec.Body.String()
+	if !strings.Contains(body, "loza_errbuf_events_created_total 1") {
+		t.Fatalf("expected the event to be tracked as created, got %s", body)
+	}
+	if !strings.Contains(body, "loza_errbuf_buffer_size 0") {
+		t.Fatalf("expected buffer_size to return to 0 after a validation error, got %s", body)
+	}
+}
+
 func TestDecrementBufferSizeClampsAtZero(t *testing.T) {
 	mc := NewMetricsCollector("loza_clamp", 8)
 	for i := 0; i < 5; i++ {
