@@ -70,8 +70,11 @@ func (ms *MultiServer) Run(ctx context.Context) error {
 	var startErr error
 	select {
 	case startErr = <-serverCh:
-		ms.closeStopCh()
-		ms.stopWG.Wait()
+		// Tear down the servers that did start. Their Start calls stay
+		// blocked until Stop is called, so waiting without shutting them
+		// down first would deadlock here. Keep the start error as the
+		// cause reported to the caller.
+		_ = ms.shutdown(ctx)
 		return startErr
 	case <-ms.stopCh:
 		return ms.shutdown(ctx)
