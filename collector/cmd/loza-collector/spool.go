@@ -517,13 +517,24 @@ func (s *collectorState) replaySpool() error {
 		}
 
 		decoded := append([]byte(nil), line...)
+		quarantineReason := ""
 		if encryptionEnabled(s.cfg.storageEncryptionKey) {
-			if plain, err := decryptBlob(decoded, s.cfg.storageEncryptionKey); err == nil {
+			plain, err := decryptBlob(decoded, s.cfg.storageEncryptionKey)
+			if err != nil {
+				logJSON("warn", "spool_replay_decrypt_failed", map[string]any{
+					"error":        err.Error(),
+					"start_offset": item.startOffset,
+				})
+				quarantineReason = "decryption_failed"
+			} else {
 				decoded = plain
 			}
 		}
-		if !json.Valid(decoded) {
-			s.quarantineBadSpoolLine(decoded)
+		if quarantineReason == "" && !json.Valid(decoded) {
+			quarantineReason = "invalid_spool_record"
+		}
+		if quarantineReason != "" {
+			s.quarantineBadSpoolLine(decoded, quarantineReason)
 			item.skip = true
 			if err := s.enqueueDelivery(item); err != nil {
 				return fmt.Errorf("enqueue invalid spool record: %w", err)
@@ -554,13 +565,13 @@ func (s *collectorState) replaySpool() error {
 	return nil
 }
 
-func (s *collectorState) quarantineBadSpoolLine(raw []byte) {
+func (s *collectorState) quarantineBadSpoolLine(raw []byte, reason string) {
 	if s.spoolBadFile == "" || len(bytes.TrimSpace(raw)) == 0 {
 		return
 	}
 	entry := map[string]any{
 		"timestamp": time.Now().UTC().Format(time.RFC3339Nano),
-		"reason":    "invalid_spool_record",
+		"reason":    reason,
 		"raw":       string(raw),
 	}
 	encoded, err := json.Marshal(entry)
