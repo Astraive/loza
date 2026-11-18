@@ -5,6 +5,7 @@ pub use httpbatch::*;
 use crate::config::MemorySinkStore;
 use crate::sink;
 use crate::SinkConfig;
+use std::io;
 
 pub fn stdout() -> SinkConfig {
     SinkConfig::Stdout
@@ -41,8 +42,44 @@ pub fn otlp_sink(endpoint: impl Into<String>) -> SinkConfig {
     }
 }
 
-pub fn drain(sink_cfg: &SinkConfig) {
-    let _ = sink::flush_sink(sink_cfg);
+/// Flush `sink_cfg`, propagating any I/O error to the caller.
+///
+/// # Migration note
+/// This function previously returned `()` and silently discarded the result
+/// of `flush_sink`. It now returns `io::Result<()>` so failed flushes (for
+/// example a broken pipe on stdout/stderr) are observable. Callers that want
+/// the old fire-and-forget behaviour can use `let _ = drain(cfg);` or
+/// `drain(cfg).ok();`.
+pub fn drain(sink_cfg: &SinkConfig) -> io::Result<()> {
+    drain_with(sink_cfg, sink::flush_sink)
+}
+
+/// Flush `sink_cfg` through `flush`, returning the result unchanged.
+///
+/// This is the single propagation point exercised by the regression tests.
+fn drain_with(
+    sink_cfg: &SinkConfig,
+    flush: impl FnOnce(&SinkConfig) -> io::Result<()>,
+) -> io::Result<()> {
+    flush(sink_cfg)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn drain_propagates_flush_failure() {
+        let sink = stdout();
+        let result = drain_with(&sink, |_| Err(io::Error::other("flush failed")));
+        assert_eq!(result.unwrap_err().to_string(), "flush failed");
+    }
+
+    #[test]
+    fn drain_returns_ok_for_non_io_sinks() {
+        assert!(drain(&memory()).is_ok());
+        assert!(drain(&noop()).is_ok());
+    }
 }
 
 pub fn pause(sink_cfg: &SinkConfig) {

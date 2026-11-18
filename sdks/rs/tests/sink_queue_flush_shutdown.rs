@@ -6,7 +6,7 @@ fn sink_queue_flush_shutdown_helpers_work() {
     let _otlp = loza::otlp_sink("http://127.0.0.1:4318");
     let sinks = loza::multi_sink(&[memory.clone(), noop]);
     assert_eq!(sinks.len(), 2);
-    loza::drain(&memory);
+    loza::drain(&memory).expect("drain");
     loza::pause(&memory);
     loza::resume(&memory);
     assert_eq!(loza::queue_size(&memory), 0);
