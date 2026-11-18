@@ -247,13 +247,34 @@ func (t *HTTPTransport) calculateBackoff(attempt int, retryAfter time.Duration) 
 	baseDelay := 1 * time.Second
 	exponentialDelay := float64(baseDelay) * math.Pow(2, float64(attempt))
 
+	// Cap the exponential term before adding jitter. At high attempt counts
+	// the float exceeds MaxInt64 and converting it directly to time.Duration
+	// wraps negative, slipping past the maxBackoff guard and turning the
+	// backoff into an immediate retry. Capping here also keeps math.Pow's
+	// +Inf from producing NaN once jitter is applied.
+	maxBackoffFloat := float64(t.maxBackoff)
+	if exponentialDelay > maxBackoffFloat {
+		exponentialDelay = maxBackoffFloat
+	}
+
 	// Add jitter (±25% of the delay)
 	jitter := exponentialDelay * 0.25 * (rand.Float64()*2 - 1)
-	delay := time.Duration(exponentialDelay + jitter)
+	delayFloat := exponentialDelay + jitter
 
-	// Cap at max backoff
+	// Clamp to [0, maxBackoff] in float space before the duration conversion.
+	if delayFloat > maxBackoffFloat {
+		delayFloat = maxBackoffFloat
+	}
+	if delayFloat < 0 {
+		delayFloat = 0
+	}
+
+	delay := time.Duration(delayFloat)
 	if delay > t.maxBackoff {
 		delay = t.maxBackoff
+	}
+	if delay < 0 {
+		delay = 0
 	}
 
 	return delay

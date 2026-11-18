@@ -344,6 +344,31 @@ func TestHTTPTransport_MaxBackoffCap(t *testing.T) {
 	}
 }
 
+func TestHTTPTransport_BackoffOverflowAtHighAttempts(t *testing.T) {
+	transport := NewHTTPTransport(HTTPTransportConfig{
+		MaxRetries: 64,
+		MaxBackoff: 30 * time.Second,
+	})
+
+	// 1s * 2^34 exceeds MaxInt64. Converting that float64 directly to
+	// time.Duration wraps negative, bypassing the maxBackoff cap so
+	// time.After fires immediately. Beyond ~1023 math.Pow yields +Inf, which
+	// must not turn into NaN once jitter is applied either.
+	attempts := []int{33, 34, 35, 62, 100, 1000, 1 << 20}
+	for _, attempt := range attempts {
+		for i := 0; i < 50; i++ {
+			backoff := transport.calculateBackoff(attempt, 0)
+			if backoff < 0 {
+				t.Fatalf("attempt %d: expected non-negative backoff, got %s", attempt, backoff)
+			}
+			if backoff > transport.maxBackoff {
+				t.Fatalf("attempt %d: expected backoff capped at %s, got %s",
+					attempt, transport.maxBackoff, backoff)
+			}
+		}
+	}
+}
+
 func TestHTTPTransport_RetryAfterOverridesExponentialBackoff(t *testing.T) {
 	transport := NewHTTPTransport(HTTPTransportConfig{
 		MaxRetries: 3,
