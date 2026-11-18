@@ -225,3 +225,74 @@ func TestCallbacksConcurrentWithAliasRegistration(t *testing.T) {
 
 	wg.Wait()
 }
+
+func TestRegisterAliasOverlapChecksFullIntervals(t *testing.T) {
+	day := 24 * time.Hour
+	base := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
+	at := func(d time.Duration) time.Time { return base.Add(d) }
+
+	tests := []struct {
+		name         string
+		existingFrom time.Time
+		existingTo   *time.Time
+		newFrom      time.Time
+		newTo        *time.Time
+		wantOverlap  bool
+	}{
+		{
+			name:         "genuine partial overlap is rejected",
+			existingFrom: at(0), existingTo: ptrTime(at(10 * day)),
+			newFrom: at(5 * day), newTo: ptrTime(at(20 * day)), wantOverlap: true,
+		},
+		{
+			name:         "new alias entirely before existing is allowed",
+			existingFrom: at(10 * day), existingTo: ptrTime(at(20 * day)),
+			newFrom: at(0), newTo: ptrTime(at(2 * day)), wantOverlap: false,
+		},
+		{
+			name:         "new alias ending before open-ended existing starts is allowed",
+			existingFrom: at(10 * day), existingTo: nil,
+			newFrom: at(0), newTo: ptrTime(at(2 * day)), wantOverlap: false,
+		},
+		{
+			name:         "existing alias entirely before new open-ended alias is allowed",
+			existingFrom: at(0), existingTo: ptrTime(at(2 * day)),
+			newFrom: at(5 * day), newTo: nil, wantOverlap: false,
+		},
+		{
+			name:         "touching endpoints do not overlap",
+			existingFrom: at(0), existingTo: ptrTime(at(10 * day)),
+			newFrom: at(10 * day), newTo: ptrTime(at(20 * day)), wantOverlap: false,
+		},
+		{
+			name:         "open-ended existing still blocks a later alias",
+			existingFrom: at(0), existingTo: nil,
+			newFrom: at(5 * day), newTo: nil, wantOverlap: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := &fakeTopologyStore{
+				history: map[string][]*models.ServiceAlias{
+					"svc-a": {
+						{Canonical: "svc-b", ValidFrom: tt.existingFrom, ValidTo: tt.existingTo},
+					},
+				},
+			}
+			resolver := NewResolver(store)
+			err := resolver.RegisterAlias(context.Background(), "svc-a", "svc-c", tt.newFrom, tt.newTo)
+			if tt.wantOverlap {
+				if err == nil {
+					t.Fatal("expected overlap error, got nil")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("expected registration to succeed, got: %v", err)
+			}
+		})
+	}
+}
+
+func ptrTime(t time.Time) *time.Time { return &t }
