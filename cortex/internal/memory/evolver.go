@@ -37,7 +37,12 @@ func DefaultConfig() Config {
 }
 
 // FromConfig creates a Config from the cortex config file values.
+// A non-positive decayPeriod is normalized to the default so the resulting
+// Config never carries an interval that would make decay undefined.
 func FromConfig(decayPeriod time.Duration, decayRate, archiveThreshold, mergeTolerance, featureVectorAlpha float64) Config {
+	if decayPeriod <= 0 {
+		decayPeriod = DefaultConfig().DecayPeriod
+	}
 	return Config{
 		DecayPeriod:        decayPeriod,
 		DecayRate:          decayRate,
@@ -50,17 +55,17 @@ func FromConfig(decayPeriod time.Duration, decayRate, archiveThreshold, mergeTol
 // SignatureEvolver handles long-horizon operational memory:
 // behavioral equivalence, signature merging, decay, and cascading renames.
 type SignatureEvolver struct {
-	cfg           Config
+	cfg            Config
 	signatureStore storage.SignatureStore
-	topology      *topology.Resolver
+	topology       *topology.Resolver
 }
 
 // NewSignatureEvolver creates a new evolver and registers topology callbacks.
 func NewSignatureEvolver(cfg Config, signatureStore storage.SignatureStore, topo *topology.Resolver) *SignatureEvolver {
 	ev := &SignatureEvolver{
-		cfg:           cfg,
+		cfg:            cfg,
 		signatureStore: signatureStore,
-		topology:      topo,
+		topology:       topo,
 	}
 
 	// Register callback for cascading renames
@@ -140,6 +145,13 @@ func (ev *SignatureEvolver) Decay(ctx context.Context) (int, error) {
 	archived, err := ev.signatureStore.ArchiveStale(ctx, threshold)
 	if err != nil {
 		return 0, fmt.Errorf("failed to archive stale signatures: %w", err)
+	}
+
+	// A non-positive DecayPeriod makes the decay interval undefined. Skip
+	// per-signature decay rather than dividing by zero. Archiving above is
+	// independent of this value and has already been applied.
+	if ev.cfg.DecayPeriod <= 0 {
+		return archived, nil
 	}
 
 	sigs, err := ev.signatureStore.List(ctx, 10000)
