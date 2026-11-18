@@ -324,6 +324,7 @@ type collectorState struct {
 	diskHealthy         atomic.Bool
 	rateLimiter         *rate.Limiter
 	metrics             collectorMetrics
+	inflightMu          sync.Mutex
 	rng                 *rand.Rand
 	spoolFile           *os.File
 	spoolPosFile        string
