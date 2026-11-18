@@ -6,6 +6,7 @@ import { lozaKoaMiddleware } from '../src/middleware/koa.ts';
 import { lozaFastifyPlugin } from '../src/middleware/fastify.ts';
 import { lozaHonoMiddleware } from '../src/middleware/hono.ts';
 import { lozaNextMiddleware } from '../src/middleware/next.ts';
+import { Logger } from '../src/core/logger.ts';
 
 type HttpResponse = {
   statusCode: number;
@@ -110,6 +111,48 @@ describe('framework middleware', () => {
     const failedReply = Object.assign(Promise.reject(new Error('failed')), { statusCode: 503 });
     failedReply.catch(() => {});
     await failure({ method: 'POST', url: '/bad', headers: {}, socket: {}, ip: '127.0.0.1' }, failedReply);
+  });
+
+  it('Fastify middleware strips query strings from path, route, and event', async () => {
+    const original = Logger.prototype.startHTTPEvent;
+    const captured: any[] = [];
+    (Logger.prototype as any).startHTTPEvent = function (params: any) {
+      captured.push(params);
+      return original.call(this, params);
+    };
+    try {
+      const plugin = lozaFastifyPlugin({ service: 'fastify' });
+      const makeReply = () => Object.assign(Promise.resolve(), { statusCode: 200 });
+
+      // Fastify exposes a stable route pattern: the query string still must not leak.
+      await plugin(
+        { method: 'GET', url: '/login?token=super-secret&user=alice', routeOptions: { url: '/login' }, headers: {}, ip: '1.2.3.4' },
+        makeReply(),
+      );
+      // With no route pattern, the fallback route must be the query-stripped pathname.
+      await plugin(
+        { method: 'POST', url: '/search?q=private-value', headers: {}, ip: '1.2.3.4' },
+        makeReply(),
+      );
+
+      assert.equal(captured.length, 2);
+      assert.equal(captured[0].path, '/login');
+      assert.equal(captured[0].route, '/login');
+      assert.equal(captured[0].event, 'GET /login');
+      assert.equal(captured[1].path, '/search');
+      assert.equal(captured[1].route, '/search');
+      assert.equal(captured[1].event, 'POST /search');
+
+      for (const params of captured) {
+        assert.ok(!String(params.path).includes('?'));
+        assert.ok(!String(params.route).includes('?'));
+        assert.ok(!String(params.event).includes('?'));
+        assert.ok(!JSON.stringify(params).includes('super-secret'));
+        assert.ok(!JSON.stringify(params).includes('private-value'));
+      }
+    } finally {
+      (Logger.prototype as any).startHTTPEvent = original;
+    }
   });
 
   it('finishes Hono events on success and thrown errors', async () => {
