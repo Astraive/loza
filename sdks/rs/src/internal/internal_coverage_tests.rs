@@ -228,4 +228,42 @@ mod tests {
             server.join().unwrap();
         }
     }
+
+    #[test]
+    fn disk_buffer_eviction_preserves_non_json_files() {
+        let dir = std::env::temp_dir().join(format!(
+            "loza-rs-evict-json-only-{}-{}",
+            std::process::id(),
+            fastrand::u64(..)
+        ));
+        let disk = queue::DiskOfflineBuffer::new(&dir, 1);
+
+        // A non-JSON file whose name sorts before the timestamp-named JSON files.
+        let unrelated = dir.join("!keep-me.txt");
+        std::fs::write(&unrelated, "do not delete").unwrap();
+
+        // Each enqueue writes a JSON file and triggers eviction (max_files = 1).
+        disk.enqueue("first").unwrap();
+        disk.enqueue("second").unwrap();
+
+        assert!(
+            unrelated.exists(),
+            "eviction must not delete unrelated non-JSON files"
+        );
+
+        let json_files = std::fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(|entry| entry.ok())
+            .filter(|entry| {
+                entry
+                    .path()
+                    .extension()
+                    .map(|ext| ext == "json")
+                    .unwrap_or(false)
+            })
+            .count();
+        assert_eq!(json_files, 1, "eviction must still cap JSON files");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
 }
