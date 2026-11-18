@@ -65,7 +65,14 @@ class Middleware:
             FinishError(ctx, exc, Bool("panic", True))
             raise
         finally:
-            Emit(ctx)
+            # Emission is best-effort: a telemetry failure (including a sink
+            # BaseException re-raised by panic recovery) must never replace an
+            # application exception already in flight, nor break a successful
+            # request.
+            try:
+                Emit(ctx)
+            except BaseException:
+                pass
 
 
 def _header(scope, wanted):
