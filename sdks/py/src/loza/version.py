@@ -26,7 +26,7 @@ def _load_version() -> str:
                         value = stripped.split(":", 1)[1].strip().strip("\"'")
                         if value:
                             return value
-            except OSError:
+            except (OSError, UnicodeDecodeError):
                 continue
     return _FALLBACK_VERSION
 
