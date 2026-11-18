@@ -501,9 +501,28 @@ class Logger:
         ctx.finish("abandoned")
 
     def retry(self, ctx: EventContext, *attrs: Attr, **named: Any) -> None:
+        """Reopen a closed emission so the event can be delivered again.
+
+        A sink failure leaves an event in ``EVENT_DELIVERY_FAILED`` with
+        ``emitted=False``. Such an event is otherwise permanently closed:
+        ``enrich``/``finish`` reject it via ``_ensure_mutable`` and ``emit``
+        raises ``EventClosedError``, so the payload can never be re-sent.
+        Reopen that state here so a subsequent ``emit()`` re-delivers it, and
+        record the ``retried`` outcome without failing on an already finished
+        event.
+        """
+        if ctx.event_state in {EVENT_DELIVERY_FAILED, EVENT_EMITTED}:
+            ctx.event_state = EVENT_FINISHED
+            ctx.emitted = False
+            ctx.emitted_payload = ""
         if attrs or named:
             self.enrich(ctx, *attrs, **named)
-        ctx.finish("retried")
+        if ctx.finished_at is None:
+            ctx.finish("retried")
+        else:
+            # A previously finished event cannot be finished twice; the reopen
+            # above still makes it emittable, so just update the outcome.
+            ctx.outcome = "retried"
 
     def partial(self, ctx: EventContext, reason: str = "partial", *attrs: Attr, **named: Any) -> None:
         if attrs or named:
