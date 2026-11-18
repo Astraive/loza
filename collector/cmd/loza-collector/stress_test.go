@@ -535,15 +535,9 @@ func TestStressQueryPressure(t *testing.T) {
 	}
 	_ = sink.Flush(context.Background())
 
-	// Concurrent query pressure
+	// Concurrent query pressure through the ownership-scoped query path.
 	concurrentQueries := 50
-	queries := []string{
-		"SELECT * FROM events LIMIT 10",
-		"SELECT COUNT(*) FROM events",
-		"SELECT service, COUNT(*) FROM events GROUP BY service",
-		"SELECT * FROM events WHERE event_name = 'stress.query' LIMIT 5",
-		"SELECT * FROM events ORDER BY timestamp DESC LIMIT 20",
-	}
+	queriesPerWorker := 5
 
 	var (
 		queryOK      atomic.Int64
@@ -558,12 +552,9 @@ func TestStressQueryPressure(t *testing.T) {
 		wg.Add(1)
 		go func(id int) {
 			defer wg.Done()
-			for _, q := range queries {
-				body := fmt.Sprintf(`{"query":%q}`, q)
+			for j := 0; j < queriesPerWorker; j++ {
 				rec := httptest.NewRecorder()
-				req := httptest.NewRequest(http.MethodPost, "/query", strings.NewReader(body))
-				req.Header.Set("Content-Type", "application/json")
-				state.handleQuery(rec, req)
+				state.handleQuery(rec, legacyScopedRequest("default", "production", `{"limit":10}`))
 				queryTotal.Add(1)
 				if rec.Code == http.StatusOK {
 					queryOK.Add(1)
@@ -864,13 +855,11 @@ func TestStressLargeResultSets(t *testing.T) {
 	}
 
 	for _, qt := range queryTests {
-		body := fmt.Sprintf(`{"query":%q,"limit":%d}`, qt.query, qt.limit)
+		body := fmt.Sprintf(`{"limit":%d}`, qt.limit)
 		rec := httptest.NewRecorder()
-		req := httptest.NewRequest(http.MethodPost, "/query", strings.NewReader(body))
-		req.Header.Set("Content-Type", "application/json")
 
 		start := time.Now()
-		state.handleQuery(rec, req)
+		state.handleQuery(rec, legacyScopedRequest("default", "production", body))
 		elapsed := time.Since(start)
 
 		t.Logf("Large result [%s]: status=%d duration=%v", qt.name, rec.Code, elapsed)
@@ -968,11 +957,8 @@ func TestStressConnectionPoolExhaustion(t *testing.T) {
 			}
 
 			// Read
-			qBody := `{"query":"SELECT COUNT(*) FROM events"}`
 			qRec := httptest.NewRecorder()
-			qReq := httptest.NewRequest(http.MethodPost, "/query", strings.NewReader(qBody))
-			qReq.Header.Set("Content-Type", "application/json")
-			state.handleQuery(qRec, qReq)
+			state.handleQuery(qRec, legacyScopedRequest("default", "production", `{"limit":5}`))
 			if qRec.Code == http.StatusOK {
 				queryOK.Add(1)
 			} else {
@@ -1096,11 +1082,8 @@ func TestStressMixedWorkload(t *testing.T) {
 		go func(id int) {
 			defer wg.Done()
 			for time.Since(start) < duration {
-				qBody := `{"query":"SELECT COUNT(*) FROM events"}`
 				rec := httptest.NewRecorder()
-				req := httptest.NewRequest(http.MethodPost, "/query", strings.NewReader(qBody))
-				req.Header.Set("Content-Type", "application/json")
-				state.handleQuery(rec, req)
+				state.handleQuery(rec, legacyScopedRequest("default", "production", `{"limit":5}`))
 				if rec.Code == http.StatusOK {
 					reads.Add(1)
 				} else {
