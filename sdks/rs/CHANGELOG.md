@@ -2,6 +2,16 @@
 
 All notable changes to the LOZA Rust SDK are documented in this file.
 
+## [Unreleased]
+
+### Fixed
+
+- Event mutators no longer discard the `ensure_mutable` lifecycle check:
+  `set_attr`, `append_attr`, `merge_group`, `delete_attr`,
+  `checkpoint_with_attrs`, `start_process`, `start_timer`, `start_group`, and
+  the matching `Logger` helpers are now no-ops once an event is emitting,
+  emitted, or failed. Public signatures are unchanged.
+
 ## [0.3.4] - 2026-08-26
 
 ### Changed

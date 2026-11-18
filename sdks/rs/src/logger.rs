@@ -150,7 +150,9 @@ impl Logger {
         key: impl Into<String>,
         value: V,
     ) {
-        let _ = ctx.ensure_mutable();
+        if ctx.ensure_mutable().is_err() {
+            return;
+        }
         ctx.mark_active_if_created();
         let target = match group {
             "http" => &mut ctx.http,
@@ -589,7 +591,9 @@ impl Logger {
 
 impl Logger {
     fn apply_attr(&self, ctx: &mut EventContext, attr: Attr) {
-        let _ = ctx.ensure_mutable();
+        if ctx.ensure_mutable().is_err() {
+            return;
+        }
         ctx.mark_active_if_created();
         if attr.sensitive {
             ctx.sensitive_keys.push(attr.key.clone());
