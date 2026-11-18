@@ -145,7 +145,29 @@ func fanoutOutputsFromFile(outputs []collectorconfig.FanoutOutputConfig) []worke
 	return mapped
 }
 
+// validateFanoutRoles rejects configurations with more than one enabled
+// fallback output. Without this check, createFanoutSinks would create a sink
+// for every fallback and then silently keep only the last one, leaving the
+// overwritten sinks (and their background flush loops) running but
+// unreachable and never closed.
+func validateFanoutRoles(outputs []workerFanoutOutput) error {
+	fallbacks := 0
+	for _, output := range outputs {
+		if output.enabled && output.role == fanoutRoleFallback {
+			fallbacks++
+		}
+	}
+	if fallbacks > 1 {
+		return fmt.Errorf("fanout supports at most one enabled fallback output, found %d", fallbacks)
+	}
+	return nil
+}
+
 func createFanoutSinks(cfg workerConfig) ([]processing.NamedSink, *processing.NamedSink, []*sql.DB, error) {
+	if err := validateFanoutRoles(cfg.fanoutOutputs); err != nil {
+		return nil, nil, nil, err
+	}
+
 	secondary := make([]processing.NamedSink, 0, len(cfg.fanoutOutputs))
 	var fallback *processing.NamedSink
 	dbs := make([]*sql.DB, 0, len(cfg.fanoutOutputs))
