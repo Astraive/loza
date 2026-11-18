@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 )
@@ -42,16 +43,19 @@ func (s *collectorState) executeRetention() error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
+	var retentionErrs []error
 	if s.cfg.retentionDays > 0 {
 		cutoffTime := time.Now().UTC().AddDate(0, 0, -s.cfg.retentionDays)
 		if err := s.deleteByAge(ctx, s.queryDB, cutoffTime); err != nil {
 			logJSON("warn", "retention_age_delete_failed", map[string]any{"error": err.Error()})
+			retentionErrs = append(retentionErrs, fmt.Errorf("delete events by age: %w", err))
 		}
 	}
 
 	if s.cfg.retentionMaxSize > 0 {
 		if err := s.deleteBySize(ctx, s.queryDB); err != nil {
 			logJSON("warn", "retention_size_delete_failed", map[string]any{"error": err.Error()})
+			retentionErrs = append(retentionErrs, fmt.Errorf("delete events by size: %w", err))
 		}
 	}
 
@@ -59,7 +63,7 @@ func (s *collectorState) executeRetention() error {
 		"retention_days": s.cfg.retentionDays,
 		"retention_size": s.cfg.retentionMaxSize,
 	})
-	return nil
+	return errors.Join(retentionErrs...)
 }
 
 func (s *collectorState) deleteByAge(ctx context.Context, db *sql.DB, cutoffTime time.Time) error {
