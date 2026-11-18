@@ -64,6 +64,7 @@ class Middleware:
                 String("http.remote_ip", environ.get("REMOTE_ADDR", "")),
             )
             response = self.app(environ, capture_start_response)
+            ctx.params.status_code = status_code
         except Exception as exc:
             FinishError(ctx, exc, Bool("panic", True))
             Emit(ctx)
@@ -84,7 +85,6 @@ class Middleware:
                 Finish(
                     ctx,
                     "error" if status_code >= 500 else "success",
-                    Int("status_code", status_code),
                     Int("response_bytes", response_bytes),
                     Int("duration_ms", int((time.perf_counter() - started) * 1000)),
                 )
@@ -99,7 +99,6 @@ class Middleware:
                         Finish(
                             ctx,
                             "error" if status_code >= 500 else "success",
-                            Int("status_code", status_code),
                             Int("response_bytes", response_bytes),
                             Int("duration_ms", int((time.perf_counter() - started) * 1000)),
                         )

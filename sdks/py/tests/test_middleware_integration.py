@@ -13,14 +13,14 @@ async def _receive() -> dict:
     return {"type": "http.request", "body": b"", "more_body": False}
 
 
-async def _run_app(messages: list[dict]) -> None:
+async def _run_app(messages: list[dict], middleware_cls=None) -> None:
     async def app(scope, receive, send):
         await send({"type": "http.response.start", "status": 201, "headers": []})
         await send({"type": "http.response.body", "body": b"ok"})
 
     sink = loza.MemorySink()
     loza.Configure(loza.Test("checkout").with_sink(sink))
-    middleware = Middleware(app, service="checkout")
+    middleware = (middleware_cls or Middleware)(app, service="checkout")
 
     async def send(message: dict) -> None:
         messages.append(message)
@@ -42,13 +42,27 @@ async def _run_app(messages: list[dict]) -> None:
     assert payload["kind"] == "http"
     assert payload["http"]["user_agent"] == "pytest"
     assert payload["http"]["remote_ip"] == "127.0.0.1"
-    # status_code is a canonical field — canonical enforcement removes it from attrs
+    # status_code is canonical and must be recorded, not silently dropped
+    assert payload["status_code"] == 201
+    assert payload["http"]["status_code"] == 201
     assert "status_code" not in payload.get("attrs", {})
     assert payload["attrs"]["response_bytes"] == 2
 
 
 def test_asgi_middleware_captures_http_request() -> None:
     asyncio.run(_run_app([]))
+
+
+def test_fastapi_middleware_records_status_code() -> None:
+    from loza.middleware.fastapi import Middleware as FastAPIMiddleware
+
+    asyncio.run(_run_app([], FastAPIMiddleware))
+
+
+def test_starlette_middleware_records_status_code() -> None:
+    from loza.middleware.starlette import Middleware as StarletteMiddleware
+
+    asyncio.run(_run_app([], StarletteMiddleware))
 
 
 def test_flask_middleware_streams_response_without_buffering() -> None:
@@ -89,6 +103,8 @@ def test_flask_middleware_streams_response_without_buffering() -> None:
 
     assert len(sink.events) == 1
     payload = json.loads(sink.events[0])
+    assert payload["status_code"] == 200
+    assert payload["http"]["status_code"] == 200
     assert payload["attrs"]["response_bytes"] == 6
 
 
@@ -151,6 +167,8 @@ def test_flask_middleware_closes_original_iterable_on_close() -> None:
     assert body.closed is True
     assert len(sink.events) == 1
     payload = json.loads(sink.events[0])
+    assert payload["status_code"] == 200
+    assert payload["http"]["status_code"] == 200
     assert payload["attrs"]["response_bytes"] == 5
 
 
@@ -227,3 +245,27 @@ def test_starlette_emit_failure_does_not_break_successful_request(monkeypatch) -
     messages = []
     asyncio.run(_run_starlette_app(app, messages))
     assert any(message.get("type") == "http.response.start" for message in messages)
+
+
+def test_django_middleware_records_status_code() -> None:
+    from loza.middleware.django import LozaMiddleware
+
+    class Response:
+        status_code = 202
+
+    class Request:
+        method = "GET"
+        path = "/health"
+        META = {"HTTP_USER_AGENT": "pytest", "REMOTE_ADDR": "127.0.0.1"}
+
+    sink = loza.MemorySink()
+    loza.Configure(loza.Test("checkout").with_sink(sink))
+    middleware = LozaMiddleware(lambda _request: Response(), service="checkout")
+
+    middleware(Request())
+
+    assert len(sink.events) == 1
+    payload = json.loads(sink.events[0])
+    assert payload["status_code"] == 202
+    assert payload["http"]["status_code"] == 202
+    assert "status_code" not in payload.get("attrs", {})

@@ -32,10 +32,10 @@ class LozaMiddleware:
                 String("http.remote_ip", request.META.get("REMOTE_ADDR", "")),
             )
             response = self.get_response(request)
+            ctx.params.status_code = response.status_code
             Finish(
                 ctx,
                 "error" if response.status_code >= 500 else "success",
-                Int("status_code", response.status_code),
                 Int("duration_ms", int((time.perf_counter() - started) * 1000)),
             )
             return response
