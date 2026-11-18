@@ -90,9 +90,10 @@ def kafka_sink(endpoint: str = "", topic: str = "", **kwargs: Any) -> HTTPBatchS
 
     The collector must have a Kafka sink configured to handle these events.
     """
+    service = kwargs.pop("service", "")
     return HTTPBatchSink(
         endpoint=endpoint or "http://127.0.0.1:9308/events",
-        service=topic or kwargs.pop("service", ""),
+        service=topic or service,
         **kwargs,
     )
 
