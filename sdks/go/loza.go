@@ -1217,6 +1217,10 @@ func RedactKeys(keys ...string) Redactor         { return core.RedactKeys(keys..
 func DropKeys(keys ...string) Redactor           { return core.DropKeys(keys...) }
 func RedactPatterns(patterns ...string) Redactor { return core.RedactPatterns(patterns...) }
 
+func HashKeysWithSecret(secret []byte, keys ...string) Redactor {
+	return core.HashKeysWithSecret(secret, keys...)
+}
+
 // ── Schemas ────────────────────────────────────────────────────────────────────
 
 func DefaultSchema() Schema { return core.DefaultSchema() }
