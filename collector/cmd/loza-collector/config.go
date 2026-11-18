@@ -1961,8 +1961,12 @@ func parseConfigBool(raw string) (bool, error) {
 	}
 }
 
+// redactedSecret replaces credential values in `config print` output. Secrets
+// resolved from config files or the environment must never reach stdout.
+const redactedSecret = "[REDACTED]"
+
 func marshalPrintableConfig(fc fileConfig) ([]byte, error) {
-	redacted := fc
+	redacted := redactConfigForPrint(fc)
 
 	var out bytes.Buffer
 	enc := yaml.NewEncoder(&out)
@@ -1975,4 +1979,31 @@ func marshalPrintableConfig(fc fileConfig) ([]byte, error) {
 		return nil, err
 	}
 	return out.Bytes(), nil
+}
+
+// redactConfigForPrint returns a printable copy of fc with every credential
+// field replaced by a redaction marker. Fanout outputs live in a shared slice,
+// so that slice is copied before its secret fields are cleared; this keeps the
+// caller's config untouched.
+func redactConfigForPrint(fc fileConfig) fileConfig {
+	redacted := fc
+
+	redacted.Auth.Value = redactedSecret
+	redacted.Auth.ServerSecret = redactedSecret
+
+	redacted.Fanout.Outputs = append([]collectorconfig.FanoutOutputConfig(nil), fc.Fanout.Outputs...)
+	for i := range redacted.Fanout.Outputs {
+		out := &redacted.Fanout.Outputs[i]
+		out.ClickHouse.Password = redactedSecret
+		out.Postgres.DSN = redactedSecret
+		out.S3.AccessKey = redactedSecret
+		out.S3.SecretKey = redactedSecret
+	}
+
+	redacted.Dedupe.RedisPassword = redactedSecret
+	redacted.CortexBridge.APIKey = redactedSecret
+	redacted.EventBus.Redis.Password = redactedSecret
+	redacted.EventBus.NATS.Password = redactedSecret
+
+	return redacted
 }
