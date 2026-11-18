@@ -301,17 +301,17 @@ func (s *sink) WriteEvent(ctx context.Context, encoded []byte, _ *collectorevent
 	}
 	s.mu.Unlock()
 
-	if pendingErr != nil {
+	// Always persist a detached full batch, even when an earlier background
+	// error is pending. Returning before execBatch would silently drop those
+	// events. Surface both the pending and the write error.
+	if len(batch) == 0 {
 		return pendingErr
 	}
-	if len(batch) == 0 {
-		return nil
-	}
 	if err := s.acquireFlush(ctx); err != nil {
-		return err
+		return errors.Join(pendingErr, err)
 	}
 	defer s.releaseFlush()
-	return s.execBatch(ctx, batch)
+	return errors.Join(pendingErr, s.execBatch(ctx, batch))
 }
 
 func (s *sink) Flush(ctx context.Context) error {
@@ -353,13 +353,14 @@ func (s *sink) Flush(ctx context.Context) error {
 	s.lastErr = nil
 	s.mu.Unlock()
 
-	if pendingErr != nil {
-		return pendingErr
+	// Always persist the detached batch, even when an earlier background error
+	// is pending. Returning before execBatch would silently drop the buffered
+	// events, including on Close. Surface both the pending and write errors.
+	var writeErr error
+	if len(batch) > 0 {
+		writeErr = s.execBatch(ctx, batch)
 	}
-	if len(batch) == 0 {
-		return nil
-	}
-	return s.execBatch(ctx, batch)
+	return errors.Join(pendingErr, writeErr)
 }
 
 func (s *sink) Close(ctx context.Context) error {

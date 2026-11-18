@@ -245,6 +245,90 @@ func TestWriteEventBatchingFlush(t *testing.T) {
 	}
 	assertRowCount(t, db, 1)
 }
+
+func TestFlushWritesBufferedBatchWhenPriorErrorPending(t *testing.T) {
+	db := openSQLiteDB(t)
+	mustExec(t, db, `CREATE TABLE events (raw TEXT)`)
+
+	rawSink, err := New(Config{DB: db, Table: "events", BatchSize: 10})
+	if err != nil {
+		t.Fatalf("new sink failed: %v", err)
+	}
+	s := rawSink.(*sink)
+
+	ctx := context.Background()
+	if err := s.WriteEvent(ctx, []byte(`{"event_id":"buffered"}`), nil); err != nil {
+		t.Fatalf("write event failed: %v", err)
+	}
+	assertRowCount(t, db, 0)
+
+	pendingErr := errors.New("prior background failure")
+	s.mu.Lock()
+	s.lastErr = pendingErr
+	s.mu.Unlock()
+
+	flushErr := s.Flush(ctx)
+	if !errors.Is(flushErr, pendingErr) {
+		t.Fatalf("Flush should surface pending error, got: %v", flushErr)
+	}
+	assertRowCount(t, db, 1)
+}
+
+func TestCloseFlushesBufferedBatchWhenPriorErrorPending(t *testing.T) {
+	db := openSQLiteDB(t)
+	mustExec(t, db, `CREATE TABLE events (raw TEXT)`)
+
+	rawSink, err := New(Config{DB: db, Table: "events", BatchSize: 10})
+	if err != nil {
+		t.Fatalf("new sink failed: %v", err)
+	}
+	s := rawSink.(*sink)
+
+	ctx := context.Background()
+	if err := s.WriteEvent(ctx, []byte(`{"event_id":"buffered"}`), nil); err != nil {
+		t.Fatalf("write event failed: %v", err)
+	}
+
+	pendingErr := errors.New("prior background failure")
+	s.mu.Lock()
+	s.lastErr = pendingErr
+	s.mu.Unlock()
+
+	closeErr := s.Close(ctx)
+	if !errors.Is(closeErr, pendingErr) {
+		t.Fatalf("Close should surface pending error, got: %v", closeErr)
+	}
+	assertRowCount(t, db, 1)
+}
+
+func TestWriteEventWritesFullBatchWhenPriorErrorPending(t *testing.T) {
+	db := openSQLiteDB(t)
+	mustExec(t, db, `CREATE TABLE events (raw TEXT)`)
+
+	rawSink, err := New(Config{DB: db, Table: "events", BatchSize: 2})
+	if err != nil {
+		t.Fatalf("new sink failed: %v", err)
+	}
+	s := rawSink.(*sink)
+
+	ctx := context.Background()
+	if err := s.WriteEvent(ctx, []byte(`{"event_id":"a"}`), nil); err != nil {
+		t.Fatalf("write event a failed: %v", err)
+	}
+	assertRowCount(t, db, 0)
+
+	pendingErr := errors.New("prior background failure")
+	s.mu.Lock()
+	s.lastErr = pendingErr
+	s.mu.Unlock()
+
+	writeErr := s.WriteEvent(ctx, []byte(`{"event_id":"b"}`), nil)
+	if !errors.Is(writeErr, pendingErr) {
+		t.Fatalf("WriteEvent should surface pending error, got: %v", writeErr)
+	}
+	assertRowCount(t, db, 2)
+}
+
 func TestFlushHonorsCanceledContextWhileWaitingForSerialization(t *testing.T) {
 	db := openSQLiteDB(t)
 	mustExec(t, db, `CREATE TABLE events (raw TEXT)`)
