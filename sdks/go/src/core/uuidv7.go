@@ -20,6 +20,17 @@ type uuidV7Gen struct {
 	mu     sync.Mutex
 	lastMS int64
 	seq    uint16
+	// now returns the current Unix time in milliseconds. When nil, the wall
+	// clock is used. It exists as a seam so sequence-overflow behavior can be
+	// exercised deterministically in tests.
+	now func() int64
+}
+
+func (g *uuidV7Gen) nowMS() int64 {
+	if g.now != nil {
+		return g.now()
+	}
+	return time.Now().UnixMilli()
 }
 
 var globalIDGen = &uuidV7Gen{}
@@ -36,7 +47,7 @@ func (g *uuidV7Gen) NewID() string { return g.newID() }
 func (g *uuidV7Gen) newID() string {
 	g.mu.Lock()
 
-	now := time.Now().UnixMilli()
+	now := g.nowMS()
 	if now == g.lastMS {
 		g.seq++
 		if g.seq > 0x0FFF {
@@ -45,8 +56,12 @@ func (g *uuidV7Gen) newID() string {
 				g.mu.Unlock()
 				time.Sleep(time.Microsecond * 100)
 				g.mu.Lock()
-				now = time.Now().UnixMilli()
+				now = g.nowMS()
 			}
+			// Record the new millisecond alongside the sequence reset, otherwise
+			// the next call in this millisecond takes the "new millisecond" branch
+			// and restarts the sequence, emitting a duplicate (timestamp, seq) prefix.
+			g.lastMS = now
 			g.seq = 0
 		}
 	} else {
