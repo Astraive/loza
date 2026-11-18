@@ -3,6 +3,7 @@ package topology
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -102,4 +103,78 @@ func TestRegisterAliasRejectsOverlaps(t *testing.T) {
 	if err := resolver.RegisterAlias(context.Background(), "svc-a", "svc-c", validFrom, nil); err == nil {
 		t.Fatal("expected overlap error")
 	}
+}
+
+func TestCallbacksFireOnRegisterAlias(t *testing.T) {
+	resolver := NewResolver(&fakeTopologyStore{history: map[string][]*models.ServiceAlias{}})
+
+	var fired []string
+	const callbackCount = 5
+	for i := 0; i < callbackCount; i++ {
+		resolver.RegisterCallback(func(_ context.Context, from, to string, _ time.Time) {
+			fired = append(fired, from+"->"+to)
+		})
+	}
+
+	validFrom := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	if err := resolver.RegisterAlias(context.Background(), "svc-a", "svc-b", validFrom, nil); err != nil {
+		t.Fatalf("register alias: %v", err)
+	}
+	if len(fired) != callbackCount {
+		t.Fatalf("expected %d callbacks to fire, got %d", callbackCount, len(fired))
+	}
+	for _, got := range fired {
+		if got != "svc-a->svc-b" {
+			t.Fatalf("unexpected callback arguments: %s", got)
+		}
+	}
+}
+
+func TestCallbackCanRegisterCallback(t *testing.T) {
+	resolver := NewResolver(&fakeTopologyStore{history: map[string][]*models.ServiceAlias{}})
+
+	fired := 0
+	resolver.RegisterCallback(func(_ context.Context, _, _ string, _ time.Time) {
+		fired++
+		// A callback that registers another callback must not deadlock: the
+		// callbacks slice must not be locked while they are invoked.
+		resolver.RegisterCallback(func(context.Context, string, string, time.Time) {})
+	})
+
+	validFrom := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	if err := resolver.RegisterAlias(context.Background(), "svc-a", "svc-b", validFrom, nil); err != nil {
+		t.Fatalf("register alias: %v", err)
+	}
+	if fired != 1 {
+		t.Fatalf("expected one callback invocation, got %d", fired)
+	}
+}
+
+func TestCallbacksConcurrentWithAliasRegistration(t *testing.T) {
+	resolver := NewResolver(&fakeTopologyStore{history: map[string][]*models.ServiceAlias{}})
+	validFrom := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	var wg sync.WaitGroup
+	for i := 0; i < 50; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			resolver.RegisterCallback(func(context.Context, string, string, time.Time) {})
+		}()
+	}
+
+	// A single alias-registration goroutine iterates the callbacks slice while
+	// the goroutines above append to it; under -race this is the reported race.
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 50; i++ {
+			if err := resolver.RegisterAlias(context.Background(), "svc-a", "svc-b", validFrom, nil); err != nil {
+				t.Errorf("register alias: %v", err)
+				return
+			}
+		}
+	}()
+
+	wg.Wait()
 }
