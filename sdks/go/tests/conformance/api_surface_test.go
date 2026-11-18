@@ -2,6 +2,7 @@ package conformance
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -216,8 +217,7 @@ func TestHTTPClientInstrumentation(t *testing.T) {
 			Path:   r.URL.Path,
 			Route:  "/api",
 		})
-		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, downstream.URL, nil)
-		_, _ = client.Do(req)
+		_ = doDownstreamCall(client, ctx, downstream.URL)
 		_ = loza.Enrich(ctx, loza.UserID("u_1"))
 		_ = loza.Finish(ctx, "success", loza.Int("status_code", 200))
 		_ = loza.Emit(ctx)
@@ -235,5 +235,63 @@ func TestHTTPClientInstrumentation(t *testing.T) {
 
 	if store.Len() == 0 {
 		t.Fatalf("expected emitted events")
+	}
+}
+
+// doDownstreamCall issues the outbound request made by the HTTP instrumentation
+// conformance handler. It always closes the response body so the underlying
+// connection can be reused and is not leaked.
+func doDownstreamCall(client *http.Client, ctx context.Context, url string) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return err
+	}
+	resp, err := client.Do(req)
+	if err == nil && resp != nil {
+		_ = resp.Body.Close()
+	}
+	return err
+}
+
+// closeTrackingBody records whether Close was called on a response body.
+type closeTrackingBody struct {
+	closed *bool
+}
+
+func (b *closeTrackingBody) Read([]byte) (int, error) { return 0, io.EOF }
+
+func (b *closeTrackingBody) Close() error {
+	*b.closed = true
+	return nil
+}
+
+// closeTrackingRoundTripper returns a response whose body records closure.
+type closeTrackingRoundTripper struct {
+	closed *bool
+}
+
+func (rt *closeTrackingRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	return &http.Response{
+		Status:     "204 No Content",
+		StatusCode: http.StatusNoContent,
+		Header:     make(http.Header),
+		Body:       &closeTrackingBody{closed: rt.closed},
+		Request:    req,
+	}, nil
+}
+
+// TestHTTPClientInstrumentationClosesResponseBody is a regression test for the
+// leaked response body in the instrumented downstream call: the body returned by
+// client.Do must be closed.
+func TestHTTPClientInstrumentationClosesResponseBody(t *testing.T) {
+	closed := false
+	client := loza.WrapHTTPClient(&http.Client{
+		Transport: &closeTrackingRoundTripper{closed: &closed},
+	})
+	if err := doDownstreamCall(client, context.Background(), "http://downstream.invalid"); err != nil {
+		t.Fatalf("downstream call: %v", err)
+	}
+	if !closed {
+		t.Fatal("expected instrumented downstream response body to be closed")
 	}
 }
