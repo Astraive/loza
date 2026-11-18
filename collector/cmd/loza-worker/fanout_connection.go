@@ -64,7 +64,7 @@ func workerPostgresDSN(connection collectorconfig.DatabaseConnectionConfig) stri
 		Scheme: "postgres",
 		Host:   net.JoinHostPort(strings.TrimSpace(connection.Host), strconv.Itoa(port)),
 		Path:   "/" + strings.TrimSpace(connection.Database),
-		User:   url.UserPassword(os.Getenv(connection.UsernameEnv), os.Getenv(connection.PasswordEnv)),
+		User:   url.UserPassword(os.Getenv(strings.TrimSpace(connection.UsernameEnv)), os.Getenv(strings.TrimSpace(connection.PasswordEnv))),
 	}
 	mode := strings.TrimSpace(connection.SSLMode)
 	if mode == "" {
