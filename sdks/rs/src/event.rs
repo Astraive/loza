@@ -363,11 +363,11 @@ impl EventContext {
         let timestamp = OffsetDateTime::now_utc()
             .format(&Rfc3339)
             .unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_string());
-        let event_id = format!("evt_{started_unix_ms}");
+        let event_id = crate::internal::core::uuidv7::new_event_id();
         let request_id = params
             .request_id
             .clone()
-            .unwrap_or_else(|| format!("req_{started_unix_ms}"));
+            .unwrap_or_else(crate::internal::core::uuidv7::new_request_id);
         Self {
             timestamp,
             schema_version: LOZA_SPEC_VERSION.to_string(),
