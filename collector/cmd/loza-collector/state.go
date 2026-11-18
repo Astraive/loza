@@ -125,11 +125,15 @@ func schemaModeForProcessor(s *collectorState) string {
 }
 
 func (s *collectorState) convertSchemaRegistry() []processing.SchemaRegistryEntry {
-	if len(s.config().schemaRegistry) == 0 {
+	// Take a locked snapshot: ensureProcessor can call this while other HTTP
+	// handlers are publishing schema updates. schemaRegistrySnapshot also
+	// reads via config(), so a concurrent SIGHUP reload cannot tear the read.
+	registry := s.schemaRegistrySnapshot()
+	if len(registry) == 0 {
 		return nil
 	}
-	out := make([]processing.SchemaRegistryEntry, len(s.config().schemaRegistry))
-	for i, e := range s.config().schemaRegistry {
+	out := make([]processing.SchemaRegistryEntry, len(registry))
+	for i, e := range registry {
 		out[i] = processing.SchemaRegistryEntry{
 			SchemaVersion:  e.SchemaVersion,
 			EventVersion:   e.EventVersion,
