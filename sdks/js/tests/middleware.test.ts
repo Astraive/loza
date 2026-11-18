@@ -6,6 +6,7 @@ import { lozaKoaMiddleware } from '../src/middleware/koa.ts';
 import { lozaFastifyPlugin } from '../src/middleware/fastify.ts';
 import { lozaHonoMiddleware } from '../src/middleware/hono.ts';
 import { lozaNextMiddleware } from '../src/middleware/next.ts';
+import { Logger } from '../src/core/logger.ts';
 
 type HttpResponse = {
   statusCode: number;
@@ -47,6 +48,45 @@ describe('framework middleware', () => {
     };
     lozaHttpMiddleware()(req, res500, () => {});
     res500.end();
+  });
+
+  it('emits and rethrows when downstream middleware throws synchronously', () => {
+    const captured: any[] = [];
+    let emitCount = 0;
+    const originalStart = Logger.prototype.startHTTPEvent;
+    const originalEmit = Logger.prototype.emit;
+    (Logger.prototype as any).startHTTPEvent = function (...args: any[]) {
+      const ev = originalStart.apply(this, args as any);
+      captured.push(ev);
+      return ev;
+    };
+    (Logger.prototype as any).emit = function (...args: any[]) {
+      emitCount++;
+      return originalEmit.apply(this, args as any);
+    };
+    try {
+      const boom = new Error('sync middleware failure');
+      const req = { method: 'GET', url: '/boom', headers: {}, socket: {} };
+      const res: HttpResponse = { statusCode: 200, end() {}, on() {} };
+
+      assert.throws(
+        () => lozaHttpMiddleware({ service: 'edge' })(req, res, () => { throw boom; }),
+        /sync middleware failure/,
+      );
+
+      assert.equal(captured.length, 1);
+      assert.equal(emitCount, 1, 'event must be emitted when next() throws synchronously');
+      assert.equal(captured[0].getEventState(), 'emitted');
+      assert.ok(captured[0].error, 'event must record the thrown error');
+
+      // Frameworks (e.g. Express) call res.end after handling the rethrown error;
+      // that later completion must not finish/emit the already-emitted event.
+      assert.doesNotThrow(() => (res.end as (...args: unknown[]) => unknown)());
+      assert.equal(emitCount, 1, 'res.end must not emit the event a second time');
+    } finally {
+      (Logger.prototype as any).startHTTPEvent = originalStart;
+      (Logger.prototype as any).emit = originalEmit;
+    }
   });
 
   it('records Express routes from extractor, route path, and request path', () => {
