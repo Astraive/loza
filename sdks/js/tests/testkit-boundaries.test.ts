@@ -49,6 +49,28 @@ describe('Testkit boundaries', () => {
     assert.equal(lastEvent(), undefined);
   });
 
+  it('isolates captured events between independent testkit instances', async () => {
+    clearEvents();
+    const kitA = testkit();
+    const kitB = testkit();
+
+    await kitA.logger.info('from-a');
+    await kitB.logger.info('from-b');
+
+    assert.equal(kitA.events().length, 1);
+    assert.equal(kitB.events().length, 1);
+    assert.deepEqual(kitA.events(), kitA.sink.getEvents());
+    assert.deepEqual(kitB.events(), kitB.sink.getEvents());
+
+    const aEvents = kitA.events();
+    kitB.clearEvents();
+    assert.deepEqual(kitB.events(), []);
+    assert.deepEqual(kitA.events(), aEvents, 'clearing one kit must not wipe another');
+
+    kitA.clearEvents();
+    assert.deepEqual(kitA.events(), []);
+  });
+
   it('provides mock sinks and deterministic clocks and IDs', async () => {
     const sink = new MockSink();
     await sink.write('one');
