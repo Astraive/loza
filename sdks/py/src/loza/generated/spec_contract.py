@@ -11,6 +11,20 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
+
+def _validate_flexible_json_bytes_unavailable(raw: bytes, strict: bool) -> None:
+    """Callable fallback for backup contracts that omit ``validate_flexible_json_bytes``.
+
+    The symbol is part of this module's public ``__all__``. Resolving it to ``None``
+    would leave an exported-but-uncallable name that raises ``TypeError`` at call
+    time. Keeping a real callable preserves the API and fails with an actionable
+    error instead.
+    """
+    raise NotImplementedError(
+        "validate_flexible_json_bytes is not available in the bundled backup contract; "
+        "install loza-spec to enable flexible JSON byte validation."
+    )
+
 # Try importing from loza-spec (primary path - when installed as dependency)
 try:
     from loza_contract import (
@@ -120,7 +134,9 @@ except ImportError:
         validate_event_payload_detailed = getattr(
             backup, "validate_event_payload_detailed", backup.validate_event_payload
         )
-        validate_flexible_json_bytes = getattr(backup, "validate_flexible_json_bytes", None)
+        validate_flexible_json_bytes = getattr(
+            backup, "validate_flexible_json_bytes", _validate_flexible_json_bytes_unavailable
+        )
         ValidationError = getattr(backup, "ValidationError", ValueError)
         ValidationErrors = getattr(backup, "ValidationErrors", list)
 
