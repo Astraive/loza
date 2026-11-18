@@ -19,6 +19,43 @@ func init() {
 	eventbus.Register("nats", New)
 }
 
+const (
+	// iterErrorInitialBackoff is the delay before retrying after the first
+	// iterator error. It grows exponentially up to iterErrorMaxBackoff.
+	iterErrorInitialBackoff = 50 * time.Millisecond
+	iterErrorMaxBackoff     = 2 * time.Second
+)
+
+// messageIterator is the subset of jetstream.MessagesContext used by the
+// consume loop. Keeping it narrow lets the loop be unit-tested without a
+// running NATS server.
+type messageIterator interface {
+	Next(opts ...jetstream.NextOpt) (jetstream.Msg, error)
+}
+
+// stoppableIterator is a messageIterator that also supports Stop. The iterator
+// returned by consumer.Messages implements it; the bus records Stop as a
+// shutdown hook so Close can invalidate a pending iterator.
+type stoppableIterator interface {
+	messageIterator
+	Stop()
+}
+
+// sleepFunc waits for d or until ctx is done. It reports whether the wait
+// completed; false tells the caller to stop consuming.
+type sleepFunc func(ctx context.Context, d time.Duration) bool
+
+func sleepWithContext(ctx context.Context, d time.Duration) bool {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-t.C:
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
+
 type natsBus struct {
 	conn   *nats.Conn
 	js     jetstream.JetStream
@@ -36,14 +73,6 @@ type natsBus struct {
 type subscription struct {
 	cancel context.CancelFunc
 	stop   func()
-}
-
-// messageIterator is the subset of jetstream.MessagesContext used by the
-// consume loop. It is an interface so cancellation behavior can be unit tested
-// without a running NATS server.
-type messageIterator interface {
-	Next(opts ...jetstream.NextOpt) (jetstream.Msg, error)
-	Stop()
 }
 
 // New creates a new NATS JetStream event bus.
@@ -187,17 +216,35 @@ func (b *natsBus) Subscribe(ctx context.Context, topic string, group string, han
 	return nil
 }
 
-// consume drains the iterator until its context is cancelled or the bus is
-// closed. NextContext makes a blocked iter.Next return when ctx is cancelled.
-func (b *natsBus) consume(ctx context.Context, iter messageIterator, subject string, handler eventbus.Handler) {
+// consumeMessages drains iter and dispatches messages to handler. An error
+// from iter.Next() can be persistent (e.g. a deleted consumer or a lost
+// connection) and would otherwise make the loop spin with no delay. Apply an
+// exponential backoff, capped at maxBackoff, before retrying. A successful
+// message resets the backoff.
+//
+// NextContext is used so a blocked iter.Next returns promptly when ctx is
+// cancelled; combined with the closed flag this gives clean shutdown (the
+// subscription lifecycle wired up by Subscribe/Close).
+func consumeMessages(ctx context.Context, closed *atomic.Bool, iter messageIterator, subject string, handler eventbus.Handler, sleep sleepFunc, initialBackoff, maxBackoff time.Duration) {
+	backoff := initialBackoff
 	for {
 		msg, err := iter.Next(jetstream.NextContext(ctx))
 		if err != nil {
-			if b.closed.Load() || ctx.Err() != nil {
+			if closed.Load() || ctx.Err() != nil {
 				return
+			}
+			if !sleep(ctx, backoff) || closed.Load() {
+				return
+			}
+			if backoff < maxBackoff {
+				backoff *= 2
+				if backoff > maxBackoff {
+					backoff = maxBackoff
+				}
 			}
 			continue
 		}
+		backoff = initialBackoff
 
 		handleMessage(ctx, msg, subject, handler)
 	}
@@ -227,6 +274,14 @@ func handleMessage(ctx context.Context, msg jetstream.Msg, subject string, handl
 	}
 	// Informational only: never convert the return value into an adapter ack.
 	_ = handler(ctx, busMsg)
+}
+
+// consume is the bus-owned consume loop. It wires the subscription lifecycle
+// (the bus closed flag and context cancellation) into consumeMessages, using
+// the standard capped iterator backoff settings.
+func (b *natsBus) consume(ctx context.Context, iter stoppableIterator, subject string, handler eventbus.Handler) {
+	consumeMessages(ctx, &b.closed, iter, subject, handler, sleepWithContext,
+		iterErrorInitialBackoff, iterErrorMaxBackoff)
 }
 
 func (b *natsBus) Close(_ context.Context) error {
