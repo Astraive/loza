@@ -664,6 +664,30 @@ func TestHandleOTLPLogs(t *testing.T) {
 	}
 }
 
+func TestHandleOTLPLogsRejectsUnknownFields(t *testing.T) {
+	sink := &fakeSink{}
+	state := &collectorState{
+		cfg:         testCollectorConfig(),
+		ingestSink:  sink,
+		rateLimiter: rate.NewLimiter(rate.Limit(1000), 1000),
+	}
+	state.ready.Store(true)
+
+	// protojson rejects unknown fields by default. The removed encoding/json
+	// fallback silently ignored them, producing an empty request that was
+	// answered with 202 accepted. Such malformed payloads must now be rejected.
+	body := `{"unknown":1}`
+	req := httptest.NewRequest(http.MethodPost, "/otlp/logs", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	state.handleOTLPLogs(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for unknown field payload, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if len(sink.events) != 0 {
+		t.Fatalf("expected no converted events, got %d", len(sink.events))
+	}
+}
+
 func TestHandleOTLPLogsProtobuf(t *testing.T) {
 	sink := &fakeSink{}
 	state := &collectorState{

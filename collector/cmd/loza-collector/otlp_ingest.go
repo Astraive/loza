@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/json"
 	"io"
 	"net/http"
 	"strings"
@@ -33,10 +32,8 @@ func (s *collectorState) handleOTLPLogs(w http.ResponseWriter, r *http.Request) 
 		}
 	default:
 		if err := protojson.Unmarshal(body, req); err != nil {
-			if err := json.Unmarshal(body, req); err != nil {
-				writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_otlp_json", "message": err.Error()})
-				return
-			}
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_otlp_json", "message": err.Error()})
+			return
 		}
 	}
 
