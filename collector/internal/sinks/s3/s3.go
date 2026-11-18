@@ -40,6 +40,10 @@ type sink struct {
 	stop      chan struct{}
 	closeOnce sync.Once
 	wg        sync.WaitGroup
+	// inflight tracks every putObject that may restore records to the buffer.
+	// Close waits for it so restored records are included in the final flush.
+	inflight sync.WaitGroup
+	closeErr error
 }
 
 // New creates an S3 sink.
@@ -108,28 +112,25 @@ func (s *sink) WriteEvent(ctx context.Context, encoded []byte, _ *collectorevent
 	if len(payload) == 0 {
 		return nil
 	}
-	if err := s.putObject(ctx, payload); err != nil {
-		s.restore(payload, n)
-		return err
-	}
-	return nil
+	return s.putTracked(ctx, payload, n)
 }
 
 func (s *sink) Flush(ctx context.Context) error { return s.flushBatch(ctx) }
 
 func (s *sink) Close(ctx context.Context) error {
-	var closeErr error
 	s.closeOnce.Do(func() {
 		s.mu.Lock()
 		s.closed = true
 		s.mu.Unlock()
 		close(s.stop)
 		s.wg.Wait()
-		if err := s.flushBatch(ctx); err != nil {
-			closeErr = err
-		}
+		// An in-flight put may still fail and restore its payload after the
+		// flush loop has stopped. Wait for all of them before the final flush
+		// so restored records are uploaded (or surface as a Close error).
+		s.inflight.Wait()
+		s.closeErr = s.finalFlush(ctx)
 	})
-	return closeErr
+	return s.closeErr
 }
 
 func (s *sink) flushLoop() {
@@ -172,6 +173,36 @@ func (s *sink) flushBatch(ctx context.Context) error {
 	if len(payload) == 0 {
 		return nil
 	}
+	return s.putTracked(ctx, payload, n)
+}
+
+// putTracked registers a putObject call with inflight so Close can wait for
+// it. Add and the closed check share s.mu: once Close sets closed, no new put
+// can be registered, which keeps Add strictly before Close's Wait.
+func (s *sink) putTracked(ctx context.Context, payload []byte, n int) error {
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		s.restore(payload, n)
+		return errors.New("s3: sink closed")
+	}
+	s.inflight.Add(1)
+	s.mu.Unlock()
+	defer s.inflight.Done()
+	return s.putAndRestore(ctx, payload, n)
+}
+
+// finalFlush is the untracked final drain used by Close after inflight.Wait
+// has returned; no other put can be in flight at that point.
+func (s *sink) finalFlush(ctx context.Context) error {
+	payload, n := s.drain()
+	if len(payload) == 0 {
+		return nil
+	}
+	return s.putAndRestore(ctx, payload, n)
+}
+
+func (s *sink) putAndRestore(ctx context.Context, payload []byte, n int) error {
 	if err := s.putObject(ctx, payload); err != nil {
 		s.restore(payload, n)
 		return err
