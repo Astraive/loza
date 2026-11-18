@@ -95,10 +95,11 @@ def test_trace_context_preservation() -> None:
     payload = logger.emit(ctx)
 
     event = json.loads(payload)
-    # trace_context should be present
-    if "trace_context" in event:
-        trace_ctx = event["trace_context"]
-        assert trace_ctx is not None
+    # Trace context is emitted as canonical top-level fields, not a nested
+    # "trace_context" object. Assert the assigned values unconditionally so a
+    # dropped context fails the test instead of passing vacuously.
+    assert event["trace_id"] == "trace_abc123"
+    assert event["span_id"] == "span_def456"
 
 
 def test_canonical_fields_immutable() -> None:
