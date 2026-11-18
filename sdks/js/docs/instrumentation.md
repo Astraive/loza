@@ -932,6 +932,8 @@ Redaction transforms **event payloads** before encoding. It runs after schema en
 | `dropKeys(...keys)` | Remove matching keys entirely |
 | `composeRedactors(...redactors)` | Chain multiple redactors |
 
+`maskKeys` coerces non-string values to strings before masking (e.g. `1234` → `****`), so numeric, boolean, array, and object values never escape unmasked.
+
 ```typescript
 // Default redaction (passwords, tokens, secrets)
 loza.configure(
