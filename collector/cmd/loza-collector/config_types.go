@@ -308,6 +308,7 @@ type collectorMetrics struct {
 	cortexBridgeFlushes    atomic.Int64
 	cortexBridgeEvents     atomic.Int64
 	cortexBridgeErrors     atomic.Int64
+	cortexBridgeDropped    atomic.Int64
 	cortexBridgeQueueDepth atomic.Int64
 }
 

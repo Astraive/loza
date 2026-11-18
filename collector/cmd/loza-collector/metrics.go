@@ -92,6 +92,10 @@ func (s *collectorState) metricsHandler() http.Handler {
 				Name: collectormetrics.CortexBridgeErrorsName,
 				Help: "Total collector-to-cortex bridge delivery errors.",
 			}, func() float64 { return float64(s.metrics.cortexBridgeErrors.Load()) }),
+			prometheus.NewCounterFunc(prometheus.CounterOpts{
+				Name: collectormetrics.CortexBridgeDroppedName,
+				Help: "Total events permanently dropped after async cortex bridge retry exhaustion.",
+			}, func() float64 { return float64(s.metrics.cortexBridgeDropped.Load()) }),
 			prometheus.NewGaugeFunc(prometheus.GaugeOpts{
 				Name: collectormetrics.CortexBridgeQueueDepthName,
 				Help: "Current async collector-to-cortex bridge queue depth.",
