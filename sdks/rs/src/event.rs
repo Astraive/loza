@@ -334,6 +334,8 @@ pub struct EventContext {
     pub groups: Vec<Map<String, Value>>,
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub timers: Vec<Map<String, Value>>,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub links: Vec<Map<String, Value>>,
     #[serde(skip, default)]
     process_step: u32,
     #[serde(skip_serializing_if = "std::ops::Not::not", default)]
@@ -403,6 +405,7 @@ impl EventContext {
             processes: Vec::new(),
             groups: Vec::new(),
             timers: Vec::new(),
+            links: Vec::new(),
             process_step: 0,
             partial: false,
             partial_reason: None,
