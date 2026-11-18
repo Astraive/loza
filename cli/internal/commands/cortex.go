@@ -393,8 +393,14 @@ func RunCortexGraph(ctx context.Context, cfg config.Config, args []string) error
 		return fmt.Errorf("decode graph: %w", err)
 	}
 
-	nodes := graph["nodes"].([]interface{})
-	edges := graph["edges"].([]interface{})
+	nodes, ok := graph["nodes"].([]interface{})
+	if !ok {
+		return fmt.Errorf("decode graph: missing or invalid 'nodes' field (expected an array)")
+	}
+	edges, ok := graph["edges"].([]interface{})
+	if !ok {
+		return fmt.Errorf("decode graph: missing or invalid 'edges' field (expected an array)")
+	}
 
 	fmt.Printf("Graph: %d nodes, %d edges\n", len(nodes), len(edges))
 	return nil
