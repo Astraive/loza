@@ -1,6 +1,8 @@
 use std::io;
 use std::time::Duration;
 
+use url::Url;
+
 use super::schema::{GraphView, IncidentContext, Remediation, RemediationFeedback};
 
 /// Client for the Cortex incident intelligence API.
@@ -37,6 +39,37 @@ impl CortexClient {
     pub fn with_timeout(mut self, timeout: Duration) -> Self {
         self.timeout = timeout;
         self
+    }
+
+    /// Build a request path from caller-supplied segments and query pairs.
+    ///
+    /// Each segment is percent-encoded as a single URL path segment, so reserved
+    /// characters such as `?`, `#`, `/` and `.` cannot inject query parameters
+    /// or traverse the path (e.g. via `../`). Query values are encoded with the
+    /// standard form encoder. The returned string always starts with `/`.
+    fn encoded_path(segments: &[&str], query: &[(&str, &str)]) -> String {
+        // A constant, absolute base lets `url` apply correct path-segment
+        // quoting (including the special handling of "." and ".." segments).
+        let mut url = Url::parse("http://cortex.invalid/").expect("constant base URL is valid");
+        {
+            let mut path = url
+                .path_segments_mut()
+                .expect("http base URL always has path segments");
+            path.pop_if_empty(); // drop the base's trailing-slash empty segment
+            for segment in segments {
+                path.push(segment);
+            }
+        }
+        for (key, value) in query {
+            url.query_pairs_mut().append_pair(key, value);
+        }
+
+        let mut path = url.path().to_string();
+        if let Some(query) = url.query() {
+            path.push('?');
+            path.push_str(query);
+        }
+        path
     }
 
     fn get(&self, path: &str) -> io::Result<serde_json::Value> {
@@ -110,7 +143,7 @@ impl CortexClient {
         incident_id: &str,
         mode: &str,
     ) -> io::Result<IncidentContext> {
-        let path = format!("/incidents/{}/reconstruct", incident_id);
+        let path = Self::encoded_path(&["incidents", incident_id, "reconstruct"], &[]);
         let body = serde_json::json!({"mode": mode});
         let resp = self.post(&path, &body)?;
         let ctx: IncidentContext = serde_json::from_value(resp).map_err(io_err)?;
@@ -119,7 +152,8 @@ impl CortexClient {
 
     /// Fetch the dependency graph for a service.
     pub fn service_graph(&self, service: &str, depth: u32) -> io::Result<GraphView> {
-        let path = format!("/graph/service/{}?depth={}", service, depth);
+        let depth = depth.to_string();
+        let path = Self::encoded_path(&["graph", "service", service], &[("depth", &depth)]);
         let resp = self.get(&path)?;
         let graph: GraphView = serde_json::from_value(resp).map_err(io_err)?;
         Ok(graph)
@@ -127,7 +161,8 @@ impl CortexClient {
 
     /// Fetch the graph for a specific incident.
     pub fn incident_graph(&self, incident_id: &str, depth: u32) -> io::Result<GraphView> {
-        let path = format!("/graph/incident/{}?depth={}", incident_id, depth);
+        let depth = depth.to_string();
+        let path = Self::encoded_path(&["graph", "incident", incident_id], &[("depth", &depth)]);
         let resp = self.get(&path)?;
         let graph: GraphView = serde_json::from_value(resp).map_err(io_err)?;
         Ok(graph)
@@ -183,4 +218,67 @@ impl CortexClient {
 
 fn io_err<E: std::fmt::Display>(err: E) -> io::Error {
     io::Error::other(format!("cortex client error: {err}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::CortexClient;
+
+    #[test]
+    fn encoded_path_leaves_ordinary_segments_and_query_untouched() {
+        let path = CortexClient::encoded_path(&["incidents", "inc-123", "reconstruct"], &[]);
+        assert_eq!(path, "/incidents/inc-123/reconstruct");
+
+        let path = CortexClient::encoded_path(&["graph", "service", "api"], &[("depth", "1")]);
+        assert_eq!(path, "/graph/service/api?depth=1");
+    }
+
+    #[test]
+    fn encoded_path_prevents_query_injection() {
+        let path =
+            CortexClient::encoded_path(&["graph", "service", "x?admin=true"], &[("depth", "1")]);
+        // Only our own `?depth=1` may introduce a query; the `?` in the
+        // service value must be percent-encoded into the path segment.
+        assert_eq!(
+            path.matches('?').count(),
+            1,
+            "unexpected query separator: {path}"
+        );
+        assert!(path.contains("%3F"), "expected '?' to be encoded: {path}");
+        assert!(path.ends_with("?depth=1"));
+        assert!(!path.contains("?admin=true"));
+    }
+
+    #[test]
+    fn encoded_path_prevents_fragment_and_ampersand_injection() {
+        let path =
+            CortexClient::encoded_path(&["incidents", "inc#frag&x=y", "reconstruct"], &[]);
+        assert!(!path.contains('#'), "fragment must not be raw: {path}");
+        assert!(path.contains("%23"), "expected '#' to be encoded: {path}");
+        assert!(!path.contains('?'), "no query expected: {path}");
+    }
+
+    #[test]
+    fn encoded_path_prevents_path_traversal() {
+        let path =
+            CortexClient::encoded_path(&["graph", "service", "../../admin"], &[("depth", "1")]);
+        // Slashes inside a segment must be encoded so no extra path segments
+        // (and thus no traversal) can be introduced.
+        assert!(!path.contains("../"), "path traversal leaked: {path}");
+        assert!(path.contains("%2F"), "expected '/' to be encoded: {path}");
+
+        // A segment that is exactly ".." is also neutralised by the URL builder.
+        let path = CortexClient::encoded_path(&["incidents", "..", "reconstruct"], &[]);
+        assert!(!path.contains("/../"), "dot-dot traversal leaked: {path}");
+        assert!(!path.starts_with("/reconstruct"));
+    }
+
+    #[test]
+    fn encoded_path_encodes_query_values() {
+        let path = CortexClient::encoded_path(&["graph", "service", "api"], &[("q", "a b&c")]);
+        assert!(
+            path.ends_with("?q=a+b%26c"),
+            "query value not encoded: {path}"
+        );
+    }
 }
