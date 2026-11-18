@@ -58,9 +58,12 @@ func StreamInterceptorWithConfig(cfg Config) grpc.StreamServerInterceptor {
 
 		defer func() {
 			if rec := recover(); rec != nil {
-				err = status.Error(codes.Internal, fmt.Sprintf("panic recovered: %v", rec))
-				loza.FinishError(evCtx, err, loza.Int("status_code", int(codes.Internal)))
+				// Record the panic value in server-side telemetry only. gRPC
+				// transmits the status message to the caller, so clients must
+				// receive a fixed, non-sensitive message instead.
+				loza.FinishError(evCtx, fmt.Errorf("panic recovered: %v", rec), loza.Int("status_code", int(codes.Internal)))
 				_ = loza.Emit(evCtx)
+				err = status.Error(codes.Internal, "internal server error")
 			}
 		}()
 
