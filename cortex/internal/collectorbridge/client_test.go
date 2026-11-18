@@ -9,12 +9,14 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/astraive/loza/cortex/internal/config"
 	"github.com/astraive/loza/cortex/internal/models"
+	"github.com/gorilla/websocket"
 )
 
 func TestFetchEventsSinceUsesScopedLQLRouteAndTypedCursorBindings(t *testing.T) {
@@ -335,5 +337,84 @@ func TestCursorPersistenceRejectsCorruptPrimaryAndBackup(t *testing.T) {
 	}
 	if err := client.SaveCursor(Cursor{EventID: "evt-new"}); err == nil {
 		t.Fatal("save must not overwrite an invalid primary cursor")
+	}
+}
+
+// TestStreamTailWebSocketDoesNotLeakCancellationGoroutine verifies that the
+// goroutine which closes the websocket on context cancellation also exits when
+// streamTailWebSocket returns early on its own (for example, on a read error),
+// even when the caller's context is never cancelled.
+func TestStreamTailWebSocketDoesNotLeakCancellationGoroutine(t *testing.T) {
+	upgrader := websocket.Upgrader{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		// Close immediately so the client's ReadMessage fails and
+		// streamTailWebSocket returns early while ctx is still live.
+		_ = conn.Close()
+	}))
+	defer server.Close()
+
+	client := NewClient(config.CollectorConfig{
+		URL:           server.URL,
+		Collector:     "demo",
+		TailTransport: "websocket",
+	})
+
+	// Let the server and client settle so the baseline only reflects permanent
+	// goroutines. The context below is context.Background(), which is never
+	// cancelled -- this is the condition that previously leaked the goroutine.
+	runtime.GC()
+	time.Sleep(20 * time.Millisecond)
+	baseline := runtime.NumGoroutine()
+
+	if err := client.StreamTail(context.Background(), func(_ *models.Event) error {
+		return nil
+	}); err == nil {
+		t.Fatal("expected websocket tail to return a read error after server close")
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for runtime.NumGoroutine() > baseline && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if got := runtime.NumGoroutine(); got > baseline {
+		t.Fatalf("cancellation goroutine leaked: goroutines = %d, baseline = %d", got, baseline)
+	}
+}
+
+// TestStreamTailWebSocketClosesConnectionOnContextCancellation keeps the
+// original cancellation behavior covered: cancelling the context must unblock
+// a live ReadMessage and make StreamTail return promptly.
+func TestStreamTailWebSocketClosesConnectionOnContextCancellation(t *testing.T) {
+	upgrader := websocket.Upgrader{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		// Hold the connection open until the client cancels.
+		_, _, _ = conn.ReadMessage()
+	}))
+	defer server.Close()
+
+	client := NewClient(config.CollectorConfig{
+		URL:           server.URL,
+		Collector:     "demo",
+		TailTransport: "websocket",
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		cancel()
+	}()
+
+	if err := client.StreamTail(ctx, func(_ *models.Event) error {
+		return nil
+	}); err == nil {
+		t.Fatal("expected websocket tail to return an error after context cancellation")
 	}
 }

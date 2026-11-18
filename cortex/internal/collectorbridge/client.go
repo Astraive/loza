@@ -205,9 +205,19 @@ func (c *Client) streamTailWebSocket(ctx context.Context, handle func(*models.Ev
 	}
 	defer conn.Close()
 
+	// Close the connection when the caller's context is cancelled so the
+	// blocking ReadMessage below is unblocked. The local done channel also
+	// guarantees this goroutine exits whenever this function returns early
+	// (e.g. on a dial/read/parse/handle error), even if ctx is never
+	// cancelled, preventing a goroutine leak.
+	done := make(chan struct{})
+	defer close(done)
 	go func() {
-		<-ctx.Done()
-		_ = conn.Close()
+		select {
+		case <-ctx.Done():
+			_ = conn.Close()
+		case <-done:
+		}
 	}()
 
 	for {
