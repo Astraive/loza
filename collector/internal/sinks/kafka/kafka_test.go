@@ -17,6 +17,27 @@ func TestNewRejectsInvalidAcks(t *testing.T) {
 	}
 }
 
+// Regression test for #499: the Kafka sink must accept idempotence together
+// with a non-"all" acks mode instead of failing in kgo.NewClient.
+func TestNewAcceptsIdempotenceWithNonAllAcks(t *testing.T) {
+	for _, acks := range []string{"0", "1"} {
+		t.Run("acks="+acks, func(t *testing.T) {
+			sink, err := New(Config{
+				Brokers:           []string{"127.0.0.1:9092"},
+				Topic:             "events",
+				Acks:              acks,
+				EnableIdempotence: true,
+			})
+			if err != nil {
+				t.Fatalf("New with idempotence and acks=%q: %v", acks, err)
+			}
+			if err := sink.Close(context.TODO()); err != nil {
+				t.Fatalf("close sink: %v", err)
+			}
+		})
+	}
+}
+
 func TestNewAcceptsProducerOptions(t *testing.T) {
 	sink, err := New(Config{
 		Brokers:           []string{"127.0.0.1:9092"},
