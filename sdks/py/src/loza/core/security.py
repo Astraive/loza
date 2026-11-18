@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-import hashlib
 import json
 from dataclasses import dataclass
 from typing import Any
 
 from .config import SecurityConfig
 from .event import Attr
+from .hashing import hash_sensitive_value
 
 
 @dataclass(slots=True)
@@ -55,7 +55,7 @@ class SecurityLimiter:
 
 
 def hash_value(value: Any) -> str:
-    return hashlib.sha256(str(value).encode("utf-8")).hexdigest()
+    return hash_sensitive_value(value)
 
 
 def sensitive_string(key: str, value: str) -> Attr:

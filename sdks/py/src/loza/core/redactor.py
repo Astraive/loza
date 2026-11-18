@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import copy
-import hashlib
 import json
 import re
 from collections.abc import Callable
 from typing import Any
+
+from .hashing import hash_sensitive_text
 
 REDACTED_VALUE = "[REDACTED]"
 
@@ -54,7 +55,7 @@ def _stable_text(value: Any) -> str:
 
 
 def _hash(value: Any) -> str:
-    return hashlib.sha256(_stable_text(value).encode("utf-8")).hexdigest()
+    return hash_sensitive_text(_stable_text(value))
 
 
 def _mask(value: Any, prefix: int = 2, suffix: int = 2) -> str:
