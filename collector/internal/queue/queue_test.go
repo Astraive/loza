@@ -13,6 +13,141 @@ import (
 	"time"
 )
 
+// recordingSink is an in-memory Sink used to exercise queue backpressure
+// without any filesystem or network dependency.
+type recordingSink struct {
+	mu      sync.Mutex
+	batches [][]byte
+}
+
+func (s *recordingSink) WriteEvent(ctx context.Context, data []byte, key []byte) error {
+	return s.WriteBatch(ctx, [][]byte{data})
+}
+
+func (s *recordingSink) WriteBatch(ctx context.Context, events [][]byte) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.batches = append(s.batches, events...)
+	return nil
+}
+
+func (s *recordingSink) Flush(ctx context.Context) error { return nil }
+
+func (s *recordingSink) Close(ctx context.Context) error { return nil }
+
+// newSizeLimitedQueue builds a queue whose only limit is a byte cap: MaxEvents
+// is left at 0 (unbounded) so the byte cap is the sole backpressure mechanism.
+// The flush loop is effectively disabled so buffered sizes stay deterministic.
+func newSizeLimitedQueue(t *testing.T, maxSizeBytes int64) (*Queue, *recordingSink) {
+	t.Helper()
+	sink := &recordingSink{}
+	q, err := NewQueue(QueueConfig{
+		Directory:     filepath.Join(t.TempDir(), "queue"),
+		Sink:          sink,
+		MaxEvents:     0,
+		MaxSizeBytes:  maxSizeBytes,
+		BatchSize:     100,
+		BatchTimeout:  time.Hour,
+		FlushInterval: time.Hour,
+	})
+	if err != nil {
+		t.Fatalf("new queue: %v", err)
+	}
+	// Signal shutdown without Queue.Close(): the flush loop may be parked in
+	// cond.Wait() and Close does not broadcast after closing stopCh.
+	t.Cleanup(func() {
+		close(q.stopCh)
+		q.cond.Broadcast()
+	})
+	return q, sink
+}
+
+func bufferedState(q *Queue) (int, int64) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	return len(q.events), q.queueBytes
+}
+
+func TestMaxSizeBytesBackpressureEnqueue(t *testing.T) {
+	q, _ := newSizeLimitedQueue(t, 10)
+
+	// Four-byte payloads: the 10-byte cap admits exactly two events.
+	if err := q.Enqueue(context.Background(), Event{Payload: []byte("abcd")}); err != nil {
+		t.Fatalf("enqueue 0: unexpected error: %v", err)
+	}
+	if err := q.Enqueue(context.Background(), Event{Payload: []byte("efgh")}); err != nil {
+		t.Fatalf("enqueue 1: unexpected error: %v", err)
+	}
+	if err := q.Enqueue(context.Background(), Event{Payload: []byte("ijkl")}); !errors.Is(err, ErrQueueFull) {
+		t.Fatalf("enqueue 2: expected ErrQueueFull, got %v", err)
+	}
+
+	n, bytes := bufferedState(q)
+	if n != 2 || bytes != 8 {
+		t.Fatalf("buffered = (%d events, %d bytes), want (2, 8)", n, bytes)
+	}
+	if got := q.State().Backpressured; got != 1 {
+		t.Fatalf("backpressured = %d, want 1", got)
+	}
+}
+
+func TestMaxSizeBytesBackpressureEnqueueBatch(t *testing.T) {
+	q, _ := newSizeLimitedQueue(t, 10)
+
+	errs := q.EnqueueBatch(context.Background(), []Event{
+		{Payload: []byte("abcd")},
+		{Payload: []byte("efgh")},
+		{Payload: []byte("ijkl")}, // would push the total to 12 bytes
+	})
+	if len(errs) != 3 {
+		t.Fatalf("got %d errors, want 3", len(errs))
+	}
+	if errs[0] != nil || errs[1] != nil {
+		t.Fatalf("first two events should be enqueued, got %v", errs[:2])
+	}
+	if !errors.Is(errs[2], ErrQueueFull) {
+		t.Fatalf("third event: expected ErrQueueFull, got %v", errs[2])
+	}
+
+	n, bytes := bufferedState(q)
+	if n != 2 || bytes != 8 {
+		t.Fatalf("buffered = (%d events, %d bytes), want (2, 8)", n, bytes)
+	}
+	if got := q.State().Backpressured; got != 1 {
+		t.Fatalf("backpressured = %d, want 1", got)
+	}
+}
+
+func TestMaxSizeBytesBackpressureReleasedOnFlush(t *testing.T) {
+	q, _ := newSizeLimitedQueue(t, 4)
+
+	// A single event larger than the whole cap is rejected even when empty.
+	if err := q.Enqueue(context.Background(), Event{Payload: []byte("too-large")}); !errors.Is(err, ErrQueueFull) {
+		t.Fatalf("oversized event: expected ErrQueueFull, got %v", err)
+	}
+	if err := q.Enqueue(context.Background(), Event{Payload: []byte("abcd")}); err != nil {
+		t.Fatalf("enqueue within limit: %v", err)
+	}
+	if err := q.Enqueue(context.Background(), Event{Payload: []byte("efgh")}); !errors.Is(err, ErrQueueFull) {
+		t.Fatalf("second event: expected ErrQueueFull, got %v", err)
+	}
+
+	// Flushing drains the buffer and must release the accounted bytes.
+	if err := q.doFlush(); err != nil {
+		t.Fatalf("doFlush: %v", err)
+	}
+	if n, bytes := bufferedState(q); n != 0 || bytes != 0 {
+		t.Fatalf("after flush buffered = (%d events, %d bytes), want (0, 0)", n, bytes)
+	}
+
+	if err := q.Enqueue(context.Background(), Event{Payload: []byte("wxyz")}); err != nil {
+		t.Fatalf("enqueue after flush: %v", err)
+	}
+	if n, bytes := bufferedState(q); n != 1 || bytes != 4 {
+		t.Fatalf("after re-enqueue buffered = (%d events, %d bytes), want (1, 4)", n, bytes)
+	}
+}
+
 func TestDiskSinkEncryptsPayloadAtRest(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "queue.ndjson")
 	sink, err := NewDiskSink(DiskSinkConfig{
