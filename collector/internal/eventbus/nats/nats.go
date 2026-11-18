@@ -20,14 +20,30 @@ func init() {
 }
 
 type natsBus struct {
-	conn    *nats.Conn
-	js      jetstream.JetStream
-	cfg     eventbus.NATSConfig
-	dlqCfg  string
-	closed  atomic.Bool
-	mu      sync.Mutex
-	subs    []*jetstream.Consumer
-	cancel  context.CancelFunc
+	conn   *nats.Conn
+	js     jetstream.JetStream
+	cfg    eventbus.NATSConfig
+	dlqCfg string
+	closed atomic.Bool
+	mu     sync.Mutex
+	subs   []subscription
+	cancel context.CancelFunc
+}
+
+// subscription holds the shutdown hooks for one Subscribe call. cancel stops
+// the consumer's context (unblocking a pending iter.Next via NextContext) and
+// stop invalidates the message iterator.
+type subscription struct {
+	cancel context.CancelFunc
+	stop   func()
+}
+
+// messageIterator is the subset of jetstream.MessagesContext used by the
+// consume loop. It is an interface so cancellation behavior can be unit tested
+// without a running NATS server.
+type messageIterator interface {
+	Next(opts ...jetstream.NextOpt) (jetstream.Msg, error)
+	Stop()
 }
 
 // New creates a new NATS JetStream event bus.
@@ -134,7 +150,11 @@ func (b *natsBus) Subscribe(ctx context.Context, topic string, group string, han
 		durable = b.cfg.Durable
 	}
 
-	consumer, err := b.js.CreateOrUpdateConsumer(ctx, b.cfg.Stream, jetstream.ConsumerConfig{
+	// Derive the consumer's lifetime context from the Subscribe context so
+	// that cancelling it stops the consumer (matching the Redis adapter).
+	subCtx, cancel := context.WithCancel(ctx)
+
+	consumer, err := b.js.CreateOrUpdateConsumer(subCtx, b.cfg.Stream, jetstream.ConsumerConfig{
 		Durable:       durable,
 		FilterSubject: subject,
 		AckPolicy:     jetstream.AckExplicitPolicy,
@@ -142,55 +162,74 @@ func (b *natsBus) Subscribe(ctx context.Context, topic string, group string, han
 		AckWait:       30 * time.Second,
 	})
 	if err != nil {
+		cancel()
 		return fmt.Errorf("eventbus/nats: create consumer: %w", err)
 	}
 
-	b.mu.Lock()
-	b.subs = append(b.subs, &consumer)
-	b.mu.Unlock()
-
 	iter, err := consumer.Messages(jetstream.PullMaxMessages(10))
 	if err != nil {
+		cancel()
 		return fmt.Errorf("eventbus/nats: messages: %w", err)
 	}
 
-	go func() {
-		for {
-			msg, err := iter.Next()
-			if err != nil {
-				if b.closed.Load() || ctx.Err() != nil {
-					return
-				}
-				continue
-			}
+	b.mu.Lock()
+	if b.closed.Load() {
+		b.mu.Unlock()
+		cancel()
+		iter.Stop()
+		return eventbus.ErrBusClosed
+	}
+	b.subs = append(b.subs, subscription{cancel: cancel, stop: iter.Stop})
+	b.mu.Unlock()
 
-			var env eventbus.Envelope
-			if err := json.Unmarshal(msg.Data(), &env); err != nil {
-				_ = msg.Nak()
-				continue
-			}
-
-			busMsg := &natsMessage{
-				id:   env.ID,
-				topic: subject,
-				env:  env,
-				msg:  msg,
-			}
-			if err := handler(ctx, busMsg); err != nil {
-				_ = msg.Nak()
-			} else {
-				_ = msg.Ack()
-			}
-		}
-	}()
+	go b.consume(subCtx, iter, subject, handler)
 
 	return nil
+}
+
+// consume drains the iterator until its context is cancelled or the bus is
+// closed. NextContext makes a blocked iter.Next return when ctx is cancelled.
+func (b *natsBus) consume(ctx context.Context, iter messageIterator, subject string, handler eventbus.Handler) {
+	for {
+		msg, err := iter.Next(jetstream.NextContext(ctx))
+		if err != nil {
+			if b.closed.Load() || ctx.Err() != nil {
+				return
+			}
+			continue
+		}
+
+		var env eventbus.Envelope
+		if err := json.Unmarshal(msg.Data(), &env); err != nil {
+			_ = msg.Nak()
+			continue
+		}
+
+		busMsg := &natsMessage{
+			id:    env.ID,
+			topic: subject,
+			env:   env,
+			msg:   msg,
+		}
+		if err := handler(ctx, busMsg); err != nil {
+			_ = msg.Nak()
+		} else {
+			_ = msg.Ack()
+		}
+	}
 }
 
 func (b *natsBus) Close(_ context.Context) error {
 	if !b.closed.CompareAndSwap(false, true) {
 		return nil
 	}
+	b.mu.Lock()
+	for _, sub := range b.subs {
+		sub.cancel()
+		sub.stop()
+	}
+	b.subs = nil
+	b.mu.Unlock()
 	b.cancel()
 	if b.conn != nil {
 		b.conn.Close()
@@ -228,8 +267,8 @@ type natsMessage struct {
 	msg   jetstream.Msg
 }
 
-func (m *natsMessage) ID() string                   { return m.id }
-func (m *natsMessage) Topic() string                 { return m.topic }
-func (m *natsMessage) Envelope() eventbus.Envelope   { return m.env }
-func (m *natsMessage) Ack(_ context.Context) error   { return m.msg.Ack() }
+func (m *natsMessage) ID() string                            { return m.id }
+func (m *natsMessage) Topic() string                         { return m.topic }
+func (m *natsMessage) Envelope() eventbus.Envelope           { return m.env }
+func (m *natsMessage) Ack(_ context.Context) error           { return m.msg.Ack() }
 func (m *natsMessage) Nack(_ context.Context, _ error) error { return m.msg.Nak() }
