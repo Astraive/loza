@@ -1,10 +1,39 @@
 from __future__ import annotations
 
 import hashlib
+import hmac
+import os
+import secrets
 from datetime import datetime, timedelta
 from typing import Any as _TypingAny
 
 from .event import Attr
+
+# Email and IP values are low-entropy, so a bare SHA-256 digest can be reversed
+# offline with a dictionary or rainbow table. Pseudonymization therefore uses a
+# keyed HMAC: the key comes from LOZA_PII_HASH_SECRET (or an explicit per-call
+# ``secret``), and falls back to a random per-process key when unconfigured.
+_PII_HASH_SECRET_ENV = "LOZA_PII_HASH_SECRET"
+_ephemeral_hash_key: bytes | None = None
+
+
+def _hash_key(secret: str | bytes | None) -> bytes:
+    if secret is not None:
+        key = secret.encode("utf-8") if isinstance(secret, str) else bytes(secret)
+        if not key:
+            raise ValueError("PII hash secret must not be empty")
+        return key
+    env_secret = os.environ.get(_PII_HASH_SECRET_ENV)
+    if env_secret:
+        return env_secret.encode("utf-8")
+    global _ephemeral_hash_key
+    if _ephemeral_hash_key is None:
+        _ephemeral_hash_key = secrets.token_bytes(32)
+    return _ephemeral_hash_key
+
+
+def _pseudonymize(value: str, secret: str | bytes | None) -> str:
+    return hmac.new(_hash_key(secret), value.encode("utf-8"), hashlib.sha256).hexdigest()
 
 
 def String(key: str, value: str) -> Attr:
@@ -206,12 +235,12 @@ def url(value: str) -> Attr:
     return String("url", value)
 
 
-def email_hash(value: str) -> Attr:
-    return String("email.hash", hashlib.sha256(value.strip().lower().encode("utf-8")).hexdigest())
+def email_hash(value: str, *, secret: str | bytes | None = None) -> Attr:
+    return String("email.hash", _pseudonymize(value.strip().lower(), secret))
 
 
-def ip_hash(value: str) -> Attr:
-    return String("ip.hash", hashlib.sha256(value.strip().encode("utf-8")).hexdigest())
+def ip_hash(value: str, *, secret: str | bytes | None = None) -> Attr:
+    return String("ip.hash", _pseudonymize(value.strip(), secret))
 
 
 def region(value: str) -> Attr:

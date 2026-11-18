@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import hashlib
+import hmac
 
 import loza
+
+_SECRET = b"typed-helper-test-secret"
 
 
 def test_typed_attribute_helpers_snake_case():
@@ -16,8 +19,10 @@ def test_typed_attribute_helpers_snake_case():
     assert loza.tags("env", "prod", "staging").key == "env"
     assert loza.masked("card", "4111111111111111").value == "41************11"
     assert loza.url("https://example.com").key == "url"
-    assert loza.email_hash("User@Example.COM").value == hashlib.sha256(b"user@example.com").hexdigest()
-    assert loza.ip_hash("192.168.1.1").value == hashlib.sha256(b"192.168.1.1").hexdigest()
+    expected_email = hmac.new(_SECRET, b"user@example.com", hashlib.sha256).hexdigest()
+    expected_ip = hmac.new(_SECRET, b"192.168.1.1", hashlib.sha256).hexdigest()
+    assert loza.email_hash("User@Example.COM", secret=_SECRET).value == expected_email
+    assert loza.ip_hash("192.168.1.1", secret=_SECRET).value == expected_ip
 
 
 def test_typed_attribute_helpers_pascal_case():
