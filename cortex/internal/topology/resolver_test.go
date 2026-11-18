@@ -16,6 +16,7 @@ import (
 type fakeTopologyStore struct {
 	aliasByKey map[string]*models.ServiceAlias
 	history    map[string][]*models.ServiceAlias
+	historyErr error
 	saved      []*models.ServiceAlias
 	aliasErr   error
 }
@@ -36,6 +37,9 @@ func (f *fakeTopologyStore) GetAlias(_ context.Context, alias string, timestamp 
 }
 
 func (f *fakeTopologyStore) GetHistory(_ context.Context, service string) ([]*models.ServiceAlias, error) {
+	if f.historyErr != nil {
+		return nil, f.historyErr
+	}
 	if h, ok := f.history[service]; ok {
 		return h, nil
 	}
@@ -296,3 +300,18 @@ func TestRegisterAliasOverlapChecksFullIntervals(t *testing.T) {
 }
 
 func ptrTime(t time.Time) *time.Time { return &t }
+
+func TestRegisterAliasFailsWhenHistoryLookupFails(t *testing.T) {
+	historyErr := errors.New("history store unavailable")
+	store := &fakeTopologyStore{historyErr: historyErr}
+	resolver := NewResolver(store)
+	validFrom := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	err := resolver.RegisterAlias(context.Background(), "svc-a", "svc-c", validFrom, nil)
+	if !errors.Is(err, historyErr) {
+		t.Fatalf("expected wrapped history error, got %v", err)
+	}
+	if len(store.saved) != 0 {
+		t.Fatalf("alias must not be saved when history cannot be verified, got %d saved", len(store.saved))
+	}
+}
