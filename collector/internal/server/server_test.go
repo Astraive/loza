@@ -10,9 +10,12 @@ import (
 	"time"
 
 	"github.com/astraive/loza/collector/internal/auth"
+	lozav1 "github.com/astraive/loza/gen/go/loza/core"
 	"github.com/gorilla/websocket"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
 )
 
@@ -448,4 +451,118 @@ func (m *mockIngestStream) Recv() (*EventBatch, error) {
 	batch := m.batches[m.index]
 	m.index++
 	return batch, nil
+}
+
+// blockingIngestState blocks inside Ingest so a client stream is guaranteed to
+// be in flight on the server. The entered channel signals that the stream
+// reached the handler; Ingest returns only once the stream context is cancelled
+// by a forced stop, mirroring a hung long-lived client.
+type blockingIngestState struct {
+	*mockState
+	entered chan struct{}
+}
+
+func (s *blockingIngestState) Ingest(ctx context.Context, events [][]byte) (int, error) {
+	select {
+	case s.entered <- struct{}{}:
+	default:
+	}
+	// Hold the RPC open until the stream is actually cancelled by a forced
+	// stop, mirroring a real long-lived client stream.
+	<-ctx.Done()
+	return len(events), nil
+}
+
+func newBlockingState() *blockingIngestState {
+	return &blockingIngestState{
+		mockState: &mockState{ready: true, healthy: true},
+		entered:   make(chan struct{}, 1),
+	}
+}
+
+// startTestGRPCServer starts a GRPCServer on a random local port and opens a
+// client stream whose RPC is held open on the server via a blocking Ingest.
+func startTestGRPCServer(t *testing.T, state State) (*GRPCServer, context.CancelFunc, <-chan error) {
+	t.Helper()
+
+	srv := NewGRPCServer(GRPCConfig{
+		Enabled:              true,
+		Port:                 "127.0.0.1:0",
+		MaxConcurrentStreams: 100,
+		MaxRecvMsgSize:       1 << 20,
+		MaxSendMsgSize:       1 << 20,
+	}, state)
+	// Keep the graceful-stop fallback short so shutdown tests run quickly.
+	srv.shutdownGracePeriod = 200 * time.Millisecond
+
+	startCtx, startCancel := context.WithCancel(context.Background())
+	t.Cleanup(startCancel)
+	startErr := make(chan error, 1)
+	go func() { startErr <- srv.Start(startCtx) }()
+
+	require.Eventually(t, func() bool {
+		return srv.IsReady() && srv.lis != nil
+	}, 2*time.Second, 10*time.Millisecond)
+
+	conn, err := grpc.NewClient(srv.lis.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = conn.Close() })
+
+	stream, err := lozav1.NewLozaIngestClient(conn).IngestStream(context.Background())
+	require.NoError(t, err)
+	require.NoError(t, stream.Send(&lozav1.RawEventBatch{
+		Events: []*lozav1.RawEvent{{RawJson: `{"id":"1"}`}},
+	}))
+
+	blocking, ok := state.(*blockingIngestState)
+	require.True(t, ok)
+	select {
+	case <-blocking.entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("client stream did not reach the server handler")
+	}
+
+	return srv, startCancel, startErr
+}
+
+func TestGRPCServerStopHonorsDeadlineWithOpenStream(t *testing.T) {
+	state := newBlockingState()
+	srv, _, startErr := startTestGRPCServer(t, state)
+
+	// With an in-flight stream, a deadline-bounded Stop must force the server
+	// down instead of blocking forever inside GracefulStop.
+	stopCtx, stopCancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer stopCancel()
+
+	stopDone := make(chan error, 1)
+	go func() { stopDone <- srv.Stop(stopCtx) }()
+
+	select {
+	case err := <-stopDone:
+		require.NoError(t, err)
+	case <-time.After(3 * time.Second):
+		t.Fatal("Stop blocked despite ctx deadline while a stream was open")
+	}
+	assert.False(t, srv.IsReady())
+
+	select {
+	case <-startErr:
+	case <-time.After(3 * time.Second):
+		t.Fatal("Start did not return after forced stop")
+	}
+}
+
+func TestGRPCServerStartCtxCancelStopsWithOpenStream(t *testing.T) {
+	state := newBlockingState()
+	_, cancelStart, startErr := startTestGRPCServer(t, state)
+
+	// Cancelling the lifecycle context must stop the server even while a
+	// stream is open, without leaking a goroutine stuck in GracefulStop.
+	cancelStart()
+
+	select {
+	case <-startErr:
+	case <-time.After(3 * time.Second):
+		t.Fatal("Start did not return after lifecycle context cancellation with an open stream")
+	}
 }

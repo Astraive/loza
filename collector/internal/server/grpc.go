@@ -21,6 +21,11 @@ import (
 	"google.golang.org/grpc/status"
 )
 
+// defaultGRPCShutdownGracePeriod bounds how long a graceful gRPC stop waits
+// for in-flight RPCs before forcing closure, so a single hung client cannot
+// block shutdown forever.
+const defaultGRPCShutdownGracePeriod = 10 * time.Second
+
 type GRPCServer struct {
 	cfg               GRPCConfig
 	state             State
@@ -33,6 +38,18 @@ type GRPCServer struct {
 	keyStore          auth.KeyStore
 	keyCache          *auth.MemoryKeyCache
 	serverSecret      []byte
+
+	// shutdownGracePeriod bounds graceful stop when no shorter deadline is
+	// supplied. Zero selects defaultGRPCShutdownGracePeriod. It is a field so
+	// tests can exercise the shutdown path without waiting the full grace period.
+	shutdownGracePeriod time.Duration
+}
+
+func (s *GRPCServer) gracePeriod() time.Duration {
+	if s.shutdownGracePeriod > 0 {
+		return s.shutdownGracePeriod
+	}
+	return defaultGRPCShutdownGracePeriod
 }
 
 func NewGRPCServer(cfg GRPCConfig, state State) *GRPCServer {
@@ -131,7 +148,9 @@ func (s *GRPCServer) Start(ctx context.Context) error {
 
 	go func() {
 		<-ctx.Done()
-		s.srv.GracefulStop()
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), s.gracePeriod())
+		defer cancel()
+		gracefulStopWithContext(shutdownCtx, s.srv)
 	}()
 
 	s.ready.Store(true)
@@ -143,8 +162,34 @@ func (s *GRPCServer) Stop(ctx context.Context) error {
 	if s.srv == nil {
 		return nil
 	}
-	s.srv.GracefulStop()
+	// Honour the caller's deadline. When none is supplied, still bound the
+	// graceful stop so an open stream cannot hang shutdown indefinitely.
+	if _, ok := ctx.Deadline(); !ok {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, s.gracePeriod())
+		defer cancel()
+	}
+	gracefulStopWithContext(ctx, s.srv)
 	return nil
+}
+
+// gracefulStopWithContext stops srv gracefully, but falls back to a forced
+// Stop when ctx is cancelled or its deadline expires. grpc.Server.GracefulStop
+// blocks until every in-flight RPC (including long-lived client streams)
+// finishes, so without the fallback a single slow or hung client can block
+// shutdown forever and leak the waiting goroutine.
+func gracefulStopWithContext(ctx context.Context, srv *grpc.Server) {
+	stopped := make(chan struct{})
+	go func() {
+		srv.GracefulStop()
+		close(stopped)
+	}()
+
+	select {
+	case <-stopped:
+	case <-ctx.Done():
+		srv.Stop()
+	}
 }
 
 type collectorSvcServer struct {
