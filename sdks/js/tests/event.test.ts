@@ -231,3 +231,53 @@ describe('camelCase aliases', () => {
     assert.equal(requestId, RequestID);
   });
 });
+
+describe('Event.clone deep copy', () => {
+  it('deep-clones checkpoints, processes, groups and timers', () => {
+    const ev = new Event({ event: 'clone', service: 'svc' }, 'svc', 'test');
+    ev.checkpoint('cp', { shared: 'value', nested: { deep: 1 } });
+    ev.startProcess('proc').finish(Int('p', 1));
+    ev.startGroup('grp').finish(Int('g', 2));
+    ev.startTimer('tmr').stop(Int('t', 3));
+
+    const clone = ev.clone();
+
+    // Collections are distinct arrays.
+    assert.notEqual(clone.checkpoints, ev.checkpoints);
+    assert.notEqual(clone.processes, ev.processes);
+    assert.notEqual(clone.groups, ev.groups);
+    assert.notEqual(clone.timers, ev.timers);
+
+    // Entry objects are distinct.
+    assert.notEqual(clone.checkpoints[0], ev.checkpoints[0]);
+    assert.notEqual(clone.processes[0], ev.processes[0]);
+    assert.notEqual(clone.groups[0], ev.groups[0]);
+    assert.notEqual(clone.timers[0], ev.timers[0]);
+
+    // Entry attrs are distinct objects, including nested values.
+    assert.notEqual(clone.checkpoints[0].attrs, ev.checkpoints[0].attrs);
+    assert.notEqual(clone.processes[0].attrs, ev.processes[0].attrs);
+    assert.notEqual(clone.checkpoints[0].attrs!.nested, ev.checkpoints[0].attrs!.nested);
+
+    // Mutating the original never changes the clone.
+    ev.checkpoints[0].attrs!.shared = 'changed';
+    ev.checkpoints[0].attrs!.nested.deep = 99;
+    ev.processes[0].attrs!.p = 99;
+    ev.groups[0].attrs!.g = 99;
+    ev.timers[0].attrs!.t = 99;
+    ev.processes.push({ step: 9, name: 'later', started_at_ms: 0, ended_at_ms: 0, duration_ms: 0 });
+    ev.checkpoints.push({ name: 'later', at_ms: 0 });
+
+    assert.equal(clone.checkpoints[0].attrs!.shared, 'value');
+    assert.equal(clone.checkpoints[0].attrs!.nested.deep, 1);
+    assert.equal(clone.processes[0].attrs!.p, 1);
+    assert.equal(clone.groups[0].attrs!.g, 2);
+    assert.equal(clone.timers[0].attrs!.t, 3);
+    assert.equal(clone.processes.length, 1);
+    assert.equal(clone.checkpoints.length, 1);
+
+    // Mutating the clone never changes the original.
+    clone.groups[0].attrs!.g = 777;
+    assert.equal(ev.groups[0].attrs!.g, 99);
+  });
+});
