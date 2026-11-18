@@ -4,6 +4,8 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
+	"strings"
 	"testing"
 )
 
@@ -65,6 +67,32 @@ func TestRunCategorizesBatchOutcomes(t *testing.T) {
 			}
 			if report.Errors != tt.wantErrors {
 				t.Errorf("Errors = %d, want %d", report.Errors, tt.wantErrors)
+			}
+		})
+	}
+}
+
+func TestRunRejectsNonPositiveWorkers(t *testing.T) {
+	for _, workers := range []int{0, -1} {
+		t.Run("workers="+strconv.Itoa(workers), func(t *testing.T) {
+			cfg := RunnerConfig{
+				URL:       "http://127.0.0.1:1",
+				Events:    10,
+				Workers:   workers,
+				BatchSize: 10,
+				BodySize:  16,
+			}
+
+			// Before the fix this panicked with an integer divide-by-zero.
+			report, err := Run(context.Background(), cfg)
+			if err == nil {
+				t.Fatal("expected Run to return an error for non-positive Workers")
+			}
+			if !strings.Contains(err.Error(), "workers") {
+				t.Fatalf("expected error to mention workers, got %q", err.Error())
+			}
+			if report != (Report{}) {
+				t.Fatalf("expected zero report on error, got %+v", report)
 			}
 		})
 	}
