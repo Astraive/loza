@@ -225,10 +225,20 @@ func (mc *MetricsCollector) incrementBufferSize() {
 // Requirement: 49.6
 func (mc *MetricsCollector) decrementBufferSize() {
 	if mc != nil && mc.bufferSize != nil {
-		newSize := mc.currentBufferSize.Add(-1)
-		if newSize < 0 {
-			newSize = 0
-			mc.currentBufferSize.Store(0)
+		// Decrement and clamp in a single compare-and-swap loop. A separate
+		// Add(-1) followed by Store(0) could overwrite a concurrent increment
+		// that landed between the two operations, losing buffer-size updates.
+		var newSize int64
+		for {
+			old := mc.currentBufferSize.Load()
+			if old > 0 {
+				newSize = old - 1
+			} else {
+				newSize = 0
+			}
+			if mc.currentBufferSize.CompareAndSwap(old, newSize) {
+				break
+			}
 		}
 		mc.bufferSize.Set(float64(newSize))
 	}
