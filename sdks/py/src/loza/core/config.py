@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field, fields as dataclass_fields, replace
 from typing import Any, Callable, Protocol, runtime_checkable
 from urllib.parse import quote
 
@@ -461,6 +461,57 @@ def _apply_env_vars(cfg: Config) -> Config:
     return cfg
 
 
+_NESTED_CONFIG_TYPES = {
+    "async_config": AsyncConfig,
+    "security": SecurityConfig,
+    "field_naming": FieldNamingConfig,
+}
+
+
+def _overlay_missing_config_fields(base: Config, overlay: Config, names: tuple[str, ...]) -> None:
+    """Copy non-default values for *names* from *overlay* onto *base*.
+
+    The merge helpers used to rely on a hand-written whitelist that omitted the
+    nested security/naming objects and several scalar settings, so values set in
+    YAML or code were silently discarded. Nested objects are merged field by
+    field so values from a lower-precedence layer are preserved unless the
+    overlay explicitly changes them. Fields with dedicated handling (endpoints,
+    credentials, sinks, plugins, ...) are intentionally not passed in *names*.
+    """
+    defaults = Config()
+    for name in names:
+        value = getattr(overlay, name)
+        default_value = getattr(defaults, name)
+        nested_type = _NESTED_CONFIG_TYPES.get(name)
+        if nested_type is not None:
+            base_nested = getattr(base, name)
+            for nested_field in dataclass_fields(nested_type):
+                field_value = getattr(value, nested_field.name)
+                if field_value != getattr(default_value, nested_field.name):
+                    setattr(base_nested, nested_field.name, field_value)
+        elif value != default_value:
+            setattr(base, name, value)
+
+
+_MERGED_EXTRA_FIELDS = (
+    "async_config",
+    "security",
+    "field_naming",
+    "deployment_id",
+    "include_host",
+    "max_checkpoints",
+    "panic_recovery",
+    "alias",
+    "exit_on_fatal",
+    "release",
+    "namespace",
+    "otel_bridge",
+    "retry",
+    "timeout",
+    "logger",
+)
+
+
 def _merge_file_config(base: Config, file_cfg: Config) -> Config:
     """Apply file config values only when base has defaults (empty strings, default values)."""
     if file_cfg.service and not base.service:
@@ -490,6 +541,7 @@ def _merge_file_config(base: Config, file_cfg: Config) -> Config:
         base.checkpoint_emit_immediately = bool(file_cfg.checkpoint_emit_immediately)
     if file_cfg.security.hash_salt and not base.security.hash_salt:
         base.security.hash_salt = file_cfg.security.hash_salt
+    _overlay_missing_config_fields(base, file_cfg, _MERGED_EXTRA_FIELDS)
     return base
 
 
@@ -540,6 +592,7 @@ def _merge_code_config(base: Config, code: Config) -> Config:
         base.async_config.workers = code.async_config.workers
     if code.security.hash_salt:
         base.security.hash_salt = code.security.hash_salt
+    _overlay_missing_config_fields(base, code, _MERGED_EXTRA_FIELDS)
     return base
 
 
@@ -590,11 +643,24 @@ def _config_from_mapping(data: dict[str, Any]) -> Config:
         checkpoint_emit_immediately=(
             _UNSET_FALSE if "checkpoint_emit_immediately" not in data else bool(data["checkpoint_emit_immediately"])
         ),
+        deployment_id=str(data.get("deployment_id", "")),
+        include_host=bool(data.get("include_host", False)),
+        max_checkpoints=int(data.get("max_checkpoints", 32)),
+        panic_recovery=bool(data.get("panic_recovery", False)),
+        alias=str(data.get("alias", "")),
+        exit_on_fatal=bool(data.get("exit_on_fatal", False)),
+        release=str(data.get("release", "")),
+        namespace=str(data.get("namespace", "")),
+        otel_bridge=bool(data.get("otel_bridge", False)),
+        retry=bool(data.get("retry", False)),
+        timeout=float(data.get("timeout", 0.0)),
         async_config=AsyncConfig(
             enabled=_UNSET_FALSE if "enabled" not in async_map else bool(async_map["enabled"]),
             queue_size=int(async_map.get("queue_size", 8192)),
             workers=int(async_map.get("workers", 1)),
             max_batch_bytes=int(async_map.get("max_batch_bytes", 256 * 1024)),
+            flush_interval_ms=int(async_map.get("flush_interval_ms", 5000)),
+            batch_size=int(async_map.get("batch_size", 100)),
         ),
         security=SecurityConfig(
             redact_by_default=bool(security_map.get("redact_by_default", True)),
