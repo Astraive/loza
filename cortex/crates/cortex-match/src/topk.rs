@@ -68,6 +68,10 @@ impl TopK {
         self.k
     }
 
+    pub fn metric(&self) -> &str {
+        &self.metric
+    }
+
     /// Search for top-k similar signatures
     /// O(n * d) where n = candidates, d = feature vector dim
     /// Using heap: O(n log k) instead of O(n log n)
