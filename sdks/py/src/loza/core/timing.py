@@ -11,6 +11,23 @@ if TYPE_CHECKING:
     from .event import Attr
 
 
+# Keys owned by the timing events themselves. User-supplied attrs must never be
+# allowed to replace these measured values in to_dict() output.
+_RESERVED_EVENT_KEYS = frozenset({
+    "step",
+    "name",
+    "started_at_ms",
+    "ended_at_ms",
+    "duration_ms",
+    "status_code",
+})
+
+
+def _non_reserved_attrs(attrs: dict[str, object]) -> dict[str, object]:
+    """Return user attrs with reserved event fields removed."""
+    return {k: v for k, v in attrs.items() if k not in _RESERVED_EVENT_KEYS}
+
+
 @dataclass(slots=True)
 class EventProcess:
     step: int
@@ -31,7 +48,7 @@ class EventProcess:
         }
         if self.status_code:
             d["status_code"] = self.status_code
-        d.update(self.attrs)
+        d.update(_non_reserved_attrs(self.attrs))
         return d
 
 
@@ -53,7 +70,7 @@ class EventGroup:
         }
         if self.status_code:
             d["status_code"] = self.status_code
-        d.update(self.attrs)
+        d.update(_non_reserved_attrs(self.attrs))
         return d
 
 
@@ -71,7 +88,7 @@ class EventTimer:
         }
         if self.status_code:
             d["status_code"] = self.status_code
-        d.update(self.attrs)
+        d.update(_non_reserved_attrs(self.attrs))
         return d
 
 
