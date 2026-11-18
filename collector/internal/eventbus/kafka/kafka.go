@@ -5,8 +5,8 @@ package kafka
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -14,6 +14,7 @@ import (
 	"github.com/astraive/loza/collector/internal/eventbus"
 	"github.com/rs/zerolog/log"
 	"github.com/twmb/franz-go/pkg/kadm"
+	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kgo"
 )
 
@@ -111,14 +112,12 @@ func New(_ context.Context, cfg eventbus.Config) (eventbus.Bus, error) {
 		return nil, fmt.Errorf("eventbus/kafka: create topics: %w", createErr)
 	}
 	for _, resp := range resps.Sorted() {
-		if resp.Err != nil {
-			// kadm.CreateTopics ignores topics that already exist at the Go level,
-			// but returns per-topic errors. Ignore TOPIC_ALREADY_EXISTS (code 36).
-			errStr := resp.Err.Error()
-			if !strings.Contains(errStr, "TOPIC_ALREADY_EXISTS") {
-				client.Close()
-				return nil, fmt.Errorf("eventbus/kafka: create topic %q: %w", resp.Topic, resp.Err)
-			}
+		if resp.Err != nil && !isTopicAlreadyExists(resp.Err) {
+			// kadm.CreateTopics returns per-topic errors; a TOPIC_ALREADY_EXISTS
+			// (code 36) response is benign and expected on restart. Any other
+			// error is fatal.
+			client.Close()
+			return nil, fmt.Errorf("eventbus/kafka: create topic %q: %w", resp.Topic, resp.Err)
 		}
 	}
 
@@ -156,6 +155,18 @@ func (f *firstProduceErr) load() error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.err
+}
+
+// isTopicAlreadyExists reports whether err is the Kafka TOPIC_ALREADY_EXISTS
+// error (code 36). The typed kerr code is used instead of matching message
+// text, which can differ between broker/client versions and must not turn a
+// benign "topic already exists" response into a startup failure.
+func isTopicAlreadyExists(err error) bool {
+	if err == nil {
+		return false
+	}
+	var kerrErr *kerr.Error
+	return errors.As(err, &kerrErr) && kerrErr.Code == kerr.TopicAlreadyExists.Code
 }
 
 func (b *kafkaBus) Publish(ctx context.Context, topic string, events []eventbus.Envelope) error {
@@ -330,10 +341,10 @@ type message struct {
 	rec      *kgo.Record
 }
 
-func (m *message) ID() string                   { return m.id }
-func (m *message) Topic() string                { return m.topic }
-func (m *message) Envelope() eventbus.Envelope  { return m.envelope }
-func (m *message) Ack(ctx context.Context) error { return m.consumer.CommitRecords(ctx, m.rec) }
+func (m *message) ID() string                            { return m.id }
+func (m *message) Topic() string                         { return m.topic }
+func (m *message) Envelope() eventbus.Envelope           { return m.envelope }
+func (m *message) Ack(ctx context.Context) error         { return m.consumer.CommitRecords(ctx, m.rec) }
 func (m *message) Nack(_ context.Context, _ error) error { return nil }
 
 var _ eventbus.Bus = (*kafkaBus)(nil)
