@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -630,4 +631,81 @@ func TestSpoolReplaySkipsInvalidLinesAndCompacts(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatalf("expected one replayed event and compacted spool, got replayed=%d spool_bytes=%d", sink.Len(), state.metrics.spoolBytes.Load())
+}
+
+func TestSpoolReplayQuarantinesDecryptionFailureDistinctly(t *testing.T) {
+	plain := []byte(`{"event_id":"decrypt-fail-1","event":"secret"}`)
+	sealed, err := encryptBlob(plain, "correct-encryption-key")
+	if err != nil {
+		t.Fatalf("encrypt blob: %v", err)
+	}
+
+	spoolPath := filepath.Join(t.TempDir(), "events.ndjson")
+	if err := os.WriteFile(spoolPath, append(append([]byte(nil), sealed...), '\n'), 0o600); err != nil {
+		t.Fatalf("seed spool: %v", err)
+	}
+	spoolFile, err := os.OpenFile(spoolPath, os.O_RDWR, 0o600)
+	if err != nil {
+		t.Fatalf("open spool: %v", err)
+	}
+	defer spoolFile.Close()
+
+	cfg := testCollectorConfig()
+	cfg.storageEncryptionKey = "wrong-encryption-key"
+	state := &collectorState{
+		cfg:           cfg,
+		spoolFile:     spoolFile,
+		spoolBadFile:  spoolPath + ".bad.ndjson",
+		deliveryQueue: make(chan spoolDelivery, 4),
+		deliverySpace: make(chan struct{}, 1),
+	}
+
+	var logs bytes.Buffer
+	origLogOutput := log.Writer()
+	log.SetOutput(&logs)
+	t.Cleanup(func() { log.SetOutput(origLogOutput) })
+
+	if err := state.replaySpool(); err != nil {
+		t.Fatalf("replay spool: %v", err)
+	}
+
+	// The undecryptable event must be skipped rather than delivered as raw ciphertext.
+	if got := len(state.deliveryQueue); got != 1 {
+		t.Fatalf("queued deliveries = %d, want 1", got)
+	}
+	item := <-state.deliveryQueue
+	if !item.skip {
+		t.Fatal("undecryptable spool record was not marked as skipped")
+	}
+	if len(item.payload) != 0 {
+		t.Fatalf("undecryptable spool record leaked a payload: %q", item.payload)
+	}
+
+	// The quarantine entry must use a distinct reason and retain the raw ciphertext.
+	data, err := os.ReadFile(state.spoolBadFile)
+	if err != nil {
+		t.Fatalf("read quarantine file: %v", err)
+	}
+	lines := bytes.Split(bytes.TrimSpace(data), []byte("\n"))
+	if len(lines) != 1 {
+		t.Fatalf("quarantine entries = %d, want 1: %s", len(lines), data)
+	}
+	var entry struct {
+		Reason string `json:"reason"`
+		Raw    string `json:"raw"`
+	}
+	if err := json.Unmarshal(lines[0], &entry); err != nil {
+		t.Fatalf("decode quarantine entry: %v", err)
+	}
+	if entry.Reason != "decryption_failed" {
+		t.Fatalf("quarantine reason = %q, want %q", entry.Reason, "decryption_failed")
+	}
+	if entry.Raw != string(sealed) {
+		t.Fatalf("quarantine raw = %q, want ciphertext %q", entry.Raw, sealed)
+	}
+
+	// The decryption failure must be logged instead of being silently swallowed.
+	if !strings.Contains(logs.String(), "spool_replay_decrypt_failed") {
+		t.Fatalf("expected a decryption failure log entry, got: %s", logs.String())
+	}
 }
