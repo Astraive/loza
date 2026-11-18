@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -98,7 +99,11 @@ func RunCortexIngest(ctx context.Context, cfg config.Config, args []string) erro
 
 	var events []map[string]interface{}
 	if file != "" {
-		events = parseNDJSONFile(file)
+		var err error
+		events, err = parseNDJSONFile(file)
+		if err != nil {
+			return fmt.Errorf("parse NDJSON file: %w", err)
+		}
 	}
 
 	if url != "" {
@@ -116,28 +121,63 @@ func RunCortexIngest(ctx context.Context, cfg config.Config, args []string) erro
 	return nil
 }
 
-func parseNDJSONFile(path string) []map[string]interface{} {
+// maxNDJSONLineSize bounds how large a single NDJSON event may be. bufio.Scanner's
+// 64 KiB default silently stops scanning on longer lines, which used to truncate
+// ingestion without any error, so allow substantially larger events.
+const maxNDJSONLineSize = 10 * 1024 * 1024 // 10 MiB
+
+// parseNDJSONFile reads one JSON object per line. Scanner failures (including lines
+// that exceed maxNDJSONLineSize) are returned as errors rather than silently
+// truncating the input. Unparseable lines are skipped but reported on stderr so the
+// ingested count is never quietly wrong.
+func parseNDJSONFile(path string) ([]map[string]interface{}, error) {
 	f, err := os.Open(path)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "failed to open file: %v\n", err)
-		return nil
+		return nil, fmt.Errorf("open file: %w", err)
 	}
 	defer f.Close()
 
 	var events []map[string]interface{}
+	var badLines []int
 	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 64*1024), maxNDJSONLineSize)
+	lineNo := 0
 	for scanner.Scan() {
+		lineNo++
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" {
 			continue
 		}
 		var event map[string]interface{}
 		if err := json.Unmarshal([]byte(line), &event); err != nil {
+			badLines = append(badLines, lineNo)
 			continue
 		}
 		events = append(events, event)
 	}
-	return events
+	if err := scanner.Err(); err != nil {
+		return nil, fmt.Errorf("scan %s: %w", path, err)
+	}
+	if len(badLines) > 0 {
+		fmt.Fprintln(os.Stderr, ndjsonSkippedWarning(path, badLines))
+	}
+	return events, nil
+}
+
+// ndjsonSkippedWarning formats a warning listing the (bounded) set of skipped line
+// numbers. It is kept separate so the reported count and line numbers are testable.
+func ndjsonSkippedWarning(path string, badLines []int) string {
+	const maxReported = 10
+	reported := make([]string, 0, len(badLines))
+	for i, lineNo := range badLines {
+		if i == maxReported {
+			reported = append(reported, "...")
+			break
+		}
+		reported = append(reported, strconv.Itoa(lineNo))
+	}
+	return fmt.Sprintf("warning: skipped %d unparseable line(s) in %s (lines: %s)",
+		len(badLines), path, strings.Join(reported, ", "))
 }
 
 func fetchEventsFromURL(url string) []map[string]interface{} {
