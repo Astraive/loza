@@ -748,20 +748,34 @@ func (p *Processor) redactPII(raw []byte) ([]byte, error) {
 func (p *Processor) redactMap(data map[string]interface{}, prefix string) map[string]interface{} {
 	result := make(map[string]interface{})
 
+	// In allowlist mode a container's own key cannot decide whether it is
+	// sensitive: its sensitivity is determined by its descendants. Redacting a
+	// map/array wholesale on the strength of its own key would silently destroy
+	// allowlisted nested paths (e.g. allowlist ["user.email"] with a "user"
+	// object). Recurse into containers instead and evaluate only leaf fields
+	// against the allowlist.
+	allowlistMode := len(p.cfg.Privacy.Allowlist) > 0
+
 	for key, value := range data {
 		fieldPath := key
 		if prefix != "" {
 			fieldPath = prefix + "." + key
 		}
 
-		if p.shouldRedactField(fieldPath, key) {
+		nested, isMap := value.(map[string]interface{})
+		arr, isArray := value.([]interface{})
+		isContainer := isMap || isArray
+
+		// Containers are never redacted based on their own key in allowlist
+		// mode; they are traversed so allowlisted descendants survive.
+		if p.shouldRedactField(fieldPath, key) && !(allowlistMode && isContainer) {
 			result[key] = "[REDACTED]"
 			if p.cfg.LogFunc != nil {
 				p.cfg.LogFunc("info", "pii_redacted", map[string]any{"field": fieldPath})
 			}
-		} else if nested, ok := value.(map[string]interface{}); ok {
+		} else if isMap {
 			result[key] = p.redactMap(nested, fieldPath)
-		} else if arr, ok := value.([]interface{}); ok {
+		} else if isArray {
 			result[key] = p.redactArray(arr, fieldPath)
 		} else {
 			result[key] = value
