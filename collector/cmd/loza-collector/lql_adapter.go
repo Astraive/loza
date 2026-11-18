@@ -190,7 +190,7 @@ func (c *lqlStdioCompiler) Compile(ctx context.Context, req LQLCompileRequest) (
 	for _, parameter := range body.Plan.Parameters {
 		args = append(args, parameter.Value)
 	}
-	return ParameterizedPlan{SQL: body.Plan.SQL, Args: args, OutputSchema: body.Plan.OutputSchema}, nil
+	return ParameterizedPlan{SQL: body.Plan.SQL, Args: args, OutputSchema: body.Plan.OutputSchema, Limit: req.Limit}, nil
 }
 
 func (c *lqlStdioCompiler) Close(context.Context) error {

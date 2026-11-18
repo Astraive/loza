@@ -163,7 +163,7 @@ func (s *collectorState) HandleDatabaseQuery(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	start := time.Now()
-	result, err := connection.Query(ctx, plan.SQL, plan.Args...)
+	result, err := connection.QueryWithLimit(ctx, planRowLimit(plan, req.Limit), plan.SQL, plan.Args...)
 	if err != nil {
 		writeJSON(w, http.StatusUnprocessableEntity, map[string]any{"error": "query_failed"})
 		return
