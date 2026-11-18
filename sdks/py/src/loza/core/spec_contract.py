@@ -42,11 +42,14 @@ _FIELD_ALIASES: dict[str, str] = {
 def validate_event_map(event: dict[str, object]) -> tuple[bool, list[str]]:
     """Validate an event map against required Loza spec fields.
 
-    Returns (valid, errors) where errors is a list of human-readable strings.
+    Each field declared in ``REQUIRED_EVENT_FIELDS`` must be present in either
+    its snake_case form or its canonical camelCase alias form. Returns
+    (valid, errors) where errors is a list of human-readable strings.
     """
     errors: list[str] = []
-    for field in ("event_id", "eventId", "timestamp", "service", "event"):
-        if field not in event:
+    for field in sorted(REQUIRED_EVENT_FIELDS):
+        canonical = _FIELD_ALIASES.get(field, field)
+        if field not in event and canonical not in event:
             errors.append(f"missing required field: {field}")
     if not errors:
         return True, []
