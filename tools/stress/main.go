@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"io"
 	"math/rand"
@@ -18,6 +19,11 @@ import (
 )
 
 const fallbackVersion = "0.2.6"
+
+// defaultJSONOutputPath is a repo-relative path (unlike the old hardcoded
+// absolute Windows-style path) so results are written where they are expected
+// on any platform when the tool is run from the repository root.
+const defaultJSONOutputPath = "docs/stress-test-results.json"
 
 func loadVersion() string {
 	candidates := []string{
@@ -222,9 +228,29 @@ func sampleEvent(id int) map[string]any {
 	}
 }
 
+// writeAndReportJSONResults marshals results as indented JSON, writes them to
+// path, and reports the outcome to out. It returns true only when the file was
+// written successfully; a failed write is reported as an error and never as a
+// success.
+func writeAndReportJSONResults(out io.Writer, path string, results map[string]any) bool {
+	jsonData, err := json.MarshalIndent(results, "", "  ")
+	if err != nil {
+		fmt.Fprintf(out, "ERROR: failed to encode JSON results: %v\n", err)
+		return false
+	}
+	if err := os.WriteFile(path, jsonData, 0o644); err != nil {
+		fmt.Fprintf(out, "ERROR: failed to write JSON results to %s: %v\n", path, err)
+		return false
+	}
+	fmt.Fprintf(out, "\nJSON results written to %s\n", path)
+	return true
+}
+
 func main() {
 	// Limit OS threads on Windows to avoid thread exhaustion
 	runtime.GOMAXPROCS(32)
+	jsonOutputPath := flag.String("json-output", defaultJSONOutputPath, "path to write the JSON stress test results")
+	flag.Parse()
 	collectorURL := "http://127.0.0.1:9308"
 	cortexURL := "http://127.0.0.1:9312"
 	// Use connection pooling to avoid Windows thread exhaustion
@@ -782,17 +808,18 @@ func main() {
 	fmt.Printf("Total Errors:   %d\n", totalErrors)
 	fmt.Printf("Error Rate:     %.4f%%\n", float64(totalErrors)/float64(totalReqs)*100)
 
-	// Write JSON results
-	jsonData, _ := json.MarshalIndent(map[string]any{
-		"date":        time.Now().Format(time.RFC3339),
-		"target":      "localhost",
-		"collector":   collectorURL,
-		"cortex":      cortexURL,
-		"total_reqs":  totalReqs,
+	// Write JSON results to the configured path, reporting failures honestly.
+	results := map[string]any{
+		"date":         time.Now().Format(time.RFC3339),
+		"target":       "localhost",
+		"collector":    collectorURL,
+		"cortex":       cortexURL,
+		"total_reqs":   totalReqs,
 		"total_errors": totalErrors,
-		"error_rate":  float64(totalErrors) / float64(totalReqs) * 100,
-		"tests":       jsonResults,
-	}, "", "  ")
-	os.WriteFile("/e/astraive/loza/docs/stress-test-results.json", jsonData, 0644)
-	fmt.Println("\nJSON results written to docs/stress-test-results.json")
+		"error_rate":   float64(totalErrors) / float64(totalReqs) * 100,
+		"tests":        jsonResults,
+	}
+	if !writeAndReportJSONResults(os.Stdout, *jsonOutputPath, results) {
+		os.Exit(1)
+	}
 }
