@@ -45,11 +45,19 @@ func archiveObjectKey(prefix, dataset, ext string, ts time.Time) string {
 func normalizePrefix(prefix string) string {
 	prefix = strings.TrimSpace(prefix)
 	prefix = strings.ReplaceAll(prefix, "\\", "/")
-	prefix = strings.Trim(prefix, "/")
-	if prefix == "" {
+	segments := strings.Split(prefix, "/")
+	clean := make([]string, 0, len(segments))
+	for _, segment := range segments {
+		segment = strings.TrimSpace(segment)
+		if segment == "" || segment == "." || segment == ".." {
+			continue
+		}
+		clean = append(clean, segment)
+	}
+	if len(clean) == 0 {
 		return ""
 	}
-	return prefix + "/"
+	return strings.Join(clean, "/") + "/"
 }
 
 func sanitizeSegment(seg string) string {
