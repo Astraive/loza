@@ -444,6 +444,20 @@ func TestConfigStructs(t *testing.T) {
 	assert.Equal(t, ":9310", cfg.GraphQL.Port)
 }
 
+func TestParseTailFiltersCollectorAndEnvironment(t *testing.T) {
+	req := httptest.NewRequest("GET", "/tail?collector=orders&environment=production&service=checkout", nil)
+	filters, err := ParseTailFilters(req)
+	require.NoError(t, err)
+	require.Equal(t, "orders", filters.Collector)
+	require.Equal(t, "production", filters.Environment)
+	require.Equal(t, "checkout", filters.Service)
+
+	matching := []byte(`{"collector":"orders","environment":"production","service":"checkout"}`)
+	otherEnvironment := []byte(`{"collector":"orders","environment":"staging","service":"checkout"}`)
+	require.True(t, RawMatchesTailFilters(matching, filters))
+	require.False(t, RawMatchesTailFilters(otherEnvironment, filters))
+}
+
 type websocketTailState struct {
 	filters    chan TailFilters
 	subscriber chan chan []byte
@@ -505,6 +519,9 @@ func TestTailWebSocketBrowserContract(t *testing.T) {
 	filters := <-state.filters
 	if filters.Service != "checkout" {
 		t.Fatalf("service filter = %q, want checkout", filters.Service)
+	}
+	if filters.Environment != "production" {
+		t.Fatalf("environment filter = %q, want production", filters.Environment)
 	}
 
 	subscriber := <-state.subscriber

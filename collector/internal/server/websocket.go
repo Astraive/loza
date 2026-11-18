@@ -91,6 +91,8 @@ func ParseTailFilters(r *http.Request) (TailFilters, error) {
 		filters.Since = ts.UTC()
 	}
 	filters.AfterEventID = strings.TrimSpace(q.Get("after_event_id"))
+	filters.Collector = strings.TrimSpace(q.Get("collector"))
+	filters.Environment = strings.TrimSpace(q.Get("environment"))
 	filters.Service = strings.TrimSpace(q.Get("service"))
 	filters.Kind = strings.TrimSpace(q.Get("kind"))
 	filters.TraceID = strings.TrimSpace(q.Get("trace_id"))
