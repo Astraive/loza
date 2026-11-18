@@ -41,7 +41,7 @@ func DevCommand(ctx context.Context, cfg config.Config, _ []string) error {
 	}
 
 	// Wait for collector to be ready before starting cortex
-	collectorURL := "http://localhost:9308/health"
+	collectorURL := collectorHealthURL(cfg)
 	fmt.Println("Waiting for collector to be ready...")
 	for i := 0; i < 30; i++ {
 		time.Sleep(1 * time.Second)
@@ -86,6 +86,18 @@ func superviseDev(collectorCmd, cortexCmd *exec.Cmd) error {
 		return fmt.Errorf("run cortex: %w", err)
 	}
 	return nil
+}
+
+// collectorHealthURL derives the readiness probe URL from the configured
+// collector endpoint. The collector can be launched with a non-default listen
+// address/port (via its config file), so probing a hardcoded localhost:9308
+// would never succeed. Fall back to the default port only when no URL is set.
+func collectorHealthURL(cfg config.Config) string {
+	base := strings.TrimSpace(cfg.CollectorURL)
+	if base == "" {
+		base = "http://localhost:9308"
+	}
+	return strings.TrimRight(base, "/") + "/health"
 }
 
 func configPath(cfg config.Config, name string) string {
