@@ -123,10 +123,19 @@ func (s *GraphQLServer) handleGraphQL(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Check query depth before executing
-	if queryDepth(req.Query) > maxGraphQLDepth {
-		s.writeError(w, http.StatusBadRequest, "query exceeds maximum depth")
-		return
+	// Analyse the parsed query before executing it. Counting literal braces in
+	// the request text misses alias fan-out and repeated fragment spreads, so
+	// enforce both effective depth and total field complexity on the AST.
+	cost, err := analyzeGraphQLQuery(req.Query, req.OperationName)
+	if err == nil {
+		if cost.depth > maxGraphQLDepth {
+			s.writeError(w, http.StatusBadRequest, "query exceeds maximum depth")
+			return
+		}
+		if cost.complexity > maxGraphQLComplexity {
+			s.writeError(w, http.StatusBadRequest, "query exceeds maximum complexity")
+			return
+		}
 	}
 
 	if s.schemaErr != nil {
@@ -147,24 +156,6 @@ func (s *GraphQLServer) writeError(w http.ResponseWriter, status int, message st
 	if err := json.NewEncoder(w).Encode(response); err != nil {
 		log.Error().Err(err).Msg("failed to encode error response")
 	}
-}
-
-// queryDepth counts the maximum nesting depth of curly braces in a GraphQL query.
-func queryDepth(query string) int {
-	maxDepth := 0
-	depth := 0
-	for _, c := range query {
-		switch c {
-		case '{':
-			depth++
-			if depth > maxDepth {
-				maxDepth = depth
-			}
-		case '}':
-			depth--
-		}
-	}
-	return maxDepth
 }
 
 // isIntrospectionQuery blocks the reserved GraphQL introspection fields.
