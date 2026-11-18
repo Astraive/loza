@@ -962,10 +962,9 @@ pub fn CloneEvent(event: &EventContext) -> EventContext {
 
 pub fn LinkEvent(event: &mut EventContext, linked_id: impl Into<String>) {
     let mut link = serde_json::Map::new();
-    link.insert("event_id".to_string(), Value::String(linked_id.into()));
-    if event.error.is_none() {
-        event.error = Some(serde_json::Map::new());
-    }
+    link.insert("type".to_string(), Value::String("event".to_string()));
+    link.insert("target".to_string(), Value::String(linked_id.into()));
+    event.links.push(link);
 }
 
 thread_local! {
