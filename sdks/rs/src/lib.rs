@@ -733,7 +733,14 @@ pub fn HTTPPath(path: impl Into<String>) -> Attr {
 pub fn HTTPUserAgent(ua: impl Into<String>) -> Attr {
     let mut value = ua.into();
     if value.len() > 512 {
-        value.truncate(512);
+        // String::truncate panics if the byte index splits a UTF-8 code point.
+        // Floor to the last valid char boundary at or before byte 512 so a
+        // multibyte character straddling the limit is cut whole (or dropped).
+        let mut end = 512;
+        while !value.is_char_boundary(end) {
+            end -= 1;
+        }
+        value.truncate(end);
     }
     Attr::new("http.user_agent", Value::String(value))
 }
