@@ -2,6 +2,7 @@ package core
 
 import (
 	"fmt"
+	"math"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -957,8 +958,14 @@ func canonicalInt(v any) (int, bool) {
 	case int:
 		return vv, true
 	case int64:
+		if vv > math.MaxInt || vv < math.MinInt {
+			return 0, false
+		}
 		return int(vv), true
 	case uint64:
+		if vv > math.MaxInt {
+			return 0, false
+		}
 		return int(vv), true
 	default:
 		return 0, false
@@ -1166,6 +1173,9 @@ func canonicalInt64(v any) (int64, bool) {
 	case int:
 		return int64(vv), true
 	case uint64:
+		if vv > math.MaxInt64 {
+			return 0, false
+		}
 		return int64(vv), true
 	case time.Duration:
 		return vv.Milliseconds(), true
