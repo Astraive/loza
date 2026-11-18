@@ -2,9 +2,38 @@ from __future__ import annotations
 
 import copy
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any, Callable, Protocol
 
 from .event import EventContext
+
+_UNIX_EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
+
+
+def _to_unix_nano(value: Any) -> int | None:
+    """Convert an event timestamp into an OTLP ``time_unix_nano`` value.
+
+    ``EventContext.to_dict`` emits ``timestamp`` as an ISO-8601 string, but
+    OTLP requires ``time_unix_nano`` to be an integer count of nanoseconds
+    since the Unix epoch. Accept already-numeric values defensively and
+    return ``None`` when the value cannot be interpreted.
+    """
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value * 1_000_000_000)
+    if not isinstance(value, str):
+        return None
+    try:
+        moment = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=timezone.utc)
+    delta = moment - _UNIX_EPOCH
+    return (delta.days * 86_400 + delta.seconds) * 1_000_000_000 + delta.microseconds * 1_000
 
 
 class EventView:
@@ -121,7 +150,7 @@ class OTelLogSchema:
         payload = event.to_dict()
         attrs = {k: v for k, v in payload.items() if k not in {"timestamp", "level", "message"}}
         return {
-            "time_unix_nano": payload.get("timestamp"),
+            "time_unix_nano": _to_unix_nano(payload.get("timestamp")),
             "severity_text": payload.get("level", "info"),
             "body": payload.get("message") or payload.get("event"),
             "attributes": attrs,
