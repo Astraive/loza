@@ -35,7 +35,7 @@ func (s *collectorState) handleSchemaList(w http.ResponseWriter, r *http.Request
 		"mode":            cfg.schemaMode,
 		"schema_version":  cfg.schemaSchemaVersion,
 		"event_version":   cfg.schemaEventVersion,
-		"registry":        cfg.schemaRegistry,
+		"registry":        s.schemaRegistrySnapshot(),
 		"quarantine_path": cfg.schemaQuarantinePath,
 	})
 }
@@ -75,24 +75,18 @@ func (s *collectorState) handleSchemaPublish(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	// Publish a fresh snapshot instead of mutating the live config in place:
-	// handlers read cfg concurrently via config(), and a reload can swap it.
-	// Build the next registry as a separate slice so the live config is only
-	// committed after persistence succeeds. A failed save must leave both the
-	// in-memory registry and disk unchanged (no partial/phantom publishes).
-	s.cfgMu.RLock()
-	cfg := s.cfg
-	s.cfgMu.RUnlock()
-
-	updatedRegistry := make([]collectorconfig.SchemaRegistryEntry, len(cfg.schemaRegistry))
-	for i, existing := range cfg.schemaRegistry {
-		updatedRegistry[i] = existing
-		updatedRegistry[i].RequiredFields = append([]string(nil), existing.RequiredFields...)
-	}
-
+	// Serialize publishes with the reader paths (list, diff and processor
+	// setup) under the registry lock, and read/commit the config through the
+	// snapshot accessors so a concurrent SIGHUP reload cannot be lost. Mutate
+	// only a private deep copy so readers never observe a half-written slice
+	// header or a concurrently modified element, and so a failed save leaves
+	// both the in-memory registry and disk unchanged (no partial publishes).
+	s.schemaRegistryMu.Lock()
+	cfg := s.config()
+	registry := cloneSchemaRegistry(cfg.schemaRegistry)
 	updated := false
-	for i := range updatedRegistry {
-		current := &updatedRegistry[i]
+	for i := range registry {
+		current := &registry[i]
 		if current.SchemaVersion == entry.SchemaVersion && current.EventVersion == entry.EventVersion {
 			current.RequiredFields = append([]string(nil), entry.RequiredFields...)
 			updated = true
@@ -100,22 +94,24 @@ func (s *collectorState) handleSchemaPublish(w http.ResponseWriter, r *http.Requ
 		}
 	}
 	if !updated {
-		updatedRegistry = append(updatedRegistry, collectorconfig.SchemaRegistryEntry{
+		registry = append(registry, collectorconfig.SchemaRegistryEntry{
 			SchemaVersion:  entry.SchemaVersion,
 			EventVersion:   entry.EventVersion,
 			RequiredFields: append([]string(nil), entry.RequiredFields...),
 		})
 	}
-	if err := saveSchemaRegistryFile(cfg.schemaRegistryFile, updatedRegistry, cfg.storageEncryptionKey); err != nil {
+	if err := saveSchemaRegistryFile(cfg.schemaRegistryFile, registry, cfg.storageEncryptionKey); err != nil {
+		s.schemaRegistryMu.Unlock()
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "schema_registry_save_failed", "message": err.Error()})
 		return
 	}
-	// Commit only after persistence succeeds, publishing a fresh snapshot
-	// under the write lock so concurrent readers never see a partial update.
-	cfg.schemaRegistry = updatedRegistry
-	s.cfgMu.Lock()
-	s.cfg = cfg
-	s.cfgMu.Unlock()
+	// Commit only after persistence succeeds, publishing a fresh config
+	// snapshot so concurrent readers never see a partial update. Release the
+	// registry lock before taking processorMu (processor setup also reads the
+	// registry) to keep a consistent lock order with ensureProcessor.
+	cfg.schemaRegistry = registry
+	s.setConfig(cfg)
+	s.schemaRegistryMu.Unlock()
 
 	s.processorMu.Lock()
 	if s.processor != nil {
@@ -150,14 +146,44 @@ func decodeSchemaEntryRequest(w http.ResponseWriter, r *http.Request) (schemaEnt
 }
 
 func (s *collectorState) findSchemaRegistryEntry(schemaVersion, eventVersion string) *collectorconfig.SchemaRegistryEntry {
+	s.schemaRegistryMu.RLock()
+	defer s.schemaRegistryMu.RUnlock()
 	cfg := s.config()
 	for i := range cfg.schemaRegistry {
 		entry := &cfg.schemaRegistry[i]
 		if entry.SchemaVersion == schemaVersion && entry.EventVersion == eventVersion {
-			return entry
+			// Return a copy so callers can use the result after the lock is
+			// released without racing with a concurrent publish.
+			found := *entry
+			found.RequiredFields = append([]string(nil), entry.RequiredFields...)
+			return &found
 		}
 	}
 	return nil
+}
+
+// schemaRegistrySnapshot returns a deep copy of the schema registry taken
+// under the registry lock, so callers can read it without holding the lock.
+func (s *collectorState) schemaRegistrySnapshot() []collectorconfig.SchemaRegistryEntry {
+	s.schemaRegistryMu.RLock()
+	defer s.schemaRegistryMu.RUnlock()
+	// Read via config() so a concurrent SIGHUP reload swapping s.cfg cannot
+	// race with this snapshot.
+	return cloneSchemaRegistry(s.config().schemaRegistry)
+}
+
+// cloneSchemaRegistry deep-copies a registry slice, including each entry's
+// RequiredFields backing array.
+func cloneSchemaRegistry(entries []collectorconfig.SchemaRegistryEntry) []collectorconfig.SchemaRegistryEntry {
+	if len(entries) == 0 {
+		return nil
+	}
+	out := make([]collectorconfig.SchemaRegistryEntry, len(entries))
+	for i, entry := range entries {
+		out[i] = entry
+		out[i].RequiredFields = append([]string(nil), entry.RequiredFields...)
+	}
+	return out
 }
 
 type piiAuditRequest struct {

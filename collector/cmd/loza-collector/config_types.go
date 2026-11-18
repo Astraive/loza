@@ -349,6 +349,7 @@ type collectorState struct {
 	processorMu         sync.RWMutex
 	processor           *processing.Processor
 	processorClosed     bool
+	schemaRegistryMu    sync.RWMutex // guards cfg.schemaRegistry against concurrent publish/list/diff/processor reads
 	cortexBridge        *cortexBridgeClient
 	queryDB             *sql.DB
 	queryConnection     database.Connection

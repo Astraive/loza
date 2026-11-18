@@ -13,9 +13,10 @@ import (
 	collectorconfig "github.com/astraive/loza/collector/internal/config"
 )
 
-// cloneSchemaRegistry makes an independent copy so assertions cannot be
-// satisfied by aliased slices.
-func cloneSchemaRegistry(entries []collectorconfig.SchemaRegistryEntry) []collectorconfig.SchemaRegistryEntry {
+// cloneRegistryForTest makes an independent copy so assertions cannot be
+// satisfied by aliased slices. (Named distinctly from the production
+// cloneSchemaRegistry helper used by the concurrent-publish fix.)
+func cloneRegistryForTest(entries []collectorconfig.SchemaRegistryEntry) []collectorconfig.SchemaRegistryEntry {
 	out := make([]collectorconfig.SchemaRegistryEntry, len(entries))
 	for i, entry := range entries {
 		out[i] = entry
@@ -70,7 +71,7 @@ func TestHandleSchemaPublishSaveFailureDoesNotMutateRegistry(t *testing.T) {
 			cfg := testCollectorConfig()
 			cfg.storageEncryptionKey = ""
 			cfg.schemaRegistryFile = regPath
-			cfg.schemaRegistry = cloneSchemaRegistry(original)
+			cfg.schemaRegistry = cloneRegistryForTest(original)
 
 			state := &collectorState{cfg: cfg}
 			state.ready.Store(true)
