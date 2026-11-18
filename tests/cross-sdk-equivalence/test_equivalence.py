@@ -2,7 +2,8 @@
 """test_equivalence.py -- Cross-SDK equivalence test.
 
 Sends the same canonical event from each SDK and asserts stored events
-match on canonical fields. If no collector is running at localhost:9308,
+match on canonical fields. Any failed check makes the process exit 1; only
+an all-pass run prints PASSED. If no collector is running at localhost:9308,
 prints SKIP and exits 0.
 """
 
@@ -144,7 +145,16 @@ def main():
         print(f"  Got:      {json.dumps({k: found.get(k) for k in ['event_id', 'event_name', 'service', 'outcome']})}")
         sys.exit(1)
 
-    # ── v0.2.0: Release field equivalence ──────────────────────────────────
+    # ── v0.2.0: Extended equivalence checks ────────────────────────────────
+    # Failed extended checks must not be silently downgraded to warnings: the
+    # overall result and exit code below have to reflect them, just like the
+    # canonical check above does.
+    failures: list[str] = []
+
+    def record_failure(message: str) -> None:
+        failures.append(message)
+        print(f"  FAIL: {message}")
+
     print()
     print("=== v0.2.0 Extended Equivalence Checks ===")
     print()
@@ -160,14 +170,14 @@ def main():
 
     result = emit_event_via_api(release_event)
     if result is None:
-        print("  WARN: Release field emit failed (collector may not support)")
+        record_failure("Release field emit failed (collector may not support)")
     else:
         time.sleep(0.5)
         events = query_events(release_marker)
         if events and canonical_match(events[0], release_event):
             print("  PASS: Release event accepted and stored")
         else:
-            print("  WARN: Release event was not found in projected storage")
+            record_failure("Release event was not found in projected storage")
 
     # 2. Notice level equivalence
     print("2. Notice level equivalence...")
@@ -183,7 +193,7 @@ def main():
     if result:
         print("  PASS: Notice-level event submitted")
     else:
-        print("  WARN: Notice level emit failed")
+        record_failure("Notice level emit failed")
 
     # 3. Agent/ai kind equivalence
     print("3. Agent/ai kind equivalence...")
@@ -201,7 +211,7 @@ def main():
         if result:
             print(f"  PASS: kind={kind} submitted")
         else:
-            print(f"  WARN: kind={kind} emit failed")
+            record_failure(f"kind={kind} emit failed")
 
     # 4. Domain helper equivalence (money, percent, httpStatus)
     print("4. Domain helper equivalence...")
@@ -221,13 +231,18 @@ def main():
         if events and canonical_match(events[0], domain_event):
             print("  PASS: Domain helper fields preserved in projected storage")
         else:
-            print("  WARN: Domain event was not found in projected storage")
+            record_failure("Domain event was not found in projected storage")
     else:
-        print("  WARN: Domain event emit failed")
+        record_failure("Domain event emit failed")
 
     print()
     print("=== v0.2.0 Extended Checks Complete ===")
     print()
+    if failures:
+        print(f"=== Equivalence Test FAILED ({len(failures)} extended check(s) failed) ===")
+        for failure in failures:
+            print(f"  - {failure}")
+        sys.exit(1)
     print("=== Equivalence Test PASSED ===")
 
 
