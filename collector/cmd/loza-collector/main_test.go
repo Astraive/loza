@@ -758,6 +758,7 @@ func TestConfigureHTTPServerTLSForMTLS(t *testing.T) {
 	cfg := testCollectorConfig()
 	cfg.identityMode = "mtls"
 	cfg.serverConfig.HTTP.TLSEnabled = true
+	cfg.serverConfig.HTTP.TLSClientCAFile = writeTestClientCAFile(t)
 	if err := configureHTTPServerTLS(server, cfg); err != nil {
 		t.Fatalf("configure tls: %v", err)
 	}
