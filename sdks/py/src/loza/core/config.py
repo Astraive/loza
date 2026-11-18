@@ -101,7 +101,7 @@ class Config:
     sinks: list[Any] = field(default_factory=list)
     collector_endpoint: str = ""
     collector_name: str = ""
-    api_key: str = ""
+    api_key: str = field(default="", repr=False)
     username: str = field(default="", repr=False)
     password: str = field(default="", repr=False)
     duplicate_policy: str = "canonical_wins"

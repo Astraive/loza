@@ -2,6 +2,7 @@ import pytest
 
 from loza.core.config import Config
 from loza.core.http_client import CollectorClient
+from loza.core.config import Config
 from loza.cortex.client import CortexClient
 from loza.core.pipeline import DiskOfflineBuffer
 from loza.sinks.file import FileSink
@@ -52,3 +53,19 @@ def test_disk_offline_buffer_rejects_parent_traversal():
 def test_cortex_client_rejects_metadata_endpoint():
     with pytest.raises(ValueError, match="non-public"):
         CortexClient("http://169.254.169.254/latest/meta-data")
+
+
+def test_config_repr_does_not_leak_api_key() -> None:
+    api_key = "sk-loza-super-secret-value"
+    cfg = Config(service="svc").with_api_key(api_key).with_basic_auth("secret-user", "secret-pass")
+
+    for rendered in (repr(cfg), str(cfg)):
+        assert api_key not in rendered
+        assert "secret-user" not in rendered
+        assert "secret-pass" not in rendered
+
+    # Redacting the repr must not break access to the configured credentials.
+    assert cfg.api_key == api_key
+    assert cfg.username == "secret-user"
+    assert cfg.password == "secret-pass"
+    assert cfg.with_service("other").api_key == api_key
