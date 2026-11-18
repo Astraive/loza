@@ -12,6 +12,7 @@ func configureHTTPServerTLS(server *http.Server, cfg collectorConfig) error {
 	if !cfg.serverConfig.HTTP.TLSEnabled {
 		return nil
 	}
+	verifyClientCert := cfg.serverConfig.HTTP.TLSRequireClientCert || cfg.identityMode == "mtls"
 	tlsConfig := &tls.Config{
 		MinVersion: tls.VersionTLS12,
 	}
@@ -26,7 +27,13 @@ func configureHTTPServerTLS(server *http.Server, cfg collectorConfig) error {
 		}
 		tlsConfig.ClientCAs = pool
 	}
-	if cfg.serverConfig.HTTP.TLSRequireClientCert || cfg.identityMode == "mtls" {
+	if verifyClientCert {
+		// crypto/tls falls back to the host's system root pool when ClientCAs is
+		// nil. That would accept any publicly trusted client certificate and
+		// silently defeat mTLS identity restrictions, so fail closed instead.
+		if tlsConfig.ClientCAs == nil {
+			return fmt.Errorf("http client certificate verification requires a client CA file")
+		}
 		tlsConfig.ClientAuth = tls.RequireAndVerifyClientCert
 	} else if tlsConfig.ClientCAs != nil {
 		tlsConfig.ClientAuth = tls.VerifyClientCertIfGiven
