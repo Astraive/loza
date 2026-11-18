@@ -26,9 +26,27 @@ class Middleware:
             ),
         )
 
+    def _respond_without_app(self, environ: dict, start_response: Callable) -> Iterable[bytes]:
+        """Return a WSGI-valid 500 and emit a LOZA error event when no app is configured.
+
+        ``app=None`` is the default, so a common miswire (``wsgi_app = middleware()``)
+        would otherwise return an empty iterable without ever calling
+        ``start_response``, which WSGI servers reject and which emits no event.
+        """
+        start_response("500 Internal Server Error", [("Content-Type", "text/plain")])
+        ctx = self.wrap_scope(environ)
+        FinishError(
+            ctx,
+            RuntimeError("loza.flask.middleware: no WSGI app configured (app=None)"),
+            Bool("panic", True),
+            Int("status_code", 500),
+        )
+        Emit(ctx)
+        return [b"Internal Server Error"]
+
     def __call__(self, environ: dict, start_response: Callable) -> Iterable[bytes]:
         if self.app is None:
-            return []
+            return self._respond_without_app(environ, start_response)
         status_code = 500
         response_bytes = 0
         started = time.perf_counter()
