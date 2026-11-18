@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/astraive/loza/collector/internal/eventbus"
+	"github.com/twmb/franz-go/pkg/kgo"
 )
 
 func TestKafkaRequiresBrokers(t *testing.T) {
@@ -17,6 +18,27 @@ func TestKafkaRequiresBrokers(t *testing.T) {
 	})
 	if err == nil {
 		t.Error("expected error for empty brokers")
+	}
+}
+
+// Regression test for #499: idempotence combined with a non-"all" acks mode
+// must produce a valid franz-go client instead of failing New with
+// "idempotency requires acks=all".
+func TestProducerOptsIdempotenceWithNonAllAcks(t *testing.T) {
+	for _, acks := range []string{"0", "1"} {
+		t.Run("acks="+acks, func(t *testing.T) {
+			kc := eventbus.KafkaConfig{
+				Brokers:           []string{"127.0.0.1:9092"},
+				Topic:             "loza.test",
+				Acks:              acks,
+				EnableIdempotence: true,
+			}
+			client, err := kgo.NewClient(producerOpts(kc)...)
+			if err != nil {
+				t.Fatalf("kgo.NewClient with idempotence and acks=%q: %v", acks, err)
+			}
+			client.Close()
+		})
 	}
 }
 

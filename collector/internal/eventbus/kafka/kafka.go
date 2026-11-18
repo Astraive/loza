@@ -30,26 +30,9 @@ type kafkaBus struct {
 	subs   []context.CancelFunc
 }
 
-// New creates a new Kafka event bus.
-// Auto-creates topics via the admin API (idempotent).
-func New(_ context.Context, cfg eventbus.Config) (eventbus.Bus, error) {
-	kc := cfg.Kafka
-	if len(kc.Brokers) == 0 {
-		return nil, fmt.Errorf("eventbus/kafka: brokers must not be empty")
-	}
-	if kc.Topic == "" {
-		kc.Topic = cfg.Topic
-	}
-	if kc.Topic == "" {
-		kc.Topic = "loza.events.raw"
-	}
-	if kc.ConsumerGroup == "" {
-		kc.ConsumerGroup = cfg.ConsumerGroup
-	}
-	if kc.ConsumerGroup == "" {
-		kc.ConsumerGroup = "loza-worker"
-	}
-
+// producerOpts builds the producer options used by New. Keeping the option
+// construction separate lets config validation be exercised without a broker.
+func producerOpts(kc eventbus.KafkaConfig) []kgo.Opt {
 	opts := []kgo.Opt{
 		kgo.SeedBrokers(kc.Brokers...),
 		kgo.DefaultProduceTopic(kc.Topic),
@@ -77,12 +60,37 @@ func New(_ context.Context, cfg eventbus.Config) (eventbus.Bus, error) {
 	case "0":
 		opts = append(opts, kgo.RequiredAcks(kgo.NoAck()), kgo.DisableIdempotentWrite())
 	case "1":
-		opts = append(opts, kgo.RequiredAcks(kgo.LeaderAck()))
+		// Idempotent writes require acks=all in franz-go, so opt out even
+		// when idempotence was explicitly requested (same as acks "0").
+		opts = append(opts, kgo.RequiredAcks(kgo.LeaderAck()), kgo.DisableIdempotentWrite())
 	default:
 		opts = append(opts, kgo.RequiredAcks(kgo.AllISRAcks()))
 	}
 
-	client, err := kgo.NewClient(opts...)
+	return opts
+}
+
+// New creates a new Kafka event bus.
+// Auto-creates topics via the admin API (idempotent).
+func New(_ context.Context, cfg eventbus.Config) (eventbus.Bus, error) {
+	kc := cfg.Kafka
+	if len(kc.Brokers) == 0 {
+		return nil, fmt.Errorf("eventbus/kafka: brokers must not be empty")
+	}
+	if kc.Topic == "" {
+		kc.Topic = cfg.Topic
+	}
+	if kc.Topic == "" {
+		kc.Topic = "loza.events.raw"
+	}
+	if kc.ConsumerGroup == "" {
+		kc.ConsumerGroup = cfg.ConsumerGroup
+	}
+	if kc.ConsumerGroup == "" {
+		kc.ConsumerGroup = "loza-worker"
+	}
+
+	client, err := kgo.NewClient(producerOpts(kc)...)
 	if err != nil {
 		return nil, fmt.Errorf("eventbus/kafka: client: %w", err)
 	}

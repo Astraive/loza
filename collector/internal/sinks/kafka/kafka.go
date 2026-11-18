@@ -74,7 +74,10 @@ func New(cfg Config) (collectorevent.Sink, error) {
 			return backoff
 		}))
 	}
-	if !cfg.EnableIdempotence {
+	// franz-go requires acks=all for idempotent writes. Opt out for any
+	// weaker ack mode (acks "0" or "1") even when idempotence was requested,
+	// so the client can still be constructed for these valid configs.
+	if !cfg.EnableIdempotence || requiredAcks != kgo.AllISRAcks() {
 		opts = append(opts, kgo.DisableIdempotentWrite())
 	}
 
