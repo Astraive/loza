@@ -74,9 +74,18 @@ func (s *collectorState) handleSchemaPublish(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
+	// Build the next registry as a separate slice so the live config is only
+	// committed after persistence succeeds. A failed save must leave both the
+	// in-memory registry and disk unchanged (no partial/phantom publishes).
+	updatedRegistry := make([]collectorconfig.SchemaRegistryEntry, len(s.cfg.schemaRegistry))
+	for i, existing := range s.cfg.schemaRegistry {
+		updatedRegistry[i] = existing
+		updatedRegistry[i].RequiredFields = append([]string(nil), existing.RequiredFields...)
+	}
+
 	updated := false
-	for i := range s.cfg.schemaRegistry {
-		current := &s.cfg.schemaRegistry[i]
+	for i := range updatedRegistry {
+		current := &updatedRegistry[i]
 		if current.SchemaVersion == entry.SchemaVersion && current.EventVersion == entry.EventVersion {
 			current.RequiredFields = append([]string(nil), entry.RequiredFields...)
 			updated = true
@@ -84,16 +93,17 @@ func (s *collectorState) handleSchemaPublish(w http.ResponseWriter, r *http.Requ
 		}
 	}
 	if !updated {
-		s.cfg.schemaRegistry = append(s.cfg.schemaRegistry, collectorconfig.SchemaRegistryEntry{
+		updatedRegistry = append(updatedRegistry, collectorconfig.SchemaRegistryEntry{
 			SchemaVersion:  entry.SchemaVersion,
 			EventVersion:   entry.EventVersion,
 			RequiredFields: append([]string(nil), entry.RequiredFields...),
 		})
 	}
-	if err := saveSchemaRegistryFile(s.cfg.schemaRegistryFile, s.cfg.schemaRegistry, s.cfg.storageEncryptionKey); err != nil {
+	if err := saveSchemaRegistryFile(s.cfg.schemaRegistryFile, updatedRegistry, s.cfg.storageEncryptionKey); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "schema_registry_save_failed", "message": err.Error()})
 		return
 	}
+	s.cfg.schemaRegistry = updatedRegistry
 
 	s.processorMu.Lock()
 	if s.processor != nil {
