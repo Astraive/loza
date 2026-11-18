@@ -342,6 +342,7 @@ type collectorState struct {
 	tailSubscribers     map[chan []byte]struct{}
 	processorMu         sync.RWMutex
 	processor           *processing.Processor
+	processorClosed     bool
 	cortexBridge        *cortexBridgeClient
 	queryDB             *sql.DB
 	queryConnection     database.Connection

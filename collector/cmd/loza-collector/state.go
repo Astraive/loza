@@ -40,6 +40,9 @@ func (s *collectorState) effectiveDiskHealthy() bool {
 func (s *collectorState) ensureProcessor() error {
 	s.processorMu.Lock()
 	defer s.processorMu.Unlock()
+	if s.processorClosed {
+		return errProcessorClosed
+	}
 	if s.processor != nil {
 		return nil
 	}

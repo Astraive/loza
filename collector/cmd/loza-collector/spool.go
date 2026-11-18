@@ -18,6 +18,7 @@ const maxSpoolReplayRecordBytes = 16 * 1024 * 1024
 var (
 	errSpoolCapacity         = errors.New("spool capacity exceeded")
 	errDeliveryQueueCapacity = errors.New("delivery queue bytes exceeded")
+	errProcessorClosed       = errors.New("processor is closed")
 )
 
 type spoolDelivery struct {
@@ -155,12 +156,19 @@ func (s *collectorState) closeReliability() {
 			}
 			s.spoolFile = nil
 		}
+		// Hold the write lock for the whole teardown so it is mutually
+		// exclusive with the RLock-held Process/WriteDLQ call sites. Closing
+		// the processor while a request holds a reference to it would either
+		// use an already-closed processor or race with its internal state.
+		s.processorMu.Lock()
 		if s.processor != nil {
 			if err := s.processor.Close(); err != nil {
 				logJSON("error", "processor_close_failed", map[string]any{"error": err.Error()})
 			}
 			s.processor = nil
 		}
+		s.processorClosed = true
+		s.processorMu.Unlock()
 	})
 }
 
@@ -372,18 +380,30 @@ func (s *collectorState) processSpoolEvent(item spoolDelivery) {
 
 func (s *collectorState) maybeWriteDLQ(raw []byte, err error) {
 	s.processorMu.RLock()
-	proc := s.processor
-	s.processorMu.RUnlock()
-	if proc == nil {
-		if initErr := s.ensureProcessor(); initErr != nil {
-			logJSON("error", "collector_dlq_processor_not_initialized", map[string]any{"error": initErr.Error()})
-			return
-		}
-		s.processorMu.RLock()
-		proc = s.processor
+	if s.processorClosed {
 		s.processorMu.RUnlock()
+		return
 	}
-	proc.WriteDLQ(raw, err)
+	proc := s.processor
+	if proc != nil {
+		// Keep the read lock across the write so a concurrent teardown (which
+		// takes the write lock) cannot close the processor out from under us.
+		proc.WriteDLQ(raw, err)
+		s.processorMu.RUnlock()
+		return
+	}
+	s.processorMu.RUnlock()
+
+	if initErr := s.ensureProcessor(); initErr != nil {
+		logJSON("error", "collector_dlq_processor_not_initialized", map[string]any{"error": initErr.Error()})
+		return
+	}
+	s.processorMu.RLock()
+	defer s.processorMu.RUnlock()
+	if s.processorClosed || s.processor == nil {
+		return
+	}
+	s.processor.WriteDLQ(raw, err)
 }
 
 func (s *collectorState) markSpoolDelivered(item spoolDelivery) {
