@@ -1,4 +1,4 @@
-from queue import SimpleQueue
+from queue import Empty, SimpleQueue
 
 
 class ObjectPool:
@@ -7,7 +7,10 @@ class ObjectPool:
         self.items = SimpleQueue()
 
     def get(self):
-        return self.items.get() if not self.items.empty() else self.factory()
+        try:
+            return self.items.get_nowait()
+        except Empty:
+            return self.factory()
 
     def put(self, item):
         self.items.put(item)
