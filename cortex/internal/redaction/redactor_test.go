@@ -101,3 +101,62 @@ func TestRedactMapZeroValueAndNilReceiver(t *testing.T) {
 		t.Error("nil receiver should return the input map")
 	}
 }
+
+// Regression: blocklist entries containing uppercase characters must still
+// match the lowercased key in redactString. Previously entries were appended
+// verbatim, so "ApiKey"/"CreditCard" could never match and the field was never
+// detected or redacted.
+func TestNewWithConfigNormalizesBlocklist(t *testing.T) {
+	r := NewWithConfig(Config{
+		Mode:      ModeEnforce,
+		Blocklist: []string{"ApiKey", "CreditCard"},
+	})
+
+	tests := []struct {
+		name  string
+		key   string
+		value string
+		want  string
+	}{
+		{"mixed-case blocklist entry matches lowercased key", "X-ApiKey", "topsecret", "[REDACTED]"},
+		{"uppercase blocklist entry matches lowercased key", "CreditCard", "carddata", "[REDACTED]"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := r.redactString(tt.key, tt.value); got != tt.want {
+				t.Fatalf("redactString(%q, %q) = %q, want %q", tt.key, tt.value, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestNewWithConfigNormalizesBlocklistViaRedactMap(t *testing.T) {
+	r := NewWithConfig(Config{
+		Mode:      ModeEnforce,
+		Blocklist: []string{"ApiKey"},
+	})
+
+	data := map[string]interface{}{
+		"X-ApiKey": "topsecret",
+		"name":     "harmless",
+	}
+	got := r.RedactMap(data)
+
+	if got["X-ApiKey"] != "[REDACTED]" {
+		t.Fatalf("blocklisted key not redacted: got %q", got["X-ApiKey"])
+	}
+	if got["name"] != "harmless" {
+		t.Fatalf("unrelated key was modified: got %q", got["name"])
+	}
+}
+
+// Normalization must not mutate the caller's Config slice.
+func TestNewWithConfigDoesNotMutateBlocklist(t *testing.T) {
+	blocklist := []string{"ApiKey"}
+	NewWithConfig(Config{Mode: ModeEnforce, Blocklist: blocklist})
+
+	if blocklist[0] != "ApiKey" {
+		t.Fatalf("caller blocklist was mutated: got %q, want %q", blocklist[0], "ApiKey")
+	}
+}

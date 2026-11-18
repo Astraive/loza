@@ -91,6 +91,13 @@ func NewWithConfig(cfg Config) *Redactor {
 		allowlist[strings.ToLower(k)] = true
 	}
 	mode := normalizeMode(cfg.Mode)
+
+	// Normalize blocklist entries once so they match the lowercased key in
+	// redactString. Build a new slice to avoid mutating the caller's config.
+	blocklist := make([]string, len(cfg.Blocklist))
+	for i, k := range cfg.Blocklist {
+		blocklist[i] = strings.ToLower(k)
+	}
 	patterns := []*regexp.Regexp{emailRegex, ccRegex, ssnRegex}
 	if mode == ModeEnforce {
 		patterns = append(patterns, ipRegex, phoneRegex)
@@ -98,7 +105,7 @@ func NewWithConfig(cfg Config) *Redactor {
 	return &Redactor{
 		mode:      mode,
 		patterns:  patterns,
-		blocklist: cfg.Blocklist,
+		blocklist: blocklist,
 		allowlist: allowlist,
 	}
 }
