@@ -12,6 +12,12 @@ import (
 	"github.com/astraive/loza/sdks/go"
 )
 
+// maxBufferedFactor bounds the retained buffer to a small multiple of the
+// configured batch size. Without a cap, a failed batch is folded back into the
+// buffer together with every event written during the send, so sustained send
+// failures grow memory in proportion to the incoming event rate.
+const maxBufferedFactor = 2
+
 // Config controls HTTP batch sink behavior.
 type Config struct {
 	URL           string
@@ -64,13 +70,55 @@ func New(cfg Config) (loza.Sink, error) {
 
 func (s *sink) Name() string { return "httpbatch" }
 
+// maxBuffered returns the hard cap on the number of buffered events. New
+// normalizes BatchSize to a positive value, but keep a defensive floor in case
+// a sink is constructed directly in tests.
+func (s *sink) maxBuffered() int {
+	if s.cfg.BatchSize <= 0 {
+		return maxBufferedFactor
+	}
+	return s.cfg.BatchSize * maxBufferedFactor
+}
+
+// trimBuf drops the oldest buffered events when the buffer exceeds its cap and
+// returns the number of events dropped. Callers must hold s.mu.
+func (s *sink) trimBuf() int {
+	max := s.maxBuffered()
+	if len(s.buf) <= max {
+		return 0
+	}
+	dropped := len(s.buf) - max
+	copy(s.buf, s.buf[dropped:])
+	for i := len(s.buf) - dropped; i < len(s.buf); i++ {
+		s.buf[i] = nil
+	}
+	s.buf = s.buf[:max]
+	return dropped
+}
+
+// retainFailed puts a failed batch back ahead of events buffered during the
+// send and applies the cap, dropping the oldest events if needed. Callers must
+// hold s.mu.
+func (s *sink) retainFailed(batch [][]byte) int {
+	s.buf = append(batch, s.buf...)
+	return s.trimBuf()
+}
+
+func (s *sink) notifyDropped(dropped int) {
+	if dropped > 0 && s.cfg.OnError != nil {
+		s.cfg.OnError(fmt.Errorf("httpbatch: buffer full, dropped %d events", dropped))
+	}
+}
+
 func (s *sink) WriteEvent(_ context.Context, encoded []byte, _ *loza.Event) error {
 	s.mu.Lock()
 	cp := make([]byte, len(encoded))
 	copy(cp, encoded)
 	s.buf = append(s.buf, cp)
+	dropped := s.trimBuf()
 	flush := len(s.buf) >= s.cfg.BatchSize
 	s.mu.Unlock()
+	s.notifyDropped(dropped)
 	if flush {
 		return s.Flush(context.Background())
 	}
@@ -97,25 +145,28 @@ func (s *sink) WriteBatch(ctx context.Context, encoded [][]byte, _ []*loza.Event
 
 func (s *sink) Flush(ctx context.Context) error {
 	s.flushMu.Lock()
-	defer s.flushMu.Unlock()
-
 	s.mu.Lock()
 	if len(s.buf) == 0 {
 		s.mu.Unlock()
+		s.flushMu.Unlock()
 		return nil
 	}
 	batch := s.buf
 	s.buf = make([][]byte, 0, s.cfg.BatchSize)
 	s.mu.Unlock()
 
-	if err := s.send(ctx, bytes.Join(batch, nil)); err != nil {
+	err := s.send(ctx, bytes.Join(batch, nil))
+	var dropped int
+	if err != nil {
 		s.mu.Lock()
-		batch = append(batch, s.buf...)
-		s.buf = batch
+		dropped = s.retainFailed(batch)
 		s.mu.Unlock()
-		return err
 	}
-	return nil
+	s.flushMu.Unlock()
+
+	// Notify after releasing flushMu so an OnError callback may call Flush.
+	s.notifyDropped(dropped)
+	return err
 }
 
 func (s *sink) send(ctx context.Context, payload []byte) error {

@@ -4,6 +4,7 @@ import (
 	"compress/gzip"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -296,6 +297,71 @@ func TestBatchSinkWriteBatchPreservesOrderAfterFailedFlush(t *testing.T) {
 	}
 	if bodies[0] != "first\n" || bodies[1] != "first\nsecond\n" {
 		t.Fatalf("request bodies = %q, WriteBatch payload overtook retained events", bodies)
+	}
+}
+
+// TestBatchSinkCapsBufferOnSustainedFailures reproduces the unbounded growth
+// reported in mass-scan finding MASS-0514: every failed send used to fold all
+// concurrently buffered events back into the retained batch with no size cap.
+func TestBatchSinkCapsBufferOnSustainedFailures(t *testing.T) {
+	fail := true
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		if fail {
+			http.Error(w, "retry", http.StatusServiceUnavailable)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+
+	dropped := make(chan error, 1)
+	got, err := New(Config{
+		URL:           server.URL,
+		BatchSize:     2,
+		FlushInterval: time.Hour,
+		OnError: func(err error) {
+			select {
+			case dropped <- err:
+			default:
+			}
+		},
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer func() { _ = got.Close(context.Background()) }()
+
+	const events = 200
+	for i := 0; i < events; i++ {
+		// Every send fails, so the old implementation retained all events.
+		_ = got.WriteEvent(context.Background(), []byte(fmt.Sprintf("event-%03d\n", i)), nil)
+	}
+
+	impl := got.(*sink)
+	impl.mu.Lock()
+	buffered := len(impl.buf)
+	var last string
+	if buffered > 0 {
+		last = string(impl.buf[buffered-1])
+	}
+	cap := impl.maxBuffered()
+	impl.mu.Unlock()
+
+	if buffered > cap {
+		t.Fatalf("buffered events = %d, want <= cap %d (unbounded growth on sustained failures)", buffered, cap)
+	}
+	if last != fmt.Sprintf("event-%03d\n", events-1) {
+		t.Fatalf("newest retained event = %q, want %q (oldest should be dropped first)", last, fmt.Sprintf("event-%03d\n", events-1))
+	}
+
+	select {
+	case err := <-dropped:
+		if !strings.Contains(err.Error(), "dropped") {
+			t.Fatalf("drop notification = %v, want a dropped-events error", err)
+		}
+	default:
+		t.Fatal("no OnError notification for dropped events")
 	}
 }
 
