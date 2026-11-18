@@ -569,33 +569,44 @@ func (s *GraphQLServer) handleRemediationSuggestions(ctx context.Context, vars m
 		return nil, newGraphQLClientError("incidentId required")
 	}
 
-	_, err := s.incidents.Get(ctx, incidentID)
+	incident, err := s.incidents.Get(ctx, incidentID)
 	if err != nil {
 		return nil, err
 	}
 
-	sigs, err := s.signatures.List(ctx, 10)
+	// Scope remediation to the signature of the incident being queried. Without a
+	// signature there is no incident-specific remediation to suggest.
+	if incident.SignatureID == "" {
+		return []map[string]interface{}{}, nil
+	}
+
+	incidentSignature, err := s.signatures.Get(ctx, incident.SignatureID)
 	if err != nil {
 		return nil, err
 	}
 
-	suggestions := make([]map[string]interface{}, 0)
-	for _, sig := range sigs {
-		similar, err := s.match.FindSimilar(ctx, sig, 5)
-		if err != nil {
+	similar, err := s.match.FindSimilar(ctx, incidentSignature, 5)
+	if err != nil {
+		return nil, err
+	}
+
+	suggestions := make([]map[string]interface{}, 0, len(similar))
+	for _, sim := range similar {
+		// SimilarIncident.Resolution is the remediation recorded on the matched
+		// signature. Fall back to the queried incident's own remediation when the
+		// match does not carry one.
+		action := sim.Resolution
+		if action == "" && len(incidentSignature.Remediation) > 0 {
+			action = incidentSignature.Remediation[0]
+		}
+		if action == "" {
 			continue
 		}
-		symptomType := ""
-		if len(sig.Symptoms) > 0 {
-			symptomType = string(sig.Symptoms[0])
-		}
-		for _, sim := range similar {
-			suggestions = append(suggestions, map[string]interface{}{
-				"action":     symptomType,
-				"confidence": sim.Similarity,
-				"signature":  sig,
-			})
-		}
+		suggestions = append(suggestions, map[string]interface{}{
+			"action":     action,
+			"confidence": sim.Similarity,
+			"signature":  incidentSignature,
+		})
 	}
 
 	return suggestions, nil
