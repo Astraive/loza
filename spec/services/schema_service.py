@@ -160,8 +160,8 @@ class SchemaServiceHandler(BaseHTTPRequestHandler):
 
         if path.startswith("/schemas/"):
             rel = path[len("/schemas/"):]
-            # Base dir: spec/schemas/json/
-            base = root / "spec" / "schemas" / "json"
+            # root already points at spec/, so schemas live in spec/schemas/json/
+            base = root / "schemas" / "json"
             target = base / rel
             # Protect against path traversal. is_relative_to() enforces a real
             # path boundary; a string-prefix check would wrongly accept a
