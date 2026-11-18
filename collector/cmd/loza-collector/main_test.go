@@ -405,6 +405,53 @@ func TestPrepareEventNormalizesEventTypeAlias(t *testing.T) {
 	}
 }
 
+func TestPrepareEventNullPayloadWithIdentityEnforcement(t *testing.T) {
+	cfg := testCollectorConfig()
+	cfg.processorRegistry = []string{"identity"}
+	cfg.authIdentityWins = true
+	cfg.allowPayloadIdentity = false
+	cfg.boundServiceName = "checkout"
+	state := &collectorState{cfg: cfg}
+
+	// json.Unmarshal("null", &payload) succeeds and leaves payload nil. Before
+	// the fix, applyIdentity wrote into that nil map and panicked.
+	next, govErr := state.prepareEvent([]byte("null"))
+	if govErr != nil {
+		t.Fatalf("prepare event: %v", govErr)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(next, &payload); err != nil {
+		t.Fatalf("decode governed event: %v", err)
+	}
+	if payload == nil {
+		t.Fatalf("expected governed event object, got null")
+	}
+	if got := payload["service"]; got != "checkout" {
+		t.Fatalf("expected bound service identity, got %#v", got)
+	}
+	serviceIdentity, ok := payload["service_identity"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected service_identity object, got %#v", payload["service_identity"])
+	}
+	if got := serviceIdentity["name"]; got != "checkout" {
+		t.Fatalf("expected bound service identity name, got %#v", got)
+	}
+}
+
+func TestPrepareEventNullPayloadPassesThroughWithoutGovernance(t *testing.T) {
+	cfg := testCollectorConfig()
+	cfg.processorRegistry = nil
+	state := &collectorState{cfg: cfg}
+
+	next, govErr := state.prepareEvent([]byte("null"))
+	if govErr != nil {
+		t.Fatalf("prepare event: %v", govErr)
+	}
+	if string(next) != "null" {
+		t.Fatalf("expected null payload to pass through unchanged, got %q", next)
+	}
+}
+
 func TestHandleIngestInvalidJSON(t *testing.T) {
 	sink := &fakeSink{}
 	state := &collectorState{

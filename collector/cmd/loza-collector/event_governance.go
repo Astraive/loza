@@ -31,6 +31,11 @@ func (s *collectorState) prepareEvent(raw []byte) ([]byte, *governanceError) {
 	if err := json.Unmarshal(raw, &payload); err != nil {
 		return raw, &governanceError{Code: "invalid_json", Message: err.Error()}
 	}
+	// json.Unmarshal succeeds on `null` but leaves the map nil. Governance
+	// processors below write into payload, which would panic on a nil map.
+	if payload == nil {
+		payload = map[string]any{}
+	}
 
 	if err := s.enforcePayloadLimits(payload); err != nil {
 		return raw, err
