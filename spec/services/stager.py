@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import errno
 import gzip
 import json
 import logging
@@ -10,6 +11,7 @@ import os
 import random
 import re
 import time
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -79,45 +81,64 @@ def _source_suffix(source: Any) -> str:
     return _safe_name(str(source))
 
 
-def _build_target(partition_dir: Path, payload: dict[str, Any], source: Any, compress: bool) -> Path:
-    ext = ".json.gz" if compress else ".json"
+def _target_candidates(partition_dir: Path, payload: dict[str, Any], source: Any, ext: str):
+    """Yield the preferred final name followed by numbered fallbacks."""
     event_id = payload.get("event_id")
     stem = _safe_name(str(event_id)) if event_id else f"noid-{_source_suffix(source)}"
-    candidate = partition_dir / f"{stem}{ext}"
-    if not candidate.exists():
-        return candidate
+    yield partition_dir / f"{stem}{ext}"
     i = 1
     while True:
-        retry_candidate = partition_dir / f"{stem}-{i}{ext}"
-        if not retry_candidate.exists():
-            return retry_candidate
+        yield partition_dir / f"{stem}-{i}{ext}"
         i += 1
 
 
-def _write_payload_atomically(target: Path, payload: dict[str, Any], compress: bool) -> None:
-    target.parent.mkdir(parents=True, exist_ok=True)
-    temp_file = target.with_name(f".{target.name}.{os.getpid()}.{int(time.time() * 1000000)}.tmp")
+def _write_payload_atomically(
+    partition_dir: Path, payload: dict[str, Any], source: Any, compress: bool
+) -> Path:
+    """Write a complete payload and atomically claim a free final filename.
+
+    The payload is written in full to a private temp file first, then the final
+    name is created with ``os.link``.  ``os.link`` is an atomic "create if
+    absent" operation: it succeeds for exactly one caller and raises EEXIST for
+    everyone else.  That closes the check-then-act (TOCTOU) gap where two
+    concurrent workers both observed a free name and silently overwrote each
+    other via ``os.replace``.  Because the linked inode already holds the
+    complete payload, readers never observe an empty or partially written file.
+    """
+    ext = ".json.gz" if compress else ".json"
+    partition_dir.mkdir(parents=True, exist_ok=True)
+    temp_file = partition_dir / f".{os.getpid()}.{uuid.uuid4().hex}.tmp"
     try:
         if compress:
             with gzip.open(temp_file, "wt", encoding="utf-8") as fh:
                 json.dump(payload, fh, separators=(",", ":"), ensure_ascii=False)
         else:
             temp_file.write_text(json.dumps(payload, separators=(",", ":"), ensure_ascii=False), encoding="utf-8")
-        os.replace(temp_file, target)
-    finally:
-        if temp_file.exists():
+
+        for target in _target_candidates(partition_dir, payload, source, ext):
             try:
-                temp_file.unlink()
-            except Exception:
-                pass
+                os.link(temp_file, target)
+            except FileExistsError:
+                # Another worker already committed this name; try the next one.
+                continue
+            except OSError as exc:
+                if exc.errno == errno.EEXIST:
+                    continue
+                raise
+            return target
+    finally:
+        try:
+            temp_file.unlink()
+        except FileNotFoundError:
+            pass
+        except Exception:
+            pass
 
 
 def _stage_payload(staging_dir: Path, payload: dict[str, Any], source: Any, compress: bool) -> Path:
     ts = payload.get("timestamp") or datetime.now(timezone.utc).isoformat()
     partition_dir = _partition_path(staging_dir, ts)
-    target = _build_target(partition_dir, payload, source, compress)
-    _write_payload_atomically(target, payload, compress)
-    return target
+    return _write_payload_atomically(partition_dir, payload, source, compress)
 
 
 def stage_events(
