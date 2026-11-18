@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/astraive/loza/collector/internal/auth"
 	publichttp "github.com/astraive/loza/collector/server/http"
 	"github.com/rs/zerolog/log"
 )
@@ -172,116 +173,20 @@ func (s *collectorState) handleQuery(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "auth_failed"})
 		return
 	}
-	if isCanonicalCollectorRoute(r) {
-		s.handleScopedQuery(w, r)
-		return
-	}
-	requestID := fmt.Sprintf("q_%d", time.Now().UTC().UnixNano())
-	var req queryRequest
-	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_query_request", "message": err.Error()})
-		return
-	}
-	query := strings.TrimSpace(req.Query)
-	if query == "" {
-		query = strings.TrimSpace(req.SQL)
-	}
-	if !isReadOnlyQuery(query) {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "query_must_be_read_only"})
-		return
-	}
-	if !isSafeQuery(query) {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "query_contains_blocked_operations"})
-		return
-	}
-	if req.Limit <= 0 || req.Limit > 1000 {
-		req.Limit = 1000
-	}
-
-	db := s.queryDB
-	var closeDB func()
-	if db == nil {
-		var err error
-		db, err = sql.Open(s.cfg.duckDBDriver, s.cfg.duckDBPath)
-		if err != nil {
-			log.Error().Err(err).Str("request_id", requestID).Msg("query db open failed")
-			writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "query_unavailable", "request_id": requestID})
+	// isAuthorized only proves authentication; require the read permission here
+	// as defense in depth for direct handler calls (the router already enforces
+	// events:read via RequirePermission for both canonical and legacy routes).
+	if s.cfg.authEnabled {
+		if ac := auth.GetAuthContext(r.Context()); ac == nil || !ac.HasPermission(auth.PermEventsRead) {
+			writeJSON(w, http.StatusForbidden, map[string]any{"error": "query_permission_required"})
 			return
 		}
-		closeDB = func() { _ = db.Close() }
 	}
-	if closeDB != nil {
-		defer closeDB()
-	}
-
-	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
-	defer cancel()
-
-	// Use a dedicated connection so SET and query run on the same connection.
-	// DuckDB SET is connection-scoped; using the pool directly means the SET
-	// might apply to one connection while the query runs on another.
-	conn, err := db.Conn(ctx)
-	if err != nil {
-		log.Error().Err(err).Str("request_id", requestID).Msg("query conn acquire failed")
-		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "query_unavailable", "request_id": requestID})
-		return
-	}
-	defer conn.Close()
-
-	// Disable external access to block read_csv, read_json, etc.
-	// Reject the query if this fails — proceeding without the safety guard is unsafe.
-	if _, err := conn.ExecContext(ctx, "SET enable_external_access=false"); err != nil {
-		log.Error().Err(err).Str("request_id", requestID).Msg("failed to disable external access in DuckDB")
-		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "query_safety_check_failed", "request_id": requestID})
-		return
-	}
-
-	rows, err := conn.QueryContext(ctx, query)
-	if err != nil {
-		log.Error().Err(err).Str("request_id", requestID).Msg("query failed")
-		writeJSON(w, http.StatusUnprocessableEntity, map[string]any{"error": "query_failed", "request_id": requestID})
-		return
-	}
-	defer rows.Close()
-
-	columns, err := rows.Columns()
-	if err != nil {
-		log.Error().Err(err).Str("request_id", requestID).Msg("query columns failed")
-		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "query_failed", "request_id": requestID})
-		return
-	}
-	result := make([]map[string]any, 0)
-	for rows.Next() {
-		values := make([]any, len(columns))
-		ptrs := make([]any, len(columns))
-		for i := range values {
-			ptrs[i] = &values[i]
-		}
-		if err := rows.Scan(ptrs...); err != nil {
-			log.Error().Err(err).Str("request_id", requestID).Msg("query scan failed")
-			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "query_failed", "request_id": requestID})
-			return
-		}
-		row := make(map[string]any, len(columns))
-		for i, col := range columns {
-			switch v := values[i].(type) {
-			case []byte:
-				row[col] = string(v)
-			default:
-				row[col] = v
-			}
-		}
-		result = append(result, row)
-		if len(result) >= req.Limit {
-			break
-		}
-	}
-	if err := rows.Err(); err != nil {
-		log.Error().Err(err).Str("request_id", requestID).Msg("query rows iteration failed")
-		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "query_failed", "request_id": requestID})
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"columns": columns, "rows": result, "row_count": len(result)})
+	// Client-supplied SQL cannot prove collector/environment ownership. The
+	// router binds both canonical routes and legacy default-collector routes to
+	// an authorized collector scope, so every query uses the fixed,
+	// parameterized, ownership-filtered query rather than arbitrary SQL.
+	s.handleScopedQuery(w, r)
 }
 
 // handleScopedQuery exposes a fixed, parameterized event-listing query. Raw
@@ -596,49 +501,6 @@ func (s *collectorState) writeDLQRecords(records []map[string]any) error {
 		return err
 	}
 	return os.Rename(tmp, s.cfg.dlqPath)
-}
-
-func isReadOnlyQuery(query string) bool {
-	lower := strings.ToLower(strings.TrimSpace(query))
-	if lower == "" {
-		return false
-	}
-	if strings.Contains(lower, ";") || strings.Contains(lower, "--") || strings.Contains(lower, "/*") || strings.Contains(lower, "*/") {
-		return false
-	}
-	for _, prefix := range []string{"select", "with", "show", "describe", "pragma table_info", "pragma database_list"} {
-		if strings.HasPrefix(lower, prefix) {
-			return true
-		}
-	}
-	return false
-}
-
-// isSafeQuery performs a deeper check beyond isReadOnlyQuery, blocking dangerous
-// DuckDB functions and DML operations that can be hidden inside CTEs or subqueries.
-func isSafeQuery(query string) bool {
-	lower := strings.ToLower(strings.TrimSpace(query))
-	if strings.Contains(lower, ";") || strings.Contains(lower, "--") || strings.Contains(lower, "/*") || strings.Contains(lower, "*/") {
-		return false
-	}
-	// Block dangerous DuckDB functions and DDL/DML keywords
-	dangerous := []string{
-		"chr(", "unicode(",
-		"read_", "scan(", "glob(", "iceberg_scan", "delta_scan",
-		"httpfs", "spatial", "sqlite", "postgres", "mysql", "s3", "http://", "https://", "file:",
-		"install", "load ", "load\t", "attach", "copy ", "export",
-		"call ", "prepare", "execute",
-		"query(", "printf(", "format(",
-		"create ", "drop ", "alter ", "truncate",
-		"insert ", "update ", "delete ", "merge ",
-		"grant ", "revoke",
-	}
-	for _, d := range dangerous {
-		if strings.Contains(lower, d) {
-			return false
-		}
-	}
-	return true
 }
 
 func deliveryQueueDepth(ch chan spoolDelivery) int {
