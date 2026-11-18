@@ -92,6 +92,32 @@ def test_flask_middleware_streams_response_without_buffering() -> None:
     assert payload["attrs"]["response_bytes"] == 6
 
 
+def test_flask_middleware_without_app_calls_start_response_and_emits_event() -> None:
+    from loza.middleware.flask import Middleware as FlaskMiddleware
+
+    sink = loza.MemorySink()
+    loza.Configure(loza.Test("checkout").with_sink(sink))
+    middleware = FlaskMiddleware(service="checkout")  # app intentionally omitted (the common miswire)
+
+    captured: dict = {}
+
+    def start_response(status, headers, exc_info=None):
+        captured["status"] = status
+        captured["headers"] = headers
+
+    response = middleware({"REQUEST_METHOD": "GET", "PATH_INFO": "/broken"}, start_response)
+
+    assert captured["status"].startswith("500")
+    assert ("Content-Type", "text/plain") in captured["headers"]
+    assert list(response) == [b"Internal Server Error"]
+
+    assert len(sink.events) == 1
+    payload = json.loads(sink.events[0])
+    assert payload["outcome"] == "error"
+    assert payload["error"]["message"] == "loza.flask.middleware: no WSGI app configured (app=None)"
+    assert payload["attrs"]["panic"] is True
+
+
 def test_flask_middleware_closes_original_iterable_on_close() -> None:
     from loza.middleware.flask import Middleware as FlaskMiddleware
 
