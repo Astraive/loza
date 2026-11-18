@@ -39,20 +39,20 @@ function extractStatusCode(attrs: Record<string, any>): { code: number; rest: Re
   return { code, rest };
 }
 
-/** Normalize key/value attr objects (Attr or {key, value}) into entry fields. */
-function collectAttrs(attrs: any[]): { code: number; rest: Record<string, any> } {
-  let code = 0;
-  const rest: Record<string, any> = {};
+/** Collect Attr-shaped objects into entry attrs and an optional status code. */
+function collectAttrs(attrs: any[]): { extra: Record<string, any>; statusCode: number } {
+  const extra: Record<string, any> = {};
+  let statusCode = 0;
   for (const a of attrs) {
     if (a && a.key) {
       if (a.key === 'status_code' && typeof a.value === 'number') {
-        code = a.value;
+        statusCode = a.value;
       } else {
-        rest[a.key] = a.value;
+        extra[a.key] = a.value;
       }
     }
   }
-  return { code, rest };
+  return { extra, statusCode };
 }
 
 /** Handle for a named process step with automatic duration tracking. */
@@ -62,23 +62,21 @@ export class ProcessHandle {
   private _step: number;
   private _startedAt: number;
   private _startedAtMs: number;
-  private _initialAttrs: any[];
+  private _attrs: any[];
 
-  constructor(event: any, name: string, step: number, startedAt: number, initialAttrs: any[] = []) {
+  constructor(event: any, name: string, step: number, startedAt: number, attrs: any[] = []) {
     this._event = event;
     this._name = name;
     this._step = step;
     this._startedAt = startedAt;
     this._startedAtMs = startedAt - (this._event.startedAt || startedAt);
-    this._initialAttrs = initialAttrs;
+    this._attrs = attrs;
   }
 
   finish(...attrs: any[]): void {
     const now = Date.now();
     const endedMs = now - (this._event.startedAt || now);
-    const collected = collectAttrs([...this._initialAttrs, ...attrs]);
-    const extra = collected.rest;
-    let statusCode = collected.code;
+    const { extra, statusCode } = collectAttrs([...this._attrs, ...attrs]);
     const entry: ProcessEntry = {
       step: this._step,
       name: this._name,
@@ -106,20 +104,18 @@ export class TimerHandle {
   private _event: any;
   private _name: string;
   private _startedAt: number;
-  private _initialAttrs: any[];
+  private _attrs: any[];
 
-  constructor(event: any, name: string, startedAt: number, initialAttrs: any[] = []) {
+  constructor(event: any, name: string, startedAt: number, attrs: any[] = []) {
     this._event = event;
     this._name = name;
     this._startedAt = startedAt;
-    this._initialAttrs = initialAttrs;
+    this._attrs = attrs;
   }
 
   stop(...attrs: any[]): void {
     const durationMs = Date.now() - this._startedAt;
-    const collected = collectAttrs([...this._initialAttrs, ...attrs]);
-    const extra = collected.rest;
-    let statusCode = collected.code;
+    const { extra, statusCode } = collectAttrs([...this._attrs, ...attrs]);
     const entry: TimerEntry = {
       name: this._name,
       duration_ms: durationMs,
@@ -166,22 +162,20 @@ export class GroupHandle {
   private _name: string;
   private _startedAt: number;
   private _startedAtMs: number;
-  private _initialAttrs: any[];
+  private _attrs: any[];
 
-  constructor(event: any, name: string, startedAt: number, initialAttrs: any[] = []) {
+  constructor(event: any, name: string, startedAt: number, attrs: any[] = []) {
     this._event = event;
     this._name = name;
     this._startedAt = startedAt;
     this._startedAtMs = startedAt - (this._event.startedAt || startedAt);
-    this._initialAttrs = initialAttrs;
+    this._attrs = attrs;
   }
 
   finish(...attrs: any[]): void {
     const now = Date.now();
     const endedMs = now - (this._event.startedAt || now);
-    const collected = collectAttrs([...this._initialAttrs, ...attrs]);
-    const extra = collected.rest;
-    let statusCode = collected.code;
+    const { extra, statusCode } = collectAttrs([...this._attrs, ...attrs]);
     const entry: GroupEntry = {
       name: this._name,
       started_at_ms: this._startedAtMs,
