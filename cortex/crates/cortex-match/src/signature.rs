@@ -202,11 +202,20 @@ pub fn normalize_signature(causal_chain: &[Event], service_names: &[String]) -> 
 
     let role_set: std::collections::HashSet<_> = roles.iter().collect();
     let role_diversity = role_set.len() as f64 / service_names.len().max(1) as f64;
-    if sig.feature_vector.len() >= 9 {
-        sig.feature_vector[9] = role_diversity;
-    }
+    set_role_diversity_feature(&mut sig, role_diversity);
 
     sig
+}
+
+/// Write the topology role-diversity value into feature slot 9 when present.
+///
+/// Slot 9 is the last element of a full ten-element feature vector, so a guard
+/// based on `len() >= 9` was off by one and panicked on a nine-element vector.
+/// Using `get_mut` only writes the slot when it actually exists.
+fn set_role_diversity_feature(sig: &mut Signature, role_diversity: f64) {
+    if let Some(slot) = sig.feature_vector.get_mut(9) {
+        *slot = role_diversity;
+    }
 }
 
 /// Compute hash of signature shape (topology-independent)
@@ -329,5 +338,35 @@ mod tests {
         assert!(!sig.shape.contains("payments"));
         assert!(!sig.shape.contains("billing"));
         assert!(sig.shape.contains("Latency"));
+    }
+
+    #[test]
+    fn test_normalize_writes_role_diversity_to_last_slot() {
+        // Two distinct roles ("api" and "database") across two services -> 1.0.
+        let events = vec![Event {
+            kind: "deploy".to_string(),
+            service: None,
+            timestamp_ms: 0,
+        }];
+        let services = vec!["payments-api".to_string(), "orders-db".to_string()];
+
+        let sig = normalize_signature(&events, &services);
+
+        assert_eq!(sig.feature_vector.len(), 10);
+        assert!((sig.feature_vector[9] - 1.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_role_diversity_short_vector_does_not_panic() {
+        // Regression for MASS-0270: a nine-element feature vector previously
+        // reached `feature_vector[9]` under a `len() >= 9` guard and panicked
+        // with an index-out-of-bounds error. It must be left untouched instead.
+        let mut sig = Signature::new();
+        sig.feature_vector = vec![0.0; 9];
+
+        set_role_diversity_feature(&mut sig, 0.75);
+
+        assert_eq!(sig.feature_vector.len(), 9);
+        assert!(sig.feature_vector.iter().all(|&v| v == 0.0));
     }
 }
