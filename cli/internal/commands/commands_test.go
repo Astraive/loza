@@ -639,6 +639,62 @@ func TestSignaturesCommandHandlesUnexpectedJSONShape(t *testing.T) {
 	}
 }
 
+func TestOutputIncidentContextPrintsValidSuccessRate(t *testing.T) {
+	ctx := map[string]interface{}{
+		"suggested_actions": []interface{}{
+			map[string]interface{}{"action": "restart", "success_rate": 0.85},
+		},
+	}
+	out, err := captureStdout(t, func() error {
+		outputIncidentContext(ctx)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("outputIncidentContext: %v", err)
+	}
+	if !strings.Contains(out, "  - restart (success rate: 85.0%)") {
+		t.Fatalf("expected formatted success rate in output, got %q", out)
+	}
+}
+
+func TestOutputIncidentContextHandlesMissingOrInvalidSuccessRate(t *testing.T) {
+	tests := []struct {
+		name   string
+		action map[string]interface{}
+	}{
+		{
+			name:   "missing success_rate",
+			action: map[string]interface{}{"action": "restart"},
+		},
+		{
+			name:   "string success_rate",
+			action: map[string]interface{}{"action": "restart", "success_rate": "0.85"},
+		},
+		{
+			name:   "null success_rate",
+			action: map[string]interface{}{"action": "restart", "success_rate": nil},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := map[string]interface{}{
+				"suggested_actions": []interface{}{tt.action},
+			}
+			out, err := captureStdout(t, func() error {
+				outputIncidentContext(ctx)
+				return nil
+			})
+			if err != nil {
+				t.Fatalf("outputIncidentContext: %v", err)
+			}
+			if !strings.Contains(out, "  - restart\n") {
+				t.Fatalf("expected action to be printed without a success rate, got %q", out)
+			}
+		})
+	}
+}
+
 func TestSignaturesCommandRendersValidShape(t *testing.T) {
 	body := `{"data":{"signatures":[{"id":"sig_1","pattern":"pay.*fail","count":3,"lastSeen":"2026-01-01"}]}}`
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
