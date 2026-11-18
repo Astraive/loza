@@ -81,6 +81,9 @@ class SecurityConfig:
     max_event_bytes: int = 256 * 1024
     max_attr_count: int = 512
     drop_oversized_events: bool = True
+    # Secret salt for keyed pseudonymization of sensitive values. Kept out of
+    # repr() so it is never leaked by logging the config.
+    hash_salt: str = field(default="", repr=False)
 
 
 @dataclass(slots=True)
@@ -290,6 +293,13 @@ def new_client(code_config: Config):  # -> Logger
     # Step 5: Apply code config (highest precedence)
     merged = _merge_code_config(merged, code_config)
 
+    # Step 5b: Install the configured pseudonymization secret, when provided.
+    # Without one, pseudonymize.py keeps its random-per-process default.
+    if merged.security.hash_salt:
+        from .pseudonymize import configure_hash_secret
+
+        configure_hash_secret(merged.security.hash_salt)
+
     # Step 6: Validate
     merged.validate()
 
@@ -387,6 +397,11 @@ def _apply_env_vars(cfg: Config) -> Config:
     if max_bytes_env.isdigit():
         cfg.security.max_event_bytes = int(max_bytes_env)
 
+    # Pseudonymization secret salt
+    hash_salt_env = os.getenv("LOZA_HASH_SALT", "").strip()
+    if hash_salt_env:
+        cfg.security.hash_salt = hash_salt_env
+
     return cfg
 
 
@@ -417,6 +432,8 @@ def _merge_file_config(base: Config, file_cfg: Config) -> Config:
         base.duplicate_policy = file_cfg.duplicate_policy
     if file_cfg.checkpoint_emit_immediately:
         base.checkpoint_emit_immediately = file_cfg.checkpoint_emit_immediately
+    if file_cfg.security.hash_salt and not base.security.hash_salt:
+        base.security.hash_salt = file_cfg.security.hash_salt
     return base
 
 
@@ -465,6 +482,8 @@ def _merge_code_config(base: Config, code: Config) -> Config:
         base.async_config.queue_size = code.async_config.queue_size
     if code.async_config.workers != 1:
         base.async_config.workers = code.async_config.workers
+    if code.security.hash_salt:
+        base.security.hash_salt = code.security.hash_salt
     return base
 
 
@@ -526,6 +545,7 @@ def _config_from_mapping(data: dict[str, Any]) -> Config:
             max_event_bytes=int(security_map.get("max_event_bytes", 256 * 1024)),
             max_attr_count=int(security_map.get("max_attr_count", 512)),
             drop_oversized_events=bool(security_map.get("drop_oversized_events", True)),
+            hash_salt=str(security_map.get("hash_salt", "")),
         ),
         field_naming=FieldNamingConfig(
             policy=str(field_map.get("policy", ExpandDotKeys)),
