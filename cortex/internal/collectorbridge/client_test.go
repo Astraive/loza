@@ -2,9 +2,18 @@ package collectorbridge
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/base64"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
+	"math/big"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -416,5 +425,140 @@ func TestStreamTailWebSocketClosesConnectionOnContextCancellation(t *testing.T) 
 		return nil
 	}); err == nil {
 		t.Fatal("expected websocket tail to return an error after context cancellation")
+	}
+}
+
+// newTestCAAndLeaf issues a leaf certificate for 127.0.0.1/localhost signed by a
+// freshly generated private CA. The returned PEM contains the CA certificate
+// only, so it can be written to CollectorConfig.TLSCAFile.
+func newTestCAAndLeaf(t *testing.T) (caPEM []byte, leaf tls.Certificate) {
+	t.Helper()
+
+	caKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generate CA key: %v", err)
+	}
+	caTemplate := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "loza-collectorbridge-test-ca"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(24 * time.Hour),
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
+	}
+	caDER, err := x509.CreateCertificate(rand.Reader, caTemplate, caTemplate, &caKey.PublicKey, caKey)
+	if err != nil {
+		t.Fatalf("create CA certificate: %v", err)
+	}
+	caCert, err := x509.ParseCertificate(caDER)
+	if err != nil {
+		t.Fatalf("parse CA certificate: %v", err)
+	}
+	caPEM = pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: caDER})
+
+	leafKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generate leaf key: %v", err)
+	}
+	leafTemplate := &x509.Certificate{
+		SerialNumber: big.NewInt(2),
+		Subject:      pkix.Name{CommonName: "localhost"},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(24 * time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		DNSNames:     []string{"localhost"},
+		IPAddresses:  []net.IP{net.ParseIP("127.0.0.1")},
+	}
+	leafDER, err := x509.CreateCertificate(rand.Reader, leafTemplate, caCert, &leafKey.PublicKey, caKey)
+	if err != nil {
+		t.Fatalf("create leaf certificate: %v", err)
+	}
+	leaf = tls.Certificate{
+		Certificate: [][]byte{leafDER, caDER},
+		PrivateKey:  leafKey,
+	}
+	return caPEM, leaf
+}
+
+func TestWebSocketDialerReusesCollectorTLSConfig(t *testing.T) {
+	caPEM, _ := newTestCAAndLeaf(t)
+	caPath := filepath.Join(t.TempDir(), "ca.pem")
+	if err := os.WriteFile(caPath, caPEM, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	client := NewClient(config.CollectorConfig{URL: "https://collector.example", TLSCAFile: caPath})
+	transport, ok := client.httpClient.Transport.(*http.Transport)
+	if !ok || transport.TLSClientConfig == nil || transport.TLSClientConfig.RootCAs == nil {
+		t.Fatal("expected HTTP transport to carry the configured root CAs")
+	}
+	got := client.webSocketDialer().TLSClientConfig
+	if got != transport.TLSClientConfig || got.RootCAs != transport.TLSClientConfig.RootCAs {
+		t.Fatal("websocket dialer must reuse the HTTP transport TLS config with the configured roots")
+	}
+	if websocket.DefaultDialer.TLSClientConfig != nil {
+		t.Fatal("rebuilding the dialer must not mutate websocket.DefaultDialer")
+	}
+}
+
+func TestStreamTailWebSocketUsesConfiguredTLSCA(t *testing.T) {
+	caPEM, leaf := newTestCAAndLeaf(t)
+	caPath := filepath.Join(t.TempDir(), "ca.pem")
+	if err := os.WriteFile(caPath, caPEM, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	upgrader := websocket.Upgrader{CheckOrigin: func(_ *http.Request) bool { return true }}
+	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("websocket upgrade: %v", err)
+			return
+		}
+		defer conn.Close()
+		if err := conn.WriteJSON(map[string]any{
+			"type": "event",
+			"data": map[string]any{
+				"id":             "tls-tail-1",
+				"schema_version": "v1",
+				"event_version":  "v1",
+				"event_id":       "tls-tail-1",
+				"timestamp":      "2026-01-01T00:00:00Z",
+				"service":        "checkout",
+				"event":          "checkout.request",
+				"kind":           "event",
+			},
+		}); err != nil {
+			t.Errorf("write websocket event: %v", err)
+		}
+	}))
+	server.TLS = &tls.Config{Certificates: []tls.Certificate{leaf}, MinVersion: tls.VersionTLS12}
+	server.StartTLS()
+	defer server.Close()
+
+	client := NewClient(config.CollectorConfig{
+		URL:           server.URL,
+		Collector:     "demo",
+		TailTransport: "websocket",
+		TLSCAFile:     caPath,
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	var received []*models.Event
+	err := client.StreamTail(ctx, func(event *models.Event) error {
+		received = append(received, event)
+		cancel()
+		return nil
+	})
+	if len(received) != 1 {
+		t.Fatalf("received %d events, want 1 (err=%v)", len(received), err)
+	}
+	if received[0].ID != "tls-tail-1" {
+		t.Fatalf("event ID = %q, want tls-tail-1", received[0].ID)
+	}
+	if err != nil && (strings.Contains(err.Error(), "x509") || strings.Contains(err.Error(), "certificate")) {
+		t.Fatalf("unexpected TLS verification error: %v", err)
 	}
 }
