@@ -1,15 +1,25 @@
 // Package memory implements an in-process event bus using buffered channels.
 // Suitable for local dev, testing, and single-process deployments.
+//
+// Delivery is at-least-once within the process: a handler signals failure by
+// returning an error or by calling Message.Nack. A failed delivery is retried
+// up to Config.Memory.MaxRetries times before the envelope is dead-lettered.
+// A handler that returns nil without nacking is treated as an implicit ack.
 package memory
 
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sync"
 
 	"github.com/astraive/loza/collector/internal/eventbus"
 )
+
+// errNack is the failure reason recorded when a handler nacks a message
+// without supplying an explicit error.
+var errNack = errors.New("memory bus: message nacked by handler")
 
 func init() {
 	eventbus.Register("memory", New)
@@ -17,16 +27,16 @@ func init() {
 
 // Bus implements eventbus.Bus using in-process buffered channels.
 type Bus struct {
-	mu      sync.RWMutex
-	topics  map[string]*topic
-	dlq     []eventbus.Envelope
-	dlqMu   sync.Mutex
-	closed  bool
-	cfg     eventbus.Config
+	mu     sync.RWMutex
+	topics map[string]*topic
+	dlq    []eventbus.Envelope
+	dlqMu  sync.Mutex
+	closed bool
+	cfg    eventbus.Config
 }
 
 type topic struct {
-	name    string
+	name     string
 	ch       chan eventbus.Envelope
 	mu       sync.RWMutex
 	handlers []handlerEntry
@@ -38,19 +48,48 @@ type handlerEntry struct {
 	handler eventbus.Handler
 }
 
-// Message implements eventbus.Message for the memory adapter.
+// Message implements eventbus.Message for the memory adapter. It records the
+// handler's acknowledgment decision so consumeLoop can act on it.
 type Message struct {
 	id       string
 	topic    string
 	envelope eventbus.Envelope
+
+	mu      sync.Mutex
+	acked   bool
+	nacked  bool
+	nackErr error
 }
 
-func (m *Message) ID() string                   { return m.id }
-func (m *Message) Topic() string                { return m.topic }
-func (m *Message) Envelope() eventbus.Envelope  { return m.envelope }
+func (m *Message) ID() string                  { return m.id }
+func (m *Message) Topic() string               { return m.topic }
+func (m *Message) Envelope() eventbus.Envelope { return m.envelope }
 
-func (m *Message) Ack(_ context.Context) error  { return nil }
-func (m *Message) Nack(_ context.Context, _ error) error { return nil }
+// Ack marks the message as successfully processed. There is no remote broker
+// to confirm to, so this only records the decision for consumeLoop.
+func (m *Message) Ack(_ context.Context) error {
+	m.mu.Lock()
+	m.acked = true
+	m.mu.Unlock()
+	return nil
+}
+
+// Nack marks the message as failed and records the reason so consumeLoop can
+// retry or dead-letter it. A nack takes precedence over a prior ack.
+func (m *Message) Nack(_ context.Context, err error) error {
+	m.mu.Lock()
+	m.nacked = true
+	m.nackErr = err
+	m.mu.Unlock()
+	return nil
+}
+
+// decision reports whether the handler nacked the message and why.
+func (m *Message) decision() (nacked bool, nackErr error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.nacked, m.nackErr
+}
 
 // New creates a new memory bus.
 func New(_ context.Context, cfg eventbus.Config) (eventbus.Bus, error) {
@@ -149,18 +188,67 @@ func (b *Bus) consumeLoop(t *topic) {
 				topic:    t.name,
 				envelope: env,
 			}
-			if err := h.handler(context.Background(), msg); err != nil {
-				b.dlqMu.Lock()
-				env.Attempts++
-				if env.Headers == nil {
-					env.Headers = make(map[string]string)
+
+			// The returned error is the primary failure signal; an explicit
+			// Nack is the alternative for handlers that prefer the Message API.
+			handlerErr := h.handler(context.Background(), msg)
+			nacked, nackErr := msg.decision()
+
+			var failure error
+			switch {
+			case handlerErr != nil:
+				failure = handlerErr
+			case nacked:
+				failure = nackErr
+				if failure == nil {
+					failure = errNack
 				}
-				env.Headers["dlq_reason"] = err.Error()
-				b.dlq = append(b.dlq, env)
-				b.dlqMu.Unlock()
+			}
+
+			if failure != nil {
+				b.handleFailure(t, env, failure)
 			}
 		}
 	}
+}
+
+// handleFailure requeues an envelope for another attempt while the retry
+// budget remains, otherwise it moves the envelope to the DLQ.
+func (b *Bus) handleFailure(t *topic, env eventbus.Envelope, reason error) {
+	if env.Attempts >= b.cfg.Memory.MaxRetries {
+		b.appendToDLQ(env, reason)
+		return
+	}
+
+	env.Attempts++
+
+	// Do not send on a channel that Close may have closed. Holding the read
+	// lock blocks Close from closing the channel while we enqueue, and the
+	// non-blocking send keeps this path from stalling delivery.
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	if !b.closed {
+		select {
+		case t.ch <- env:
+			return
+		default:
+		}
+	}
+
+	// Bus closed or buffer full: there is no room for another attempt.
+	b.appendToDLQ(env, reason)
+}
+
+// appendToDLQ records a failed envelope in the in-process DLQ.
+func (b *Bus) appendToDLQ(env eventbus.Envelope, reason error) {
+	env.Attempts++
+	if env.Headers == nil {
+		env.Headers = make(map[string]string)
+	}
+	env.Headers["dlq_reason"] = reason.Error()
+	b.dlqMu.Lock()
+	b.dlq = append(b.dlq, env)
+	b.dlqMu.Unlock()
 }
 
 // Close shuts down the memory bus.
@@ -189,14 +277,7 @@ func (b *Bus) Health(_ context.Context) eventbus.Health {
 
 // PublishDLQ sends an envelope to the in-process DLQ.
 func (b *Bus) PublishDLQ(_ context.Context, original eventbus.Envelope, reason error) error {
-	b.dlqMu.Lock()
-	defer b.dlqMu.Unlock()
-	original.Attempts++
-	if original.Headers == nil {
-		original.Headers = make(map[string]string)
-	}
-	original.Headers["dlq_reason"] = reason.Error()
-	b.dlq = append(b.dlq, original)
+	b.appendToDLQ(original, reason)
 	return nil
 }
 
