@@ -555,11 +555,17 @@ def emit_event(event: EventContext) -> str:
 
 
 def flush(timeout: float | None = None) -> None:
-    _default.flush()
+    if timeout is None:
+        _default.flush()
+    else:
+        _default.flush(timeout)
 
 
 def shutdown(timeout: float | None = None) -> None:
-    _default.shutdown()
+    if timeout is None:
+        _default.shutdown()
+    else:
+        _default.shutdown(timeout)
 
 
 def drain(target: Any | None = None, timeout: float | None = None) -> list:
