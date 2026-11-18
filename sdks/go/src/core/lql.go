@@ -82,7 +82,7 @@ func (c *CollectorClient) QueryLQL(ctx context.Context, lql string, options ...L
 	if err != nil {
 		return nil, fmt.Errorf("lql: marshal: %w", err)
 	}
-	raw, err := c.do(ctx, "POST", c.collectorPath("/lql/query"), body)
+	raw, status, err := c.doWithStatus(ctx, "POST", c.collectorPath("/lql/query"), body)
 	if err != nil {
 		var response struct {
 			Error       string          `json:"error,omitempty"`
@@ -92,6 +92,7 @@ func (c *CollectorClient) QueryLQL(ctx context.Context, lql string, options ...L
 			return nil, &LQLCompilationError{
 				Message:     response.Error,
 				Diagnostics: response.Diagnostics,
+				Status:      status,
 			}
 		}
 		return nil, err
