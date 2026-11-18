@@ -180,7 +180,14 @@ func redactObject(value any, blocked map[string]struct{}, scanSecrets bool) bool
 			}
 		}
 	case []any:
-		for _, child := range typed {
+		for i, child := range typed {
+			if scanSecrets {
+				if text, ok := child.(string); ok && secretValuePattern.MatchString(text) {
+					typed[i] = "[REDACTED]"
+					modified = true
+					continue
+				}
+			}
 			if redactObject(child, blocked, scanSecrets) {
 				modified = true
 			}
