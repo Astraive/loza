@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"io"
@@ -353,11 +354,12 @@ type websocketTailState struct {
 	filters    chan TailFilters
 	subscriber chan chan []byte
 	removed    chan struct{}
+	history    [][]byte
 }
 
 func (s *websocketTailState) TailHistory(_ context.Context, filters TailFilters) ([][]byte, error) {
 	s.filters <- filters
-	return [][]byte{[]byte(`{"event_id":"evt-1","timestamp":"2026-08-24T00:00:00Z"}`)}, nil
+	return s.history, nil
 }
 
 func (*websocketTailState) TailMatches(_ context.Context, raw []byte, filters TailFilters) bool {
@@ -377,6 +379,7 @@ func TestTailWebSocketBrowserContract(t *testing.T) {
 		filters:    make(chan TailFilters, 1),
 		subscriber: make(chan chan []byte, 1),
 		removed:    make(chan struct{}),
+		history:    [][]byte{[]byte(`{"event_id":"evt-1","timestamp":"2026-08-24T00:00:00Z","service":"checkout"}`)},
 	}
 	credential := "lz_sec_live_ksec1_testsecret"
 	handler := NewTailWebSocketHandler(HTTPConfig{
@@ -419,6 +422,61 @@ func TestTailWebSocketBrowserContract(t *testing.T) {
 	case <-state.removed:
 	case <-time.After(time.Second):
 		t.Fatal("tail subscriber was not removed after disconnect")
+	}
+}
+
+// TestTailWebSocketFiltersHistoryFrames verifies that initial history frames are
+// passed through TailMatches before being written, just like live events. A
+// history frame that does not match the requested service filter must never be
+// delivered to the client (regression for MASS-0218 / issue #537).
+func TestTailWebSocketFiltersHistoryFrames(t *testing.T) {
+	nonMatchingHistory := []byte(`{"event_id":"evt-hist-skip","timestamp":"2026-08-24T00:00:00Z","service":"payments"}`)
+	matchingHistory := []byte(`{"event_id":"evt-hist-ok","timestamp":"2026-08-24T00:00:01Z","service":"checkout"}`)
+	state := &websocketTailState{
+		filters:    make(chan TailFilters, 1),
+		subscriber: make(chan chan []byte, 1),
+		removed:    make(chan struct{}),
+		history:    [][]byte{nonMatchingHistory, matchingHistory},
+	}
+	handler := NewTailWebSocketHandler(HTTPConfig{}, state)
+	srv := httptest.NewServer(handler)
+	defer srv.Close()
+
+	dialer := websocket.Dialer{Subprotocols: []string{auth.WebSocketTailProtocol}}
+	conn, _, err := dialer.Dial("ws"+strings.TrimPrefix(srv.URL, "http")+"?service=checkout", nil)
+	if err != nil {
+		t.Fatalf("dial tail websocket: %v", err)
+	}
+	defer conn.Close()
+	if err := conn.SetReadDeadline(time.Now().Add(3 * time.Second)); err != nil {
+		t.Fatalf("set read deadline: %v", err)
+	}
+
+	filters := <-state.filters
+	if filters.Service != "checkout" {
+		t.Fatalf("service filter = %q, want checkout", filters.Service)
+	}
+	subscriber := <-state.subscriber
+
+	// The first delivered frame must be the matching history event. If history
+	// frames bypass TailMatches, the non-matching "payments" event is sent first.
+	_, first, err := conn.ReadMessage()
+	if err != nil {
+		t.Fatalf("read first frame: %v", err)
+	}
+	if !bytes.Contains(first, []byte(`"evt-hist-ok"`)) {
+		t.Fatalf("first frame = %s, want matching history event evt-hist-ok", first)
+	}
+
+	// A subsequent live event must be the next frame received. If the
+	// non-matching history event leaked through it would arrive here instead.
+	subscriber <- []byte(`{"event_id":"evt-live","service":"checkout"}`)
+	_, second, err := conn.ReadMessage()
+	if err != nil {
+		t.Fatalf("read second frame: %v", err)
+	}
+	if !bytes.Contains(second, []byte(`"evt-live"`)) {
+		t.Fatalf("second frame = %s, want live event (non-matching history frame leaked)", second)
 	}
 }
 
