@@ -28,18 +28,23 @@ func MiddlewareWithConfig(cfg Config) func(http.Handler) http.Handler {
 
 	return func(next http.Handler) http.Handler {
 		return adapter(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			next.ServeHTTP(w, r)
+			// Set the route in a defer so a panic in the downstream handler does
+			// not unwind past route extraction. The defer runs before the
+			// nethttp adapter's recover emits the error event.
+			defer func() {
+				route := ""
+				if rc := chi.RouteContext(r.Context()); rc != nil {
+					route = rc.RoutePattern()
+				}
+				if route == "" && fallbackExtractor != nil {
+					route = fallbackExtractor(r)
+				}
+				if route != "" {
+					_ = loza.Set(r.Context(), loza.Route(route))
+				}
+			}()
 
-			route := ""
-			if rc := chi.RouteContext(r.Context()); rc != nil {
-				route = rc.RoutePattern()
-			}
-			if route == "" && fallbackExtractor != nil {
-				route = fallbackExtractor(r)
-			}
-			if route != "" {
-				loza.Set(r.Context(), loza.Route(route))
-			}
+			next.ServeHTTP(w, r)
 		}))
 	}
 }
