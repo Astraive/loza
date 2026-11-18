@@ -573,6 +573,44 @@ func TestExportAcceptsOutputFlag(t *testing.T) {
 	}
 }
 
+func TestCollectorHealthURLUsesConfiguredEndpoint(t *testing.T) {
+	tests := []struct {
+		name         string
+		collectorURL string
+		want         string
+	}{
+		{
+			name:         "non-default port",
+			collectorURL: "http://127.0.0.1:9451",
+			want:         "http://127.0.0.1:9451/health",
+		},
+		{
+			name:         "custom host and port",
+			collectorURL: "http://collector.internal:8080",
+			want:         "http://collector.internal:8080/health",
+		},
+		{
+			name:         "trailing slash is normalized",
+			collectorURL: "http://127.0.0.1:9451/",
+			want:         "http://127.0.0.1:9451/health",
+		},
+		{
+			name:         "empty URL falls back to default port",
+			collectorURL: "",
+			want:         "http://localhost:9308/health",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := collectorHealthURL(config.Config{CollectorURL: tt.collectorURL})
+			if got != tt.want {
+				t.Fatalf("collectorHealthURL() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestEmitWithCustomKindAndOutcome(t *testing.T) {
 	cfg := config.Config{CollectorURL: "http://127.0.0.1:9308"}
 	old := os.Stdout
