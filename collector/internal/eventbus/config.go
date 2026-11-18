@@ -31,6 +31,11 @@ type Config struct {
 type MemoryConfig struct {
 	// BufferSize is the channel buffer size for the in-process bus.
 	BufferSize int `yaml:"buffer_size" json:"buffer_size"`
+
+	// MaxRetries is the number of times a failed delivery is requeued before
+	// the envelope is moved to the DLQ. Zero (the default) preserves the
+	// original fire-and-forget behaviour of immediately dead-lettering.
+	MaxRetries int `yaml:"max_retries" json:"max_retries,omitempty"`
 }
 
 // RedisConfig configures the Redis Streams adapter.
@@ -55,11 +60,11 @@ type NATSConfig struct {
 
 // KafkaConfig configures the Kafka adapter.
 type KafkaConfig struct {
-	Brokers          []string `yaml:"brokers" json:"brokers"`
-	Topic            string   `yaml:"topic" json:"topic"`
-	ConsumerGroup    string   `yaml:"consumer_group" json:"consumer_group"`
-	Acks             string   `yaml:"acks" json:"acks"`
-	EnableIdempotence bool   `yaml:"enable_idempotence" json:"enable_idempotence"`
-	MaxRetries       int      `yaml:"max_retries" json:"max_retries"`
-	Compression      string   `yaml:"compression" json:"compression"`
+	Brokers           []string `yaml:"brokers" json:"brokers"`
+	Topic             string   `yaml:"topic" json:"topic"`
+	ConsumerGroup     string   `yaml:"consumer_group" json:"consumer_group"`
+	Acks              string   `yaml:"acks" json:"acks"`
+	EnableIdempotence bool     `yaml:"enable_idempotence" json:"enable_idempotence"`
+	MaxRetries        int      `yaml:"max_retries" json:"max_retries"`
+	Compression       string   `yaml:"compression" json:"compression"`
 }
