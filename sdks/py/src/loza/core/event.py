@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import copy
-import hashlib
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -10,6 +9,7 @@ from typing import TYPE_CHECKING, Any, Callable
 if TYPE_CHECKING:
     from .timing import ProcessHandle, TimerHandle, GroupHandle
 from .config import LOZA_EVENT_VERSION, LOZA_SPEC_VERSION
+from .hashing import hash_sensitive_value
 from .uuidv7 import uuidv7_like
 from .errors import EventAlreadyFinishedError, EventClosedError
 
@@ -348,7 +348,7 @@ def _hash_at_path(target: dict[str, Any], key: str) -> None:
     value = _get_path(target, key)
     if value is None:
         return
-    hashed = hashlib.sha256(str(value).encode("utf-8")).hexdigest()
+    hashed = hash_sensitive_value(value)
     _set_path_direct(target, key, hashed)
 
 

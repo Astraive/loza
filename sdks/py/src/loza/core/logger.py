@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import copy
-import hashlib
 import json
 import sys
 import time
@@ -20,6 +19,7 @@ from .config import (
     _collector_ingest_endpoint,
 )
 from .errors import EventClosedError, EventValidationError
+from .hashing import hash_sensitive_value
 from .event import (
     EVENT_DELIVERY_FAILED,
     EVENT_EMITTED,
@@ -717,7 +717,7 @@ class Logger:
         value = Logger._get_path(target, key)
         if value is None:
             return
-        hashed = hashlib.sha256(str(value).encode("utf-8")).hexdigest()
+        hashed = hash_sensitive_value(value)
         Logger._set_path_direct(target, key, hashed)
 
     @staticmethod
