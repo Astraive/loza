@@ -2,7 +2,9 @@ package nats
 
 import (
 	"context"
+	"errors"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -12,6 +14,97 @@ import (
 
 // Tests require a running NATS server. Use build tag for CI.
 // go test -tags=integration ./internal/eventbus/nats/...
+
+var errIteratorBoom = errors.New("iterator error")
+
+// errorIterator mimics a persistently failing iter.Next() (e.g. a deleted
+// consumer): it returns an error immediately on every call.
+type errorIterator struct {
+	calls atomic.Int32
+}
+
+func (i *errorIterator) Next(_ ...jetstream.NextOpt) (jetstream.Msg, error) {
+	i.calls.Add(1)
+	return nil, errIteratorBoom
+}
+
+func noopHandler(context.Context, eventbus.Message) error { return nil }
+
+// TestConsumeMessagesBacksOffOnIteratorError verifies that repeated iterator
+// errors trigger a capped exponential backoff instead of a tight retry loop.
+func TestConsumeMessagesBacksOffOnIteratorError(t *testing.T) {
+	closed := &atomic.Bool{}
+	iter := &errorIterator{}
+	ctx := context.Background()
+
+	var backoffs []time.Duration
+	stopAfter := 5
+	sleep := func(_ context.Context, d time.Duration) bool {
+		backoffs = append(backoffs, d)
+		return len(backoffs) < stopAfter
+	}
+
+	const initial, max = 10 * time.Millisecond, 40 * time.Millisecond
+	consumeMessages(ctx, closed, iter, "subject", noopHandler, sleep, initial, max)
+
+	if got := int(iter.calls.Load()); got != stopAfter {
+		t.Fatalf("iter.Next calls = %d, want %d", got, stopAfter)
+	}
+	want := []time.Duration{10, 20, 40, 40, 40}
+	for i, d := range want {
+		want[i] = d * time.Millisecond
+	}
+	if len(backoffs) != len(want) {
+		t.Fatalf("backoffs = %v, want %v", backoffs, want)
+	}
+	for i := range want {
+		if backoffs[i] != want[i] {
+			t.Fatalf("backoff[%d] = %v, want %v (full: %v)", i, backoffs[i], want[i], backoffs)
+		}
+	}
+}
+
+// TestConsumeMessagesDoesNotHotLoop uses real sleeps to show that a persistent
+// iterator error does not spin the CPU: the number of Next calls stays bounded
+// by the backoff interval.
+func TestConsumeMessagesDoesNotHotLoop(t *testing.T) {
+	closed := &atomic.Bool{}
+	iter := &errorIterator{}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	const window = 120 * time.Millisecond
+	const backoff = 20 * time.Millisecond
+	time.AfterFunc(window, cancel)
+	consumeMessages(ctx, closed, iter, "subject", noopHandler, sleepWithContext, backoff, backoff)
+
+	calls := int(iter.calls.Load())
+	// Without backoff this would be thousands of calls in the same window.
+	if calls > 20 {
+		t.Fatalf("iter.Next called %d times in %v — hot loop not throttled", calls, window)
+	}
+	if calls < 2 {
+		t.Fatalf("iter.Next called only %d time(s) — expected retries with backoff", calls)
+	}
+}
+
+// TestConsumeMessagesStopsWhenClosed verifies the loop exits after a backoff
+// if the bus is closed while it is waiting.
+func TestConsumeMessagesStopsWhenClosed(t *testing.T) {
+	closed := &atomic.Bool{}
+	iter := &errorIterator{}
+	ctx := context.Background()
+
+	sleep := func(context.Context, time.Duration) bool {
+		closed.Store(true)
+		return true
+	}
+	consumeMessages(ctx, closed, iter, "subject", noopHandler, sleep, time.Millisecond, time.Millisecond)
+
+	if got := int(iter.calls.Load()); got != 1 {
+		t.Fatalf("iter.Next calls = %d, want 1 (must stop once closed)", got)
+	}
+}
 
 func TestNATSRequiresConnection(t *testing.T) {
 	_, err := New(context.Background(), eventbus.Config{
