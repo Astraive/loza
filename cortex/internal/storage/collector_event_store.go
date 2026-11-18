@@ -2,13 +2,22 @@ package storage
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"time"
 
 	"github.com/astraive/loza/cortex/internal/collectorbridge"
 	"github.com/astraive/loza/cortex/internal/config"
 	"github.com/astraive/loza/cortex/internal/models"
-	"github.com/rs/zerolog/log"
 )
+
+// ErrCollectorReadOnly is returned when a write is attempted against a
+// collector-backed event store. In SourceOfTruth mode the collector owns the
+// canonical event stream and cortex is a read-only consumer: it cannot persist
+// events on the collector's behalf. Returning an explicit error makes the
+// unsupported write visible to callers instead of silently dropping data while
+// reporting success.
+var ErrCollectorReadOnly = errors.New("collector-backed event store is read-only: events must be ingested by the collector, not saved through cortex")
 
 type collectorBackedEventStore struct {
 	client *collectorbridge.Client
@@ -19,15 +28,15 @@ func newCollectorBackedEventStore(cfg config.CollectorConfig) EventStore {
 }
 
 func (s *collectorBackedEventStore) Save(ctx context.Context, event *models.Event, lifecycle *LifecycleData) error {
-	// Collector-backed: events are stored in collector, not in cortex
-	log.Warn().Str("event_id", event.ID).Msg("Save called on collector-backed event store; event discarded (should be routed to collector)")
-	return nil
+	id := ""
+	if event != nil {
+		id = event.ID
+	}
+	return fmt.Errorf("%w: cannot save event %q", ErrCollectorReadOnly, id)
 }
 
 func (s *collectorBackedEventStore) SaveBatch(ctx context.Context, events []*models.Event, lifecycles []*LifecycleData) error {
-	// Collector-backed: events are stored in collector, not in cortex
-	log.Warn().Int("count", len(events)).Msg("SaveBatch called on collector-backed event store; events discarded (should be routed to collector)")
-	return nil
+	return fmt.Errorf("%w: cannot save batch of %d events", ErrCollectorReadOnly, len(events))
 }
 
 func (s *collectorBackedEventStore) Get(ctx context.Context, id string) (*models.Event, error) {
