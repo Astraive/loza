@@ -50,3 +50,21 @@ func TestTimeoutHelpers(t *testing.T) {
 		t.Fatal("generic errors should be retryable")
 	}
 }
+
+func TestIsTimeoutWrapped(t *testing.T) {
+	cause := NewTimeoutError(true, context.DeadlineExceeded)
+
+	wrapped := fmt.Errorf("wrapped: %w", cause)
+	if !IsTimeout(wrapped) {
+		t.Fatal("expected wrapped timeout error to be detected")
+	}
+
+	doubleWrapped := fmt.Errorf("outer: %w", wrapped)
+	if !IsTimeout(doubleWrapped) {
+		t.Fatal("expected doubly wrapped timeout error to be detected")
+	}
+
+	if IsTimeout(fmt.Errorf("wrapped: %w", fmt.Errorf("other"))) {
+		t.Fatal("non-timeout error should not be detected as a timeout")
+	}
+}

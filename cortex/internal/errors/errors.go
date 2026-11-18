@@ -2,6 +2,7 @@ package errors
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 )
@@ -59,8 +60,8 @@ func (e *TimeoutError) Unwrap() error {
 }
 
 func IsTimeout(err error) bool {
-	_, ok := err.(*TimeoutError)
-	return ok
+	var target *TimeoutError
+	return errors.As(err, &target)
 }
 
 func NewTimeoutError(partial bool, cause error) *TimeoutError {
