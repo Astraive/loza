@@ -19,7 +19,9 @@ import (
 	"github.com/astraive/loza/cortex/internal/middleware"
 	"github.com/astraive/loza/cortex/internal/models"
 	"github.com/astraive/loza/cortex/internal/processor"
+	"github.com/astraive/loza/cortex/internal/reconstructor"
 	"github.com/astraive/loza/cortex/internal/storage"
+	"github.com/go-chi/chi/v5"
 )
 
 func TestServerHealthAndReadiness(t *testing.T) {
@@ -148,6 +150,70 @@ func TestGraphLookupStatusDistinguishesNotFoundFromStorageFailure(t *testing.T) 
 	}
 	if got := graphLookupStatus(errors.New("database unavailable")); got != http.StatusInternalServerError {
 		t.Fatalf("storage failure status = %d, want 500", got)
+	}
+}
+
+// reconstructIncidentStore is an incident store whose Get returns a configured
+// error, letting tests drive the reconstruction handlers' error classification.
+type reconstructIncidentStore struct {
+	getErr error
+}
+
+func (*reconstructIncidentStore) Save(context.Context, *models.Incident) error { return nil }
+func (s *reconstructIncidentStore) Get(context.Context, string) (*models.Incident, error) {
+	return nil, s.getErr
+}
+func (*reconstructIncidentStore) GetBySignature(context.Context, string) (*models.Incident, error) {
+	return nil, storage.ErrNotFound
+}
+func (*reconstructIncidentStore) List(context.Context, int, int) ([]*models.Incident, error) {
+	return nil, nil
+}
+
+func newReconstructTestServer(getErr error) *Server {
+	recon := reconstructor.NewIncidentReconstructor(nil, nil, nil, &reconstructIncidentStore{getErr: getErr})
+	return &Server{recon: recon}
+}
+
+func TestReconstructHandlersClassifyStorageFailureAsServerError(t *testing.T) {
+	tests := []struct {
+		name       string
+		getErr     error
+		wantStatus int
+	}{
+		{
+			name:       "not found",
+			getErr:     fmt.Errorf("store get: %w", storage.ErrNotFound),
+			wantStatus: http.StatusNotFound,
+		},
+		{
+			name:       "storage failure",
+			getErr:     errors.New("database unavailable"),
+			wantStatus: http.StatusInternalServerError,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			srv := newReconstructTestServer(test.getErr)
+
+			rec := httptest.NewRecorder()
+			body := strings.NewReader(`{"incident_id":"inc-1","mode":"fast"}`)
+			srv.Reconstruct(rec, httptest.NewRequest(http.MethodPost, "/reconstruct", body))
+			if rec.Code != test.wantStatus {
+				t.Errorf("Reconstruct status = %d, want %d: %s", rec.Code, test.wantStatus, rec.Body.String())
+			}
+
+			req := httptest.NewRequest(http.MethodGet, "/incidents/inc-1/reconstruct", nil)
+			routeCtx := chi.NewRouteContext()
+			routeCtx.URLParams.Add("incident_id", "inc-1")
+			req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, routeCtx))
+			rec = httptest.NewRecorder()
+			srv.ReconstructIncident(rec, req)
+			if rec.Code != test.wantStatus {
+				t.Errorf("ReconstructIncident status = %d, want %d: %s", rec.Code, test.wantStatus, rec.Body.String())
+			}
+		})
 	}
 }
 
