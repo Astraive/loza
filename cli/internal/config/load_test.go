@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -37,5 +38,52 @@ func TestLoadUsesDefaultsThenUserConfig(t *testing.T) {
 	}
 	if cfg.DuckDBPath != "defaults.db" {
 		t.Fatalf("duckdb path = %q, want defaults fallback", cfg.DuckDBPath)
+	}
+}
+
+func TestLoadRejectsEmptyRequiredPaths(t *testing.T) {
+	tests := []struct {
+		name    string
+		config  string
+		wantErr string
+	}{
+		{
+			name: "empty collector repo path",
+			config: "" +
+				"collector_repo_path: \"\"\n" +
+				"spec_repo_path: defaults-spec\n" +
+				"collector_url: http://defaults:9308\n",
+			wantErr: "collector_repo_path must not be empty",
+		},
+		{
+			name: "empty spec repo path",
+			config: "" +
+				"collector_repo_path: defaults-collector\n" +
+				"spec_repo_path: \"\"\n" +
+				"collector_url: http://defaults:9308\n",
+			wantErr: "spec_repo_path must not be empty",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			defaultsPath := filepath.Join(dir, "loza-cli.defaults.yaml")
+
+			if err := os.WriteFile(defaultsPath, []byte(tt.config), 0o600); err != nil {
+				t.Fatalf("write defaults: %v", err)
+			}
+
+			t.Setenv("LOZA_CLI_DEFAULTS", defaultsPath)
+			t.Setenv("LOZA_CLI_CONFIG", filepath.Join(dir, ".loza-cli.yaml"))
+
+			cfg, err := Load()
+			if err == nil {
+				t.Fatalf("Load() succeeded with cfg=%+v, want validation error for empty required path", cfg)
+			}
+			if !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("Load() error = %q, want it to contain %q", err.Error(), tt.wantErr)
+			}
+		})
 	}
 }
