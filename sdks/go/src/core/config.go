@@ -206,7 +206,13 @@ type Config struct {
 	IDGen IDGenerator
 
 	// ── Clock ─────────────────────────────────────────────────────────────────
-	Clock                  Clock
+	Clock Clock
+	// dsnErr records a parse failure from the WithDSN code option. It is kept
+	// explicitly (rather than encoded as an empty CollectorURL) so the error
+	// survives config merging and is surfaced by Validate. An empty CollectorURL
+	// is a valid zero value that mergeCodeConfig deliberately ignores, so it
+	// cannot be used as an invalid-state sentinel.
+	dsnErr                 error
 	codeSetCompression     bool
 	codeSetAsync           bool
 	codeSetBackpressure    bool
@@ -463,6 +469,16 @@ func (c Config) WithDropOversizedEvents(drop bool) Config {
 // Validate validates cfg and returns explicit field-level errors.
 // In strict mode, additional config checks are enforced.
 func (c Config) Validate() error {
+	// A malformed loza:// DSN supplied via WithDSN is a hard configuration
+	// error. Surface it before any other check so callers never receive a
+	// silently misdirected client when DSN parsing failed.
+	if c.dsnErr != nil {
+		return &ConfigValidationError{
+			Field:   "DSN",
+			Problem: c.dsnErr.Error(),
+		}
+	}
+
 	// Validate service name (required in strict mode)
 	if c.Strict && strings.TrimSpace(c.Service) == "" {
 		return &ConfigValidationError{
@@ -1164,6 +1180,12 @@ func shouldInstallDefaultCollectorSink(cfg Config) bool {
 // mergeCodeConfig merges code-level config into base, with code taking precedence
 // for any non-zero/non-nil fields.
 func mergeCodeConfig(base, code Config) Config {
+	// A DSN parse failure is a sticky code-level error: propagate it so the
+	// final Validate call surfaces it instead of silently falling back to a
+	// defaults-file or environment collector URL.
+	if code.dsnErr != nil {
+		base.dsnErr = code.dsnErr
+	}
 	if code.CollectorURL != "" {
 		base.CollectorURL = code.CollectorURL
 	}
