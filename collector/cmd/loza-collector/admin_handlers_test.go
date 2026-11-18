@@ -259,3 +259,71 @@ func TestHandleKeyRevoke_NotFound(t *testing.T) {
 		t.Errorf("expected 404, got %d", rec.Code)
 	}
 }
+
+func TestValidatePolicyMap_RejectsNonNumericValues(t *testing.T) {
+	tests := []struct {
+		name    string
+		policy  map[string]any
+		wantErr string
+	}{
+		{"sample_rate_string_out_of_range", map[string]any{"sample_rate": "9"}, "sample_rate must be a number"},
+		{"max_attrs_negative_string", map[string]any{"max_attrs": "-1"}, "max_attrs must be a number"},
+		{"sample_rate_bool", map[string]any{"sample_rate": true}, "sample_rate must be a number"},
+		{"max_event_bytes_nil", map[string]any{"max_event_bytes": nil}, "max_event_bytes must be a number"},
+		{"max_attr_length_slice", map[string]any{"max_attr_length": []any{float64(1)}}, "max_attr_length must be a number"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			errs := validatePolicyMap(tt.policy)
+			for _, err := range errs {
+				if err == tt.wantErr {
+					return
+				}
+			}
+			t.Fatalf("expected error %q, got %v", tt.wantErr, errs)
+		})
+	}
+}
+
+func TestValidatePolicyMap_AcceptsValidNumericValues(t *testing.T) {
+	policy := map[string]any{
+		"max_attr_length": float64(128),
+		"max_event_bytes": float64(1024),
+		"max_attrs":       int(10),
+		"sample_rate":     float64(0.5),
+	}
+	if errs := validatePolicyMap(policy); len(errs) != 0 {
+		t.Fatalf("expected no errors for valid numeric policy, got %v", errs)
+	}
+
+	outOfRange := map[string]any{
+		"max_attrs":   float64(-1),
+		"sample_rate": float64(9),
+	}
+	errs := validatePolicyMap(outOfRange)
+	if len(errs) != 2 {
+		t.Fatalf("expected 2 errors for out-of-range numeric values, got %v", errs)
+	}
+}
+
+func TestHandlePolicyValidate_RejectsWrongTypedValue(t *testing.T) {
+	state := newTestCollectorState()
+
+	payload, _ := json.Marshal(map[string]any{"sample_rate": "9"})
+	req := httptest.NewRequest(http.MethodPost, "/admin/policy/validate", bytes.NewReader(payload))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	state.handlePolicyValidate(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for wrong-typed sample_rate, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if valid, _ := resp["valid"].(bool); valid {
+		t.Fatal("expected valid=false for wrong-typed sample_rate")
+	}
+}
