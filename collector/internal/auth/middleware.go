@@ -430,7 +430,13 @@ func extractIP(r *http.Request, trustedProxies []*net.IPNet) string {
 			}
 		}
 		if xri := r.Header.Get("X-Real-IP"); xri != "" {
-			return strings.TrimSpace(xri)
+			// Validate and canonicalize the header before using it. Returning a
+			// raw, unparsed value would let a client inject an arbitrary string
+			// that ipAllowed's literal comparison could match. On malformed
+			// input, fall through to the trusted proxy's own address (fail closed).
+			if ip := net.ParseIP(strings.TrimSpace(xri)); ip != nil {
+				return ip.String()
+			}
 		}
 	}
 	return host

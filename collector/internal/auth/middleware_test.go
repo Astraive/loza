@@ -3,6 +3,7 @@ package auth
 import (
 	"context"
 	"encoding/base64"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -483,5 +484,78 @@ func TestMiddleware_PrivateTokenCarriesRBACPermissions(t *testing.T) {
 	handler.ServeHTTP(recorder, request)
 	if recorder.Code != http.StatusNoContent {
 		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusNoContent)
+	}
+}
+
+func mustParseCIDR(t *testing.T, s string) *net.IPNet {
+	t.Helper()
+	_, cidr, err := net.ParseCIDR(s)
+	if err != nil {
+		t.Fatalf("ParseCIDR(%q): %v", s, err)
+	}
+	return cidr
+}
+
+// TestExtractIP_XRealIPValidatedAndCanonicalized is a regression test for the
+// X-Real-IP allowlist bypass: the header must never be returned verbatim. Only
+// a valid IP is accepted, in canonical form; malformed values fall back to the
+// trusted proxy's own address so the request fails closed.
+func TestExtractIP_XRealIPValidatedAndCanonicalized(t *testing.T) {
+	trusted := []*net.IPNet{mustParseCIDR(t, "10.0.0.0/8")}
+
+	tests := []struct {
+		name       string
+		remoteAddr string
+		xri        string
+		want       string
+	}{
+		{
+			name:       "valid X-Real-IP is returned",
+			remoteAddr: "10.0.0.1:1234",
+			xri:        "203.0.113.5",
+			want:       "203.0.113.5",
+		},
+		{
+			name:       "valid X-Real-IP is canonicalized",
+			remoteAddr: "10.0.0.1:1234",
+			xri:        "2001:0db8:0000:0000:0000:0000:0000:0001",
+			want:       "2001:db8::1",
+		},
+		{
+			name:       "whitespace-padded valid IP is trimmed and parsed",
+			remoteAddr: "10.0.0.1:1234",
+			xri:        "  203.0.113.5  ",
+			want:       "203.0.113.5",
+		},
+		{
+			name:       "malformed X-Real-IP falls back to trusted proxy host",
+			remoteAddr: "10.0.0.1:1234",
+			xri:        "not-an-ip",
+			want:       "10.0.0.1",
+		},
+		{
+			name:       "allowed-looking but non-IP X-Real-IP is rejected",
+			remoteAddr: "10.0.0.1:1234",
+			xri:        "203.0.113.5evil",
+			want:       "10.0.0.1",
+		},
+		{
+			name:       "X-Real-IP ignored when peer is not a trusted proxy",
+			remoteAddr: "192.0.2.10:1234",
+			xri:        "203.0.113.5",
+			want:       "192.0.2.10",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := httptest.NewRequest(http.MethodGet, "/", nil)
+			r.RemoteAddr = tt.remoteAddr
+			r.Header.Set("X-Real-IP", tt.xri)
+
+			if got := extractIP(r, trusted); got != tt.want {
+				t.Errorf("extractIP() = %q, want %q", got, tt.want)
+			}
+		})
 	}
 }
