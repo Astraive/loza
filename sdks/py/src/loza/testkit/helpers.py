@@ -84,8 +84,21 @@ _fake_now: datetime | None = None
 _captured_events: list[dict[str, Any]] = []
 
 
+class _CapturingSink(MemorySink):
+    """Memory sink that also records every emitted event in the module buffer.
+
+    This backs the ``events()`` / ``last_event()`` helpers exposed by ``testkit()``
+    so they observe the events actually written by the testkit logger.
+    """
+
+    def write(self, encoded: str) -> None:
+        super().write(encoded)
+        _captured_events.append(json.loads(encoded))
+
+
 def testkit(service: str = "test") -> dict[str, Any]:
-    logger, sink = TestLogger(service)
+    sink = _CapturingSink()
+    logger = Logger(Config.test(service).with_sink(sink))
     return {
         "logger": logger,
         "sink": sink,
