@@ -105,7 +105,12 @@ func (a *Analyzer) analyze(ctx context.Context) error {
 		return fmt.Errorf("list events for correlation analysis: %w", err)
 	}
 
-	cutoff := time.Now().Add(-a.cfg.CoOccurrenceWindow * 2)
+	// Both synthesis passes consume the same event slice but operate on
+	// different lookback windows. Filter with the larger of the two so that
+	// deploy-to-anomaly pairs inside DeploymentAdjacencyWindow are not
+	// discarded by the shorter co-occurrence window before they are examined.
+	lookback := max(a.cfg.CoOccurrenceWindow*2, a.cfg.DeploymentAdjacencyWindow)
+	cutoff := time.Now().Add(-lookback)
 	var recent []*models.Event
 	for _, e := range events {
 		if e.Timestamp.After(cutoff) {
