@@ -19,6 +19,7 @@ from .config import (
     UserWins,
     _collector_ingest_endpoint,
 )
+from .duplicate_policy import apply_duplicate
 from .errors import EventClosedError, EventValidationError
 from .event import (
     EVENT_DELIVERY_FAILED,
@@ -769,21 +770,7 @@ class Logger:
 
     @staticmethod
     def _apply_duplicate(target: dict[str, Any], key: str, value: Any, policy: str) -> None:
-        if key not in target:
-            target[key] = value
-            return
-        if policy in {CanonicalWins, FirstWins}:
-            return
-        if policy in {UserWins, LastWins}:
-            target[key] = value
-            return
-        if policy == KeepBoth:
-            old = target[key]
-            target[key] = old + [value] if isinstance(old, list) else [old, value]
-            return
-        if policy == ErrorOnDuplicate:
-            raise ValueError(f"duplicate field: {key}")
-        target[key] = value
+        apply_duplicate(target, key, value, policy)
 
     @staticmethod
     def _delete_path(target: dict[str, Any], key: str) -> None:
