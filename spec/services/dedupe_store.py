@@ -9,8 +9,14 @@ from __future__ import annotations
 
 import os
 import time
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Optional
+
+try:
+    import fcntl  # POSIX advisory file locking
+except ImportError:  # pragma: no cover - non-POSIX platforms
+    fcntl = None
 
 
 class LocalDedupeStore:
@@ -20,32 +26,55 @@ class LocalDedupeStore:
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._shelf_path = str(self.path)
+        self._lock_path = str(self.path) + ".lock"
+
+    @contextmanager
+    def _exclusive_lock(self):
+        """Serialize the shelve read-modify-write across processes.
+
+        A shelve/dbm store is not safe for concurrent writers, and the
+        check-then-set in ``mark_seen`` (and check-then-delete in ``is_seen``) is
+        a time-of-check/time-of-use race when the fallback store is shared by
+        multiple processes. An exclusive advisory lock on a dedicated lock file
+        makes the whole critical section atomic across processes.
+        """
+        if fcntl is None:  # pragma: no cover - non-POSIX platforms
+            yield
+            return
+        with open(self._lock_path, "a+") as lock_file:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
     def mark_seen(self, key: str, ttl: int) -> bool:
         import shelve
 
-        with shelve.open(self._shelf_path) as db:
-            now = int(time.time())
-            expiry = now + ttl
-            if key in db:
-                val = db[key]
-                if val >= now:
-                    return False
-            db[key] = expiry
-            return True
+        with self._exclusive_lock():
+            with shelve.open(self._shelf_path) as db:
+                now = int(time.time())
+                expiry = now + ttl
+                if key in db:
+                    val = db[key]
+                    if val >= now:
+                        return False
+                db[key] = expiry
+                return True
 
     def is_seen(self, key: str) -> bool:
         import shelve
 
-        with shelve.open(self._shelf_path) as db:
-            now = int(time.time())
-            if key in db:
-                expiry = db[key]
-                if expiry >= now:
-                    return True
-                # expired
-                del db[key]
-            return False
+        with self._exclusive_lock():
+            with shelve.open(self._shelf_path) as db:
+                now = int(time.time())
+                if key in db:
+                    expiry = db[key]
+                    if expiry >= now:
+                        return True
+                    # expired
+                    del db[key]
+                return False
 
 
 class RedisDedupeStore:
