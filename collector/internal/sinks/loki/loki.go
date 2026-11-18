@@ -40,6 +40,10 @@ type sink struct {
 	stop      chan struct{}
 	closeOnce sync.Once
 	wg        sync.WaitGroup
+	// inflight tracks pushes whose batches have already been handed out of
+	// s.batch by appendEntry. Close waits on it so every in-flight push has
+	// settled (and any failed push has been restored) before the final flush.
+	inflight sync.WaitGroup
 }
 
 type lokiEntry struct {
@@ -126,6 +130,9 @@ func (s *sink) WriteEvent(ctx context.Context, encoded []byte, ev *collectoreven
 	if len(batch) == 0 {
 		return nil
 	}
+	// appendEntry registered this batch as in-flight under s.mu. Balance it
+	// once the push (and any restore) has completed.
+	defer s.inflight.Done()
 
 	if ctx == nil {
 		ctx = context.Background()
@@ -155,14 +162,40 @@ func (s *sink) Flush(ctx context.Context) error {
 func (s *sink) Close(ctx context.Context) error {
 	var closeErr error
 	s.closeOnce.Do(func() {
+		// Set closed under the same lock that hands out batches for a push.
+		// After this point appendEntry cannot register new in-flight pushes,
+		// so waiting on inflight below cannot race with a new Add.
 		s.mu.Lock()
 		s.closed = true
 		s.mu.Unlock()
 		close(s.stop)
+		// Drain the periodic loop and every push that was already in flight.
+		// A failed in-flight push restores its batch, so finalFlush sees the
+		// complete set of entries that still need delivery.
 		s.wg.Wait()
-		closeErr = s.Flush(ctx)
+		s.inflight.Wait()
+		closeErr = s.finalFlush(ctx)
 	})
 	return closeErr
+}
+
+// finalFlush performs the one and only flush of a closing sink. It must not
+// use Flush: Flush restores a failed batch into s.batch, but after Close the
+// flush loop is stopped and appendEntry rejects writes, so restored entries
+// would be stranded forever. Instead, a failed final push is reported as an
+// explicit drop of the buffered entries.
+func (s *sink) finalFlush(ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	batch := s.drain()
+	if len(batch) == 0 {
+		return nil
+	}
+	if err := s.pushBatch(ctx, batch); err != nil {
+		return fmt.Errorf("loki: close: dropping %d buffered entries after final flush failed: %w", len(batch), err)
+	}
+	return nil
 }
 
 func (s *sink) flushLoop() {
@@ -192,6 +225,9 @@ func (s *sink) appendEntry(entry lokiEntry) ([]lokiEntry, error) {
 	batch := make([]lokiEntry, len(s.batch))
 	copy(batch, s.batch)
 	s.batch = s.batch[:0]
+	// Register while still holding s.mu so Close cannot begin Wait between
+	// the batch leaving s.batch and the push being registered.
+	s.inflight.Add(1)
 	return batch, nil
 }
 
