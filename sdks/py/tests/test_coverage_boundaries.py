@@ -894,6 +894,48 @@ def test_testkit_lifecycle_helpers_and_non_live_integrations() -> None:
     assert bind_loza(logger) is logger and processor(emit_immediate=False)
 
 
+def test_structlog_processor_does_not_mutate_event_dict(monkeypatch: pytest.MonkeyPatch) -> None:
+    from loza.integrations.structlog import adapter as structlog_adapter
+
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(
+        structlog_adapter,
+        "Info",
+        lambda message, **attrs: captured.update(message=message, attrs=attrs),
+    )
+
+    event_dict = {"event": "hello world", "user": "alice", "count": 3}
+    processor = structlog_adapter.StructlogProcessor()
+
+    result = processor(None, "info", event_dict)
+
+    # The caller's dict (and the value returned to the next processor) must keep
+    # the "event" key so downstream processors/renderers can read the message.
+    assert result is event_dict
+    assert result == {"event": "hello world", "user": "alice", "count": 3}
+    assert event_dict["event"] == "hello world"
+
+    # The emitted message comes from "event", which is not forwarded as an attr.
+    assert captured["message"] == "hello world"
+    assert captured["attrs"] == {"user": "alice", "count": 3}
+
+    # With no "event" key the method name is used as the message, still without
+    # mutating the shared dict.
+    captured.clear()
+    bare = {"user": "bob"}
+    processor(None, "warning", bare)
+    assert captured["message"] == "warning"
+    assert captured["attrs"] == {"user": "bob"}
+    assert bare == {"user": "bob"}
+
+    # Immediate emission disabled: no emit and no mutation.
+    captured.clear()
+    quiet = structlog_adapter.StructlogProcessor(emit_immediate=False)
+    unchanged = {"event": "silent", "user": "carol"}
+    assert quiet(None, "info", unchanged) == {"event": "silent", "user": "carol"}
+    assert captured == {}
+
+
 def test_active_logger_error_and_pipeline_lifecycle() -> None:
     from loza.core.logger import Logger
 
