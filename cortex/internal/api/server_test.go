@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/astraive/loza/cortex/internal/config"
+	"github.com/astraive/loza/cortex/internal/matcher"
 	"github.com/astraive/loza/cortex/internal/middleware"
 	"github.com/astraive/loza/cortex/internal/models"
 	"github.com/astraive/loza/cortex/internal/processor"
@@ -338,5 +339,159 @@ func TestGraphQLRejectsReaderIngestMutations(t *testing.T) {
 	)
 	if len(result.Errors) == 0 || !strings.Contains(result.Errors[0].Message, "writer role required") {
 		t.Fatalf("expected writer authorization error, got %+v", result.Errors)
+	}
+}
+
+// remediationIncidentStore and remediationMatcher are focused fakes that record
+// which signature the suggestion path scopes its similar-search to.
+type remediationIncidentStore struct {
+	incidents map[string]*models.Incident
+}
+
+func (*remediationIncidentStore) Save(context.Context, *models.Incident) error { return nil }
+func (s *remediationIncidentStore) Get(_ context.Context, id string) (*models.Incident, error) {
+	incident := s.incidents[id]
+	if incident == nil {
+		return nil, storage.ErrNotFound
+	}
+	return incident, nil
+}
+func (*remediationIncidentStore) GetBySignature(context.Context, string) (*models.Incident, error) {
+	return nil, storage.ErrNotFound
+}
+func (*remediationIncidentStore) List(context.Context, int, int) ([]*models.Incident, error) {
+	return nil, nil
+}
+
+type remediationMatcher struct {
+	queriedSignatures []string
+	similar           map[string][]*models.SimilarIncident
+}
+
+func (*remediationMatcher) Score(*models.IncidentSignature, *models.IncidentSignature) (float64, error) {
+	return 0, nil
+}
+func (*remediationMatcher) TopK(*models.IncidentSignature, []*models.IncidentSignature, int) ([]matcher.Match, error) {
+	return nil, nil
+}
+func (*remediationMatcher) ExtractSignature(context.Context, *models.IncidentContext) (*models.IncidentSignature, error) {
+	return nil, nil
+}
+func (m *remediationMatcher) FindSimilar(_ context.Context, sig *models.IncidentSignature, _ int) ([]*models.SimilarIncident, error) {
+	m.queriedSignatures = append(m.queriedSignatures, sig.SignatureID)
+	return m.similar[sig.SignatureID], nil
+}
+func (*remediationMatcher) RegisterSignature(context.Context, *models.IncidentSignature) error {
+	return nil
+}
+func (*remediationMatcher) UpdateSignature(context.Context, string, *models.SignatureUpdate) error {
+	return nil
+}
+
+func newRemediationTestServer(t *testing.T) (*GraphQLServer, *remediationMatcher) {
+	t.Helper()
+	signatures := &graphQLSignatureStore{signatures: map[string]*models.IncidentSignature{
+		"sig-1": {
+			SignatureID: "sig-1", Shape: "first",
+			Symptoms:    []models.SymptomType{models.SymptomTypeLatencySpike},
+			Remediation: []string{"restart-cache"},
+		},
+		"sig-2": {
+			SignatureID: "sig-2", Shape: "second",
+			Symptoms:    []models.SymptomType{models.SymptomTypeErrorRate},
+			Remediation: []string{"rollback-deploy"},
+		},
+	}}
+	match := &remediationMatcher{similar: map[string][]*models.SimilarIncident{
+		"sig-1": {{IncidentID: "sig-2", Similarity: 0.9, Resolution: "rollback-deploy"}},
+		"sig-2": {{IncidentID: "sig-1", Similarity: 0.7, Resolution: "restart-cache"}},
+	}}
+	server := &GraphQLServer{
+		incidents: &remediationIncidentStore{incidents: map[string]*models.Incident{
+			"inc-1": {ID: "inc-1", SignatureID: "sig-1", Status: "active", Severity: "high", PrimaryService: "api"},
+			"inc-2": {ID: "inc-2", SignatureID: "sig-2", Status: "active", Severity: "high", PrimaryService: "api"},
+		}},
+		signatures: signatures,
+		match:      match,
+	}
+	if err := server.initSchema(); err != nil {
+		t.Fatal(err)
+	}
+	return server, match
+}
+
+func TestRemediationSuggestionsScopeSearchToIncidentSignature(t *testing.T) {
+	server, match := newRemediationTestServer(t)
+
+	suggestions, err := server.handleRemediationSuggestions(context.Background(), map[string]interface{}{
+		"incidentId": "inc-1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The similar-search must use only the queried incident's signature, never a
+	// global signature listing.
+	if len(match.queriedSignatures) != 1 || match.queriedSignatures[0] != "sig-1" {
+		t.Fatalf("FindSimilar scoped to %v, want [sig-1]", match.queriedSignatures)
+	}
+
+	got, ok := suggestions.([]map[string]interface{})
+	if !ok || len(got) != 1 {
+		t.Fatalf("unexpected suggestions: %#v", suggestions)
+	}
+	if action := got[0]["action"]; action != "rollback-deploy" {
+		t.Fatalf("action = %v, want the matched signature's remediation %q (not a symptom)", action, "rollback-deploy")
+	}
+	sig, ok := got[0]["signature"].(*models.IncidentSignature)
+	if !ok || sig.SignatureID != "sig-1" {
+		t.Fatalf("suggestion signature = %#v, want sig-1", got[0]["signature"])
+	}
+}
+
+func TestRemediationSuggestionsAreIncidentSpecific(t *testing.T) {
+	server, _ := newRemediationTestServer(t)
+
+	first, err := server.handleRemediationSuggestions(context.Background(), map[string]interface{}{"incidentId": "inc-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := server.handleRemediationSuggestions(context.Background(), map[string]interface{}{"incidentId": "inc-2"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstAction := first.([]map[string]interface{})[0]["action"]
+	secondAction := second.([]map[string]interface{})[0]["action"]
+	if firstAction == secondAction {
+		t.Fatalf("distinct incidents returned identical action %q", firstAction)
+	}
+	if firstAction != "rollback-deploy" || secondAction != "restart-cache" {
+		t.Fatalf("incident-specific actions = (%v, %v), want (rollback-deploy, restart-cache)", firstAction, secondAction)
+	}
+}
+
+func TestGraphQLRemediationSuggestionsReturnIncidentSpecificAction(t *testing.T) {
+	server, _ := newRemediationTestServer(t)
+	result := server.executeQuery(
+		context.Background(),
+		`query { remediationSuggestions(incidentId: "inc-1") { action confidence signature { signature_id } } }`,
+		nil,
+		"",
+	)
+	if len(result.Errors) != 0 {
+		t.Fatalf("unexpected GraphQL errors: %+v", result.Errors)
+	}
+	data := result.Data.(map[string]interface{})
+	suggestions := data["remediationSuggestions"].([]interface{})
+	if len(suggestions) != 1 {
+		t.Fatalf("unexpected suggestions: %#v", suggestions)
+	}
+	suggestion := suggestions[0].(map[string]interface{})
+	if suggestion["action"] != "rollback-deploy" {
+		t.Fatalf("action = %v, want rollback-deploy", suggestion["action"])
+	}
+	signature := suggestion["signature"].(map[string]interface{})
+	if signature["signature_id"] != "sig-1" {
+		t.Fatalf("signature_id = %v, want sig-1", signature["signature_id"])
 	}
 }
