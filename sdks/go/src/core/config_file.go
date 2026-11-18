@@ -314,13 +314,8 @@ func splitKeyValue(s string) (key, value string, ok bool) {
 		if s[i] == ':' {
 			key = trimSpace(s[:i])
 			value = trimSpace(s[i+1:])
-			// Strip inline comments
-			for j := 0; j < len(value); j++ {
-				if value[j] == '#' {
-					value = trimSpace(value[:j])
-					break
-				}
-			}
+			// Strip inline comments only outside of quotes.
+			value = trimSpace(stripInlineComment(value))
 			// Strip surrounding quotes
 			if len(value) >= 2 && ((value[0] == '"' && value[len(value)-1] == '"') ||
 				(value[0] == '\'' && value[len(value)-1] == '\'')) {
@@ -330,6 +325,32 @@ func splitKeyValue(s string) (key, value string, ok bool) {
 		}
 	}
 	return "", "", false
+}
+
+// stripInlineComment removes a trailing inline comment from value. A '#'
+// begins a comment only when it is outside a quoted section and is at the
+// start of the value or preceded by whitespace. A '#' inside a quoted value
+// (for example tenant_id: "team#1") is data and is preserved.
+func stripInlineComment(value string) string {
+	var quote byte
+	for i := 0; i < len(value); i++ {
+		c := value[i]
+		if quote != 0 {
+			if c == quote {
+				quote = 0
+			}
+			continue
+		}
+		// A quote opens a quoted section only at the start of a token.
+		if (c == '"' || c == '\'') && (i == 0 || value[i-1] == ' ' || value[i-1] == '\t') {
+			quote = c
+			continue
+		}
+		if c == '#' && (i == 0 || value[i-1] == ' ' || value[i-1] == '\t') {
+			return value[:i]
+		}
+	}
+	return value
 }
 
 func parseInt(s string) (int, error) {

@@ -109,6 +109,52 @@ func TestParseSimpleYAML_InlineComments(t *testing.T) {
 	}
 }
 
+func TestParseSimpleYAML_HashInsideQuotedValue(t *testing.T) {
+	content := "tenant_id: \"team#1\"\nservice_name: 'svc#2'\n"
+	var fc FileConfig
+	if err := parseSimpleYAML(content, &fc); err != nil {
+		t.Fatalf("parseSimpleYAML() error = %v", err)
+	}
+	if fc.TenantID != "team#1" {
+		t.Errorf("TenantID = %q, want %q", fc.TenantID, "team#1")
+	}
+	if fc.ServiceName != "svc#2" {
+		t.Errorf("ServiceName = %q, want %q", fc.ServiceName, "svc#2")
+	}
+}
+
+func TestSplitKeyValue_HashHandling(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		key   string
+		value string
+	}{
+		{"hash inside double quotes", `tenant_id: "team#1"`, "tenant_id", "team#1"},
+		{"hash inside single quotes", `tenant_id: 'team#1'`, "tenant_id", "team#1"},
+		{"hash without preceding whitespace is data", "tenant_id: team#1", "tenant_id", "team#1"},
+		{"comment after quoted value", `tenant_id: "team#1" # comment`, "tenant_id", "team#1"},
+		{"comment after unquoted value", "tenant_id: team-1 # comment", "tenant_id", "team-1"},
+		{"comment at start of value", "tenant_id: # comment", "tenant_id", ""},
+		{"contains a colon", `collector_url: "http://host:9308#frag"`, "collector_url", "http://host:9308#frag"},
+		{"apostrophe in unquoted value before comment", "service_name: don't # comment", "service_name", "don't"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			key, value, ok := splitKeyValue(tt.input)
+			if !ok {
+				t.Fatalf("splitKeyValue(%q) returned ok = false", tt.input)
+			}
+			if key != tt.key {
+				t.Errorf("key = %q, want %q", key, tt.key)
+			}
+			if value != tt.value {
+				t.Errorf("value = %q, want %q", value, tt.value)
+			}
+		})
+	}
+}
+
 func TestLoadFromFile_NotFound(t *testing.T) {
 	_, err := LoadFromFile("/nonexistent/path/loza.yaml")
 	if err == nil {
