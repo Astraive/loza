@@ -34,6 +34,10 @@ func (e *rejectionError) Error() string {
 }
 
 func Run(ctx context.Context, cfg RunnerConfig) (Report, error) {
+	if cfg.Workers <= 0 {
+		return Report{}, fmt.Errorf("loadgen: workers must be greater than zero, got %d", cfg.Workers)
+	}
+
 	client := &http.Client{Timeout: 30 * time.Second}
 	var accepted atomic.Int64
 	var rejected atomic.Int64
