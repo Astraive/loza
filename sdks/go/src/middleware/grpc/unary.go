@@ -38,9 +38,25 @@ func UnaryInterceptorWithConfig(cfg Config) grpc.UnaryServerInterceptor {
 			Route:  info.FullMethod,
 			Path:   info.FullMethod,
 		})
+		recoverPanics := loza.PanicRecoveryEnabled()
 
-		if !loza.PanicRecoveryEnabled() {
-			resp, err := handler(evCtx, req)
+		// Finalize and emit on every exit path, including panic unwinding, so a
+		// panic in the handler never silently drops the started event.
+		defer func() {
+			if rec := recover(); rec != nil {
+				if !recoverPanics {
+					loza.FinishError(evCtx, status.Error(codes.Internal, fmt.Sprintf("panic: %v", rec)), loza.Int("status_code", int(codes.Internal)))
+					_ = loza.Emit(evCtx)
+					panic(rec)
+				}
+				// Record the panic value in server-side telemetry only. gRPC
+				// transmits the status message to the caller, so clients must
+				// receive a fixed, non-sensitive message instead.
+				loza.FinishError(evCtx, fmt.Errorf("panic recovered: %v", rec), loza.Int("status_code", int(codes.Internal)))
+				_ = loza.Emit(evCtx)
+				err = status.Error(codes.Internal, "internal server error")
+				return
+			}
 			if err != nil {
 				st, _ := status.FromError(err)
 				loza.FinishError(evCtx, err, loza.Int("status_code", int(st.Code())))
@@ -48,28 +64,9 @@ func UnaryInterceptorWithConfig(cfg Config) grpc.UnaryServerInterceptor {
 				loza.Finish(evCtx, "success", loza.Int("status_code", int(codes.OK)))
 			}
 			_ = loza.Emit(evCtx)
-			return resp, err
-		}
-
-		defer func() {
-			if rec := recover(); rec != nil {
-				// Record the panic value in server-side telemetry only. gRPC
-				// transmits the status message to the caller, so clients must
-				// receive a fixed, non-sensitive message instead.
-				loza.FinishError(evCtx, fmt.Errorf("panic recovered: %v", rec), loza.Int("status_code", int(codes.Internal)))
-				_ = loza.Emit(evCtx)
-				err = status.Error(codes.Internal, "internal server error")
-			}
 		}()
 
 		resp, err = handler(evCtx, req)
-		if err != nil {
-			st, _ := status.FromError(err)
-			loza.FinishError(evCtx, err, loza.Int("status_code", int(st.Code())))
-		} else {
-			loza.Finish(evCtx, "success", loza.Int("status_code", int(codes.OK)))
-		}
-		_ = loza.Emit(evCtx)
 		return resp, err
 	}
 }

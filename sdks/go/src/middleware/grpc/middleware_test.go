@@ -165,3 +165,51 @@ func TestStreamInterceptorEmitsSuccessAndError(t *testing.T) {
 		t.Fatalf("events = %d, want 2", store.Len())
 	}
 }
+
+// assertPanic runs fn and fails the test unless fn panics with the expected value.
+func assertPanic(t *testing.T, want any, fn func()) {
+	t.Helper()
+	defer func() {
+		got := recover()
+		if got == nil {
+			t.Error("expected handler panic to propagate, got none")
+			return
+		}
+		if got != want {
+			t.Errorf("panic = %v, want %v", got, want)
+		}
+	}()
+	fn()
+}
+
+func TestInterceptorsEmitEventOnPanicWithoutRecovery(t *testing.T) {
+	store := configureGRPC(t, false)
+	info := &grpcpkg.UnaryServerInfo{FullMethod: "/demo.Service/Call"}
+	unaryPanic := "unary panic without recovery"
+	assertPanic(t, unaryPanic, func() {
+		_, _ = UnaryInterceptor()(context.Background(), nil, info, func(context.Context, any) (any, error) {
+			panic(unaryPanic)
+		})
+	})
+
+	streamInfo := &grpcpkg.StreamServerInfo{FullMethod: "/demo.Service/Stream"}
+	stream := fakeStream{ctx: context.Background()}
+	streamPanic := "stream panic without recovery"
+	assertPanic(t, streamPanic, func() {
+		_ = StreamInterceptor()(nil, stream, streamInfo, func(_ any, _ grpcpkg.ServerStream) error {
+			panic(streamPanic)
+		})
+	})
+
+	if err := loza.Flush(context.Background()); err != nil {
+		t.Fatalf("Flush: %v", err)
+	}
+	if store.Len() != 2 {
+		t.Fatalf("events = %d, want 2 (one per panicking handler)", store.Len())
+	}
+	for _, ev := range store.Events() {
+		if ev.Error == nil {
+			t.Errorf("panic event %q missing error outcome: %+v", ev.Event, ev)
+		}
+	}
+}
