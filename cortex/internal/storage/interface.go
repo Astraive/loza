@@ -137,7 +137,7 @@ type SignatureStore interface {
 
 type SalienceStore interface {
 	Save(ctx context.Context, score *models.SalienceScore) error
-	Get(ctx context.Context, eventType string) (float64, error)
+	Get(ctx context.Context, eventType string) (*models.SalienceScore, error)
 	List(ctx context.Context, limit int) ([]*models.SalienceScore, error)
 }
 
