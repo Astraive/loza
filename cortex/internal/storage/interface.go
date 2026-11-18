@@ -152,4 +152,5 @@ type FeedbackStore interface {
 	Save(ctx context.Context, fb *models.RemediationFeedback) error
 	GetByRemediation(ctx context.Context, remediationID string) ([]*models.RemediationFeedback, error)
 	GetSuccessRate(ctx context.Context, action string, signatureID string) (float64, error)
+	GetAverageTimeToResolve(ctx context.Context, action string, signatureID string) (int64, error)
 }

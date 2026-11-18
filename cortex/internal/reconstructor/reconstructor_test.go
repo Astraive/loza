@@ -184,6 +184,10 @@ func (f *fakeReconFeedbackStore) GetSuccessRate(context.Context, string, string)
 	return 0, nil
 }
 
+func (f *fakeReconFeedbackStore) GetAverageTimeToResolve(context.Context, string, string) (int64, error) {
+	return 0, nil
+}
+
 func buildReconIncidentGraph(store *fakeReconGraphStore, incidentID string) {
 	now := time.Now()
 	store.nodes[incidentID] = &models.Node{

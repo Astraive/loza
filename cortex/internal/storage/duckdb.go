@@ -1385,3 +1385,15 @@ func (s *DuckDBFeedbackStore) GetSuccessRate(ctx context.Context, action string,
 		WHERE r.action = ? AND r.signature_id = ?`, action, signatureID).Scan(&rate)
 	return rate, err
 }
+
+// GetAverageTimeToResolve returns the average time to resolve for feedback
+// attached to remediations with the given action and signature.
+func (s *DuckDBFeedbackStore) GetAverageTimeToResolve(ctx context.Context, action string, signatureID string) (int64, error) {
+	var avgTime int64
+	err := s.db.QueryRowContext(ctx, `
+		SELECT COALESCE(CAST(AVG(f.time_to_resolve_seconds) AS BIGINT), 0)
+		FROM remediation_feedback f
+		JOIN remediations r ON f.remediation_id = r.remediation_id
+		WHERE r.action = ? AND r.signature_id = ?`, action, signatureID).Scan(&avgTime)
+	return avgTime, err
+}

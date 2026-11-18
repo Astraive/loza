@@ -125,21 +125,7 @@ func (l *Learner) GetTopRemediations(ctx context.Context, signatureID string, li
 }
 
 func (l *Learner) GetAverageTimeToResolve(ctx context.Context, action string, signatureID string) (int64, error) {
-	feedbacks, err := l.feedbackStore.GetByRemediation(ctx, action)
-	if err != nil {
-		return 0, err
-	}
-
-	if len(feedbacks) == 0 {
-		return 0, nil
-	}
-
-	var totalTime int64
-	for _, fb := range feedbacks {
-		totalTime += fb.TimeToResolve
-	}
-
-	return totalTime / int64(len(feedbacks)), nil
+	return l.feedbackStore.GetAverageTimeToResolve(ctx, action, signatureID)
 }
 
 // UpdateFeatureWeights adjusts feature vector weights based on feedback outcome.
