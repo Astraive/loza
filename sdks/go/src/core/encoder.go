@@ -44,7 +44,11 @@ func (e *JSONEventEncoder) EncodeEvent(dst []byte, ev *Event) ([]byte, error) {
 	if ts.IsZero() {
 		ts = time.Now()
 	}
-	w.AppendStringField("timestamp", e.formatTime(ts))
+	if e.TimeFormat == TimeFormatUnixMS {
+		w.AppendInt64Field("timestamp", ts.UnixMilli())
+	} else {
+		w.AppendStringField("timestamp", e.formatTime(ts))
+	}
 	w.AppendStringField("schema_version", firstNonEmpty(ev.SchemaVersion, LOZA_SPEC_VERSION))
 	w.AppendStringField("event_version", firstNonEmpty(ev.EventVersion, LOZA_EVENT_VERSION))
 
