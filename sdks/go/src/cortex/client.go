@@ -75,7 +75,8 @@ func (c *Client) Health(ctx context.Context) bool {
 	}
 	var body map[string]any
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
-		return true // 200 with non-JSON body is still healthy
+		// Fail closed: an undecodable body cannot confirm status=="ok".
+		return false
 	}
 	if s, ok := body["status"].(string); ok {
 		return s == "ok"
@@ -99,7 +100,8 @@ func (c *Client) Ready(ctx context.Context) bool {
 	}
 	var body map[string]any
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
-		return true
+		// Fail closed: an undecodable body cannot confirm readiness.
+		return false
 	}
 	if s, ok := body["status"].(string); ok {
 		return s == "ok"
