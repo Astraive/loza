@@ -608,8 +608,18 @@ func (s *httpBatchSink) WriteBatch(ctx context.Context, encoded [][]byte, _ []*E
 	if len(encoded) == 0 {
 		return nil
 	}
-	payload := bytes.Join(encoded, nil)
-	return s.send(ctx, payload)
+	// Route the batch through the buffered flush path so it can never overtake
+	// events retained in s.buf after a failed flush. Appending each item keeps
+	// the byte-for-byte concatenation of bytes.Join(encoded, nil) while
+	// preserving the order of any older, already-retained events.
+	s.mu.Lock()
+	for _, e := range encoded {
+		cp := make([]byte, len(e))
+		copy(cp, e)
+		s.buf = append(s.buf, cp)
+	}
+	s.mu.Unlock()
+	return s.Flush(ctx)
 }
 
 func (s *httpBatchSink) Flush(ctx context.Context) error {
