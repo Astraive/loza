@@ -246,6 +246,7 @@ func lqlRestartBackoff(failures uint) time.Duration {
 }
 
 type lqlRPCResponse struct {
+	ID     int64           `json:"id"`
 	Result json.RawMessage `json:"result"`
 	Error  *struct {
 		Code        string          `json:"code"`
@@ -256,7 +257,8 @@ type lqlRPCResponse struct {
 
 func (c *lqlStdioCompiler) requestLocked(ctx context.Context, method string, params any) (lqlRPCResponse, error) {
 	c.nextID++
-	request := map[string]any{"id": c.nextID, "method": method, "protocol_version": c.protocol, "language_version": c.language, "params": params}
+	id := c.nextID
+	request := map[string]any{"id": id, "method": method, "protocol_version": c.protocol, "language_version": c.language, "params": params}
 	line, err := json.Marshal(request)
 	if err != nil {
 		return lqlRPCResponse{}, err
@@ -264,16 +266,31 @@ func (c *lqlStdioCompiler) requestLocked(ctx context.Context, method string, par
 	if _, err := c.stdin.Write(append(line, '\n')); err != nil {
 		return lqlRPCResponse{}, err
 	}
+	// Bind the reader to this process before spawning the goroutine. killLocked
+	// and startLocked replace c.stdout on a restart, so a goroutine that reads
+	// the field itself can race with them or consume the next process's reply
+	// after this request has timed out.
+	reader := c.stdout
 	result := make(chan lqlRPCResponse, 1)
 	errorsCh := make(chan error, 1)
 	go func() {
-		responseLine, readErr := c.stdout.ReadBytes('\n')
+		responseLine, readErr := reader.ReadBytes('\n')
 		if readErr != nil {
 			errorsCh <- readErr
 			return
 		}
 		var response lqlRPCResponse
-		errorsCh <- json.Unmarshal(responseLine, &response)
+		if err := json.Unmarshal(responseLine, &response); err != nil {
+			errorsCh <- err
+			return
+		}
+		// A compiler that omits the id leaves it at zero; accept those replies,
+		// but never let a mismatched id from a stale response satisfy a request.
+		if response.ID != 0 && response.ID != id {
+			errorsCh <- fmt.Errorf("lql response id mismatch: got %d, want %d", response.ID, id)
+			return
+		}
+		errorsCh <- nil
 		result <- response
 	}()
 	select {
