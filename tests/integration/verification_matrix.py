@@ -683,138 +683,153 @@ def run_shared_sdk_conformance() -> list[StepResult]:
     return results
 
 
+# Each SDK method family is verified by its own dedicated behavioral test. A
+# family that is absent from this table has no test covering it and must never be
+# reported as implemented_and_passing (MASS-0862 / issue #950). Note that
+# `http_and_framework_helpers` is intentionally omitted: no SDK category suite
+# contains a behavioral test for that family.
+_FAMILY_TEST_SELECTORS: dict[str, dict[str, str]] = {
+    "client_creation_and_configuration": {
+        "go": "TestClientCreationAndConfiguration",
+        "js": "tests/client_creation.test.ts",
+        "py": "tests/test_client_creation.py",
+        "rs": "client_creation",
+    },
+    "basic_logging_and_events": {
+        "go": "TestBasicLoggingAndEventFacades",
+        "js": "tests/basic_logging_events.test.ts",
+        "py": "tests/test_basic_logging_events.py",
+        "rs": "basic_logging_events",
+    },
+    "lifecycle": {
+        "go": "TestLifecycleEventHelpers",
+        "js": "tests/lifecycle_event.test.ts",
+        "py": "tests/test_lifecycle_event.py",
+        "rs": "lifecycle_event",
+    },
+    "process_group_timer_stopwatch": {
+        "go": "TestProcessGroupTimerAndStopwatchHelpers",
+        "js": "tests/process_group_timer_stopwatch.test.ts",
+        "py": "tests/test_process_group_timer_stopwatch.py",
+        "rs": "process_group_timer_stopwatch",
+    },
+    "typed_attributes": {
+        "go": "TestTypedAttributeHelpers",
+        "js": "tests/typed_attribute_helpers.test.ts",
+        "py": "tests/test_typed_attribute_helpers.py",
+        "rs": "typed_attribute_helpers",
+    },
+    "identity_and_domain_helpers": {
+        "go": "TestIdentityDomainHelpers",
+        "js": "tests/identity_domain_helpers.test.ts",
+        "py": "tests/test_identity_domain_helpers.py",
+        "rs": "identity_domain_helpers",
+    },
+    "sink_queue_flush_shutdown": {
+        "go": "TestSinkQueueFlushAndShutdownHelpers",
+        "js": "tests/sink_queue_flush_shutdown.test.ts",
+        "py": "tests/test_sink_queue_flush_shutdown.py",
+        "rs": "sink_queue_flush_shutdown",
+    },
+    "sampling_and_policy": {
+        "go": "TestSamplingAndPolicyHelpers",
+        "js": "tests/sampling_policy.test.ts",
+        "py": "tests/test_sampling_policy.py",
+        "rs": "sampling_policy",
+    },
+    "testing_and_conformance": {
+        "go": "TestTestingAndConformanceHelpers",
+        "js": "tests/testing_conformance.test.ts",
+        "py": "tests/test_testing_conformance.py",
+        "rs": "testing_conformance",
+    },
+    "collector_api_and_cli": {
+        "go": "TestCollectorAndCortexClientFamilies",
+        "js": "tests/collector_api_cli.test.ts",
+        "py": "tests/test_collector_api_cli.py",
+        "rs": "collector_api_cli",
+    },
+}
+
+_SDK_ALIASES = {
+    "go": "go",
+    "golang": "go",
+    "js": "js",
+    "javascript": "js",
+    "typescript": "js",
+    "py": "py",
+    "python": "py",
+    "rs": "rs",
+    "rust": "rs",
+}
+
+_SDK_CATEGORY_ROOTS = {
+    "go": WORKSPACE_ROOT / "sdks" / "go",
+    "js": WORKSPACE_ROOT / "sdks" / "js",
+    "py": WORKSPACE_ROOT / "sdks" / "py",
+    "rs": WORKSPACE_ROOT / "sdks" / "rs",
+}
+
+# A None entry means the interpreter (PYTHON) is always available.
+_SDK_CATEGORY_TOOLS = {"go": "go", "js": "node", "py": None, "rs": "cargo"}
+
+
+def _normalize_sdk(sdk: str) -> str:
+    return _SDK_ALIASES.get(sdk.lower(), sdk.lower())
+
+
+def _family_step_id(sdk: str, family: str) -> str:
+    return f"sdk.{_normalize_sdk(sdk)}.family.{family}"
+
+
+def _sdk_family_command(sdk: str, selector: str) -> tuple[list[str], Path, float]:
+    if sdk == "go":
+        return (
+            ["go", "test", "./tests/conformance", "-run", f"^{selector}$", "-count=1"],
+            _SDK_CATEGORY_ROOTS["go"],
+            180.0,
+        )
+    if sdk == "js":
+        return (
+            ["node", "--test", "--test-concurrency=1", "--experimental-strip-types", selector],
+            _SDK_CATEGORY_ROOTS["js"],
+            180.0,
+        )
+    if sdk == "py":
+        return ([PYTHON, "-m", "pytest", selector, "-q"], _SDK_CATEGORY_ROOTS["py"], 180.0)
+    if sdk == "rs":
+        return (["cargo", "test", "-q", "--test", selector], _SDK_CATEGORY_ROOTS["rs"], 240.0)
+    raise ValueError(f"unknown sdk: {sdk}")
+
+
 def run_sdk_category_suites() -> list[StepResult]:
-    return [
-        _run(
-            "sdk.go.categories",
-            "sdk_categories",
-            [
-                "go",
-                "test",
-                "./tests/conformance",
-                "-run",
-                "Test(ClientCreationAndConfiguration|BasicLoggingAndEventFacades|LifecycleAndTimingHelpers|TypedAttrsAndDomainHelpers|SamplingRedactionTestkitAndClients)$",
-                "-count=1",
-            ],
-            WORKSPACE_ROOT / "sdks" / "go",
-            timeout_s=180,
-        )
-        if _tool_available("go")
-        else _blocked("sdk.go.categories", "sdk_categories", "go is unavailable"),
-        _run(
-            "sdk.js.categories",
-            "sdk_categories",
-            [
-                "node",
-                "--test",
-                "--test-concurrency=1",
-                "--experimental-strip-types",
-                "tests/client_creation.test.ts",
-                "tests/basic_logging_events.test.ts",
-                "tests/lifecycle_event.test.ts",
-                "tests/process_group_timer_stopwatch.test.ts",
-                "tests/typed_attribute_helpers.test.ts",
-                "tests/identity_domain_helpers.test.ts",
-                "tests/sink_queue_flush_shutdown.test.ts",
-                "tests/sampling_policy.test.ts",
-                "tests/testing_conformance.test.ts",
-                "tests/collector_api_cli.test.ts",
-            ],
-            WORKSPACE_ROOT / "sdks" / "js",
-            timeout_s=180,
-        )
-        if _tool_available("node")
-        else _blocked("sdk.js.categories", "sdk_categories", "node is unavailable"),
-        _run(
-            "sdk.py.categories",
-            "sdk_categories",
-            [
-                PYTHON,
-                "-m",
-                "pytest",
-                "tests/test_client_creation.py",
-                "tests/test_basic_logging_events.py",
-                "tests/test_lifecycle_event.py",
-                "tests/test_process_group_timer_stopwatch.py",
-                "tests/test_typed_attribute_helpers.py",
-                "tests/test_identity_domain_helpers.py",
-                "tests/test_sink_queue_flush_shutdown.py",
-                "tests/test_sampling_policy.py",
-                "tests/test_testing_conformance.py",
-                "tests/test_collector_api_cli.py",
-                "-q",
-            ],
-            WORKSPACE_ROOT / "sdks" / "py",
-            timeout_s=300,
-        ),
-        _run(
-            "sdk.rs.categories",
-            "sdk_categories",
-            [
-                "cargo",
-                "test",
-                "-q",
-                "--test",
-                "client_creation",
-                "--test",
-                "basic_logging_events",
-                "--test",
-                "lifecycle_event",
-                "--test",
-                "process_group_timer_stopwatch",
-                "--test",
-                "typed_attribute_helpers",
-                "--test",
-                "identity_domain_helpers",
-                "--test",
-                "sink_queue_flush_shutdown",
-                "--test",
-                "sampling_policy",
-                "--test",
-                "testing_conformance",
-                "--test",
-                "collector_api_cli",
-            ],
-            WORKSPACE_ROOT / "sdks" / "rs",
-            timeout_s=240,
-        )
-        if _tool_available("cargo")
-        else _blocked("sdk.rs.categories", "sdk_categories", "cargo is unavailable"),
-    ]
+    results: list[StepResult] = []
+    for sdk in ("go", "js", "py", "rs"):
+        tool = _SDK_CATEGORY_TOOLS[sdk]
+        tool_ready = tool is None or _tool_available(tool)
+        for family, selectors in _FAMILY_TEST_SELECTORS.items():
+            if sdk not in selectors:
+                continue
+            step_id = _family_step_id(sdk, family)
+            if not tool_ready:
+                results.append(_blocked(step_id, "sdk_categories", f"{tool} is unavailable"))
+                continue
+            command, cwd, timeout_s = _sdk_family_command(sdk, selectors[sdk])
+            results.append(_run(step_id, "sdk_categories", command, cwd, timeout_s=timeout_s))
+    return results
 
 
 def _family_status_from_results(result_map: dict[str, StepResult], sdk: str, family: str) -> dict[str, Any]:
-    sdk_key_map = {
-        "go": "go",
-        "golang": "go",
-        "js": "js",
-        "javascript": "js",
-        "typescript": "js",
-        "py": "py",
-        "python": "py",
-        "rs": "rs",
-        "rust": "rs",
-    }
-    normalized_sdk = sdk_key_map.get(sdk.lower(), sdk.lower())
-    mapping = {
-        "client_creation_and_configuration": f"sdk.{normalized_sdk}.categories",
-        "basic_logging_and_events": f"sdk.{normalized_sdk}.categories",
-        "lifecycle": f"sdk.{normalized_sdk}.categories",
-        "process_group_timer_stopwatch": f"sdk.{normalized_sdk}.categories",
-        "typed_attributes": f"sdk.{normalized_sdk}.categories",
-        "identity_and_domain_helpers": f"sdk.{normalized_sdk}.categories",
-        "http_and_framework_helpers": f"sdk.{normalized_sdk}.categories",
-        "sink_queue_flush_shutdown": f"sdk.{normalized_sdk}.categories",
-        "sampling_and_policy": f"sdk.{normalized_sdk}.categories",
-        "testing_and_conformance": f"sdk.{normalized_sdk}.categories",
-        "collector_api_and_cli": f"sdk.{normalized_sdk}.categories",
-    }
-    step_id = mapping.get(family)
-    if step_id is None:
+    normalized_sdk = _normalize_sdk(sdk)
+    # A family can only be verified when a behavioral test actually covers it
+    # for this SDK. Families without such a test (e.g. http_and_framework_helpers)
+    # are never promoted to implemented_and_passing by a blanket suite result.
+    if normalized_sdk not in _FAMILY_TEST_SELECTORS.get(family, {}):
         return {
             "status": "documented_but_not_behaviorally_verified",
-            "reason": "no category suite mapping yet",
+            "reason": f"no behavioral test covers '{family}' for sdk '{normalized_sdk}'",
         }
+    step_id = _family_step_id(normalized_sdk, family)
     result = result_map.get(step_id)
     if result is None:
         return {
