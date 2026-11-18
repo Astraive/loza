@@ -33,14 +33,14 @@ def run_encoder_benchmark(iterations: int = 10000) -> dict:
             ctx = logger.start_event(loza.Params(event="bench.encoder"))
 
             if attr_count >= 4:
-                loza.enrich(ctx,
+                logger.enrich(ctx,
                     loza.String("user.id", "u-abc123"),
                     loza.Int("status_code", 200),
                     loza.Float64("duration_ms", 42.5),
                     loza.Bool("cache_hit", True),
                 )
             if attr_count >= 12:
-                loza.enrich(ctx,
+                logger.enrich(ctx,
                     loza.String("tenant.id", "tenant-acme"),
                     loza.String("session.id", "sess-xyz"),
                     loza.String("request.id", "req-789"),
@@ -51,10 +51,10 @@ def run_encoder_benchmark(iterations: int = 10000) -> dict:
                     loza.String("http.user_agent", "Mozilla/5.0"),
                 )
 
-            loza.finish(ctx, "success")
+            logger.finish(ctx, "success")
 
             t0 = time.perf_counter()
-            loza.emit(ctx)
+            logger.emit(ctx)
             latencies.append((time.perf_counter() - t0) * 1_000_000)
 
         latencies.sort()
