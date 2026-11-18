@@ -19,6 +19,24 @@ use time::OffsetDateTime;
 /// Callback for collector ack/nack responses.
 pub type CollectorAckHandler = Box<dyn Fn(&Value) + Send + Sync>;
 
+/// Delivery settings sourced from `SinkConfig::HttpBatch`.
+#[derive(Clone, Copy, Debug)]
+struct HttpSinkOptions {
+    max_retries: u32,
+    enable_compression: bool,
+    max_batch_bytes: usize,
+}
+
+impl Default for HttpSinkOptions {
+    fn default() -> Self {
+        Self {
+            max_retries: 3,
+            enable_compression: true,
+            max_batch_bytes: 256 * 1024,
+        }
+    }
+}
+
 /// Global paused sink registry.
 fn paused_sinks() -> &'static Mutex<HashSet<String>> {
     static PAUSED: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
@@ -120,7 +138,10 @@ pub fn write_sink_with_ack(
             basic_username,
             basic_password,
             insecure,
-            ..
+            timeout_ms: _,
+            max_retries,
+            enable_compression,
+            max_batch_bytes,
         } => {
             let auth = (
                 api_key.as_deref(),
@@ -128,10 +149,15 @@ pub fn write_sink_with_ack(
                 basic_password.as_deref(),
                 *insecure,
             );
+            let options = HttpSinkOptions {
+                max_retries: *max_retries,
+                enable_compression: *enable_compression,
+                max_batch_bytes: *max_batch_bytes,
+            };
             if *ndjson {
-                post_http_ndjson_with_ack(endpoint, &[encoded.to_string()], ack, auth)
+                post_http_ndjson_with_ack(endpoint, &[encoded.to_string()], ack, auth, &options)
             } else {
-                post_http_batch_with_ack(endpoint, &[encoded.to_string()], ack, auth)
+                post_http_batch_with_ack(endpoint, &[encoded.to_string()], ack, auth, &options)
             }
         }
     }
@@ -157,7 +183,10 @@ pub fn write_batch_sink_with_ack(
             basic_username,
             basic_password,
             insecure,
-            ..
+            timeout_ms: _,
+            max_retries,
+            enable_compression,
+            max_batch_bytes,
         } => {
             let auth = (
                 api_key.as_deref(),
@@ -165,11 +194,19 @@ pub fn write_batch_sink_with_ack(
                 basic_password.as_deref(),
                 *insecure,
             );
-            if *ndjson {
-                post_http_ndjson_with_ack(endpoint, encoded_events, ack, auth)
-            } else {
-                post_http_batch_with_ack(endpoint, encoded_events, ack, auth)
+            let options = HttpSinkOptions {
+                max_retries: *max_retries,
+                enable_compression: *enable_compression,
+                max_batch_bytes: *max_batch_bytes,
+            };
+            for chunk in batch_chunks(encoded_events, options.max_batch_bytes) {
+                if *ndjson {
+                    post_http_ndjson_with_ack(endpoint, &chunk, ack, auth, &options)?;
+                } else {
+                    post_http_batch_with_ack(endpoint, &chunk, ack, auth, &options)?;
+                }
             }
+            Ok(())
         }
         _ => {
             for encoded in encoded_events {
@@ -197,7 +234,13 @@ pub fn close_sink(sink: &SinkConfig) -> io::Result<()> {
 
 #[allow(dead_code)]
 fn post_http_batch(endpoint: &str, encoded_events: &[String]) -> io::Result<()> {
-    post_http_batch_with_ack(endpoint, encoded_events, None, (None, None, None, false))
+    post_http_batch_with_ack(
+        endpoint,
+        encoded_events,
+        None,
+        (None, None, None, false),
+        &HttpSinkOptions::default(),
+    )
 }
 
 fn post_http_batch_with_ack(
@@ -205,6 +248,7 @@ fn post_http_batch_with_ack(
     encoded_events: &[String],
     ack: Option<&CollectorAckHandler>,
     auth: (Option<&str>, Option<&str>, Option<&str>, bool),
+    options: &HttpSinkOptions,
 ) -> io::Result<()> {
     let client = collector_http_client(endpoint, auth);
     let payload = client
@@ -216,14 +260,13 @@ fn post_http_batch_with_ack(
     let body = serde_json::to_vec(&payload)
         .map_err(|err| io::Error::other(format!("serialize collector payload: {err}")))?;
 
-    let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
-    encoder.write_all(&body)?;
-    let compressed = encoder.finish()?;
+    let (payload, compressed) = encode_http_body(body, options.enable_compression)?;
 
-    let mut request = ureq::post(endpoint)
-        .set("Content-Type", "application/json")
-        .set("Content-Encoding", "gzip")
-        .timeout(std::time::Duration::from_millis(client.timeout_ms));
+    let mut request = ureq::post(endpoint).set("Content-Type", "application/json");
+    if compressed {
+        request = request.set("Content-Encoding", "gzip");
+    }
+    request = request.timeout(std::time::Duration::from_millis(client.timeout_ms));
 
     if let Some(api_key) = &client.api_key {
         let auth_value = if client.auth_header.eq_ignore_ascii_case("authorization") {
@@ -239,15 +282,11 @@ fn post_http_batch_with_ack(
             base64::engine::general_purpose::STANDARD.encode(format!("{username}:{password}"));
         request = request.set(&client.auth_header, &format!("Basic {token}"));
     }
-    let retry_policy = RetryPolicy {
-        max_attempts: 3,
-        base_delay: Duration::from_millis(100),
-        max_delay: Duration::from_secs(30),
-    };
+    let retry_policy = retry_policy(options.max_retries);
 
     for attempt in 1..=retry_policy.max_attempts {
         let request = request.clone();
-        match request.send_bytes(&compressed) {
+        match request.send_bytes(&payload) {
             Ok(response) => {
                 let status = response.status();
                 let retry_after = parse_retry_after(response.header("Retry-After"));
@@ -306,6 +345,48 @@ fn post_http_batch_with_ack(
     Ok(())
 }
 
+/// Build the retry policy from the sink's configured retry count.
+/// A zero retry count still performs a single delivery attempt.
+fn retry_policy(max_retries: u32) -> RetryPolicy {
+    RetryPolicy {
+        max_attempts: max_retries.max(1),
+        base_delay: Duration::from_millis(100),
+        max_delay: Duration::from_secs(30),
+    }
+}
+
+/// Compress a request body only when compression is enabled for the sink.
+fn encode_http_body(body: Vec<u8>, enable_compression: bool) -> io::Result<(Vec<u8>, bool)> {
+    if !enable_compression {
+        return Ok((body, false));
+    }
+    let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+    encoder.write_all(&body)?;
+    Ok((encoder.finish()?, true))
+}
+
+/// Split encoded events into chunks that respect the configured batch byte limit.
+/// The `+ 1` per event accounts for the comma/newline separating serialized events.
+fn batch_chunks(encoded_events: &[String], max_batch_bytes: usize) -> Vec<Vec<String>> {
+    let budget = max_batch_bytes.max(1);
+    let mut chunks = Vec::new();
+    let mut current = Vec::new();
+    let mut current_bytes = 0usize;
+    for event in encoded_events {
+        let size = event.len().saturating_add(1);
+        if !current.is_empty() && current_bytes.saturating_add(size) > budget {
+            chunks.push(std::mem::take(&mut current));
+            current_bytes = 0;
+        }
+        current.push(event.clone());
+        current_bytes = current_bytes.saturating_add(size);
+    }
+    if !current.is_empty() {
+        chunks.push(current);
+    }
+    chunks
+}
+
 fn notify_ack(ack: Option<&CollectorAckHandler>, raw: &str) {
     if let Some(handler) = ack {
         if let Ok(parsed) = serde_json::from_str::<Value>(raw) {
@@ -316,7 +397,13 @@ fn notify_ack(ack: Option<&CollectorAckHandler>, raw: &str) {
 
 #[allow(dead_code)]
 fn post_http_ndjson(endpoint: &str, encoded_events: &[String]) -> io::Result<()> {
-    post_http_ndjson_with_ack(endpoint, encoded_events, None, (None, None, None, false))
+    post_http_ndjson_with_ack(
+        endpoint,
+        encoded_events,
+        None,
+        (None, None, None, false),
+        &HttpSinkOptions::default(),
+    )
 }
 
 fn post_http_ndjson_with_ack(
@@ -324,19 +411,19 @@ fn post_http_ndjson_with_ack(
     encoded_events: &[String],
     ack: Option<&CollectorAckHandler>,
     auth: (Option<&str>, Option<&str>, Option<&str>, bool),
+    options: &HttpSinkOptions,
 ) -> io::Result<()> {
     let client = collector_http_client(endpoint, auth);
     let body = encoded_events.join("\n");
     let body_bytes = body.into_bytes();
 
-    let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
-    encoder.write_all(&body_bytes)?;
-    let compressed = encoder.finish()?;
+    let (payload, compressed) = encode_http_body(body_bytes, options.enable_compression)?;
 
-    let mut request = ureq::post(endpoint)
-        .set("Content-Type", "application/x-ndjson")
-        .set("Content-Encoding", "gzip")
-        .timeout(std::time::Duration::from_millis(client.timeout_ms));
+    let mut request = ureq::post(endpoint).set("Content-Type", "application/x-ndjson");
+    if compressed {
+        request = request.set("Content-Encoding", "gzip");
+    }
+    request = request.timeout(std::time::Duration::from_millis(client.timeout_ms));
 
     if let Some(api_key) = &client.api_key {
         let auth_value = if client.auth_header.eq_ignore_ascii_case("authorization") {
@@ -352,15 +439,11 @@ fn post_http_ndjson_with_ack(
             base64::engine::general_purpose::STANDARD.encode(format!("{username}:{password}"));
         request = request.set(&client.auth_header, &format!("Basic {token}"));
     }
-    let retry_policy = RetryPolicy {
-        max_attempts: 3,
-        base_delay: Duration::from_millis(100),
-        max_delay: Duration::from_secs(30),
-    };
+    let retry_policy = retry_policy(options.max_retries);
 
     for attempt in 1..=retry_policy.max_attempts {
         let request = request.clone();
-        match request.send_bytes(&compressed) {
+        match request.send_bytes(&payload) {
             Ok(response) => {
                 let status = response.status();
                 let retry_after = parse_retry_after(response.header("Retry-After"));
@@ -530,6 +613,8 @@ fn collector_http_client(
 mod tests {
     use super::*;
     use crate::config::MemorySinkStore;
+    use flate2::read::GzDecoder;
+    use std::io::Read;
 
     fn memory_sink() -> SinkConfig {
         SinkConfig::Memory(MemorySinkStore::new())
@@ -584,5 +669,53 @@ mod tests {
 
         resume_sink(&clone);
         assert!(!is_sink_paused(&sink));
+    }
+
+    #[test]
+    fn retry_policy_uses_configured_retry_count() {
+        assert_eq!(retry_policy(5).max_attempts, 5);
+        assert_eq!(retry_policy(1).max_attempts, 1);
+        // Zero retries must still perform a single delivery attempt.
+        assert_eq!(retry_policy(0).max_attempts, 1);
+    }
+
+    #[test]
+    fn compression_is_applied_only_when_enabled() {
+        let original = br#"{"event":"checkout"}"#.to_vec();
+
+        let (plain, compressed) = encode_http_body(original.clone(), false).unwrap();
+        assert!(!compressed);
+        assert_eq!(plain, original);
+
+        let (zipped, compressed) = encode_http_body(original.clone(), true).unwrap();
+        assert!(compressed);
+        assert_ne!(zipped, original);
+        let mut decoded = Vec::new();
+        GzDecoder::new(&zipped[..])
+            .read_to_end(&mut decoded)
+            .unwrap();
+        assert_eq!(decoded, original);
+    }
+
+    #[test]
+    fn batch_chunks_respect_max_batch_bytes() {
+        let events = vec!["aaaa".to_string(), "bbbb".to_string(), "cccc".to_string()];
+        // Each event costs len + 1 = 5 bytes; two fit exactly into a 10-byte budget.
+        assert_eq!(
+            batch_chunks(&events, 10),
+            vec![
+                vec![events[0].clone(), events[1].clone()],
+                vec![events[2].clone()],
+            ]
+        );
+        assert_eq!(
+            batch_chunks(&events, 1),
+            vec![
+                vec![events[0].clone()],
+                vec![events[1].clone()],
+                vec![events[2].clone()],
+            ]
+        );
+        assert!(batch_chunks(&[], 100).is_empty());
     }
 }
