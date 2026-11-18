@@ -59,7 +59,7 @@ func NewGRPCServer(cfg *config.Config, stor storage.Storage, redactCfg redaction
 	return &GRPCServer{
 		config:      cfg,
 		processor:   eventProc,
-		bus:         eventbus.New(),
+		bus:         eventbus.New().WithBufferSize(cfg.EventBus.SubscriberBufferSize),
 		topology:    topology,
 		graph:       graphBuilder,
 		match:       matching,
