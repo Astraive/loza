@@ -19,6 +19,10 @@ var BytePool = &sync.Pool{
 func Get() []byte {
 	bp := BytePool.Get().(*[]byte)
 	buf := (*bp)[:0]
+	// Resetting the length alone leaves the previous owner's bytes in the
+	// backing array, so a caller that reslices past len would read stale data.
+	// Clear the retained capacity to honor the zeroed-buffer contract.
+	clear(buf[:cap(buf)])
 	return buf
 }
 
