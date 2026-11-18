@@ -463,6 +463,9 @@ func (s *PostgresEventStore) List(ctx context.Context, limit, offset int) ([]*mo
 		}
 		events = append(events, event)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
 	return events, nil
 }
 
@@ -482,6 +485,9 @@ func (s *PostgresEventStore) FindByTraceID(ctx context.Context, traceID string) 
 		}
 		events = append(events, event)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
 	return events, nil
 }
 
@@ -500,6 +506,9 @@ func (s *PostgresEventStore) FindByIncidentID(ctx context.Context, incidentID st
 			return nil, err
 		}
 		events = append(events, event)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
 	}
 	return events, nil
 }
@@ -534,6 +543,9 @@ func (s *PostgresEventStore) FindByService(ctx context.Context, service string, 
 		}
 		events = append(events, event)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
 	return events, nil
 }
 
@@ -554,6 +566,9 @@ func (s *PostgresEventStore) FindByEventName(ctx context.Context, eventName stri
 		}
 		events = append(events, event)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
 	return events, nil
 }
 
@@ -572,6 +587,9 @@ func (s *PostgresEventStore) FindByOutcome(ctx context.Context, outcome string, 
 			return nil, err
 		}
 		events = append(events, event)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
 	}
 	return events, nil
 }
@@ -592,6 +610,9 @@ func (s *PostgresEventStore) FindByLevel(ctx context.Context, level string, limi
 		}
 		events = append(events, event)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
 	return events, nil
 }
 
@@ -610,6 +631,9 @@ func (s *PostgresEventStore) FindByDurationRange(ctx context.Context, minMs, max
 			return nil, err
 		}
 		events = append(events, event)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
 	}
 	return events, nil
 }
@@ -630,6 +654,9 @@ func (s *PostgresEventStore) FindByEnvironment(ctx context.Context, env string, 
 		}
 		events = append(events, event)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
 	return events, nil
 }
 
@@ -649,6 +676,9 @@ func (s *PostgresEventStore) FindByRelease(ctx context.Context, release string, 
 		}
 		events = append(events, event)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
 	return events, nil
 }
 
@@ -667,6 +697,9 @@ func (s *PostgresEventStore) CountByOutcome(ctx context.Context, service string,
 		}
 		result[outcome] = count
 	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
 	return result, nil
 }
 
@@ -684,6 +717,9 @@ func (s *PostgresEventStore) CountByEventName(ctx context.Context, service strin
 			return nil, err
 		}
 		result[eventName] = count
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
 	}
 	return result, nil
 }
@@ -720,6 +756,9 @@ func (s *PostgresEventStore) DistinctServices(ctx context.Context) ([]string, er
 		}
 		services = append(services, svc)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
 	return services, nil
 }
 
@@ -736,6 +775,9 @@ func (s *PostgresEventStore) DistinctEventNames(ctx context.Context) ([]string, 
 			return nil, err
 		}
 		names = append(names, name)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
 	}
 	return names, nil
 }
@@ -838,6 +880,9 @@ func (s *PostgresEventStore) ListLifecycleSummaries(ctx context.Context, filter 
 		}
 		summaries = append(summaries, &s)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, err
+	}
 	return summaries, total, nil
 }
 
@@ -877,6 +922,9 @@ func (s *PostgresTopologyStore) GetHistory(ctx context.Context, service string) 
 			return nil, err
 		}
 		aliases = append(aliases, &a)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
 	}
 	return aliases, nil
 }
@@ -935,6 +983,9 @@ func (s *PostgresGraphStore) ListNodes(ctx context.Context, nodeType string, lim
 	}
 		nodes = append(nodes, &node)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
 	return nodes, nil
 }
 
@@ -971,6 +1022,9 @@ func (s *PostgresGraphStore) GetEdges(ctx context.Context, nodeID string, edgeTy
 		log.Warn().Err(err).Msg("failed to unmarshal edge attributes")
 	}
 		edges = append(edges, &edge)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
 	}
 	return edges, nil
 }
@@ -1034,6 +1088,9 @@ func (s *PostgresGraphStore) Traverse(ctx context.Context, startNodeID string, o
 				if !visited[edge.ToNodeID] {
 					queue = append(queue, edge.ToNodeID)
 				}
+			}
+			if err := edgeRows.Err(); err != nil {
+				return nil, err
 			}
 			edgeRows.Close()
 		}
@@ -1102,6 +1159,9 @@ func (s *PostgresIncidentStore) List(ctx context.Context, limit, offset int) ([]
 		log.Warn().Err(err).Msg("failed to unmarshal incident affected services")
 	}
 		incidents = append(incidents, &inc)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
 	}
 	return incidents, nil
 }
@@ -1194,6 +1254,9 @@ func (s *PostgresSignatureStore) List(ctx context.Context, limit int) ([]*models
 	}
 		sigs = append(sigs, &sig)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
 	return sigs, nil
 }
 
@@ -1230,6 +1293,9 @@ func (s *PostgresSignatureStore) FindByBehavioralHash(ctx context.Context, hash 
 		log.Warn().Err(err).Msg("failed to unmarshal signature feature weights")
 	}
 		sigs = append(sigs, &sig)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
 	}
 	return sigs, nil
 }
@@ -1298,6 +1364,9 @@ func (s *PostgresSignatureStore) FindSimilar(ctx context.Context, sig *models.In
 				ResolutionTime: candidate.AvgResolutionTime,
 			})
 		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
 	}
 
 	if len(results) > limit {
@@ -1412,6 +1481,9 @@ func (s *PostgresRemediationStore) ListByIncident(ctx context.Context, incidentI
 	}
 		remediations = append(remediations, &rem)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
 	return remediations, nil
 }
 
@@ -1447,6 +1519,9 @@ func (s *PostgresRemediationStore) ListBySignature(ctx context.Context, signatur
 		}
 		stats = append(stats, &s)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
 	return stats, nil
 }
 
@@ -1476,6 +1551,9 @@ func (s *PostgresFeedbackStore) GetByRemediation(ctx context.Context, remediatio
 			return nil, err
 		}
 		feedbacks = append(feedbacks, &fb)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
 	}
 	return feedbacks, nil
 }
