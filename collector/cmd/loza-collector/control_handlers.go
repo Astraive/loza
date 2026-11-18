@@ -510,7 +510,11 @@ func (s *collectorState) handleDLQDelete(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	id := r.PathValue("id")
-	events, err := s.readDLQRecords()
+	// Serialize the whole read-modify-write so concurrent deletes cannot read
+	// stale records or clobber each other's rewritten DLQ.
+	s.dlqMu.Lock()
+	defer s.dlqMu.Unlock()
+	events, err := s.readDLQRecordsLocked()
 	if err != nil {
 		writeJSON(w, http.StatusNotFound, map[string]any{"error": err.Error()})
 		return
@@ -528,7 +532,7 @@ func (s *collectorState) handleDLQDelete(w http.ResponseWriter, r *http.Request)
 		writeJSON(w, http.StatusNotFound, map[string]any{"error": "dlq_event_not_found"})
 		return
 	}
-	if err := s.writeDLQRecords(remaining); err != nil {
+	if err := s.writeDLQRecordsLocked(remaining); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "dlq_delete_failed", "message": err.Error()})
 		return
 	}
@@ -536,6 +540,13 @@ func (s *collectorState) handleDLQDelete(w http.ResponseWriter, r *http.Request)
 }
 
 func (s *collectorState) readDLQRecords() ([]map[string]any, error) {
+	s.dlqMu.Lock()
+	defer s.dlqMu.Unlock()
+	return s.readDLQRecordsLocked()
+}
+
+// readDLQRecordsLocked reads DLQ records; the caller must hold s.dlqMu.
+func (s *collectorState) readDLQRecordsLocked() ([]map[string]any, error) {
 	if strings.TrimSpace(s.cfg.dlqPath) == "" {
 		return nil, os.ErrNotExist
 	}
@@ -570,17 +581,29 @@ func (s *collectorState) readDLQRecords() ([]map[string]any, error) {
 }
 
 func (s *collectorState) writeDLQRecords(records []map[string]any) error {
+	s.dlqMu.Lock()
+	defer s.dlqMu.Unlock()
+	return s.writeDLQRecordsLocked(records)
+}
+
+// writeDLQRecordsLocked atomically rewrites the DLQ; the caller must hold s.dlqMu.
+// A unique temp file is used so concurrent writers can never race on a shared
+// path, and it is always cleaned up whether the rename succeeds or fails.
+func (s *collectorState) writeDLQRecordsLocked(records []map[string]any) error {
 	if strings.TrimSpace(s.cfg.dlqPath) == "" {
 		return os.ErrNotExist
 	}
-	if err := os.MkdirAll(filepath.Dir(s.cfg.dlqPath), 0o755); err != nil {
+	dir := filepath.Dir(s.cfg.dlqPath)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
-	tmp := s.cfg.dlqPath + ".tmp"
-	file, err := os.OpenFile(tmp, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
+	file, err := os.CreateTemp(dir, filepath.Base(s.cfg.dlqPath)+".tmp-*")
 	if err != nil {
 		return err
 	}
+	tmpName := file.Name()
+	defer os.Remove(tmpName)
+
 	for _, record := range records {
 		raw, err := json.Marshal(record)
 		if err != nil {
@@ -595,7 +618,7 @@ func (s *collectorState) writeDLQRecords(records []map[string]any) error {
 	if err := file.Close(); err != nil {
 		return err
 	}
-	return os.Rename(tmp, s.cfg.dlqPath)
+	return os.Rename(tmpName, s.cfg.dlqPath)
 }
 
 func isReadOnlyQuery(query string) bool {
