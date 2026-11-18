@@ -2,11 +2,31 @@ package core
 
 import (
 	"net/http"
+	"net/url"
 	"time"
 
 	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/trace"
 )
+
+// telemetryRequestURL returns a telemetry-safe representation of u that keeps
+// only the scheme, host and path. Userinfo (user:pass@host), query parameters,
+// fragments and opaque data are deliberately excluded because they commonly
+// carry credentials, tokens or other sensitive information that must not be
+// persisted or exported to the telemetry backend.
+func telemetryRequestURL(u *url.URL) string {
+	if u == nil {
+		return ""
+	}
+	safe := *u
+	safe.User = nil
+	safe.RawQuery = ""
+	safe.ForceQuery = false
+	safe.Fragment = ""
+	safe.RawFragment = ""
+	safe.Opaque = ""
+	return safe.String()
+}
 
 type lozaRoundTripper struct {
 	base http.RoundTripper
@@ -43,7 +63,7 @@ func (rt *lozaRoundTripper) RoundTrip(req *http.Request) (*http.Response, error)
 	if HasEvent(ctx) {
 		_ = Default().Checkpoint(ctx, "http.client.started",
 			String("http.client.method", req.Method),
-			String("http.client.url", req.URL.String()),
+			String("http.client.url", telemetryRequestURL(req.URL)),
 		)
 	}
 	resp, err := rt.base.RoundTrip(req)
