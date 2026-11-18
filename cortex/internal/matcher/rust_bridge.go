@@ -76,6 +76,6 @@ func (m *RustMatcherCGO) ShapeHash(signatureJSON string) (string, error) {
 
 // TopKResult represents a single result from top-k search.
 type TopKResult struct {
-	Index      int     `json:"index"`
-	Similarity float64 `json:"similarity"`
+	SignatureID string  `json:"signature_id"`
+	Similarity  float64 `json:"similarity"`
 }
