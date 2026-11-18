@@ -588,8 +588,10 @@ def run_baseline_product_suites() -> list[StepResult]:
 
 def run_shared_sdk_conformance() -> list[StepResult]:
     results: list[StepResult] = []
-    if not _tool_available("node"):
-        return [_blocked("sdk.shared_conformance", "sdk_conformance", "node is unavailable")]
+    # Only the JavaScript SDK checks need a JS runtime. Do not let a missing
+    # `node` short-circuit the Go/Python/Rust collector e2e flows below, which
+    # have their own tool guards and do not depend on node.
+    node_available = _tool_available("node")
 
     with tempfile.TemporaryDirectory(prefix="loza-shared-conformance-") as raw_dir:
         temp_dir = Path(raw_dir)
@@ -609,7 +611,20 @@ def run_shared_sdk_conformance() -> list[StepResult]:
             env["LOZA_COLLECTOR_API_KEY"] = collector.ingest_token
             env["LOZA_TEST_COLLECTOR_ADMIN_KEY"] = collector.admin_token
 
-            if _tool_available("cargo"):
+            def conformance_step(sdk: str, step_id: str) -> StepResult:
+                return _run(
+                    step_id,
+                    "sdk_conformance",
+                    [PYTHON, "conformance/runner.py", "--sdk", sdk, "--group", "all", "--json"],
+                    SPEC_ROOT,
+                    env=env,
+                    timeout_s=600,
+                )
+
+            # The runner crashes on a missing JS runtime for the javascript
+            # SDK checks, so gate just those on node. Every other SDK can be
+            # checked without node.
+            if node_available and _tool_available("cargo"):
                 results.append(
                     _run(
                         "sdk.shared_conformance",
@@ -620,18 +635,18 @@ def run_shared_sdk_conformance() -> list[StepResult]:
                         timeout_s=600,
                     )
                 )
-            else:
+            elif node_available:
                 for sdk_name in ("javascript", "go", "python"):
-                    results.append(
-                        _run(
-                            f"sdk.shared_conformance.{sdk_name}",
-                            "sdk_conformance",
-                            [PYTHON, "conformance/runner.py", "--sdk", sdk_name, "--group", "all", "--json"],
-                            SPEC_ROOT,
-                            env=env,
-                            timeout_s=600,
-                        )
-                    )
+                    results.append(conformance_step(sdk_name, f"sdk.shared_conformance.{sdk_name}"))
+            else:
+                results.append(
+                    _blocked("sdk.shared_conformance.javascript", "sdk_conformance", "node is unavailable")
+                )
+                non_js_sdks = ["go", "python"]
+                if _tool_available("cargo"):
+                    non_js_sdks.append("rust")
+                for sdk_name in non_js_sdks:
+                    results.append(conformance_step(sdk_name, f"sdk.shared_conformance.{sdk_name}"))
             results.append(
                 _run(
                     "sdk.go.collector_e2e",
@@ -653,8 +668,8 @@ def run_shared_sdk_conformance() -> list[StepResult]:
                     env=env,
                     timeout_s=180,
                 )
-                if _tool_available("npm")
-                else _blocked("sdk.js.collector_e2e", "sdk_conformance", "npm is unavailable")
+                if node_available and _tool_available("npm")
+                else _blocked("sdk.js.collector_e2e", "sdk_conformance", "node/npm is unavailable")
             )
             results.append(
                 _run(

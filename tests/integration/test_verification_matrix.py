@@ -1,9 +1,13 @@
 #!/usr/bin/env python3
-"""Regression tests for the SDK method-family verification matrix (MASS-0862).
+"""Regression tests for the SDK verification matrix.
 
-Before the fix, every family was mapped to a single ``sdk.<sdk>.categories``
-result, so one passing suite falsely marked all 11 families as
-``implemented_and_passing`` -- including families with no behavioral test.
+Covers two independent fixes:
+  * MASS-0862: every SDK method family must be verified by its own distinct
+    behavioral test rather than a single blanket ``sdk.<sdk>.categories``
+    result (which falsely marked all families as verified).
+  * issue #952: a missing ``node`` binary must gate only the JavaScript steps
+    in ``run_shared_sdk_conformance`` and not short-circuit the Go/Python/Rust
+    collector e2e flows that do not need node.
 """
 from __future__ import annotations
 
@@ -11,6 +15,7 @@ import importlib.util
 import json
 import sys
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -21,6 +26,8 @@ sys.modules[_spec.name] = vm
 assert _spec.loader is not None
 _spec.loader.exec_module(vm)
 
+
+# --- MASS-0862: SDK method-family verification -------------------------------
 
 def _passing(step_id: str) -> vm.StepResult:
     return vm.StepResult(id=step_id, category="sdk_categories", status="implemented_and_passing")
@@ -112,3 +119,90 @@ def test_build_matrix_leaves_untested_family_unverified() -> None:
         assert family_matrix[sdk]["http_and_framework_helpers"]["status"] == (
             "documented_but_not_behaviorally_verified"
         )
+
+
+# --- issue #952: node gating in run_shared_sdk_conformance -------------------
+
+def _collector() -> vm.CollectorRuntime:
+    return vm.CollectorRuntime(
+        base_url="http://127.0.0.1:19999",
+        ingest_token="ingest-token",
+        admin_token="admin-token",
+    )
+
+
+def _recording_run(calls: list[list[str]]):
+    def fake_run(*args, **kwargs) -> vm.StepResult:
+        step_id, category, command = args[0], args[1], list(args[2])
+        calls.append(command)
+        return vm.StepResult(
+            id=step_id,
+            category=category,
+            status="implemented_and_passing",
+            command=command,
+        )
+
+    return fake_run
+
+
+def _available_except(missing: set[str]):
+    return lambda name: name not in missing
+
+
+def test_missing_node_does_not_block_go_python_rust_e2e():
+    """A missing node gates only the JS steps; the other SDK e2e flows still run."""
+    calls: list[list[str]] = []
+    with (
+        patch.object(vm, "_tool_available", side_effect=_available_except({"node"})),
+        patch.object(vm, "_start_collector", return_value=(object(), [], _collector())),
+        patch.object(vm, "_wait_for_http", return_value=True),
+        patch.object(vm, "_run", side_effect=_recording_run(calls)),
+        patch.object(vm, "_stop_process"),
+    ):
+        results = vm.run_shared_sdk_conformance()
+
+    by_id = {result.id: result for result in results}
+
+    # Regression assertion: these must run even though node is unavailable.
+    for step_id in ("sdk.go.collector_e2e", "sdk.py.collector_e2e", "sdk.rs.collector_e2e"):
+        assert step_id in by_id, f"{step_id} was skipped when node is unavailable"
+        assert by_id[step_id].status == "implemented_and_passing"
+
+    # Only the node/JS-dependent steps are gated.
+    assert by_id["sdk.js.collector_e2e"].status == "environment_blocked"
+    assert "node" in by_id["sdk.js.collector_e2e"].details["reason"]
+    assert by_id["sdk.shared_conformance.javascript"].status == "environment_blocked"
+
+    # Non-JS shared conformance checks are preserved.
+    for step_id in (
+        "sdk.shared_conformance.go",
+        "sdk.shared_conformance.python",
+        "sdk.shared_conformance.rust",
+    ):
+        assert by_id[step_id].status == "implemented_and_passing"
+
+    assert not any(command[0] in {"npm", "npm.cmd"} for command in calls)
+    assert any(command[:2] == ["go", "test"] for command in calls)
+    assert any(command[:2] == ["cargo", "test"] for command in calls)
+
+
+def test_node_available_runs_all_e2e_steps():
+    """When node is present the previous behavior is unchanged."""
+    with (
+        patch.object(vm, "_tool_available", side_effect=_available_except(set())),
+        patch.object(vm, "_start_collector", return_value=(object(), [], _collector())),
+        patch.object(vm, "_wait_for_http", return_value=True),
+        patch.object(vm, "_run", side_effect=_recording_run([])),
+        patch.object(vm, "_stop_process"),
+    ):
+        results = vm.run_shared_sdk_conformance()
+
+    by_id = {result.id: result for result in results}
+    for step_id in (
+        "sdk.shared_conformance",
+        "sdk.go.collector_e2e",
+        "sdk.js.collector_e2e",
+        "sdk.py.collector_e2e",
+        "sdk.rs.collector_e2e",
+    ):
+        assert by_id[step_id].status == "implemented_and_passing"
