@@ -18,6 +18,8 @@ type fakeEventStore struct {
 	byIncident    map[string][]*models.Event
 	traceCalls    int
 	incidentCalls int
+	traceErr      error
+	incidentErr   error
 }
 
 func (f *fakeEventStore) Save(_ context.Context, event *models.Event, _ *storage.LifecycleData) error {
@@ -42,11 +44,17 @@ func (f *fakeEventStore) List(context.Context, int, int) ([]*models.Event, error
 
 func (f *fakeEventStore) FindByTraceID(_ context.Context, traceID string) ([]*models.Event, error) {
 	f.traceCalls++
+	if f.traceErr != nil {
+		return nil, f.traceErr
+	}
 	return f.byTraceID[traceID], nil
 }
 
 func (f *fakeEventStore) FindByIncidentID(_ context.Context, incidentID string) ([]*models.Event, error) {
 	f.incidentCalls++
+	if f.incidentErr != nil {
+		return nil, f.incidentErr
+	}
 	return f.byIncident[incidentID], nil
 }
 
@@ -126,8 +134,9 @@ func (f *fakeTopologyStoreForProcessor) GetHistory(context.Context, string) ([]*
 }
 
 type fakeGraphStoreForProcessor struct {
-	nodes []*models.Node
-	edges []*models.Edge
+	nodes      []*models.Node
+	edges      []*models.Edge
+	saveEdgeFn func(*models.Edge) error
 }
 
 func (f *fakeGraphStoreForProcessor) SaveNode(_ context.Context, node *models.Node) error {
@@ -144,6 +153,11 @@ func (f *fakeGraphStoreForProcessor) ListNodes(context.Context, string, int) ([]
 }
 
 func (f *fakeGraphStoreForProcessor) SaveEdge(_ context.Context, edge *models.Edge) error {
+	if f.saveEdgeFn != nil {
+		if err := f.saveEdgeFn(edge); err != nil {
+			return err
+		}
+	}
 	f.edges = append(f.edges, edge)
 	return nil
 }
@@ -259,3 +273,190 @@ func TestProcessBatchLinksLocalTraceWithoutStoreLookup(t *testing.T) {
 		t.Fatalf("expected same-trace edge in batch graph build, got %+v", graphStore.edges)
 	}
 }
+
+func TestProcessEventReturnsAggregatedLinkEdgeSaveErrors(t *testing.T) {
+	errLinkA := errors.New("link A save failed")
+	errLinkB := errors.New("link B save failed")
+	events := &fakeEventStore{}
+	topology := &fakeTopologyStoreForProcessor{}
+	graphStore := &fakeGraphStoreForProcessor{
+		saveEdgeFn: func(edge *models.Edge) error {
+			switch edge.ToNodeID {
+			case "target-a":
+				return errLinkA
+			case "target-b":
+				return errLinkB
+			default:
+				return nil
+			}
+		},
+	}
+	p := NewEventProcessor(events, topology, graphStore)
+
+	event := &models.Event{
+		ID:         "evt-links",
+		Timestamp:  time.Now(),
+		Kind:       models.EventKindLog,
+		Service:    "svc-a",
+		Provenance: "jsonl",
+		Links: []*models.EventLink{
+			{Type: "co_occurred", Target: "target-a"},
+			{Type: "co_occurred", Target: "target-b"},
+		},
+	}
+
+	err := p.ProcessEvent(context.Background(), event)
+	if err == nil {
+		t.Fatal("expected ProcessEvent to fail when link edges cannot be persisted")
+	}
+	if !errors.Is(err, errLinkA) || !errors.Is(err, errLinkB) {
+		t.Fatalf("expected both link edge failures to be reported, got %v", err)
+	}
+}
+
+func TestProcessEventReturnsTraceEdgeSaveError(t *testing.T) {
+	errTraceEdge := errors.New("trace edge save failed")
+	events := &fakeEventStore{
+		byTraceID: map[string][]*models.Event{
+			"trace-1": {{ID: "evt-related", Timestamp: time.Now(), Kind: models.EventKindLog, Service: "svc-a"}},
+		},
+	}
+	graphStore := &fakeGraphStoreForProcessor{
+		saveEdgeFn: func(edge *models.Edge) error {
+			if edge.Type == models.EdgeTypeSameTrace {
+				return errTraceEdge
+			}
+			return nil
+		},
+	}
+	p := NewEventProcessor(events, &fakeTopologyStoreForProcessor{}, graphStore)
+
+	event := &models.Event{
+		ID:         "evt-1",
+		Timestamp:  time.Now(),
+		Kind:       models.EventKindLog,
+		Service:    "svc-a",
+		TraceID:    "trace-1",
+		Provenance: "jsonl",
+	}
+
+	if err := p.ProcessEvent(context.Background(), event); !errors.Is(err, errTraceEdge) {
+		t.Fatalf("expected trace edge save failure to be returned, got %v", err)
+	}
+}
+
+func TestProcessEventReturnsIncidentEdgeSaveError(t *testing.T) {
+	errIncidentEdge := errors.New("incident edge save failed")
+	events := &fakeEventStore{
+		byIncident: map[string][]*models.Event{
+			"inc-1": {{ID: "evt-related", Timestamp: time.Now(), Kind: models.EventKindLog, Service: "svc-a"}},
+		},
+	}
+	graphStore := &fakeGraphStoreForProcessor{
+		saveEdgeFn: func(edge *models.Edge) error {
+			if edge.Type == models.EdgeTypeSameIncident {
+				return errIncidentEdge
+			}
+			return nil
+		},
+	}
+	p := NewEventProcessor(events, &fakeTopologyStoreForProcessor{}, graphStore)
+
+	event := &models.Event{
+		ID:         "evt-1",
+		Timestamp:  time.Now(),
+		Kind:       models.EventKindLog,
+		Service:    "svc-a",
+		IncidentID: "inc-1",
+		Provenance: "jsonl",
+	}
+
+	if err := p.ProcessEvent(context.Background(), event); !errors.Is(err, errIncidentEdge) {
+		t.Fatalf("expected incident edge save failure to be returned, got %v", err)
+	}
+}
+
+func TestProcessEventReturnsTraceLookupError(t *testing.T) {
+	errLookup := errors.New("trace store unavailable")
+	events := &fakeEventStore{traceErr: errLookup}
+	p := NewEventProcessor(events, &fakeTopologyStoreForProcessor{}, &fakeGraphStoreForProcessor{})
+
+	event := &models.Event{
+		ID:         "evt-1",
+		Timestamp:  time.Now(),
+		Kind:       models.EventKindLog,
+		Service:    "svc-a",
+		TraceID:    "trace-1",
+		Provenance: "jsonl",
+	}
+
+	if err := p.ProcessEvent(context.Background(), event); !errors.Is(err, errLookup) {
+		t.Fatalf("expected trace lookup failure to be returned, got %v", err)
+	}
+}
+
+func TestProcessEventReturnsIncidentLookupError(t *testing.T) {
+	errLookup := errors.New("incident store unavailable")
+	events := &fakeEventStore{incidentErr: errLookup}
+	p := NewEventProcessor(events, &fakeTopologyStoreForProcessor{}, &fakeGraphStoreForProcessor{})
+
+	event := &models.Event{
+		ID:         "evt-1",
+		Timestamp:  time.Now(),
+		Kind:       models.EventKindLog,
+		Service:    "svc-a",
+		IncidentID: "inc-1",
+		Provenance: "jsonl",
+	}
+
+	if err := p.ProcessEvent(context.Background(), event); !errors.Is(err, errLookup) {
+		t.Fatalf("expected incident lookup failure to be returned, got %v", err)
+	}
+}
+
+func TestProcessBatchReturnsLinkEdgeSaveError(t *testing.T) {
+	errLink := errors.New("batch link edge save failed")
+	graphStore := &fakeGraphStoreForProcessor{
+		saveEdgeFn: func(edge *models.Edge) error {
+			if edge.Type == models.EdgeType(linkType) && edge.ToNodeID == "target-x" {
+				return errLink
+			}
+			return nil
+		},
+	}
+	p := NewEventProcessor(&fakeEventStore{}, &fakeTopologyStoreForProcessor{}, graphStore)
+
+	batch := []*models.Event{{
+		ID:         "evt-batch-link",
+		Timestamp:  time.Now(),
+		Kind:       models.EventKindLog,
+		Service:    "svc-a",
+		Provenance: "jsonl",
+		Links:      []*models.EventLink{{Type: linkType, Target: "target-x"}},
+	}}
+
+	if err := p.ProcessBatch(context.Background(), batch); !errors.Is(err, errLink) {
+		t.Fatalf("expected batch link edge save failure to be returned, got %v", err)
+	}
+}
+
+func TestProcessBatchReturnsIncidentLookupError(t *testing.T) {
+	errLookup := errors.New("batch incident store unavailable")
+	events := &fakeEventStore{incidentErr: errLookup}
+	p := NewEventProcessor(events, &fakeTopologyStoreForProcessor{}, &fakeGraphStoreForProcessor{})
+
+	batch := []*models.Event{{
+		ID:         "evt-batch-incident",
+		Timestamp:  time.Now(),
+		Kind:       models.EventKindLog,
+		Service:    "svc-a",
+		IncidentID: "inc-1",
+		Provenance: "jsonl",
+	}}
+
+	if err := p.ProcessBatch(context.Background(), batch); !errors.Is(err, errLookup) {
+		t.Fatalf("expected batch incident lookup failure to be returned, got %v", err)
+	}
+}
+
+const linkType = "co_occurred"
