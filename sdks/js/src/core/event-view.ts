@@ -81,7 +81,7 @@ export class EventView {
     this.timers = Object.freeze([...(event.timers || [])]);
     this.error = event.error ? { ...event.error } : null;
     this.state = event.state;
-    this.sensitiveKeys = event.sensitiveKeys;
-    this.hashKeys = event.hashKeys;
+    this.sensitiveKeys = new Set(event.sensitiveKeys);
+    this.hashKeys = new Set(event.hashKeys);
   }
 }
