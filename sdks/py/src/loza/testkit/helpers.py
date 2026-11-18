@@ -121,12 +121,24 @@ def clear_events() -> None:
     _captured_events.clear()
 
 
-def golden_test(path: str, event: dict[str, Any]) -> bool:
+def golden_test(path: str, event: dict[str, Any], update: bool = False) -> bool:
+    """Compare a snapshotted ``event`` against the golden file at ``path``.
+
+    A missing golden file is a failure: it must not be silently created and
+    reported as a successful comparison, otherwise a mistyped path, a deleted
+    fixture, or a first run can pass without comparing anything. Pass
+    ``update=True`` to explicitly (re)create the golden file from ``event``.
+    """
     snapshot = json.dumps(snapshot_event(event), sort_keys=True, separators=(",", ":"))
     target = Path(path)
-    if not target.exists():
+    if update:
+        target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(snapshot + "\n", encoding="utf-8")
         return True
+    if not target.exists():
+        raise FileNotFoundError(
+            f"golden file {path!s} does not exist; call golden_test(..., update=True) to create it explicitly"
+        )
     return json.dumps(json.loads(target.read_text(encoding="utf-8")), sort_keys=True, separators=(",", ":")) == snapshot
 
 
