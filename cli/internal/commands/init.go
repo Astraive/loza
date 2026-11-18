@@ -22,6 +22,9 @@ func InitCommand(cfg config.Config, args []string) error {
 	if fs.NArg() > 0 && fs.Arg(0) != "" {
 		target = fs.Arg(0)
 	}
+	if err := config.ValidateValidationMode(cfg.ValidationMode); err != nil {
+		return err
+	}
 	if err := config.Generate(target, cfg); err != nil {
 		return err
 	}
