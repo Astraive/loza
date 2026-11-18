@@ -548,6 +548,49 @@ func TestSpoolLimitRejectsBeforeWriting(t *testing.T) {
 	}
 }
 
+func TestEffectiveSpoolHealthHonorsHybridMode(t *testing.T) {
+	tests := []struct {
+		name             string
+		mode             string
+		wantWhenUnhealthy bool
+	}{
+		{name: "spool", mode: "spool", wantWhenUnhealthy: false},
+		{name: "hybrid", mode: "hybrid", wantWhenUnhealthy: false},
+		{name: "queue", mode: "queue", wantWhenUnhealthy: true},
+		{name: "direct", mode: "direct", wantWhenUnhealthy: true},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			state := &collectorState{cfg: testCollectorConfig()}
+			state.cfg.reliabilityMode = tc.mode
+			state.ready.Store(true)
+			state.sinkHealthy.Store(true)
+			state.diskHealthy.Store(true)
+
+			// Simulate an over-capacity spool: unhealthy flag with pending bytes.
+			state.spoolHealthy.Store(false)
+			state.metrics.spoolBytes.Store(128)
+
+			if got := state.effectiveSpoolHealthy(); got != tc.wantWhenUnhealthy {
+				t.Fatalf("effectiveSpoolHealthy() with unhealthy spool = %v, want %v", got, tc.wantWhenUnhealthy)
+			}
+			if got := state.isReady(); got != tc.wantWhenUnhealthy {
+				t.Fatalf("isReady() with unhealthy spool = %v, want %v", got, tc.wantWhenUnhealthy)
+			}
+
+			// A healthy spool must restore readiness in every mode.
+			state.spoolHealthy.Store(true)
+			if !state.effectiveSpoolHealthy() {
+				t.Fatal("expected healthy spool to be reported healthy")
+			}
+			if !state.isReady() {
+				t.Fatal("expected ready collector with healthy spool")
+			}
+		})
+	}
+}
+
 func TestSpoolQueueBytesLimitDropsToDLQ(t *testing.T) {
 	cfg := testCollectorConfig()
 	cfg.reliabilityMode = "spool"

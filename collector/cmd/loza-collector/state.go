@@ -21,7 +21,7 @@ func (s *collectorState) effectiveSinkHealthy() bool {
 }
 
 func (s *collectorState) effectiveSpoolHealthy() bool {
-	if s.cfg.reliabilityMode != "spool" {
+	if s.cfg.reliabilityMode != "spool" && s.cfg.reliabilityMode != "hybrid" {
 		return true
 	}
 	if s.spoolHealthy.Load() {
