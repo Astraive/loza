@@ -372,22 +372,22 @@ func (l *Logger) Checkpoint(ctx context.Context, name string, attrs ...Attr) err
 		return nil
 	}
 
+	atMS := cfg.Clock.Now().Sub(ev.StartedAt).Milliseconds()
+
+	// Check the limit and append under one locked critical section. Reading the
+	// count under the lock but appending afterwards lets concurrent calls all
+	// observe count < MaxCheckpoints and push the event past the limit (TOCTOU).
 	ev.MuLock()
-	count := len(ev.Checkpoints)
 	if err := ev.ensureMutableLocked(); err != nil {
 		ev.MuUnlock()
 		return err
 	}
-	ev.MuUnlock()
-
-	if count >= cfg.Checkpoints.MaxCheckpoints {
+	if len(ev.Checkpoints) >= cfg.Checkpoints.MaxCheckpoints {
+		ev.MuUnlock()
 		return nil
 	}
-
-	atMS := cfg.Clock.Now().Sub(ev.StartedAt).Milliseconds()
-	if err := ev.AddCheckpoint(EventCheckpoint{Name: name, AtMS: atMS, Attrs: attrs}); err != nil {
-		return err
-	}
+	ev.Checkpoints = append(ev.Checkpoints, EventCheckpoint{Name: name, AtMS: atMS, Attrs: attrs})
+	ev.MuUnlock()
 	if !cfg.Checkpoints.EmitImmediately {
 		return nil
 	}
