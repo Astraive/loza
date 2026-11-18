@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 )
 
@@ -77,3 +78,77 @@ func TestRunEventPanicStackRespectsIncludeSource(t *testing.T) {
 	}
 }
 
+// classifiedPanicError is an error that also carries classification metadata.
+// When passed to panic, a recovery wrapper that does not unwrap will hide all
+// of this from errors.Is/errors.As and from DefaultErrorExtractor.
+type classifiedPanicError struct {
+	code      string
+	retriable bool
+}
+
+func (e *classifiedPanicError) Error() string   { return "classified panic: " + e.code }
+func (e *classifiedPanicError) Code() string    { return e.code }
+func (e *classifiedPanicError) Retriable() bool { return e.retriable }
+
+func TestRunEventPanicPreservesErrorIdentity(t *testing.T) {
+	sink := &captureSink{}
+	cfg := Test()
+	cfg.Sinks = []Sink{sink}
+	cfg.PanicRecovery = true
+
+	l, err := New(cfg)
+	if err != nil {
+		t.Fatalf("new logger: %v", err)
+	}
+
+	prev := Default()
+	SetDefault(l)
+	defer SetDefault(prev)
+
+	sentinel := &classifiedPanicError{code: "E_PANIC", retriable: true}
+	err = RunEvent(context.Background(), Params{Event: "panic.identity"}, func(context.Context) error {
+		panic(sentinel)
+	})
+	if err == nil {
+		t.Fatalf("expected panic recovery error")
+	}
+
+	if !errors.Is(err, sentinel) {
+		t.Fatalf("errors.Is did not reach the original panicked error")
+	}
+
+	var coded CodedError
+	if !errors.As(err, &coded) || coded.Code() != sentinel.code {
+		t.Fatalf("error code did not propagate: got=%v want=%q", coded, sentinel.code)
+	}
+	var retriable RetriableError
+	if !errors.As(err, &retriable) || !retriable.Retriable() {
+		t.Fatalf("retriability did not propagate")
+	}
+
+	info := DefaultErrorExtractor(err)
+	if info.Code != sentinel.code {
+		t.Fatalf("extracted code: got=%q want=%q", info.Code, sentinel.code)
+	}
+	if !info.Retriable {
+		t.Fatalf("extracted retriable: got=false want=true")
+	}
+	if info.Cause == "" {
+		t.Fatalf("expected extracted cause to preserve the original error message")
+	}
+}
+
+func TestPanicRunErrorUnwrapNonError(t *testing.T) {
+	e := &panicRunError{value: "boom"}
+	if got := errors.Unwrap(e); got != nil {
+		t.Fatalf("Unwrap of a non-error panic value: got=%v want=nil", got)
+	}
+	if got := DefaultErrorExtractor(e).Code; got != "" {
+		t.Fatalf("code from non-error panic value: got=%q want empty", got)
+	}
+
+	var nilErr *panicRunError
+	if got := errors.Unwrap(nilErr); got != nil {
+		t.Fatalf("Unwrap of nil receiver: got=%v want=nil", got)
+	}
+}

@@ -174,3 +174,15 @@ func (e *panicRunError) StackTrace() string {
 	}
 	return e.stack
 }
+
+// Unwrap returns the original panic value when it is an error. This preserves
+// the identity, code, and retriability of errors that were passed to panic,
+// allowing errors.Is/errors.As (and error extractors that use them) to see
+// through the recovery wrapper.
+func (e *panicRunError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	wrapped, _ := e.value.(error)
+	return wrapped
+}
