@@ -60,8 +60,10 @@ fn normalize_timestamp(ts: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use super::normalize_graph_nodes;
     use super::normalize_timestamp;
     use crate::cortex::schema::{IncidentContext, Remediation, RemediationFeedback};
+    use serde_json::{json, Value};
     use time::format_description::well_known::Rfc3339;
 
     fn is_rfc3339(value: &str) -> bool {
@@ -124,12 +126,6 @@ mod tests {
             feedback.timestamp
         );
     }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::normalize_graph_nodes;
-    use serde_json::{json, Value};
 
     #[test]
     fn normalizes_graph_node_ids_to_lowercase_trimmed_strings() {
@@ -146,10 +142,7 @@ mod tests {
 
     #[test]
     fn leaves_non_string_and_missing_ids_untouched() {
-        let mut nodes: Vec<Value> = vec![
-            json!({"id": 42}),
-            json!({"name": "no-id"}),
-        ];
+        let mut nodes: Vec<Value> = vec![json!({"id": 42}), json!({"name": "no-id"})];
 
         normalize_graph_nodes(&mut nodes);
 
