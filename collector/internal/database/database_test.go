@@ -5,8 +5,12 @@ import (
 	"database/sql"
 	"database/sql/driver"
 	"errors"
+	"fmt"
 	"io"
+	"reflect"
 	"testing"
+
+	chdriver "github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 )
 
 // countRows is a minimal database/sql driver that serves count rows with no
@@ -116,4 +120,165 @@ func TestCollectRowsHonorsLimitWithoutError(t *testing.T) {
 	if !closed {
 		t.Fatal("collectRows did not close the row source")
 	}
+}
+
+type stubColumnType struct {
+	name     string
+	scanType reflect.Type
+	nullable bool
+}
+
+func (c stubColumnType) Name() string             { return c.name }
+func (c stubColumnType) Nullable() bool           { return c.nullable }
+func (c stubColumnType) ScanType() reflect.Type   { return c.scanType }
+func (c stubColumnType) DatabaseTypeName() string { return c.name }
+
+// stubClickHouseRows mirrors the parts of clickhouse-go that matter here:
+// Nullable(T) columns report *T as their ScanType and the driver therefore
+// writes through a **T destination (nil for SQL NULL).
+type stubClickHouseRows struct {
+	columns []string
+	types   []chdriver.ColumnType
+	data    [][]any
+	pos     int
+	err     error
+	closed  bool
+}
+
+func (r *stubClickHouseRows) Columns() []string                  { return r.columns }
+func (r *stubClickHouseRows) ColumnTypes() []chdriver.ColumnType { return r.types }
+func (r *stubClickHouseRows) Err() error                         { return r.err }
+func (r *stubClickHouseRows) Close() error {
+	r.closed = true
+	return nil
+}
+
+func (r *stubClickHouseRows) Next() bool {
+	if r.pos+1 >= len(r.data) {
+		return false
+	}
+	r.pos++
+	return true
+}
+
+func (r *stubClickHouseRows) Scan(dest ...any) error {
+	row := r.data[r.pos]
+	if len(row) != len(dest) {
+		return fmt.Errorf("Scan: expected %d destinations, got %d", len(row), len(dest))
+	}
+	for i, value := range row {
+		switch d := dest[i].(type) {
+		case *string:
+			s, ok := value.(string)
+			if !ok {
+				return fmt.Errorf("Scan column %d: expected string, got %T", i, value)
+			}
+			*d = s
+		case **string:
+			if value == nil {
+				*d = nil
+				continue
+			}
+			s, ok := value.(string)
+			if !ok {
+				return fmt.Errorf("Scan column %d: expected string, got %T", i, value)
+			}
+			*d = new(string)
+			**d = s
+		case **int64:
+			if value == nil {
+				*d = nil
+				continue
+			}
+			n, ok := value.(int64)
+			if !ok {
+				return fmt.Errorf("Scan column %d: expected int64, got %T", i, value)
+			}
+			*d = new(int64)
+			**d = n
+		case *[]byte:
+			b, ok := value.([]byte)
+			if !ok {
+				return fmt.Errorf("Scan column %d: expected []byte, got %T", i, value)
+			}
+			*d = b
+		default:
+			return fmt.Errorf("Scan column %d: unexpected destination %T", i, dest[i])
+		}
+	}
+	return nil
+}
+
+func assertResultRows(t *testing.T, got, want [][]any) {
+	t.Helper()
+	if len(got) != len(want) {
+		t.Fatalf("row count = %d, want %d: %#v", len(got), len(want), got)
+	}
+	for r := range want {
+		if len(got[r]) != len(want[r]) {
+			t.Fatalf("row %d has %d values, want %d: %#v", r, len(got[r]), len(want[r]), got[r])
+		}
+		for c := range want[r] {
+			g, w := got[r][c], want[r][c]
+			if reflect.TypeOf(g) != reflect.TypeOf(w) || !reflect.DeepEqual(g, w) {
+				t.Errorf("row %d column %d: got %T(%#v), want %T(%#v)", r, c, g, g, w, w)
+			}
+		}
+	}
+}
+
+// Result.Rows must have the same concrete value shape for ClickHouse as for
+// the SQL/Postgres paths: no driver pointer wrappers and no raw []byte text.
+func TestQueryClickHouseRowsNormalizesValues(t *testing.T) {
+	rows := &stubClickHouseRows{
+		columns: []string{"plain", "nullable_text", "nullable_num", "null_text", "raw"},
+		types: []chdriver.ColumnType{
+			stubColumnType{name: "plain", scanType: reflect.TypeOf("")},
+			stubColumnType{name: "nullable_text", scanType: reflect.TypeOf((*string)(nil)), nullable: true},
+			stubColumnType{name: "nullable_num", scanType: reflect.TypeOf((*int64)(nil)), nullable: true},
+			stubColumnType{name: "null_text", scanType: reflect.TypeOf((*string)(nil)), nullable: true},
+			stubColumnType{name: "raw", scanType: reflect.TypeOf([]byte{})},
+		},
+		data: [][]any{
+			{"plain-value", "text-value", int64(42), nil, []byte("bytes-value")},
+			{"second", nil, int64(7), nil, []byte("more-bytes")},
+		},
+		pos: -1,
+	}
+
+	result, err := QueryClickHouseRows(rows, 0)
+	if err != nil {
+		t.Fatalf("QueryClickHouseRows: %v", err)
+	}
+	assertResultRows(t, result.Rows, [][]any{
+		{"plain-value", "text-value", int64(42), nil, "bytes-value"},
+		{"second", nil, int64(7), nil, "more-bytes"},
+	})
+	if !reflect.DeepEqual(result.Columns, rows.columns) {
+		t.Errorf("columns = %#v, want %#v", result.Columns, rows.columns)
+	}
+	if !rows.closed {
+		t.Error("rows were not closed")
+	}
+}
+
+func TestCollectRowsNormalizesValues(t *testing.T) {
+	data := [][]any{{[]byte("bytes-value"), "text-value"}}
+	pos := -1
+	result, err := collectRows(
+		[]string{"raw", "text"},
+		func() bool { pos++; return pos < len(data) },
+		func(dest ...any) error {
+			*(dest[0].(*any)) = data[pos][0]
+			*(dest[1].(*any)) = data[pos][1]
+			return nil
+		},
+		func() error { return nil },
+		func() {},
+		0,
+	)
+	if err != nil {
+		t.Fatalf("collectRows: %v", err)
+	}
+	assertResultRows(t, result.Rows, [][]any{{"bytes-value", "text-value"}})
 }

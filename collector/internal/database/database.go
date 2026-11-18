@@ -44,6 +44,15 @@ type Connection interface {
 	Close(context.Context) error
 }
 
+// normalizeResultValue keeps Result.Rows backend-neutral. Some drivers expose
+// text as raw []byte while others return a string; callers rely on one shape.
+func normalizeResultValue(value any) any {
+	if bytes, ok := value.([]byte); ok {
+		return string(bytes)
+	}
+	return value
+}
+
 func collectRows(columns []string, next func() bool, scan func(...any) error, rowErr func() error, close func(), limit int) (Result, error) {
 	defer close()
 	result := Result{Columns: append([]string(nil), columns...), Rows: make([][]any, 0)}
@@ -57,9 +66,7 @@ func collectRows(columns []string, next func() bool, scan func(...any) error, ro
 			return Result{}, err
 		}
 		for i, value := range values {
-			if bytes, ok := value.([]byte); ok {
-				values[i] = string(bytes)
-			}
+			values[i] = normalizeResultValue(value)
 		}
 		result.Rows = append(result.Rows, values)
 		if limit > 0 && len(result.Rows) >= limit {
@@ -118,10 +125,21 @@ func QueryClickHouseRows(rows clickHouseRows, limit int) (Result, error) {
 		}
 		values := make([]any, len(pointers))
 		for i, pointer := range pointers {
-			value := reflect.ValueOf(pointer)
-			if value.IsValid() && value.Kind() == reflect.Ptr && !value.IsNil() {
-				values[i] = value.Elem().Interface()
+			scanned := reflect.ValueOf(pointer)
+			if !scanned.IsValid() || scanned.Kind() != reflect.Ptr || scanned.IsNil() {
+				continue
 			}
+			concrete := scanned.Elem()
+			// Nullable(T) columns report *T as their ScanType, so reflect.New
+			// allocated a **T and the driver wrote the value one level deeper.
+			// Unwrap it to store a concrete T like the SQL/Postgres paths do.
+			if concrete.Kind() == reflect.Ptr {
+				if concrete.IsNil() {
+					continue // SQL NULL stays nil, matching collectRows.
+				}
+				concrete = concrete.Elem()
+			}
+			values[i] = normalizeResultValue(concrete.Interface())
 		}
 		result.Rows = append(result.Rows, values)
 		if limit > 0 && len(result.Rows) >= limit {
