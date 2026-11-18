@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/hex"
@@ -13,6 +14,15 @@ import (
 	"github.com/astraive/loza/collector/internal/auth"
 	speccontract "github.com/astraive/loza/spec/generated/go/contract"
 )
+
+// adminKeyStore is the subset of key-store operations needed by the admin
+// handlers. Keeping it as an interface lets tests exercise store failure paths.
+// It satisfies auth.KeyStore because FindByKeyID is part of its method set.
+type adminKeyStore interface {
+	FindByKeyID(ctx context.Context, keyID string) (*auth.KeyRecord, error)
+	CreateKey(rec *auth.KeyRecord) error
+	RevokeKey(keyID string) error
+}
 
 func (s *collectorState) handleValidate(w http.ResponseWriter, r *http.Request) {
 	if !s.isAuthorized(r) {
@@ -218,8 +228,20 @@ func (s *collectorState) handleKeyRotate(w http.ResponseWriter, r *http.Request)
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "key_store_error"})
 		return
 	}
-	// Revoke old key AFTER new key is stored
-	_ = s.keyStore.RevokeKey(oldKeyID)
+	// Revoke old key AFTER new key is stored. A failed revocation means the old
+	// (potentially compromised) key is still active, so this is not a successful
+	// rotation and must not be reported as one.
+	if err := s.keyStore.RevokeKey(oldKeyID); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{
+			"error":          "old_key_revocation_failed",
+			"message":        "new key was created but the old key could not be revoked and is still active",
+			"rotated":        false,
+			"old_key_id":     oldKeyID,
+			"new_key_id":     newKeyID,
+			"old_key_active": true,
+		})
+		return
+	}
 
 	// Invalidate cache for old key
 	if s.keyCache != nil {
