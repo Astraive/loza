@@ -128,74 +128,61 @@ func (a *Analyzer) synthesizeCoOccurrence(ctx context.Context, events []*models.
 	window := a.cfg.CoOccurrenceWindow
 	var persistenceErrors []error
 
-	// Group events by time bucket (1-minute granularity)
-	type bucket struct {
-		events  []*models.Event
-		start   time.Time
-		anomaly bool
-	}
-
-	buckets := make(map[int64]*bucket)
+	// Collect all anomalous events. A co-occurrence is decided by the actual
+	// timestamps of the pair, not by a fixed 1-minute bucket: two signals that
+	// fall within the sliding window must be correlated even if they sit on
+	// opposite sides of a minute (or any other arbitrary bucket) boundary.
+	var anomalies []*models.Event
 	for _, event := range events {
-		key := event.Timestamp.Unix() / 60
-		b, exists := buckets[key]
-		if !exists {
-			b = &bucket{start: event.Timestamp.Truncate(time.Minute)}
-			buckets[key] = b
-		}
-		b.events = append(b.events, event)
 		if isAnomaly(event) {
-			b.anomaly = true
+			anomalies = append(anomalies, event)
 		}
 	}
 
-	// Find co-occurrences across different services within the window
+	// For each pair of anomalous events from different services, apply a real
+	// overlap test against the configured window.
 	seen := make(map[string]bool)
-	for _, b := range buckets {
-		if !b.anomaly {
-			continue
-		}
-
-		// Collect unique services with anomalies in this bucket
-		anomalyServices := make(map[string]*models.Event)
-		for _, e := range b.events {
-			if isAnomaly(e) {
-				anomalyServices[e.Service] = e
+	for i, e1 := range anomalies {
+		for _, e2 := range anomalies[i+1:] {
+			if e1.Service == e2.Service {
+				continue
 			}
-		}
 
-		// Create co_occurred edges between different services
-		for svc1, e1 := range anomalyServices {
-			for svc2, e2 := range anomalyServices {
-				if svc1 >= svc2 {
-					continue
-				}
+			timeDelta := math.Abs(e1.Timestamp.Sub(e2.Timestamp).Seconds())
+			if timeDelta > window.Seconds() {
+				continue
+			}
 
-				edgeID := fmt.Sprintf("co_%s_%s_%d", e1.ID, e2.ID, b.start.Unix())
-				if seen[edgeID] {
-					continue
-				}
-				seen[edgeID] = true
+			// Order endpoints by ID so the edge ID is deterministic regardless
+			// of the order in which events were supplied.
+			from, to := e1, e2
+			if from.ID > to.ID {
+				from, to = to, from
+			}
 
-				timeDelta := math.Abs(float64(e1.Timestamp.Sub(e2.Timestamp).Seconds()))
-				weight := 1.0 / (1.0 + timeDelta/window.Seconds())
+			edgeID := fmt.Sprintf("co_%s_%s", from.ID, to.ID)
+			if seen[edgeID] {
+				continue
+			}
+			seen[edgeID] = true
 
-				if err := a.saveEdge(ctx, &models.Edge{
-					ID:         edgeID,
-					FromNodeID: e1.ID,
-					ToNodeID:   e2.ID,
-					Type:       models.EdgeTypeCoOccurred,
-					Weight:     weight,
-					Attributes: map[string]interface{}{
-						"time_delta_seconds": timeDelta,
-						"window_seconds":     window.Seconds(),
-					},
-					CreatedAt: time.Now(),
-				}); err != nil {
-					persistenceErrors = append(persistenceErrors, err)
-					if ctx.Err() != nil {
-						return errors.Join(persistenceErrors...)
-					}
+			weight := 1.0 / (1.0 + timeDelta/window.Seconds())
+
+			if err := a.saveEdge(ctx, &models.Edge{
+				ID:         edgeID,
+				FromNodeID: from.ID,
+				ToNodeID:   to.ID,
+				Type:       models.EdgeTypeCoOccurred,
+				Weight:     weight,
+				Attributes: map[string]interface{}{
+					"time_delta_seconds": timeDelta,
+					"window_seconds":     window.Seconds(),
+				},
+				CreatedAt: time.Now(),
+			}); err != nil {
+				persistenceErrors = append(persistenceErrors, err)
+				if ctx.Err() != nil {
+					return errors.Join(persistenceErrors...)
 				}
 			}
 		}
