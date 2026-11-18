@@ -1,23 +1,12 @@
 """Redaction key definitions - lightweight SDK stub.
 
-Full redaction rules live in the loza-collector package.
+Full redaction rules live in the loza-collector package. The canonical
+safety-net key set is defined in :mod:`loza.core.redactor` and re-exported
+here so there is a single source of truth.
 """
 
 from __future__ import annotations
 
-DEFAULT_KEYS = {
-    "password",
-    "passwd",
-    "pwd",
-    "secret",
-    "token",
-    "access_token",
-    "refresh_token",
-    "api_key",
-    "apikey",
-    "auth",
-    "authorization",
-    "credential",
-    "private_key",
-    "client_secret",
-}
+from loza.core.redactor import DEFAULT_KEYS
+
+__all__ = ["DEFAULT_KEYS"]
