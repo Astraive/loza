@@ -82,9 +82,16 @@ fn walk_allowlist(value: &mut Value, keys: &[&str]) {
 }
 
 fn redact_patterns(value: &mut Value, patterns: &[String]) {
+    // An invalid redaction pattern must never be silently dropped: doing so
+    // would emit data the caller believed was being scrubbed. Fail loudly with
+    // a message that identifies the offending pattern and the reason it is
+    // invalid, so misconfigured PII/redaction rules are caught immediately.
     let compiled: Vec<regex::Regex> = patterns
         .iter()
-        .filter_map(|p| regex::Regex::new(p).ok())
+        .map(|p| {
+            regex::Regex::new(p)
+                .unwrap_or_else(|err| panic!("invalid redaction pattern {p:?}: {err}"))
+        })
         .collect();
     walk_patterns(value, &compiled);
 }
@@ -195,5 +202,43 @@ mod tests {
 
         assert_eq!(redacted["message"], "[REDACTED]");
         assert_eq!(redacted["token"], "[REDACTED]");
+    }
+
+    #[test]
+    fn valid_patterns_still_redact_matching_strings() {
+        let value = json!({
+            "message": "contact me at secret@example.com",
+            "nested": { "detail": "another test@example.org" }
+        });
+        let redactor = RedactorConfig::Patterns(vec![r"[\w.]+@[\w.]+".to_string()]);
+
+        let redacted = redact(value, &redactor);
+
+        assert_eq!(redacted["message"], "[REDACTED]");
+        assert_eq!(redacted["nested"]["detail"], "[REDACTED]");
+    }
+
+    #[test]
+    #[should_panic(expected = "invalid redaction pattern")]
+    fn invalid_pattern_is_not_silently_dropped() {
+        // Previously the invalid pattern was discarded via `.filter_map(...).ok()`
+        // and the value was returned untouched, leaking data the caller expected
+        // to be redacted. It must now fail loudly instead.
+        let value = json!({ "message": "sensitive data" });
+        let redactor = RedactorConfig::Patterns(vec!["[unclosed".to_string()]);
+
+        let _ = redact(value, &redactor);
+    }
+
+    #[test]
+    #[should_panic(expected = "invalid redaction pattern")]
+    fn invalid_pattern_is_not_silently_dropped_within_compose() {
+        let value = json!({ "message": "sensitive data" });
+        let redactor = RedactorConfig::Compose(vec![
+            RedactorConfig::Default,
+            RedactorConfig::Patterns(vec!["(".to_string()]),
+        ]);
+
+        let _ = redact(value, &redactor);
     }
 }
