@@ -1,5 +1,7 @@
 use crate::{config::SchemaConfig, EventContext};
 use serde_json::{Map, Value};
+use time::format_description::well_known::Rfc3339;
+use time::OffsetDateTime;
 
 pub trait Schema {
     fn encode(&self, event: &EventContext) -> Value;
@@ -211,9 +213,37 @@ fn flatten_into(prefix: &str, value: &Value, out: &mut Map<String, Value>) {
     }
 }
 
+/// Convert a LOZA RFC3339 timestamp into the value expected by OTLP's
+/// `time_unix_nano` field: nanoseconds since the Unix epoch encoded as a
+/// decimal string (OTLP JSON encodes 64-bit integer fields as strings).
+fn otel_timestamp(timestamp: &Value) -> Value {
+    match timestamp {
+        Value::String(raw) => {
+            let raw = raw.trim();
+            // Already nanoseconds since the epoch; keep re-encoding stable.
+            if raw.parse::<i128>().is_ok() {
+                return Value::String(raw.to_string());
+            }
+            OffsetDateTime::parse(raw, &Rfc3339)
+                .map(|parsed| Value::String(parsed.unix_timestamp_nanos().max(0).to_string()))
+                .unwrap_or(Value::Null)
+        }
+        Value::Number(number) => {
+            if let Some(value) = number.as_i64() {
+                Value::String(value.to_string())
+            } else if let Some(value) = number.as_u64() {
+                Value::String(value.to_string())
+            } else {
+                Value::Null
+            }
+        }
+        _ => Value::Null,
+    }
+}
+
 fn otel_value(value: Value) -> Value {
     let mut attrs = value.as_object().cloned().unwrap_or_default();
-    let timestamp = attrs.remove("timestamp").unwrap_or(Value::Null);
+    let timestamp = otel_timestamp(&attrs.remove("timestamp").unwrap_or(Value::Null));
     let level = attrs
         .remove("level")
         .unwrap_or(Value::String("info".to_string()));
