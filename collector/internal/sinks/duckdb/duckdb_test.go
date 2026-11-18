@@ -357,6 +357,44 @@ func TestFlushHonorsCanceledContextWhileWaitingForSerialization(t *testing.T) {
 	}
 }
 
+func TestWriteEventRestoresBatchWhenAcquireFlushFails(t *testing.T) {
+	db := openSQLiteDB(t)
+	mustExec(t, db, `CREATE TABLE events (raw TEXT)`)
+
+	rawSink, err := New(Config{DB: db, Table: "events", BatchSize: 2})
+	if err != nil {
+		t.Fatalf("new sink failed: %v", err)
+	}
+	s := rawSink.(*sink)
+
+	// Occupy the flush lock so acquireFlush cannot succeed while ctx is canceled.
+	s.flushMu <- struct{}{}
+
+	// First event only fills the buffer; the second detaches a full batch.
+	if err := s.WriteEvent(context.Background(), []byte(`{"event_id":"a"}`), nil); err != nil {
+		t.Fatalf("write a failed: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := s.WriteEvent(ctx, []byte(`{"event_id":"b"}`), nil); !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context cancellation from acquireFlush, got: %v", err)
+	}
+
+	s.mu.Lock()
+	buffered := len(s.buffer)
+	s.mu.Unlock()
+	if buffered != 2 {
+		t.Fatalf("expected detached batch to be restored, want 2 buffered events, got %d", buffered)
+	}
+
+	// Release the lock and confirm the restored batch is written, not dropped.
+	<-s.flushMu
+	if err := s.Flush(context.Background()); err != nil {
+		t.Fatalf("flush failed: %v", err)
+	}
+	assertRowCount(t, db, 2)
+}
+
 func TestWriteEventBatchingFlushInterval(t *testing.T) {
 	db := openSQLiteDB(t)
 	mustExec(t, db, `CREATE TABLE events (raw TEXT)`)
