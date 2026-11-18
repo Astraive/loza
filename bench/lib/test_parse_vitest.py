@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Regression tests for the vitest bench output parser."""
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -15,8 +16,14 @@ OTHER_PASS_ROW = ('   · encode cycle  987,654.32  0.0002  0.1999  0.0015  '
                   '0.0016  0.0017  0.0018  0.0019  ±0.30%  1234567')
 FAIL_ROW = '   × broken cycle'
 
+# A representative vitest/tinybench result row. The marker is U+00B7 (MIDDLE DOT),
+# which vitest emits as the two UTF-8 bytes C2 B7.
+UTF8_ROW = '\u00b7 emit cycle    1234567    100    200    0.83    100\n'
+
 
 class ParseVitestTests(unittest.TestCase):
+    """Regression tests added on main (dedup, failure handling, latin-1 fallback)."""
+
     def parse(self, text, encoding='utf-8'):
         with tempfile.TemporaryDirectory() as tmp:
             src = Path(tmp) / 'vitest.txt'
@@ -55,6 +62,45 @@ class ParseVitestTests(unittest.TestCase):
     def test_legacy_latin1_capture_is_still_parsed(self):
         data = self.parse('\n'.join([PASS_ROW, FAIL_ROW]), encoding='latin-1')
         self.assertEqual(data['summary'], {'total': 2, 'passed': 1, 'failed': 1})
+
+
+class ParseVitestTest(unittest.TestCase):
+    """Regression tests from PR #1030 — UTF-8 decoding fix for #97."""
+
+    def run_parser(self, rows):
+        """Write rows to a UTF-8 file and parse it, returning the parsed JSON."""
+        with tempfile.NamedTemporaryFile(mode='wb', suffix='.txt', delete=False) as fh:
+            fh.write(rows.encode('utf-8'))
+            path = fh.name
+        try:
+            proc = subprocess.run(
+                [sys.executable, str(PARSER), path, 'sdk-js', 'ts'],
+                capture_output=True, text=True,
+            )
+            assert proc.returncode == 0, proc.stderr
+            return json.loads(proc.stdout)
+        finally:
+            os.unlink(path)
+
+    def test_utf8_middle_dot_rows_are_parsed(self):
+        """UTF-8 encoded U+00B7 markers must be recognized (regression for #97)."""
+        output = self.run_parser(UTF8_ROW)
+        self.assertEqual(output['summary']['total'], 1)
+        self.assertEqual(len(output['results']), 1)
+        result = output['results'][0]
+        self.assertEqual(result['name'], 'emit cycle')
+        self.assertEqual(result['hz'], 1234567.0)
+        self.assertEqual(result['ns_per_op'], 830000.0)
+        self.assertTrue(result['pass'])
+
+    def test_non_marker_lines_are_ignored(self):
+        output = self.run_parser('some unrelated log line\n' + UTF8_ROW)
+        self.assertEqual(output['summary']['total'], 1)
+
+    def test_empty_input_yields_no_results(self):
+        output = self.run_parser('')
+        self.assertEqual(output['summary']['total'], 0)
+        self.assertEqual(output['results'], [])
 
 
 if __name__ == '__main__':
