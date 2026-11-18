@@ -9,7 +9,7 @@ func (s *collectorState) processorEnabled(name string) bool {
 	if name == "" {
 		return false
 	}
-	for _, candidate := range s.cfg.processorRegistry {
+	for _, candidate := range s.config().processorRegistry {
 		if strings.EqualFold(strings.TrimSpace(candidate), name) {
 			return true
 		}
@@ -30,7 +30,7 @@ func (s *collectorState) identityEnabled() bool {
 }
 
 func (s *collectorState) dedupeEnabled() bool {
-	return s.cfg.dedupeEnabled && s.processorEnabled("dedupe")
+	return s.config().dedupeEnabled && s.processorEnabled("dedupe")
 }
 
 func (s *collectorState) limitsEnabled() bool {
@@ -51,21 +51,21 @@ func (s *collectorState) acquireIngestCapacity(eventCount int, totalBytes int64)
 	s.inflightMu.Lock()
 	defer s.inflightMu.Unlock()
 
-	if s.cfg.maxInflightRequests > 0 && s.metrics.inflightRequests.Load() >= int64(s.cfg.maxInflightRequests) {
+	if s.config().maxInflightRequests > 0 && s.metrics.inflightRequests.Load() >= int64(s.config().maxInflightRequests) {
 		return &governanceError{
 			Code:      "backpressure",
 			Message:   "collector max_inflight_requests exceeded",
 			Retryable: true,
 		}, nil
 	}
-	if s.cfg.maxInflightEvents > 0 && s.metrics.inflightEvents.Load()+int64(eventCount) > int64(s.cfg.maxInflightEvents) {
+	if s.config().maxInflightEvents > 0 && s.metrics.inflightEvents.Load()+int64(eventCount) > int64(s.config().maxInflightEvents) {
 		return &governanceError{
 			Code:      "backpressure",
 			Message:   "collector max_inflight_events exceeded",
 			Retryable: true,
 		}, nil
 	}
-	if s.cfg.maxQueueBytes > 0 && s.metrics.queueBytes.Load()+totalBytes > s.cfg.maxQueueBytes {
+	if s.config().maxQueueBytes > 0 && s.metrics.queueBytes.Load()+totalBytes > s.config().maxQueueBytes {
 		return &governanceError{
 			Code:      "queue_full",
 			Message:   "collector max_queue_bytes exceeded",

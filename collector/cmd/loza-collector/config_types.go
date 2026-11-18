@@ -312,6 +312,9 @@ type collectorMetrics struct {
 }
 
 type collectorState struct {
+	// cfgMu guards cfg. Hot reload swaps the whole config while request
+	// handlers read individual fields, so readers must go through config().
+	cfgMu               sync.RWMutex
 	cfg                 collectorConfig
 	startedAt           time.Time
 	ingestSink          collectorevent.Sink

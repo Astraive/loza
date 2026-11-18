@@ -168,7 +168,7 @@ func (s *collectorState) handleDeleteEvents(w http.ResponseWriter, r *http.Reque
 
 // deleteEventsByTenant deletes all events for a specific tenant.
 func (s *collectorState) deleteEventsByTenant(ctx context.Context, tenantID string, scope *publichttp.AuthorizedCollector) (int64, error) {
-	tableIdent, err := quoteSQLIdent(s.cfg.duckDBTable)
+	tableIdent, err := quoteSQLIdent(s.config().duckDBTable)
 	if err != nil {
 		return 0, err
 	}
@@ -191,11 +191,11 @@ func (s *collectorState) deleteEventsByTenant(ctx context.Context, tenantID stri
 
 // deleteEventsByUser deletes all events for a specific user.
 func (s *collectorState) deleteEventsByUser(ctx context.Context, userID string, scope *publichttp.AuthorizedCollector) (int64, error) {
-	tableIdent, err := quoteSQLIdent(s.cfg.duckDBTable)
+	tableIdent, err := quoteSQLIdent(s.config().duckDBTable)
 	if err != nil {
 		return 0, err
 	}
-	rawIdent, err := quoteSQLIdent(s.cfg.duckDBRawColumn)
+	rawIdent, err := quoteSQLIdent(s.config().duckDBRawColumn)
 	if err != nil {
 		rawIdent, err = quoteSQLIdent("raw")
 		if err != nil {
@@ -221,7 +221,7 @@ func (s *collectorState) deleteEventsByUser(ctx context.Context, userID string, 
 
 // deleteEvent deletes a specific event by ID.
 func (s *collectorState) deleteEvent(ctx context.Context, eventID string, scope *publichttp.AuthorizedCollector) (int64, error) {
-	tableIdent, err := quoteSQLIdent(s.cfg.duckDBTable)
+	tableIdent, err := quoteSQLIdent(s.config().duckDBTable)
 	if err != nil {
 		return 0, err
 	}

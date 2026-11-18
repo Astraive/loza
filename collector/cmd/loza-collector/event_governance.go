@@ -20,10 +20,10 @@ type governanceError struct {
 func (e governanceError) Error() string { return e.Message }
 
 func (s *collectorState) prepareEvent(raw []byte) ([]byte, *governanceError) {
-	if s.limitsEnabled() && s.cfg.maxEventBytes > 0 && int64(len(raw)) > s.cfg.maxEventBytes {
+	if s.limitsEnabled() && s.config().maxEventBytes > 0 && int64(len(raw)) > s.config().maxEventBytes {
 		return raw, &governanceError{
 			Code:    "event_too_large",
-			Message: fmt.Sprintf("event exceeds max_event_bytes (%d > %d)", len(raw), s.cfg.maxEventBytes),
+			Message: fmt.Sprintf("event exceeds max_event_bytes (%d > %d)", len(raw), s.config().maxEventBytes),
 		}
 	}
 
@@ -58,10 +58,10 @@ func (s *collectorState) prepareEvent(raw []byte) ([]byte, *governanceError) {
 	if err != nil {
 		return raw, &governanceError{Code: "event_rewrite_failed", Message: err.Error(), Retryable: true}
 	}
-	if s.limitsEnabled() && s.cfg.maxEventBytes > 0 && int64(len(next)) > s.cfg.maxEventBytes {
+	if s.limitsEnabled() && s.config().maxEventBytes > 0 && int64(len(next)) > s.config().maxEventBytes {
 		return raw, &governanceError{
 			Code:    "event_too_large_after_governance",
-			Message: fmt.Sprintf("event exceeds max_event_bytes after collector governance (%d > %d)", len(next), s.cfg.maxEventBytes),
+			Message: fmt.Sprintf("event exceeds max_event_bytes after collector governance (%d > %d)", len(next), s.config().maxEventBytes),
 		}
 	}
 	return next, nil
@@ -75,27 +75,27 @@ func (s *collectorState) enforcePayloadLimits(payload map[string]any) *governanc
 	if !s.limitsEnabled() {
 		return nil
 	}
-	if s.cfg.maxAttrCount > 0 {
-		if count := countFields(payload); count > s.cfg.maxAttrCount {
+	if s.config().maxAttrCount > 0 {
+		if count := countFields(payload); count > s.config().maxAttrCount {
 			return &governanceError{
 				Code:    "attr_count_exceeded",
-				Message: fmt.Sprintf("event field count exceeds max_attr_count (%d > %d)", count, s.cfg.maxAttrCount),
+				Message: fmt.Sprintf("event field count exceeds max_attr_count (%d > %d)", count, s.config().maxAttrCount),
 			}
 		}
 	}
-	if s.cfg.maxAttrDepth > 0 {
-		if depth := maxDepth(payload); depth > s.cfg.maxAttrDepth {
+	if s.config().maxAttrDepth > 0 {
+		if depth := maxDepth(payload); depth > s.config().maxAttrDepth {
 			return &governanceError{
 				Code:    "attr_depth_exceeded",
-				Message: fmt.Sprintf("event depth exceeds max_attr_depth (%d > %d)", depth, s.cfg.maxAttrDepth),
+				Message: fmt.Sprintf("event depth exceeds max_attr_depth (%d > %d)", depth, s.config().maxAttrDepth),
 			}
 		}
 	}
-	if s.cfg.maxStringLength > 0 {
-		if path, length, ok := firstStringLongerThan(payload, s.cfg.maxStringLength, ""); ok {
+	if s.config().maxStringLength > 0 {
+		if path, length, ok := firstStringLongerThan(payload, s.config().maxStringLength, ""); ok {
 			return &governanceError{
 				Code:    "string_too_long",
-				Message: fmt.Sprintf("field %s exceeds max_string_length (%d > %d)", path, length, s.cfg.maxStringLength),
+				Message: fmt.Sprintf("field %s exceeds max_string_length (%d > %d)", path, length, s.config().maxStringLength),
 			}
 		}
 	}
@@ -106,40 +106,40 @@ func (s *collectorState) applyIdentity(payload map[string]any) bool {
 	if !s.identityEnabled() {
 		return false
 	}
-	if !s.cfg.authIdentityWins || s.cfg.allowPayloadIdentity {
+	if !s.config().authIdentityWins || s.config().allowPayloadIdentity {
 		return false
 	}
 
 	modified := false
-	if s.cfg.boundServiceName != "" {
-		payload["service"] = s.cfg.boundServiceName
+	if s.config().boundServiceName != "" {
+		payload["service"] = s.config().boundServiceName
 		serviceObj := objectAt(payload, "service_identity")
-		serviceObj["name"] = s.cfg.boundServiceName
+		serviceObj["name"] = s.config().boundServiceName
 		modified = true
-		if s.cfg.boundServiceVersion != "" {
-			serviceObj["version"] = s.cfg.boundServiceVersion
+		if s.config().boundServiceVersion != "" {
+			serviceObj["version"] = s.config().boundServiceVersion
 		}
 	}
-	if s.cfg.boundEnvironment != "" || s.cfg.boundRegion != "" {
+	if s.config().boundEnvironment != "" || s.config().boundRegion != "" {
 		deployment := objectAt(payload, "deployment")
-		if s.cfg.boundEnvironment != "" {
-			deployment["environment"] = s.cfg.boundEnvironment
+		if s.config().boundEnvironment != "" {
+			deployment["environment"] = s.config().boundEnvironment
 		}
-		if s.cfg.boundRegion != "" {
-			deployment["region"] = s.cfg.boundRegion
+		if s.config().boundRegion != "" {
+			deployment["region"] = s.config().boundRegion
 		}
 		modified = true
 	}
-	if s.cfg.boundTenantID != "" {
-		objectAt(payload, "tenant")["id"] = s.cfg.boundTenantID
+	if s.config().boundTenantID != "" {
+		objectAt(payload, "tenant")["id"] = s.config().boundTenantID
 		modified = true
 	}
-	if s.cfg.boundWorkspaceID != "" {
-		payload["workspace"] = map[string]any{"id": s.cfg.boundWorkspaceID}
+	if s.config().boundWorkspaceID != "" {
+		payload["workspace"] = map[string]any{"id": s.config().boundWorkspaceID}
 		modified = true
 	}
-	if s.cfg.boundOrganizationID != "" {
-		payload["organization"] = map[string]any{"id": s.cfg.boundOrganizationID}
+	if s.config().boundOrganizationID != "" {
+		payload["organization"] = map[string]any{"id": s.config().boundOrganizationID}
 		modified = true
 	}
 	return modified
@@ -149,18 +149,18 @@ func (s *collectorState) applyCollectorRedaction(payload map[string]any) bool {
 	if !s.redactionEnabled() {
 		return false
 	}
-	mode := strings.ToLower(strings.TrimSpace(s.cfg.privacyMode))
-	if mode == "off" || (!s.cfg.collectorRedaction && !s.cfg.emergencyRedaction) {
+	mode := strings.ToLower(strings.TrimSpace(s.config().privacyMode))
+	if mode == "off" || (!s.config().collectorRedaction && !s.config().emergencyRedaction) {
 		return false
 	}
-	blocked := make(map[string]struct{}, len(s.cfg.privacyBlocklist))
-	for _, key := range s.cfg.privacyBlocklist {
+	blocked := make(map[string]struct{}, len(s.config().privacyBlocklist))
+	for _, key := range s.config().privacyBlocklist {
 		blocked[normalizeSensitiveKey(key)] = struct{}{}
 	}
-	if len(blocked) == 0 && !s.cfg.secretScan {
+	if len(blocked) == 0 && !s.config().secretScan {
 		return false
 	}
-	return redactObject(payload, blocked, s.cfg.secretScan)
+	return redactObject(payload, blocked, s.config().secretScan)
 }
 
 func redactObject(value any, blocked map[string]struct{}, scanSecrets bool) bool {

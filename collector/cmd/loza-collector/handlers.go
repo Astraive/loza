@@ -89,11 +89,11 @@ func (s *collectorState) handleIngest(w http.ResponseWriter, r *http.Request) {
 	s.metrics.requestsTotal.Add(1)
 	requestID := newIngestRequestID()
 
-	if s.cfg.rateLimitEnabled && !s.rateLimiter.Allow() {
+	if s.config().rateLimitEnabled && !s.rateLimiter.Allow() {
 		s.metrics.requestsLimited.Add(1)
 		s.metrics.eventsRejected.Add(1)
 		resp := ingestRejectResponse(requestID, "rate_limited", "collector rate limit exceeded", true)
-		resp.RetryAfterMS = s.cfg.retryAfterMS()
+		resp.RetryAfterMS = s.config().retryAfterMS()
 		writeJSON(w, http.StatusTooManyRequests, resp)
 		return
 	}
@@ -117,7 +117,7 @@ func (s *collectorState) handleIngest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rawEvents, err := ingest.ParseEvents(r, s.cfg.maxBodyBytes)
+	rawEvents, err := ingest.ParseEvents(r, s.config().maxBodyBytes)
 	if err != nil {
 		s.metrics.eventsRejected.Add(1)
 		status := http.StatusBadRequest
@@ -135,7 +135,7 @@ func (s *collectorState) handleIngest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if len(rawEvents) > s.cfg.maxEventsPerRequest {
+	if len(rawEvents) > s.config().maxEventsPerRequest {
 		s.metrics.eventsRejected.Add(int64(len(rawEvents)))
 		writeJSON(w, http.StatusRequestEntityTooLarge, ingestRejectResponse(requestID, "max_events_exceeded", "max events per request exceeded", false))
 		return
@@ -149,7 +149,7 @@ func (s *collectorState) handleIngest(w http.ResponseWriter, r *http.Request) {
 				s.metrics.requestsLimited.Add(1)
 				s.metrics.eventsRejected.Add(int64(len(rawEvents)))
 				resp := ingestRejectResponse(requestID, "event_rate_limited", "event rate limit exceeded", true)
-				resp.RetryAfterMS = s.cfg.retryAfterMS()
+				resp.RetryAfterMS = s.config().retryAfterMS()
 				writeJSON(w, http.StatusTooManyRequests, resp)
 				return
 			}
@@ -165,7 +165,7 @@ func (s *collectorState) handleIngest(w http.ResponseWriter, r *http.Request) {
 		s.metrics.eventsRejected.Add(int64(len(rawEvents)))
 		resp := ingestRejectResponse(requestID, gerr.Code, gerr.Message, gerr.Retryable)
 		resp.Rejected = len(rawEvents)
-		resp.RetryAfterMS = s.cfg.retryAfterMS()
+		resp.RetryAfterMS = s.config().retryAfterMS()
 		writeJSON(w, http.StatusTooManyRequests, resp)
 		return
 	} else {
@@ -182,7 +182,7 @@ func (s *collectorState) handleIngest(w http.ResponseWriter, r *http.Request) {
 		}
 
 		eventID, _ := validation.ExtractStringPath(raw, "event_id")
-		if reason, ok := s.validateEventContract(raw, s.cfg.schemaSchemaVersion, s.cfg.schemaEventVersion); ok {
+		if reason, ok := s.validateEventContract(raw, s.config().schemaSchemaVersion, s.config().schemaEventVersion); ok {
 			s.metrics.eventsInvalid.Add(1)
 			resp.AddInvalid(i, eventID, reason, reason)
 			continue
@@ -205,10 +205,10 @@ func (s *collectorState) handleIngest(w http.ResponseWriter, r *http.Request) {
 			raw = stamped
 		}
 
-		if s.cfg.reliabilityMode == "spool" || s.cfg.reliabilityMode == "hybrid" {
+		if s.config().reliabilityMode == "spool" || s.config().reliabilityMode == "hybrid" {
 			// For spool mode, deduplicate at ingest time to avoid unnecessary spooling
 			if s.dedupeEnabled() {
-				dedupeValue, ok := validation.ExtractStringPath(raw, s.cfg.dedupeKey)
+				dedupeValue, ok := validation.ExtractStringPath(raw, s.config().dedupeKey)
 				if ok {
 					duplicate, err := s.isDuplicate(dedupeValue)
 					if err != nil {
@@ -235,7 +235,7 @@ func (s *collectorState) handleIngest(w http.ResponseWriter, r *http.Request) {
 				logJSON("error", "collector_spool_write_failed", map[string]any{"error": err.Error()})
 				continue
 			}
-			if s.cfg.reliabilityMode == "hybrid" && s.hybridQueueSink != nil {
+			if s.config().reliabilityMode == "hybrid" && s.hybridQueueSink != nil {
 				if err := s.hybridQueueSink.WriteEvent(r.Context(), raw, nil); err != nil {
 					s.metrics.eventsRejected.Add(1)
 					resp.AddRejected(i, eventID, "hybrid_queue_failed", err.Error(), true)
@@ -291,7 +291,7 @@ func (s *collectorState) handleIngest(w http.ResponseWriter, r *http.Request) {
 				s.sinkHealthy.Store(false)
 				if code == "dedupe_unavailable" {
 					logJSON("error", "collector_dedupe_failed", map[string]any{"error": result.Err.Error()})
-				} else if s.cfg.reliabilityMode == "queue" {
+				} else if s.config().reliabilityMode == "queue" {
 					logJSON("error", "collector_kafka_enqueue_failed", map[string]any{"error": result.Err.Error()})
 				} else {
 					logJSON("error", "collector_sink_write_failed", map[string]any{"error": result.Err.Error()})
@@ -348,7 +348,7 @@ func (s *collectorState) validateEventContract(raw []byte, expectedSchemaVersion
 	if eventVersion, _ := payload["event_version"].(string); eventVersion != "" && eventVersion != expectedEventVersion {
 		return "unsupported_event_version", true
 	}
-	mode := strings.ToLower(strings.TrimSpace(s.cfg.schemaMode))
+	mode := strings.ToLower(strings.TrimSpace(s.config().schemaMode))
 	if mode != "" && mode != "off" {
 		strict := mode == "enforce"
 		if err := speccontract.ValidateEventMap(payload, strict); err != nil {
@@ -500,7 +500,7 @@ func (s *collectorState) handleIngestBatch(ctx context.Context, rawEvents [][]by
 			s.metrics.eventsInvalid.Add(1)
 			continue
 		}
-		if _, ok := s.validateEventContract(raw, s.cfg.schemaSchemaVersion, s.cfg.schemaEventVersion); ok {
+		if _, ok := s.validateEventContract(raw, s.config().schemaSchemaVersion, s.config().schemaEventVersion); ok {
 			s.metrics.eventsInvalid.Add(1)
 			continue
 		}
@@ -512,7 +512,7 @@ func (s *collectorState) handleIngestBatch(ctx context.Context, rawEvents [][]by
 		}
 
 		if s.dedupeEnabled() {
-			eventID, ok := validation.ExtractStringPath(raw, s.cfg.dedupeKey)
+			eventID, ok := validation.ExtractStringPath(raw, s.config().dedupeKey)
 			if ok {
 				duplicate, err := s.isDuplicate(eventID)
 				if err != nil {
@@ -527,7 +527,7 @@ func (s *collectorState) handleIngestBatch(ctx context.Context, rawEvents [][]by
 			}
 		}
 
-		if s.cfg.reliabilityMode == "spool" || s.cfg.reliabilityMode == "hybrid" {
+		if s.config().reliabilityMode == "spool" || s.config().reliabilityMode == "hybrid" {
 			if err := s.appendAndEnqueueSpool(raw); err != nil {
 				if isDiskFullErr(err) {
 					s.diskHealthy.Store(false)
@@ -535,7 +535,7 @@ func (s *collectorState) handleIngestBatch(ctx context.Context, rawEvents [][]by
 				logJSON("error", "collector_spool_write_failed", map[string]any{"error": err.Error()})
 				continue
 			}
-			if s.cfg.reliabilityMode == "hybrid" && s.hybridQueueSink != nil {
+			if s.config().reliabilityMode == "hybrid" && s.hybridQueueSink != nil {
 				if err := s.hybridQueueSink.WriteEvent(ctx, raw, nil); err != nil {
 					return accepted, err
 				}
@@ -566,7 +566,7 @@ func (s *collectorState) handleIngestBatch(ctx context.Context, rawEvents [][]by
 			}
 			if result.Err != nil {
 				s.sinkHealthy.Store(false)
-				if s.cfg.reliabilityMode == "queue" {
+				if s.config().reliabilityMode == "queue" {
 					logJSON("error", "collector_kafka_enqueue_failed", map[string]any{"error": result.Err.Error()})
 				} else {
 					logJSON("error", "collector_sink_write_failed", map[string]any{"error": result.Err.Error()})

@@ -55,8 +55,8 @@ func (s *collectorState) handleSchemaCheck(w http.ResponseWriter, r *http.Reques
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"valid":          true,
-		"schema_version": s.cfg.schemaSchemaVersion,
-		"event_version":  s.cfg.schemaEventVersion,
+		"schema_version": s.config().schemaSchemaVersion,
+		"event_version":  s.config().schemaEventVersion,
 	})
 }
 

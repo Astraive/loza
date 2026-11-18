@@ -33,15 +33,15 @@ func (d spoolDelivery) storedBytes() int64 {
 }
 
 func (s *collectorState) initReliability() error {
-	if s.cfg.reliabilityMode != "spool" && s.cfg.reliabilityMode != "hybrid" {
+	if s.config().reliabilityMode != "spool" && s.config().reliabilityMode != "hybrid" {
 		return nil
 	}
 	s.reliabilityCtx, s.reliabilityCancel = context.WithCancel(context.Background())
-	if err := os.MkdirAll(s.cfg.spoolDir, 0o755); err != nil {
+	if err := os.MkdirAll(s.config().spoolDir, 0o755); err != nil {
 		return fmt.Errorf("mkdir spool dir: %w", err)
 	}
 
-	spoolPath := filepath.Join(s.cfg.spoolDir, s.cfg.spoolFile)
+	spoolPath := filepath.Join(s.config().spoolDir, s.config().spoolFile)
 	f, err := os.OpenFile(spoolPath, os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
 		return fmt.Errorf("open spool file: %w", err)
@@ -60,7 +60,7 @@ func (s *collectorState) initReliability() error {
 	if st, err := f.Stat(); err == nil {
 		currentSize := st.Size()
 		s.metrics.spoolBytes.Store(currentSize)
-		if currentSize > s.cfg.maxSpoolBytes {
+		if currentSize > s.config().maxSpoolBytes {
 			s.spoolHealthy.Store(false)
 		} else if s.spoolProcessedPos >= currentSize {
 			s.metrics.spoolBytes.Store(0)
@@ -70,7 +70,7 @@ func (s *collectorState) initReliability() error {
 		}
 	}
 
-	s.deliveryQueue = make(chan spoolDelivery, s.cfg.deliveryQueueSize)
+	s.deliveryQueue = make(chan spoolDelivery, s.config().deliveryQueueSize)
 	s.deliverySpace = make(chan struct{}, 1)
 	s.deliveryWG.Add(1)
 	go s.deliveryWorker()
@@ -202,9 +202,9 @@ func (s *collectorState) appendSpoolLocked(raw []byte) (spoolDelivery, error) {
 	}
 
 	record := append([]byte(nil), raw...)
-	if encryptionEnabled(s.cfg.storageEncryptionKey) {
+	if encryptionEnabled(s.config().storageEncryptionKey) {
 		var err error
-		record, err = encryptBlob(record, s.cfg.storageEncryptionKey)
+		record, err = encryptBlob(record, s.config().storageEncryptionKey)
 		if err != nil {
 			return spoolDelivery{}, err
 		}
@@ -220,13 +220,13 @@ func (s *collectorState) appendSpoolLocked(raw []byte) (spoolDelivery, error) {
 		unprocessedBytes = startOffset
 	}
 	projectedBytes := unprocessedBytes + int64(len(stored))
-	if s.cfg.maxSpoolBytes > 0 && projectedBytes > s.cfg.maxSpoolBytes {
+	if s.config().maxSpoolBytes > 0 && projectedBytes > s.config().maxSpoolBytes {
 		return spoolDelivery{}, fmt.Errorf(
 			"%w: current=%d record=%d max=%d",
 			errSpoolCapacity,
 			unprocessedBytes,
 			len(stored),
-			s.cfg.maxSpoolBytes,
+			s.config().maxSpoolBytes,
 		)
 	}
 
@@ -239,7 +239,7 @@ func (s *collectorState) appendSpoolLocked(raw []byte) (spoolDelivery, error) {
 		_ = s.spoolFile.Truncate(startOffset)
 		return spoolDelivery{}, io.ErrShortWrite
 	}
-	if s.cfg.spoolFsync {
+	if s.config().spoolFsync {
 		if err := s.spoolFile.Sync(); err != nil {
 			_ = s.spoolFile.Truncate(startOffset)
 			_, _ = s.spoolFile.Seek(0, io.SeekEnd)
@@ -257,7 +257,7 @@ func (s *collectorState) appendSpoolLocked(raw []byte) (spoolDelivery, error) {
 }
 
 func (s *collectorState) validateDeliveryPayload(raw []byte) error {
-	if !s.memoryLimiterEnabled() || s.cfg.maxQueueBytes <= 0 || int64(len(raw)) <= s.cfg.maxQueueBytes {
+	if !s.memoryLimiterEnabled() || s.config().maxQueueBytes <= 0 || int64(len(raw)) <= s.config().maxQueueBytes {
 		return nil
 	}
 	s.metrics.requestsThrottled.Add(1)
@@ -265,9 +265,9 @@ func (s *collectorState) validateDeliveryPayload(raw []byte) error {
 	logJSON("warn", "delivery_queue_bytes_exceeded", map[string]any{
 		"event_bytes": len(raw),
 		"queue_bytes": s.metrics.queueBytes.Load(),
-		"max_bytes":   s.cfg.maxQueueBytes,
+		"max_bytes":   s.config().maxQueueBytes,
 	})
-	err := fmt.Errorf("%w: event=%d max=%d", errDeliveryQueueCapacity, len(raw), s.cfg.maxQueueBytes)
+	err := fmt.Errorf("%w: event=%d max=%d", errDeliveryQueueCapacity, len(raw), s.config().maxQueueBytes)
 	s.maybeWriteDLQ(raw, err)
 	return err
 }
@@ -289,8 +289,8 @@ func (s *collectorState) enqueueDelivery(item spoolDelivery) error {
 	for {
 		current := s.metrics.queueBytes.Load()
 		withinLimit := !s.memoryLimiterEnabled() ||
-			s.cfg.maxQueueBytes <= 0 ||
-			current+size <= s.cfg.maxQueueBytes
+			s.config().maxQueueBytes <= 0 ||
+			current+size <= s.config().maxQueueBytes
 		durableOversize := item.endOffset > item.startOffset && current == 0
 		if withinLimit || durableOversize {
 			if s.metrics.queueBytes.CompareAndSwap(current, current+size) {
@@ -507,7 +507,7 @@ func (s *collectorState) replaySpool() error {
 	replayCount := int64(0)
 	skippedCount := int64(0)
 	sc := bufio.NewScanner(s.spoolFile)
-	maxRecordBytes := int(s.cfg.maxEventBytes)
+	maxRecordBytes := int(s.config().maxEventBytes)
 	if maxRecordBytes <= 0 || maxRecordBytes > maxSpoolReplayRecordBytes {
 		maxRecordBytes = maxSpoolReplayRecordBytes
 	}
@@ -538,8 +538,8 @@ func (s *collectorState) replaySpool() error {
 
 		decoded := append([]byte(nil), line...)
 		quarantineReason := ""
-		if encryptionEnabled(s.cfg.storageEncryptionKey) {
-			plain, err := decryptBlob(decoded, s.cfg.storageEncryptionKey)
+		if encryptionEnabled(s.config().storageEncryptionKey) {
+			plain, err := decryptBlob(decoded, s.config().storageEncryptionKey)
 			if err != nil {
 				logJSON("warn", "spool_replay_decrypt_failed", map[string]any{
 					"error":        err.Error(),

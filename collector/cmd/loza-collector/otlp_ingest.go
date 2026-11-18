@@ -16,7 +16,7 @@ func (s *collectorState) handleOTLPLogs(w http.ResponseWriter, r *http.Request) 
 		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "auth_failed"})
 		return
 	}
-	body, err := io.ReadAll(io.LimitReader(r.Body, s.cfg.maxBodyBytes))
+	body, err := io.ReadAll(io.LimitReader(r.Body, s.config().maxBodyBytes))
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_otlp_request", "message": err.Error()})
 		return
@@ -38,9 +38,9 @@ func (s *collectorState) handleOTLPLogs(w http.ResponseWriter, r *http.Request) 
 	}
 
 	events, err := otlpconv.ConvertExportLogsRequest(req, otlpconv.Config{
-		SchemaVersion:  s.cfg.schemaSchemaVersion,
-		EventVersion:   s.cfg.schemaEventVersion,
-		DefaultService: s.cfg.boundServiceName,
+		SchemaVersion:  s.config().schemaSchemaVersion,
+		EventVersion:   s.config().schemaEventVersion,
+		DefaultService: s.config().boundServiceName,
 	})
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "otlp_conversion_failed", "message": err.Error()})

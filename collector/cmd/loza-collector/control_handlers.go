@@ -22,8 +22,8 @@ func (s *collectorState) handleVersion(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"version":            collectorVersion,
 		"ingest_api_version": "v1",
-		"schema_version":     s.cfg.schemaSchemaVersion,
-		"event_version":      s.cfg.schemaEventVersion,
+		"schema_version":     s.config().schemaSchemaVersion,
+		"event_version":      s.config().schemaEventVersion,
 	})
 }
 
@@ -33,7 +33,7 @@ func (s *collectorState) handleStatus(w http.ResponseWriter, r *http.Request) {
 		"status":           statusString(s.isReady()),
 		"version":          collectorVersion,
 		"uptime_seconds":   s.uptimeSeconds(time.Now()),
-		"reliability_mode": s.cfg.reliabilityMode,
+		"reliability_mode": s.config().reliabilityMode,
 		"ingest": map[string]any{
 			"accepted":   s.metrics.eventsAccepted.Load(),
 			"rejected":   s.metrics.eventsRejected.Load(),
@@ -41,7 +41,7 @@ func (s *collectorState) handleStatus(w http.ResponseWriter, r *http.Request) {
 			"duplicates": s.metrics.eventsDeduped.Load(),
 		},
 		"queue": map[string]any{
-			"mode":        s.cfg.reliabilityMode,
+			"mode":        s.config().reliabilityMode,
 			"depth":       deliveryQueueDepth(s.deliveryQueue),
 			"spool_bytes": s.metrics.spoolBytes.Load(),
 			"queue_bytes": s.metrics.queueBytes.Load(),
@@ -51,13 +51,13 @@ func (s *collectorState) handleStatus(w http.ResponseWriter, r *http.Request) {
 			"events":   s.metrics.inflightEvents.Load(),
 		},
 		"limits": map[string]any{
-			"max_event_bytes":       s.cfg.maxEventBytes,
-			"max_attr_count":        s.cfg.maxAttrCount,
-			"max_attr_depth":        s.cfg.maxAttrDepth,
-			"max_string_length":     s.cfg.maxStringLength,
-			"max_inflight_requests": s.cfg.maxInflightRequests,
-			"max_inflight_events":   s.cfg.maxInflightEvents,
-			"max_queue_bytes":       s.cfg.maxQueueBytes,
+			"max_event_bytes":       s.config().maxEventBytes,
+			"max_attr_count":        s.config().maxAttrCount,
+			"max_attr_depth":        s.config().maxAttrDepth,
+			"max_string_length":     s.config().maxStringLength,
+			"max_inflight_requests": s.config().maxInflightRequests,
+			"max_inflight_events":   s.config().maxInflightEvents,
+			"max_queue_bytes":       s.config().maxQueueBytes,
 		},
 	})
 }
@@ -178,7 +178,7 @@ func (s *collectorState) handleQuery(w http.ResponseWriter, r *http.Request) {
 	// by route family: legacy routes use RequirePermission (role-based), while
 	// canonical routes use AuthorizesCollector, which intentionally supports
 	// roleless collector grants. Accept either form so neither is broken.
-	if s.cfg.authEnabled {
+	if s.config().authEnabled {
 		ac := auth.GetAuthContext(r.Context())
 		scope, hasScope := publichttp.AuthorizedCollectorFromContext(r.Context())
 		allowed := ac != nil && ac.HasPermission(auth.PermEventsRead)
@@ -218,7 +218,7 @@ func (s *collectorState) handleScopedQuery(w http.ResponseWriter, r *http.Reques
 	if req.Limit <= 0 || req.Limit > 1000 {
 		req.Limit = 1000
 	}
-	table, err := quoteSQLIdent(s.cfg.duckDBTable)
+	table, err := quoteSQLIdent(s.config().duckDBTable)
 	if err != nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "query_unavailable"})
 		return
@@ -226,7 +226,7 @@ func (s *collectorState) handleScopedQuery(w http.ResponseWriter, r *http.Reques
 	db := s.queryDB
 	var closeDB func()
 	if db == nil {
-		db, err = sql.Open(s.cfg.duckDBDriver, s.cfg.duckDBPath)
+		db, err = sql.Open(s.config().duckDBDriver, s.config().duckDBPath)
 		if err != nil {
 			writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "query_unavailable"})
 			return
@@ -460,10 +460,10 @@ func (s *collectorState) readDLQRecords() ([]map[string]any, error) {
 
 // readDLQRecordsLocked reads DLQ records; the caller must hold s.dlqMu.
 func (s *collectorState) readDLQRecordsLocked() ([]map[string]any, error) {
-	if strings.TrimSpace(s.cfg.dlqPath) == "" {
+	if strings.TrimSpace(s.config().dlqPath) == "" {
 		return nil, os.ErrNotExist
 	}
-	file, err := os.Open(s.cfg.dlqPath)
+	file, err := os.Open(s.config().dlqPath)
 	if err != nil {
 		return nil, err
 	}
@@ -503,14 +503,14 @@ func (s *collectorState) writeDLQRecords(records []map[string]any) error {
 // A unique temp file is used so concurrent writers can never race on a shared
 // path, and it is always cleaned up whether the rename succeeds or fails.
 func (s *collectorState) writeDLQRecordsLocked(records []map[string]any) error {
-	if strings.TrimSpace(s.cfg.dlqPath) == "" {
+	if strings.TrimSpace(s.config().dlqPath) == "" {
 		return os.ErrNotExist
 	}
-	dir := filepath.Dir(s.cfg.dlqPath)
+	dir := filepath.Dir(s.config().dlqPath)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
-	file, err := os.CreateTemp(dir, filepath.Base(s.cfg.dlqPath)+".tmp-*")
+	file, err := os.CreateTemp(dir, filepath.Base(s.config().dlqPath)+".tmp-*")
 	if err != nil {
 		return err
 	}
@@ -531,7 +531,7 @@ func (s *collectorState) writeDLQRecordsLocked(records []map[string]any) error {
 	if err := file.Close(); err != nil {
 		return err
 	}
-	return os.Rename(tmpName, s.cfg.dlqPath)
+	return os.Rename(tmpName, s.config().dlqPath)
 }
 
 func deliveryQueueDepth(ch chan spoolDelivery) int {
