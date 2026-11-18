@@ -34,10 +34,14 @@ func applyDuplicateFieldPolicy(ev *Event, policy DuplicateFieldPolicy) error {
 			if ev.applyCanonical(a) {
 				continue
 			}
-			a.Key = "attrs." + a.Key
+			// Keep the canonical key: the encoder already places every extra
+			// attr under a single top-level "attrs" object. Prefixing with
+			// "attrs." here would make the dot-expanding encoder nest a second
+			// "attrs" object (attrs.attrs.<key>).
 			out = append(out, a)
 		case KeepBothUnderAttrs:
-			a.Key = "attrs." + a.Key
+			// Keep the canonical key so the encoder wrapper emits one "attrs"
+			// object (attrs.<key>) rather than a doubly nested one.
 			out = append(out, a)
 		case ErrorOnDuplicate:
 			return &DuplicateFieldError{Key: a.Key}

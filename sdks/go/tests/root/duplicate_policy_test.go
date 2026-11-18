@@ -2,6 +2,7 @@ package loza_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 
@@ -104,14 +105,34 @@ func TestDuplicatePolicyKeepBothMovesUnderAttrs(t *testing.T) {
 	found := false
 	for _, a := range ev.AttrList() {
 		if a.Key == "attrs.service" {
+			t.Fatalf("duplicate attr must not retain an 'attrs.' prefix on the internal key, got key=%q", a.Key)
+		}
+		if a.Key == "service" {
 			found = true
 			if v, ok := a.Value.(string); !ok || v != "svc-attr" {
-				t.Fatalf("unexpected attrs.service value: %#v", a.Value)
+				t.Fatalf("unexpected service attr value: %#v", a.Value)
 			}
 		}
 	}
 	if !found {
-		t.Fatalf("expected duplicate attr to be moved to attrs.service")
+		t.Fatalf("expected duplicate attr to be kept under the canonical service key")
+	}
+
+	// Wire output must contain a single top-level "attrs" object, not the
+	// doubly nested "attrs":{"attrs":{"service":...}} produced previously.
+	var payload map[string]any
+	if err := json.Unmarshal(store.Raw()[0], &payload); err != nil {
+		t.Fatalf("unmarshal payload: %v", err)
+	}
+	attrsObj, ok := payload["attrs"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected top-level attrs object, got %#v", payload["attrs"])
+	}
+	if got := attrsObj["service"]; got != "svc-attr" {
+		t.Fatalf("expected attrs.service == svc-attr, got %#v", got)
+	}
+	if nested, ok := attrsObj["attrs"]; ok {
+		t.Fatalf("attrs must not be doubly nested; got attrs.attrs = %#v", nested)
 	}
 }
 
