@@ -249,17 +249,46 @@ impl CollectorHttpClient {
     }
 
     /// Build an ingest envelope from encoded events.
+    ///
+    /// Events that cannot be parsed as JSON are preserved as
+    /// `{"malformed": <original encoded event>}` so they are never silently
+    /// dropped. Use [`Self::try_envelope`] when malformed events must instead be
+    /// reported to the caller as an error.
     pub fn envelope(&self, encoded_events: &[String]) -> Value {
         let events: Vec<Value> = encoded_events
             .iter()
-            .filter_map(|event| serde_json::from_str(event).ok())
+            .map(|event| {
+                serde_json::from_str(event)
+                    .unwrap_or_else(|_| serde_json::json!({ "malformed": event }))
+            })
             .collect();
+        self.build_envelope(&events)
+    }
+
+    /// Build an ingest envelope from encoded events, rejecting malformed input.
+    ///
+    /// Returns an error naming the index and parse failure of the first event
+    /// that is not valid JSON. Unlike [`Self::envelope`], no event is dropped or
+    /// replaced and the caller learns which input is invalid.
+    pub fn try_envelope(&self, encoded_events: &[String]) -> Result<Value, String> {
+        let events = encoded_events
+            .iter()
+            .enumerate()
+            .map(|(index, event)| {
+                serde_json::from_str(event)
+                    .map_err(|error| format!("event at index {index} is not valid JSON: {error}"))
+            })
+            .collect::<Result<Vec<Value>, String>>()?;
+        Ok(self.build_envelope(&events))
+    }
+
+    fn build_envelope(&self, events: &[Value]) -> Value {
         let service = self
             .service
             .clone()
-            .or_else(|| infer_service(&events))
+            .or_else(|| infer_service(events))
             .unwrap_or_else(|| "unknown".to_string());
-        build_ingest_envelope(&events, &self.sdk_name, &self.sdk_version, &service)
+        build_ingest_envelope(events, &self.sdk_name, &self.sdk_version, &service)
     }
 
     /// Validate an ingest envelope.
@@ -344,7 +373,7 @@ impl CollectorHttpClient {
     /// Validate events locally against the ingest envelope contract.
     /// The collector does not expose a dedicated `/validate` endpoint.
     pub fn validate(&self, events: &[String]) -> Result<CollectorResponse, String> {
-        let envelope = self.envelope(events);
+        let envelope = self.try_envelope(events)?;
         self.validate_envelope(&envelope)?;
         Ok(CollectorResponse {
             status_code: 200,
@@ -357,7 +386,7 @@ impl CollectorHttpClient {
 
     /// Ingest events into the collector.
     pub fn ingest(&self, events: &[String]) -> Result<CollectorResponse, String> {
-        let envelope = self.envelope(events);
+        let envelope = self.try_envelope(events)?;
         self.request("POST", "/events", Some(envelope))
     }
 
