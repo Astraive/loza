@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	collectorevent "github.com/astraive/loza/collector/internal/event"
@@ -71,6 +73,96 @@ type resolvedRetryConfig struct {
 type sink struct {
 	provider *log.LoggerProvider
 	logger   otellog.Logger
+	tracker  *deliveryErrorTracker
+	closed   atomic.Bool
+}
+
+// deliveryErrorTracker latches the most recent failure observed while
+// processing or exporting a log record. The OpenTelemetry Logs SDK reports
+// processor errors only through its global error handler and Logger.Emit has
+// no error return, so the sink needs this side channel to report a failed
+// delivery through WriteEvent instead of unconditionally returning nil.
+type deliveryErrorTracker struct {
+	mu  sync.Mutex
+	err error
+}
+
+func newDeliveryErrorTracker() *deliveryErrorTracker { return &deliveryErrorTracker{} }
+
+func (t *deliveryErrorTracker) record(err error) {
+	if t == nil || err == nil {
+		return
+	}
+	t.mu.Lock()
+	t.err = err
+	t.mu.Unlock()
+}
+
+func (t *deliveryErrorTracker) clear() {
+	if t == nil {
+		return
+	}
+	t.mu.Lock()
+	t.err = nil
+	t.mu.Unlock()
+}
+
+func (t *deliveryErrorTracker) load() error {
+	if t == nil {
+		return nil
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.err
+}
+
+// trackingExporter records export failures so WriteEvent can surface them.
+// A successful export clears the latched error.
+type trackingExporter struct {
+	log.Exporter
+	tracker *deliveryErrorTracker
+}
+
+func (e *trackingExporter) Export(ctx context.Context, records []log.Record) error {
+	err := e.Exporter.Export(ctx, records)
+	if err == nil {
+		e.tracker.clear()
+	} else {
+		e.tracker.record(fmt.Errorf("otlp: export failed: %w", err))
+	}
+	return err
+}
+
+// errorCapturingProcessor forwards errors returned by the wrapped processor
+// to the delivery tracker. The SDK hands OnEmit errors to otel.Handle, which
+// a Sink caller cannot observe, so capture them before they are discarded.
+type errorCapturingProcessor struct {
+	log.Processor
+	tracker *deliveryErrorTracker
+}
+
+func (p *errorCapturingProcessor) OnEmit(ctx context.Context, record *log.Record) error {
+	err := p.Processor.OnEmit(ctx, record)
+	if err != nil {
+		p.tracker.record(fmt.Errorf("otlp: emit failed: %w", err))
+	}
+	return err
+}
+
+func (p *errorCapturingProcessor) ForceFlush(ctx context.Context) error {
+	err := p.Processor.ForceFlush(ctx)
+	if err != nil {
+		p.tracker.record(fmt.Errorf("otlp: flush failed: %w", err))
+	}
+	return err
+}
+
+func (p *errorCapturingProcessor) Shutdown(ctx context.Context) error {
+	err := p.Processor.Shutdown(ctx)
+	if err != nil {
+		p.tracker.record(fmt.Errorf("otlp: shutdown failed: %w", err))
+	}
+	return err
 }
 
 const (
@@ -106,22 +198,39 @@ func New(ctx context.Context, cfg Config) (collectorevent.Sink, error) {
 		return nil, fmt.Errorf("otlp: create resource: %w", err)
 	}
 
+	tracker := newDeliveryErrorTracker()
+	exporter = &trackingExporter{Exporter: exporter, tracker: tracker}
 	provider := log.NewLoggerProvider(
-		log.WithProcessor(log.NewBatchProcessor(exporter)),
+		log.WithProcessor(&errorCapturingProcessor{
+			Processor: log.NewBatchProcessor(exporter),
+			tracker:   tracker,
+		}),
 		log.WithResource(res),
 	)
 
 	return &sink{
 		provider: provider,
 		logger:   provider.Logger(resolved.Logger),
+		tracker:  tracker,
 	}, nil
 }
 
 func (s *sink) Name() string { return "otlp" }
 
+// WriteEvent delivers an encoded event to the OTLP collector.
+//
+// Delivery through the OpenTelemetry Logs SDK is best-effort: records are
+// batched and exported asynchronously, so a nil error confirms only that the
+// record passed local validation and that no delivery failure has been
+// observed. Local validation failures, canceled contexts, writes after Close,
+// and failures recorded by the exporter or processor are returned to callers.
+// A latched export failure is cleared by the next successful export.
 func (s *sink) WriteEvent(ctx context.Context, encoded []byte, ev *collectorevent.Event) error {
 	if ctx == nil {
 		ctx = context.Background()
+	}
+	if s.closed.Load() {
+		return errors.New("otlp: sink is closed")
 	}
 	payloadBytes := bytes.TrimSpace(encoded)
 	if len(payloadBytes) == 0 {
@@ -144,8 +253,11 @@ func (s *sink) WriteEvent(ctx context.Context, encoded []byte, ev *collectoreven
 			otellog.String("outcome", ev.Outcome),
 		)
 	}
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("otlp: %w", err)
+	}
 	s.logger.Emit(ctx, record)
-	return nil
+	return s.tracker.load()
 }
 
 func (s *sink) Flush(ctx context.Context) error {
@@ -159,6 +271,7 @@ func (s *sink) Close(ctx context.Context) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	s.closed.Store(true)
 	return s.provider.Shutdown(ctx)
 }
 
