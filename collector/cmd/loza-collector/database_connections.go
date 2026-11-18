@@ -70,7 +70,7 @@ func openNamedDuckDB(ctx context.Context, cfg collectorConfig, item databaseConn
 	}
 	db.SetMaxOpenConns(cfg.duckDBMaxOpenConns)
 	db.SetMaxIdleConns(cfg.duckDBMaxIdleConns)
-	if err := ensureSchema(db, databaseSchemaConfig(cfg, item)); err != nil {
+	if err := ensureSchemaContext(ctx, db, databaseSchemaConfig(cfg, item)); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
