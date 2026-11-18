@@ -1,4 +1,21 @@
-use crate::{Logger, Params};
+use crate::{EventContext, Logger, Params};
+
+/// Finish a request event, mapping any `finish` failure into the caller's
+/// error type so it is never silently discarded.
+fn finish_request(
+    logger: &Logger,
+    ctx: &mut EventContext,
+    status_code: u16,
+) -> Result<(), serde_json::Error> {
+    let outcome = if status_code >= 500 {
+        "error"
+    } else {
+        "success"
+    };
+    logger
+        .finish(ctx, outcome)
+        .map_err(|err| serde_json::Error::io(std::io::Error::other(err.to_string())))
+}
 
 #[derive(Clone, Debug)]
 pub struct MiddlewareConfig {
@@ -34,17 +51,48 @@ pub fn capture_request(
     params.path = Some(path.to_string());
     params.status_code = Some(status_code);
     let mut ctx = logger.start_event(params);
-    let _ = logger.finish(
-        &mut ctx,
-        if status_code >= 500 {
-            "error"
-        } else {
-            "success"
-        },
-    );
+    finish_request(logger, &mut ctx, status_code)?;
     let event_id = ctx.event_id.clone();
     let encoded = logger
         .emit(&ctx)
         .map_err(|err| serde_json::Error::io(std::io::Error::other(err.to_string())))?;
     Ok(MiddlewareResult { event_id, encoded })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test;
+
+    #[test]
+    fn finish_request_propagates_finish_errors() {
+        let logger = test("web");
+        let mut ctx = logger.start_event(Params::new("GET /health").with_kind("http"));
+
+        finish_request(&logger, &mut ctx, 200).expect("first finish should succeed");
+
+        let err = finish_request(&logger, &mut ctx, 500)
+            .expect_err("a second finish must surface the error instead of being swallowed");
+        assert!(
+            err.to_string().contains("already finished"),
+            "expected EventAlreadyFinished, got: {err}"
+        );
+    }
+
+    #[test]
+    fn capture_request_finishes_and_emits_the_event() {
+        let logger = test("web");
+        let result =
+            capture_request(&logger, "GET", "/health", 200).expect("capture should succeed");
+        assert!(result.encoded.contains("\"kind\":\"http\""));
+        assert!(result.encoded.contains("\"outcome\":\"success\""));
+    }
+
+    #[test]
+    fn capture_request_marks_server_errors_as_errors() {
+        let logger = test("web");
+        let result =
+            capture_request(&logger, "GET", "/broken", 503).expect("capture should succeed");
+        assert!(result.encoded.contains("\"outcome\":\"error\""));
+    }
 }
