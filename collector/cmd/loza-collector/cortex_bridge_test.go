@@ -110,3 +110,48 @@ func TestCortexBridgeAsyncFlush(t *testing.T) {
 	require.NotNil(t, batch)
 	require.Len(t, batch.Events, 2)
 }
+
+// TestCortexBridgeDeliverAfterCloseDoesNotPanic is a deterministic regression
+// for the send-on-closed-channel crash: Deliver used to send to c.queue after
+// Close had closed it. It must now be rejected cleanly.
+func TestCortexBridgeDeliverAfterCloseDoesNotPanic(t *testing.T) {
+	bridge := &cortexBridgeClient{
+		cfg:   collectorConfig{cortexBridgeMode: "async"},
+		queue: make(chan []byte, 4),
+	}
+	require.NoError(t, bridge.Close())
+
+	raw := []byte(`{"event_id":"evt-after-close","timestamp":"2026-05-17T12:00:00Z","service":"checkout"}`)
+	require.ErrorIs(t, bridge.Deliver(context.Background(), [][]byte{raw}), errCortexBridgeClosed)
+}
+
+// TestCortexBridgeDeliverConcurrentWithClose exercises the race described in
+// the finding: many Deliver calls in flight while Close closes the queue. It
+// must complete without a "send on closed channel" panic (also under -race).
+func TestCortexBridgeDeliverConcurrentWithClose(t *testing.T) {
+	bridge := &cortexBridgeClient{
+		cfg:   collectorConfig{cortexBridgeMode: "async"},
+		queue: make(chan []byte, 4096),
+	}
+	raw := []byte(`{"event_id":"evt-race","timestamp":"2026-05-17T12:00:00Z","service":"checkout"}`)
+
+	const workers = 8
+	const iterations = 500
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			for j := 0; j < iterations; j++ {
+				_ = bridge.Deliver(context.Background(), [][]byte{raw})
+			}
+		}()
+	}
+	close(start)
+	require.NoError(t, bridge.Close())
+	wg.Wait()
+
+	require.ErrorIs(t, bridge.Deliver(context.Background(), [][]byte{raw}), errCortexBridgeClosed)
+}

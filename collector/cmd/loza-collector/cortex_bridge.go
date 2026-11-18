@@ -18,6 +18,8 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
+var errCortexBridgeClosed = errors.New("cortex bridge is closed")
+
 type cortexBridgeClient struct {
 	cfg       collectorConfig
 	metrics   *collectorMetrics
@@ -26,6 +28,12 @@ type cortexBridgeClient struct {
 	queue     chan []byte
 	wg        sync.WaitGroup
 	closeOnce sync.Once
+
+	// mu guards queue sends against Close. Close takes the write lock before
+	// closing queue; Deliver takes the read lock before sending, so a send can
+	// never race with the close. closed is read/written under mu.
+	mu     sync.RWMutex
+	closed bool
 }
 
 func newCortexBridgeClient(cfg collectorConfig, metrics *collectorMetrics) (*cortexBridgeClient, error) {
@@ -78,9 +86,12 @@ func (c *cortexBridgeClient) Close() error {
 		return nil
 	}
 	c.closeOnce.Do(func() {
+		c.mu.Lock()
+		c.closed = true
 		if c.queue != nil {
 			close(c.queue)
 		}
+		c.mu.Unlock()
 		c.wg.Wait()
 		if c.conn != nil {
 			_ = c.conn.Close()
@@ -95,6 +106,11 @@ func (c *cortexBridgeClient) Deliver(ctx context.Context, raws [][]byte) error {
 	}
 	if c.mode() == "sync" {
 		return c.sendBatch(ctx, raws)
+	}
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.closed {
+		return errCortexBridgeClosed
 	}
 	for _, raw := range raws {
 		cp := append([]byte(nil), raw...)
