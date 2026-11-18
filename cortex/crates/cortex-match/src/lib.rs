@@ -9,6 +9,7 @@
 //! - fast pattern comparison
 //! - approximate matching
 
+pub mod ffi;
 pub mod graph;
 pub mod signature;
 pub mod similarity;

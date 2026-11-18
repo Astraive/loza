@@ -7,17 +7,17 @@ fn cstr_to_string(ptr: *const c_char) -> Option<String> {
     if ptr.is_null() {
         return None;
     }
-    unsafe { CStr::from_ptr(ptr) }.to_str().ok().map(str::to_owned)
+    unsafe { CStr::from_ptr(ptr) }
+        .to_str()
+        .ok()
+        .map(str::to_owned)
 }
 
 /// Score a query signature against a candidate signature.
 /// Both arguments are JSON-serialized Signature objects.
 /// Returns the similarity score as f64.
 #[no_mangle]
-pub extern "C" fn score_ffi(
-    query_json: *const c_char,
-    candidate_json: *const c_char,
-) -> f64 {
+pub extern "C" fn score_ffi(query_json: *const c_char, candidate_json: *const c_char) -> f64 {
     let query_str = match cstr_to_string(query_json) {
         Some(s) => s,
         None => return 0.0,
@@ -44,7 +44,7 @@ pub extern "C" fn score_ffi(
 /// query_json: JSON-serialized Signature
 /// candidates_json: JSON array of Signature objects
 /// k: number of results to return
-/// Returns: JSON array of {signature_index, similarity} objects
+/// Returns: JSON array of {signature_id, similarity} objects
 #[no_mangle]
 pub extern "C" fn topk_search_ffi(
     query_json: *const c_char,
@@ -76,7 +76,7 @@ pub extern "C" fn topk_search_ffi(
         .iter()
         .map(|m| {
             serde_json::json!({
-                "index": m.index,
+                "signature_id": m.signature_id,
                 "similarity": m.similarity,
             })
         })
@@ -90,9 +90,7 @@ pub extern "C" fn topk_search_ffi(
 /// signature_json: JSON-serialized Signature
 /// Returns: JSON string with the hash
 #[no_mangle]
-pub extern "C" fn shape_hash_ffi(
-    signature_json: *const c_char,
-) -> *mut c_char {
+pub extern "C" fn shape_hash_ffi(signature_json: *const c_char) -> *mut c_char {
     let sig_str = match cstr_to_string(signature_json) {
         Some(s) => s,
         None => return CString::new("").unwrap().into_raw(),
