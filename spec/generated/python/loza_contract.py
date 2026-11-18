@@ -560,7 +560,7 @@ def validate_flexible_json_bytes(raw: bytes, strict: bool) -> None:
             if line.strip():
                 validate_event_payload(json.loads(line), strict)
         return
-    if isinstance(payload, dict) and 'events' in payload and 'api_version' not in payload:
+    if isinstance(payload, dict) and 'events' in payload:
         for event in payload['events']:
             validate_event_payload(event, strict)
         return
