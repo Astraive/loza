@@ -3,6 +3,7 @@ package errors
 import (
 	"context"
 	"errors"
+	stderrors "errors"
 	"fmt"
 	"time"
 )
@@ -40,7 +41,7 @@ func RetryWithBackoff(ctx context.Context, maxAttempts int, initialDelay time.Du
 }
 
 func IsRetryable(err error) bool {
-	if err == context.DeadlineExceeded || err == context.Canceled {
+	if stderrors.Is(err, context.DeadlineExceeded) || stderrors.Is(err, context.Canceled) {
 		return false
 	}
 	return true
