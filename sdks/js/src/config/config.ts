@@ -18,6 +18,10 @@ function hasBasicCredentials(cfg: Pick<Config, 'apiKey' | 'username' | 'password
   return !cfg.apiKey && !!cfg.username && (!!cfg.password || isPublicDSNUsername(cfg.username));
 }
 
+function hasCredentials(cfg: Pick<Config, 'apiKey' | 'username' | 'password'>): boolean {
+  return !!cfg.apiKey || hasBasicCredentials(cfg);
+}
+
 export function collectorRouteURL(baseURL: string, collectorName: string, route: string): string {
   const base = baseURL.replace(/\/+$/, '');
   return collectorName ? `${base}/collectors/${encodeURIComponent(collectorName)}${route}` : `${base}${route}`;
@@ -53,8 +57,8 @@ export function validateConfig(cfg: Config): Config {
   if (cfg.username && !cfg.password && !isPublicDSNUsername(cfg.username)) {
     throw new Error('invalid Loza config: Basic credentials require a password unless username is an lz_pub_ capability');
   }
-  if (hasBasicCredentials(cfg) && endpoint.protocol === 'http:' && !isLocalhost(endpoint.hostname)) {
-    throw new Error('invalid Loza config: Basic credentials require HTTPS (HTTP is allowed only for localhost)');
+  if (hasCredentials(cfg) && endpoint.protocol === 'http:' && !isLocalhost(endpoint.hostname)) {
+    throw new Error('invalid Loza config: credentials require HTTPS (HTTP is allowed only for localhost)');
   }
   return cfg;
 }
