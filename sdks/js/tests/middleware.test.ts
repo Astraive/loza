@@ -83,6 +83,31 @@ describe('framework middleware', () => {
     assert.deepEqual(responses, [200, 404, 500]);
   });
 
+  it('ends the Express response even when an error already finished the event', async () => {
+    let errorHandler: ((err: Error) => void) | undefined;
+    let ended = false;
+    const res: HttpResponse = {
+      statusCode: 200,
+      end() { ended = true; return 'ended'; },
+      on(name, handler) { if (name === 'error') errorHandler = handler; },
+    };
+    const req = { method: 'GET', path: '/broken', headers: {}, socket: {} };
+    lozaMiddleware({ service: 'api' })(req, res, () => {});
+    assert.ok(errorHandler);
+
+    // A socket error finishes/emits the event before the response is ended.
+    errorHandler!(new Error('socket failed'));
+    await Promise.resolve();
+
+    // The override must still end the response instead of throwing a
+    // double-finish error from loza.finish.
+    assert.equal(res.end('body'), 'ended');
+    assert.equal(ended, true);
+
+    // A repeated end must not re-finish the event or swallow the real end.
+    assert.equal(res.end(), 'ended');
+  });
+
   it('finishes Koa events after success and error', async () => {
     let successRan = false;
     await lozaKoaMiddleware({ service: 'koa' })(

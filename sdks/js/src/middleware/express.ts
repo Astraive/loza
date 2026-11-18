@@ -27,21 +27,36 @@ export function lozaMiddleware(opts: ExpressMiddlewareOptions = {}) {
       AttrString('http.remote_ip', req.ip || req.socket?.remoteAddress || ''),
     );
 
+    // Only one of the `error` and `end` handlers may settle the event; both
+    // finish it, and Event.finish throws once it is already finished/emitted.
+    let settled = false;
+    const settle = (finalize: () => void): void => {
+      if (settled) return;
+      settled = true;
+      try {
+        finalize();
+      } finally {
+        loza.emit(ctx).catch(() => {});
+      }
+    };
+
     const originalEnd = res.end;
     res.end = function (...args: any[]) {
       const durationMs = Date.now() - startedAt;
       const outcome = res.statusCode >= 500 ? 'error' : 'success';
-      loza.finish(ctx, outcome,
-        AttrInt('status_code', res.statusCode),
-        AttrInt('duration_ms', durationMs),
-      );
-      loza.emit(ctx).catch(() => {});
-      return originalEnd.apply(res, args);
+      try {
+        settle(() => loza.finish(ctx, outcome,
+          AttrInt('status_code', res.statusCode),
+          AttrInt('duration_ms', durationMs),
+        ));
+      } finally {
+        // Telemetry must never prevent the HTTP response from ending.
+        return originalEnd.apply(res, args);
+      }
     };
 
     res.on('error', (err: Error) => {
-      loza.finishError(ctx, err);
-      loza.emit(ctx).catch(() => {});
+      settle(() => loza.finishError(ctx, err));
     });
 
     next();
