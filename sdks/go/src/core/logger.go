@@ -496,7 +496,11 @@ func (l *Logger) Emit(ctx context.Context) error {
 	l.mu.RLock()
 	enricher := l.cfg.Enricher
 	l.mu.RUnlock()
-	if enricher != nil {
+	// Skip the enricher once the event is emitted: Emit is documented as
+	// idempotent (e.g. deferred + explicit calls), and AddAttrs on an emitted
+	// event fails with EventClosedError. EmitEventWithContext already treats an
+	// emitted event as a no-op, so repeated calls return nil without mutation.
+	if enricher != nil && !ev.IsEmitted() {
 		if err := ev.AddAttrs(enricher(ctx)); err != nil {
 			return err
 		}
