@@ -4,6 +4,17 @@ All notable changes to the contract repository are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/0.2.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [Unreleased]
+
+### Fixed
+
+- `spec/services/dedupe_store.py`: a configured but unreachable Redis backend no longer
+  silently downgrades to per-process local dedupe. `build_store()` now fails closed with
+  `RedisUnavailableError` and logs the underlying error. **Migration:** deployments that
+  intentionally relied on the silent fallback must set `DEDUPE_ALLOW_LOCAL_FALLBACK=1` to
+  opt back in; the downgrade is then logged as a warning.
+
 ## [0.3.4] - 2026-08-26
 
 ### Changed
