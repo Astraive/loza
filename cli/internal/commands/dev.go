@@ -39,12 +39,6 @@ func DevCommand(ctx context.Context, cfg config.Config, _ []string) error {
 	if err := collectorCmd.Start(); err != nil {
 		return fmt.Errorf("start collector: %w", err)
 	}
-	defer func() {
-		if collectorCmd.Process != nil {
-			_ = collectorCmd.Process.Kill()
-			_, _ = collectorCmd.Process.Wait()
-		}
-	}()
 
 	// Wait for collector to be ready before starting cortex
 	collectorURL := "http://localhost:9308/health"
@@ -59,6 +53,7 @@ func DevCommand(ctx context.Context, cfg config.Config, _ []string) error {
 			}
 		}
 		if i == 29 {
+			stopCollector(collectorCmd)
 			return fmt.Errorf("collector did not become ready within 30s")
 		}
 	}
@@ -68,10 +63,29 @@ func DevCommand(ctx context.Context, cfg config.Config, _ []string) error {
 	cortexCmd.Stdout = os.Stdout
 	cortexCmd.Stderr = os.Stderr
 	cortexCmd.Dir = cfg.CortexRepoPath
+	return superviseDev(collectorCmd, cortexCmd)
+}
+
+// stopCollector terminates and reaps an already-started collector exactly
+// once. Cmd.Wait reaps the child, so Process.Wait must not be used as well.
+func stopCollector(collectorCmd *exec.Cmd) {
+	if collectorCmd.Process != nil {
+		_ = collectorCmd.Process.Kill()
+	}
+	_ = collectorCmd.Wait()
+}
+
+// superviseDev runs cortex to completion and then tears down the collector.
+// The collector is a long-running server that never exits on its own, so it
+// must be killed before waiting; otherwise DevCommand blocks forever in Wait
+// and the cleanup is unreachable. The deferred stop also covers the case
+// where cortex fails to start or returns an error.
+func superviseDev(collectorCmd, cortexCmd *exec.Cmd) error {
+	defer stopCollector(collectorCmd)
 	if err := cortexCmd.Run(); err != nil {
 		return fmt.Errorf("run cortex: %w", err)
 	}
-	return collectorCmd.Wait()
+	return nil
 }
 
 func configPath(cfg config.Config, name string) string {
