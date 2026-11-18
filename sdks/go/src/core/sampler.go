@@ -217,6 +217,9 @@ func SampleRoutes(routes ...string) Sampler {
 }
 
 // SampleRateLimited keeps at most rate events per window using a token-bucket strategy.
+// A freshly constructed limiter starts with a single token rather than a full
+// bucket, so it cannot emit an initial burst of `rate` events before any time
+// has elapsed; the remaining budget accrues over the window.
 func SampleRateLimited(rate float64, window time.Duration) Sampler {
 	if rate <= 0 || window <= 0 {
 		return SampleNone()
@@ -225,7 +228,7 @@ func SampleRateLimited(rate float64, window time.Duration) Sampler {
 		rate:   rate,
 		window: window,
 		last:   time.Now(),
-		tokens: rate,
+		tokens: 1,
 	}
 }
 

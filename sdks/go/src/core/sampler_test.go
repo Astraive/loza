@@ -50,6 +50,25 @@ func TestSampleSlowRequestsNumericThresholds(t *testing.T) {
 	}
 }
 
+// TestSampleRateLimitedInitialBurst verifies that a freshly constructed limiter
+// does not start with a full bucket. Before this fix, SampleRateLimited(2, ...)
+// initialized tokens to 2 and accepted two events immediately (plus two more
+// after refill within the same window). A fresh limiter must only be able to
+// emit one event until tokens accrue over the window.
+func TestSampleRateLimitedInitialBurst(t *testing.T) {
+	// Use a long window so refill is negligible and the assertion is deterministic.
+	s := SampleRateLimited(2, time.Hour)
+	accepted := 0
+	for i := 0; i < 10; i++ {
+		if s.ShouldSample(nil) {
+			accepted++
+		}
+	}
+	if accepted != 1 {
+		t.Fatalf("fresh limiter accepted %d events before refill, want 1", accepted)
+	}
+}
+
 func TestSampleByHeader(t *testing.T) {
 	ev := &Event{
 		Attrs: []Attr{
