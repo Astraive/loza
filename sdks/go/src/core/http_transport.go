@@ -113,20 +113,23 @@ func (t *HTTPTransport) Do(ctx context.Context, req *http.Request) (*HTTPRespons
 		if err != nil {
 			lastErr = fmt.Errorf("request failed (attempt %d/%d): %w", attempt+1, t.maxRetries+1, err)
 
-			// Check if we should retry
-			if attempt < t.maxRetries && t.isRetryableError(err) {
-				if t.metrics != nil {
-					t.metrics.OnRetry(attempt + 1)
-				}
-				backoff := t.calculateBackoff(attempt, 0)
-				select {
-				case <-time.After(backoff):
-					continue
-				case <-ctx.Done():
-					return nil, fmt.Errorf("context cancelled during retry backoff: %w", ctx.Err())
-				}
+			// Only retry genuinely retryable errors, and only while attempts
+			// remain. A non-retryable error (or an exhausted retry budget) must
+			// not loop back immediately with zero delay.
+			if !t.isRetryableError(err) || attempt >= t.maxRetries {
+				break
 			}
-			continue
+
+			if t.metrics != nil {
+				t.metrics.OnRetry(attempt + 1)
+			}
+			backoff := t.calculateBackoff(attempt, 0)
+			select {
+			case <-time.After(backoff):
+				continue
+			case <-ctx.Done():
+				return nil, fmt.Errorf("context cancelled during retry backoff: %w", ctx.Err())
+			}
 		}
 
 		// Read response body
