@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -82,5 +83,62 @@ func TestRunLoadTestDeliversAllEvents(t *testing.T) {
 
 	if got := received.Load(); got != int64(cfg.Events) {
 		t.Fatalf("delivered %d events, want %d", got, cfg.Events)
+	}
+}
+
+// A malformed URL makes http.NewRequestWithContext return a nil request and a
+// non-nil error. sendBatch must not dereference that nil request and must
+// account for the failed batch in stats.errors instead of panicking.
+func TestSendBatchMalformedURL(t *testing.T) {
+	stats := &Stats{}
+	cfg := Config{URL: "://malformed", BatchSize: 2}
+	batch := [][]byte{[]byte(`{"event":"a"}`), []byte(`{"event":"b"}`)}
+
+	sendBatch(context.Background(), &http.Client{}, cfg, batch, stats)
+
+	if got := atomic.LoadInt64(&stats.errors); got != int64(len(batch)) {
+		t.Fatalf("stats.errors = %d, want %d", got, len(batch))
+	}
+	if got := atomic.LoadInt64(&stats.accepted); got != 0 {
+		t.Fatalf("stats.accepted = %d, want 0", got)
+	}
+	if got := atomic.LoadInt64(&stats.invalid); got != 0 {
+		t.Fatalf("stats.invalid = %d, want 0", got)
+	}
+	if got := atomic.LoadInt64(&stats.rejected); got != 0 {
+		t.Fatalf("stats.rejected = %d, want 0", got)
+	}
+}
+
+// Reproduce the reported trigger end to end: a malformed -url must not panic
+// in run()/runLoadTest()/sendBatch().
+func TestRunMalformedURLDoesNotPanic(t *testing.T) {
+	if err := run([]string{"-url", "://malformed", "-events", "1", "-workers", "1", "-batch", "1"}); err != nil {
+		t.Fatalf("run() returned error: %v", err)
+	}
+}
+
+// Guard that well-formed requests still set headers and are counted normally.
+func TestSendBatchValidURL(t *testing.T) {
+	contentTypes := make(chan string, 1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		contentTypes <- r.Header.Get("Content-Type")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"accepted":1,"invalid":0,"rejected":0}`))
+	}))
+	defer srv.Close()
+
+	stats := &Stats{}
+	cfg := Config{URL: srv.URL, APIKey: "test-key"}
+	sendBatch(context.Background(), srv.Client(), cfg, [][]byte{[]byte(`{"event":"a"}`)}, stats)
+
+	if got := <-contentTypes; got != "application/json" {
+		t.Fatalf("Content-Type = %q, want application/json", got)
+	}
+	if got := atomic.LoadInt64(&stats.accepted); got != 1 {
+		t.Fatalf("stats.accepted = %d, want 1", got)
+	}
+	if got := atomic.LoadInt64(&stats.errors); got != 0 {
+		t.Fatalf("stats.errors = %d, want 0", got)
 	}
 }
