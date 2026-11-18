@@ -145,12 +145,17 @@ func (rl *RateLimiter) extractClientIP(r *http.Request) string {
 	// Only trust X-Forwarded-For if RemoteAddr is a trusted proxy
 	if len(rl.trustedProxies) > 0 && isTrustedProxyIP(remoteIP, rl.trustedProxies) {
 		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+			// Proxies append hops to X-Forwarded-For, so the leftmost entries
+			// are client-controlled and can be spoofed. Walk right-to-left and
+			// use the closest untrusted hop that the trusted proxy actually
+			// observed, skipping any intermediate trusted proxy hops.
 			parts := strings.Split(xff, ",")
-			for _, part := range parts {
-				candidate := net.ParseIP(strings.TrimSpace(part))
-				if candidate != nil && !isTrustedProxyIP(candidate, rl.trustedProxies) {
-					return candidate.String()
+			for i := len(parts) - 1; i >= 0; i-- {
+				candidate := net.ParseIP(strings.TrimSpace(parts[i]))
+				if candidate == nil || isTrustedProxyIP(candidate, rl.trustedProxies) {
+					continue
 				}
+				return candidate.String()
 			}
 		}
 		if xri := r.Header.Get("X-Real-IP"); xri != "" {
