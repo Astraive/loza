@@ -4,6 +4,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"math"
 	"time"
 
 	"github.com/astraive/loza/cli/internal/config"
@@ -22,10 +23,7 @@ func BenchCommand(ctx context.Context, cfg config.Config, args []string) error {
 		return err
 	}
 
-	totalEvents := *rate * int(duration.Seconds())
-	if totalEvents <= 0 {
-		totalEvents = *rate
-	}
+	totalEvents := benchTotalEvents(*rate, *duration)
 	workers := 4
 	if *rate < workers {
 		workers = max(*rate, 1)
@@ -55,4 +53,17 @@ func BenchCommand(ctx context.Context, cfg config.Config, args []string) error {
 	}
 	report.Print()
 	return nil
+}
+
+// benchTotalEvents returns the number of events to send for a benchmark at the
+// given rate and duration. It computes with floating-point math and rounding so
+// fractional and sub-second durations yield the correct count (for example,
+// 100 events/sec for 500ms is 50 events, not 0). A non-positive result falls
+// back to the rate, preserving the previous behavior for a zero duration.
+func benchTotalEvents(rate int, duration time.Duration) int {
+	total := int(math.Round(float64(rate) * duration.Seconds()))
+	if total <= 0 {
+		return rate
+	}
+	return total
 }
