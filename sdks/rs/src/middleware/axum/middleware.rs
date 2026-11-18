@@ -5,7 +5,7 @@ pub fn middleware_name() -> &'static str {
 #[cfg(feature = "axum")]
 pub mod axum_impl {
     use crate::{Logger, Params};
-    use axum::extract::Request;
+    use axum::extract::{MatchedPath, Request};
     use axum::middleware::Next;
     use axum::response::Response;
     use std::sync::Arc;
@@ -34,6 +34,15 @@ pub mod axum_impl {
     ) -> Response {
         let method = req.method().to_string();
         let path = req.uri().path().to_string();
+        // Prefer the matched route template (e.g. "/users/:id") over the raw
+        // request path (e.g. "/users/123") so route-based grouping and sampling
+        // keep bounded cardinality. This mirrors axum's own MatchedPath guidance:
+        // fall back to the literal path only when routing produced no template.
+        let route = req
+            .extensions()
+            .get::<MatchedPath>()
+            .map(|matched| matched.as_str().to_string())
+            .unwrap_or_else(|| path.clone());
         let user_agent = req
             .headers()
             .get("user-agent")
@@ -46,8 +55,8 @@ pub mod axum_impl {
 
         let mut params = Params::new("http.request").with_kind("http");
         params.method = Some(method);
-        params.path = Some(path.clone());
-        params.route = Some(path);
+        params.path = Some(path);
+        params.route = Some(route);
         params.service = Some(service_name);
         let mut ctx = logger.start_event(params);
 
