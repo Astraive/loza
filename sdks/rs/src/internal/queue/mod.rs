@@ -195,7 +195,15 @@ impl DiskOfflineBuffer {
 
     fn evict_old_files(&self) {
         let mut entries: Vec<_> = match fs::read_dir(&self.dir) {
-            Ok(rd) => rd.filter_map(|e| e.ok()).collect(),
+            Ok(rd) => rd
+                .filter_map(|e| e.ok())
+                .filter(|e| {
+                    e.path()
+                        .extension()
+                        .map(|ext| ext == "json")
+                        .unwrap_or(false)
+                })
+                .collect(),
             Err(_) => return,
         };
         if entries.len() <= self.max_files {
