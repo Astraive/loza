@@ -168,3 +168,34 @@ def test_httpbatch_sink_follows_validated_same_origin_redirect() -> None:
         server.server_close()
 
     assert received == ["Bearer same-origin-key"]
+
+
+def test_httpbatch_sink_retries_malformed_response_body() -> None:
+    request_count = {"n": 0}
+
+    class MalformedHandler(_Handler):
+        response_status = 202
+        response_body = b"not json"
+
+        def do_POST(self) -> None:  # noqa: N802
+            request_count["n"] += 1
+            super().do_POST()
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), MalformedHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        sink = HTTPBatchSink(
+            f"http://127.0.0.1:{server.server_address[1]}",
+            service="checkout",
+            retries=2,
+            base_delay=0.0,
+        )
+        with pytest.raises(RuntimeError, match="collector send failed"):
+            sink.write(
+                '{"schema_version":"v1","event_version":"v1","timestamp":"2026-05-12T00:00:00Z","event_id":"evt_1","service":"checkout","event":"payment.completed","kind":"http"}'
+            )
+        assert request_count["n"] == 3  # initial attempt plus two retries
+    finally:
+        server.shutdown()
+        server.server_close()
