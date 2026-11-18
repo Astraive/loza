@@ -6,6 +6,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"net"
+	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -19,9 +22,91 @@ type PostgresStorage struct {
 	db *sql.DB
 }
 
+// isLocalPostgresHost reports whether host refers to the local machine (a
+// loopback address, an empty host, or a unix socket). Plaintext TLS modes are
+// only tolerated for these hosts so local development keeps working.
+func isLocalPostgresHost(host string) bool {
+	host = strings.TrimSpace(host)
+	switch strings.ToLower(host) {
+	case "", "localhost", "localhost.", "127.0.0.1", "::1", "[::1]":
+		return true
+	}
+	if strings.HasPrefix(host, "/") { // unix domain socket directory
+		return true
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		return ip.IsLoopback()
+	}
+	return false
+}
+
+// buildPostgresDSN constructs an lib/pq DSN that never sends credentials or
+// event data in the clear for non-local hosts. Credentials are passed through
+// url.UserPassword so the password is structurally escaped instead of being
+// interpolated into a printable, loggable string with fmt.Sprintf. For remote
+// hosts insecure sslmodes are upgraded to verify-full and an explicit CA
+// certificate is required; otherwise an error is returned and no connection is
+// attempted.
+func buildPostgresDSN(cfg config.PostgresConfig) (string, error) {
+	host := strings.TrimSpace(cfg.Host)
+	sslMode := strings.ToLower(strings.TrimSpace(cfg.SSLMode))
+	sslRootCert := strings.TrimSpace(cfg.SSLRootCert)
+	local := isLocalPostgresHost(host)
+
+	if local {
+		if sslMode == "" {
+			sslMode = "disable"
+		}
+		switch sslMode {
+		case "disable", "allow", "prefer", "require", "verify-ca", "verify-full":
+			// Local connections may use any valid mode for development.
+		default:
+			return "", fmt.Errorf("invalid postgres sslmode %q", cfg.SSLMode)
+		}
+	} else {
+		switch sslMode {
+		case "verify-full":
+			// Already the strongest mode; nothing to upgrade.
+		case "", "disable", "allow", "prefer", "require", "verify-ca":
+			// Never allow plaintext or unauthenticated TLS to a remote database.
+			log.Warn().
+				Str("host", host).
+				Str("configured_sslmode", cfg.SSLMode).
+				Msg("upgrading insecure postgres sslmode to verify-full for non-local host")
+			sslMode = "verify-full"
+		default:
+			return "", fmt.Errorf("invalid postgres sslmode %q", cfg.SSLMode)
+		}
+		if sslRootCert == "" {
+			return "", fmt.Errorf("postgres sslrootcert (CA certificate) is required for non-local host %q with sslmode=verify-full", host)
+		}
+	}
+
+	port := cfg.Port
+	if port == 0 {
+		port = 5432
+	}
+	u := &url.URL{
+		Scheme: "postgres",
+		User:   url.UserPassword(cfg.User, cfg.Password),
+		Host:   net.JoinHostPort(host, strconv.Itoa(port)),
+		Path:   "/" + strings.TrimPrefix(cfg.Database, "/"),
+	}
+	query := u.Query()
+	query.Set("sslmode", sslMode)
+	if sslRootCert != "" {
+		query.Set("sslrootcert", sslRootCert)
+	}
+	u.RawQuery = query.Encode()
+
+	return u.String(), nil
+}
+
 func NewPostgresStorage(cfg config.PostgresConfig) (*PostgresStorage, error) {
-	dsn := fmt.Sprintf("host=%s port=%d user=%s password=%s dbname=%s sslmode=%s",
-		cfg.Host, cfg.Port, cfg.User, cfg.Password, cfg.Database, cfg.SSLMode)
+	dsn, err := buildPostgresDSN(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("invalid postgres configuration: %w", err)
+	}
 
 	db, err := sql.Open("postgres", dsn)
 	if err != nil {
