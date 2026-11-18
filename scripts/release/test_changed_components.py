@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import importlib.util
+import os
+import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -68,6 +70,34 @@ class DetectRegressionTests(unittest.TestCase):
     def test_true_regression_is_still_rejected(self) -> None:
         with self.assertRaises(SystemExit):
             self._detect("1.3.0", "1.2.4")
+
+
+class WriteGithubOutputTests(unittest.TestCase):
+    def test_unset_github_output_is_a_noop(self) -> None:
+        values = {"has_changes": "true"}
+
+        with mock.patch.dict(os.environ, {}, clear=True):
+            self.assertNotIn("GITHUB_OUTPUT", os.environ)
+            # The buggy version turned "" into Path(".") and raised IsADirectoryError.
+            changed_components.write_github_output(values)
+
+    def test_empty_github_output_is_a_noop(self) -> None:
+        with mock.patch.dict(os.environ, {"GITHUB_OUTPUT": ""}, clear=True):
+            self.assertEqual(os.environ.get("GITHUB_OUTPUT"), "")
+            changed_components.write_github_output({"has_changes": "true"})
+
+    def test_writes_values_when_github_output_is_set(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            output_path = Path(temporary_directory) / "github_output"
+            values = {"has_changes": "true", "changed_components": "spec,cli"}
+
+            with mock.patch.dict(os.environ, {"GITHUB_OUTPUT": str(output_path)}, clear=True):
+                changed_components.write_github_output(values)
+
+            self.assertEqual(
+                output_path.read_text(encoding="utf-8"),
+                "has_changes=true\nchanged_components=spec,cli\n",
+            )
 
 
 if __name__ == "__main__":
