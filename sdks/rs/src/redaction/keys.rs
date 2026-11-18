@@ -27,7 +27,10 @@ fn segments(value: &str) -> Vec<&str> {
 /// `haystack`. Both sides are split on `.` and `_`, so a sensitive key is
 /// matched wherever it occurs in a dotted/underscored field name.
 fn contains_segments(haystack: &[&str], needle: &[&str]) -> bool {
-    !needle.is_empty() && haystack.windows(needle.len()).any(|window| window == needle)
+    !needle.is_empty()
+        && haystack
+            .windows(needle.len())
+            .any(|window| window == needle)
 }
 
 pub fn matches_key(key: &str, keys: &[&str]) -> bool {
