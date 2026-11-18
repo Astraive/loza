@@ -377,6 +377,37 @@ def _merge_dicts(base: dict[str, Any], override: dict[str, Any]) -> dict[str, An
     return merged
 
 
+def _strip_inline_comment(line: str) -> str:
+    """Strip a trailing inline comment without corrupting quoted or token values.
+
+    A ``#`` opens a comment only when it is outside quotes and starts a token
+    (at the start of the line or preceded by whitespace). This preserves ``#``
+    inside quoted values such as URL fragments and inside unquoted tokens such
+    as ``ab#cd``.
+    """
+    quote: str | None = None
+    index = 0
+    length = len(line)
+    while index < length:
+        char = line[index]
+        if quote is not None:
+            if quote == '"' and char == "\\" and index + 1 < length:
+                index += 2  # skip a backslash-escaped character
+                continue
+            if char == quote:
+                # YAML escapes a single quote inside single quotes by doubling it.
+                if char == "'" and index + 1 < length and line[index + 1] == "'":
+                    index += 2
+                    continue
+                quote = None
+        elif char in ("'", '"'):
+            quote = char
+        elif char == "#" and (index == 0 or line[index - 1].isspace()):
+            return line[:index]
+        index += 1
+    return line
+
+
 def _parse_simple_yaml(content: str) -> dict[str, Any]:
     root: dict[str, Any] = {}
     stack: list[tuple[int, dict[str, Any]]] = [(-1, root)]
@@ -384,7 +415,7 @@ def _parse_simple_yaml(content: str) -> dict[str, Any]:
         if not raw_line.strip() or raw_line.lstrip().startswith("#"):
             continue
         indent = len(raw_line) - len(raw_line.lstrip(" "))
-        line = raw_line.split("#", 1)[0].rstrip()
+        line = _strip_inline_comment(raw_line).rstrip()
         if ":" not in line:
             continue
         key, raw_value = line.lstrip().split(":", 1)

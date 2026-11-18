@@ -155,6 +155,27 @@ def test_config_validation_and_layer_precedence(monkeypatch: pytest.MonkeyPatch,
     assert config_module._find_user_config_path() == user_file
 
 
+def test_simple_yaml_preserves_hash_in_values_and_strips_real_comments() -> None:
+    from loza.config import config as legacy_config
+
+    source = (
+        'collector_endpoint: "https://host/#frag" # trailing comment\n'
+        "api_key: ab#cd\n"
+        "note: 'it''s #fine' # real comment\n"
+        'escaped: "a\\"b #c"\n'
+        "plain: value # another comment\n"
+    )
+    expected = {
+        "collector_endpoint": "https://host/#frag",
+        "api_key": "ab#cd",
+        "note": "it''s #fine",
+        "escaped": 'a\\"b #c',
+        "plain": "value",
+    }
+    assert config_module._parse_simple_yaml(source) == expected
+    assert legacy_config._parse_simple_yaml(source) == expected
+
+
 def test_lql_queries_encode_values_and_decode_failures(monkeypatch: pytest.MonkeyPatch) -> None:
     result = lql.QueryResult(["id"], [{"id": 1}], duration_ms=2)
     assert len(result) == 1 and list(result) == [{"id": 1}] and "columns=1" in repr(result)
