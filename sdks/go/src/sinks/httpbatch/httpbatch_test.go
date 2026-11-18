@@ -244,6 +244,61 @@ func TestBatchSinkRetainsFailedBatchAheadOfNewEvents(t *testing.T) {
 	}
 }
 
+func TestBatchSinkWriteBatchPreservesOrderAfterFailedFlush(t *testing.T) {
+	var mu sync.Mutex
+	var bodies []string
+	fail := true
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		bodies = append(bodies, string(body))
+		shouldFail := fail
+		mu.Unlock()
+		if shouldFail {
+			http.Error(w, "retry", http.StatusServiceUnavailable)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+
+	// Large BatchSize and FlushInterval keep the timer/batch-size paths out of
+	// the way so the only flush is the one we drive explicitly below.
+	got, err := New(Config{URL: server.URL, BatchSize: 100, FlushInterval: time.Hour})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	ctx := context.Background()
+	if err := got.WriteEvent(ctx, []byte("first\n"), nil); err != nil {
+		t.Fatalf("WriteEvent: %v", err)
+	}
+	// Force a failed flush so "first\n" is retained at the head of the buffer.
+	if err := got.Flush(ctx); err == nil {
+		t.Fatal("first Flush unexpectedly succeeded")
+	}
+
+	mu.Lock()
+	fail = false
+	mu.Unlock()
+
+	impl := got.(*sink)
+	if err := impl.WriteBatch(ctx, [][]byte{[]byte("second\n")}, nil); err != nil {
+		t.Fatalf("WriteBatch: %v", err)
+	}
+	if err := got.Close(ctx); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(bodies) != 2 {
+		t.Fatalf("request bodies = %q, want two attempts (retained batch must precede newer WriteBatch payload)", bodies)
+	}
+	if bodies[0] != "first\n" || bodies[1] != "first\nsecond\n" {
+		t.Fatalf("request bodies = %q, WriteBatch payload overtook retained events", bodies)
+	}
+}
+
 func TestBatchSinkReportsTimerFailures(t *testing.T) {
 	reported := make(chan error, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
