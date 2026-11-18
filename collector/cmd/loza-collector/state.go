@@ -31,10 +31,12 @@ func (s *collectorState) effectiveSpoolHealthy() bool {
 }
 
 func (s *collectorState) effectiveDiskHealthy() bool {
-	if s.diskHealthy.Load() {
-		return true
-	}
-	return s.metrics.sinkWriteErrors.Load() == 0
+	// diskHealthy is driven exclusively by disk-full signals (the OnDiskFull
+	// callbacks and spool-write disk-full errors). A sink/DLQ write error is a
+	// separate condition and must not be used to infer disk health: a disk-full
+	// signal that does not also increment sinkWriteErrors would otherwise be
+	// reported as healthy, keeping isReady() and the readiness metric green.
+	return s.diskHealthy.Load()
 }
 
 func (s *collectorState) ensureProcessor() error {

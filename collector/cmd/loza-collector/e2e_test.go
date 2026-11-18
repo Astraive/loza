@@ -122,6 +122,7 @@ func TestCollectorE2EEndpointsAndGzip(t *testing.T) {
 		rateLimiter: rate.NewLimiter(rate.Limit(1000), 1000),
 	}
 	state.ready.Store(true)
+	state.diskHealthy.Store(true)
 
 	srv := httptest.NewServer(buildMux(state))
 	defer srv.Close()
