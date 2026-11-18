@@ -19,6 +19,12 @@ class LoguruSink:
 
 
 def bind_loza(logger):
+    """Attach the Loza sink to a Loguru logger and return the logger.
+
+    This is a convenience wrapper around ``logger.add(sink())``. Calling it
+    actually wires Loguru records into Loza; it is no longer a no-op.
+    """
+    logger.add(sink())
     return logger
 
 
