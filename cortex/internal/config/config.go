@@ -134,7 +134,7 @@ type PostgresConfig struct {
 type AuthenticationConfig struct {
 	Enabled    bool     `yaml:"enabled"`
 	APIKeys    []APIKey `yaml:"api_keys"`
-	HMACSecret string   `yaml:"hmac_secret"` // HMAC-SHA256 key for hashing API keys at rest
+	HMACSecret string   `yaml:"hmac_secret"` // HMAC-SHA256 key for hashing API keys before constant-time comparison
 }
 
 // APIKey represents an API key with role

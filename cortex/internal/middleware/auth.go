@@ -9,16 +9,17 @@ import (
 	"net/http"
 	"sort"
 	"strings"
-	"sync"
 
 	"github.com/astraive/loza/cortex/internal/config"
 )
 
+// Auth holds only derived authentication data. In particular it does not keep a
+// reference to the AuthenticationConfig (and therefore its raw APIKey values):
+// those are consumed at construction time and never retained by the Auth object.
 type Auth struct {
-	cfg        *config.AuthenticationConfig
+	enabled    bool
 	keyCache   map[string]*hashedAPIKey
 	hmacSecret []byte
-	once       sync.Once
 }
 
 type hashedAPIKey struct {
@@ -29,7 +30,8 @@ type hashedAPIKey struct {
 
 // AutoGenerateHMACSecret derives a deterministic HMAC key from the configured API keys.
 // This ensures the same config always produces the same secret without requiring
-// an explicit HMAC_SECRET env var.
+// an explicit HMAC_SECRET env var. Because it is derived only from the same keys it
+// protects, it adds no independent secret entropy; set HMACSecret to supply one.
 func AutoGenerateHMACSecret(keys []config.APIKey) []byte {
 	var parts []string
 	for _, k := range keys {
@@ -41,28 +43,30 @@ func AutoGenerateHMACSecret(keys []config.APIKey) []byte {
 	return sum[:]
 }
 
+// NewAuth builds an Auth from cfg. The raw API keys are read only here and are
+// never retained by the returned Auth: only their HMAC digests are stored. The
+// caller's config is left untouched (it is not zeroed or otherwise mutated).
 func NewAuth(cfg *config.AuthenticationConfig) *Auth {
-	return &Auth{cfg: cfg}
-}
-
-func (a *Auth) init() {
-	if a.keyCache != nil {
-		return
+	a := &Auth{}
+	if cfg == nil {
+		return a
 	}
-	if len(a.cfg.APIKeys) == 0 {
-		return
+
+	a.enabled = cfg.Enabled
+	if len(cfg.APIKeys) == 0 {
+		return a
 	}
 
 	// Determine HMAC secret: use explicit config or auto-generate from API keys.
-	if a.cfg.HMACSecret != "" {
-		a.hmacSecret = []byte(a.cfg.HMACSecret)
+	if cfg.HMACSecret != "" {
+		a.hmacSecret = []byte(cfg.HMACSecret)
 	} else {
-		a.hmacSecret = AutoGenerateHMACSecret(a.cfg.APIKeys)
+		a.hmacSecret = AutoGenerateHMACSecret(cfg.APIKeys)
 	}
 
-	a.keyCache = make(map[string]*hashedAPIKey, len(a.cfg.APIKeys))
-	for i := range a.cfg.APIKeys {
-		key := &a.cfg.APIKeys[i]
+	a.keyCache = make(map[string]*hashedAPIKey, len(cfg.APIKeys))
+	for i := range cfg.APIKeys {
+		key := &cfg.APIKeys[i]
 		hash := hmacSHA256([]byte(key.Key), a.hmacSecret)
 		a.keyCache[key.Name] = &hashedAPIKey{
 			Name:    key.Name,
@@ -70,6 +74,7 @@ func (a *Auth) init() {
 			Role:    key.Role,
 		}
 	}
+	return a
 }
 
 func hmacSHA256(data, secret []byte) []byte {
@@ -88,7 +93,7 @@ type AuthResult struct {
 
 func (a *Auth) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if a.cfg == nil || !a.cfg.Enabled {
+		if !a.enabled {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -108,8 +113,6 @@ func (a *Auth) Middleware(next http.Handler) http.Handler {
 }
 
 func (a *Auth) authenticate(r *http.Request) *AuthResult {
-	a.once.Do(a.init)
-
 	result := &AuthResult{Authorized: false}
 
 	apiKeyHeader := "X-API-Key"
@@ -128,8 +131,9 @@ func (a *Auth) authenticate(r *http.Request) *AuthResult {
 		return result
 	}
 
-	// Compare HMAC-SHA256 of provided key against stored hashes.
-	// This prevents timing attacks and avoids storing raw keys in memory.
+	// Compare HMAC-SHA256 of the provided key against the stored hashes with a
+	// constant-time comparison to avoid timing side channels. Auth retains only
+	// these derived hashes; it does not store the raw API keys from config.
 	incomingHash := hmacSHA256([]byte(providedKey), a.hmacSecret)
 	for _, cached := range a.keyCache {
 		if subtle.ConstantTimeCompare(incomingHash, cached.KeyHash) == 1 {
@@ -165,7 +169,7 @@ func (a *Auth) authorizeRole(r *http.Request, requiredRole string) bool {
 
 func (a *Auth) HandlerFunc(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if a.cfg == nil || !a.cfg.Enabled {
+		if !a.enabled {
 			next(w, r)
 			return
 		}
@@ -187,7 +191,7 @@ func (a *Auth) HandlerFunc(next http.HandlerFunc) http.HandlerFunc {
 func (a *Auth) RequireRole(role string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if a.cfg == nil || !a.cfg.Enabled {
+			if !a.enabled {
 				next.ServeHTTP(w, r)
 				return
 			}
