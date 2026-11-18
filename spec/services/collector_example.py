@@ -27,8 +27,18 @@ def handle_event(event: dict[str, Any], queue: LocalQueue, dedupe_store) -> dict
     allowed = dedupe_store.mark_seen(event_id, ttl)
     if not allowed:
         return {"status": "duplicate", "event_id": event_id}
-    # enqueue
-    queue.produce(event)
+    # Enqueue after claiming the dedupe key. If the enqueue fails, release the
+    # claim so a redelivery can be retried instead of being permanently treated
+    # as a duplicate (and silently lost) for the whole TTL window.
+    try:
+        queue.produce(event)
+    except Exception:
+        try:
+            dedupe_store.delete(event_id)
+        except Exception:
+            # Best effort: never mask the original enqueue failure.
+            pass
+        raise
     return {"status": "accepted", "event_id": event_id}
 
 
