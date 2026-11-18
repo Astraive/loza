@@ -56,13 +56,16 @@ func MiddlewareWithConfig(cfg Config) echopkg.MiddlewareFunc {
 
 			err = next(c)
 			if err != nil {
+				// Handle the error here so the response status is final before the
+				// event records it. Returning nil prevents Echo's ServeHTTP from
+				// invoking the HTTP error handler a second time for the same error.
 				c.Error(err)
 				loza.FinishError(ctx, err, loza.Int("status_code", c.Response().Status))
 			} else {
 				loza.Finish(ctx, "success", loza.Int("status_code", c.Response().Status))
 			}
 			_ = loza.Emit(ctx)
-			return err
+			return nil
 		}
 	}
 }
