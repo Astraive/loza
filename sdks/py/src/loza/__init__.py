@@ -324,6 +324,7 @@ from .core.timing import (
     with_process,
     with_group,
     with_timer,
+    _attrs_to_fields,
     finish_group_error,
     measure,
     step,
@@ -496,11 +497,11 @@ def checkpoint(ctx: EventContext, name: str, *attrs: Attr, **fields: Any) -> Non
 
 
 def process(ctx: EventContext, name: str, *attrs: Attr, **fields: Any) -> "ProcessHandle":
-    return ctx.start_process(name, **fields)
+    return ctx.start_process(name, **_attrs_to_fields(attrs, fields))
 
 
 def start_process(ctx: EventContext, name: str, *attrs: Attr, **fields: Any) -> "ProcessHandle":
-    return ctx.start_process(name, **fields)
+    return ctx.start_process(name, **_attrs_to_fields(attrs, fields))
 
 
 def finish_process(handle: "ProcessHandle", **attrs: Any) -> None:
@@ -516,11 +517,11 @@ def finish_group(handle: "GroupHandle", **attrs: Any) -> None:
 
 
 def timer(ctx: EventContext, name: str, *attrs: Attr, **fields: Any) -> "TimerHandle":
-    return ctx.start_timer(name, **fields)
+    return ctx.start_timer(name, **_attrs_to_fields(attrs, fields))
 
 
 def start_timer(ctx: EventContext, name: str, *attrs: Attr, **fields: Any) -> "TimerHandle":
-    return ctx.start_timer(name, **fields)
+    return ctx.start_timer(name, **_attrs_to_fields(attrs, fields))
 
 
 def stop_timer(handle: "TimerHandle", **attrs: Any) -> None:
@@ -528,7 +529,7 @@ def stop_timer(handle: "TimerHandle", **attrs: Any) -> None:
 
 
 def start_group(ctx: EventContext, name: str, *attrs: Attr, **fields: Any) -> "GroupHandle":
-    return ctx.start_group(name, **fields)
+    return ctx.start_group(name, **_attrs_to_fields(attrs, fields))
 
 
 def stopwatch() -> "StopwatchHandle":

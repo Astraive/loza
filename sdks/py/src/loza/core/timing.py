@@ -196,16 +196,26 @@ class StopwatchHandle:
 # --- Timing helper methods (added to EventContext at runtime) ---
 
 
+def _attrs_to_fields(attrs: tuple[Attr, ...], fields: dict[str, Any]) -> dict[str, Any]:
+    """Convert positional ``Attr`` objects into keyword fields.
+
+    Keyword fields win on key collisions, mirroring ``Logger.checkpoint``.
+    """
+    data: dict[str, Any] = {a.key: a.value for a in attrs}
+    data.update(fields)
+    return data
+
+
 def with_process(ctx: Any, name: str, *attrs: Attr, **fields: Any) -> ProcessHandle:
-    return ctx.start_process(name, **fields)
+    return ctx.start_process(name, **_attrs_to_fields(attrs, fields))
 
 
 def with_group(ctx: Any, name: str, *attrs: Attr, **fields: Any) -> GroupHandle:
-    return ctx.start_group(name, **fields)
+    return ctx.start_group(name, **_attrs_to_fields(attrs, fields))
 
 
 def with_timer(ctx: Any, name: str, *attrs: Attr, **fields: Any) -> TimerHandle:
-    return ctx.start_timer(name, **fields)
+    return ctx.start_timer(name, **_attrs_to_fields(attrs, fields))
 
 
 def finish_group_error(handle: GroupHandle, error: BaseException, **attrs: object) -> None:
