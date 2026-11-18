@@ -3,7 +3,7 @@ package core
 import "fmt"
 
 func applyDuplicateFieldPolicy(ev *Event, policy DuplicateFieldPolicy) error {
-	if ev == nil || len(ev.Attrs) == 0 {
+	if ev == nil {
 		return nil
 	}
 
@@ -14,7 +14,8 @@ func applyDuplicateFieldPolicy(ev *Event, policy DuplicateFieldPolicy) error {
 	ev.MuLock()
 	defer ev.MuUnlock()
 
-	// Re-check under lock in case attrs were added concurrently
+	// Check under the lock: reading the ev.Attrs slice header without ev.mu
+	// races with concurrent setters such as AddAttrs.
 	if len(ev.Attrs) == 0 {
 		return nil
 	}
