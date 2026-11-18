@@ -345,6 +345,38 @@ func TestMatchesPattern(t *testing.T) {
 	}
 }
 
+func TestMatchesPatternMetacharactersDoNotPanic(t *testing.T) {
+	tests := []struct {
+		name      string
+		fieldPath string
+		keyLower  string
+		pattern   string
+		expected  bool
+	}{
+		// A pattern with a wildcard plus an unbalanced "[" used to build the
+		// invalid regex "^password[.*$" and panic inside MustCompile.
+		{"unbalanced bracket", "password[.foo123", "password[.foo123", "password[.*", true},
+		// Same for an unbalanced "(" -> "^a(b.*$".
+		{"unbalanced paren", "a(bc", "a(bc", "a(b*", true},
+		// Wildcard semantics must still work.
+		{"wildcard preserved", "user.email", "email", "user.*", true},
+		// All other metacharacters are literal, not regex operators.
+		{"dot is literal", "axbfoo", "axbfoo", "a.b*", false},
+		{"dot matches literally", "a.bfoo", "a.bfoo", "a.b*", true},
+	}
+
+	p := &Processor{}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := p.matchesPattern(tt.fieldPath, tt.keyLower, tt.pattern)
+			if got != tt.expected {
+				t.Errorf("matchesPattern(%q, %q, %q) = %v, want %v",
+					tt.fieldPath, tt.keyLower, tt.pattern, got, tt.expected)
+			}
+		})
+	}
+}
+
 // Helper function to compare nested structures
 func structsEqual(a, b interface{}) bool {
 	aJSON, _ := json.Marshal(a)

@@ -849,13 +849,23 @@ func (p *Processor) matchesPattern(fieldPath, keyLower, pattern string) bool {
 
 	// Wildcard match (e.g., "user.*" matches "user.email")
 	if strings.Contains(patternLower, "*") {
-		wildcardRegex := strings.ReplaceAll(patternLower, "*", ".*")
+		// Treat every regex metacharacter literally except "*", which is the
+		// documented wildcard. QuoteMeta first so entries such as "password[.*"
+		// or "a(b*" cannot form an invalid regex, then translate the escaped
+		// "\*" back into ".*" to preserve glob semantics.
+		wildcardRegex := strings.ReplaceAll(regexp.QuoteMeta(patternLower), `\*`, ".*")
 		patternKey := "^" + wildcardRegex + "$"
 		var re *regexp.Regexp
 		if cached, ok := compiledPatternCache.Load(patternKey); ok {
 			re = cached.(*regexp.Regexp)
 		} else {
-			re = regexp.MustCompile(patternKey)
+			var err error
+			re, err = regexp.Compile(patternKey)
+			if err != nil {
+				// Defensive: the pattern is quoted, so this is unreachable in
+				// practice. Skip the pattern instead of crashing the collector.
+				return false
+			}
 			compiledPatternCache.Store(patternKey, re)
 		}
 		if match := re.MatchString(fieldPath); match {
