@@ -309,6 +309,12 @@ func (s *collectorState) handleIngest(w http.ResponseWriter, r *http.Request) {
 	s.forwardAcceptedToCortex(r.Context(), acceptedForCortex)
 
 	resp.Finalize()
+	writeJSON(w, ingestStatus(resp), resp)
+}
+
+// ingestStatus maps ingest outcome counts to an HTTP status code. A batch in
+// which nothing was accepted must never report 202 (Accepted).
+func ingestStatus(resp ingest.Response) int {
 	status := http.StatusAccepted
 	switch {
 	case resp.Accepted == 0 && resp.Invalid > 0 && resp.Rejected == 0 && resp.Quarantined == 0:
@@ -319,9 +325,12 @@ func (s *collectorState) handleIngest(w http.ResponseWriter, r *http.Request) {
 		status = http.StatusServiceUnavailable
 	case resp.Accepted > 0 && (resp.Invalid > 0 || resp.Rejected > 0 || resp.Quarantined > 0):
 		status = http.StatusMultiStatus
+	case resp.Accepted == 0 && (resp.Invalid > 0 || resp.Quarantined > 0):
+		// Every event failed with a mix of invalid and quarantined outcomes.
+		// Quarantined wins (matching Response.Finalize precedence), i.e. 422.
+		status = http.StatusUnprocessableEntity
 	}
-
-	writeJSON(w, status, resp)
+	return status
 }
 
 func (s *collectorState) validateEventContract(raw []byte, expectedSchemaVersion, expectedEventVersion string) (string, bool) {
