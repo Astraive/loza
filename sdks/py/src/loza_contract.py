@@ -537,6 +537,7 @@ def validate_event_payload_detailed(payload: dict[str, Any], strict: bool) -> li
     if normalized.get('event_version') not in {LOZA_EVENT_VERSION}:
         errors.append(ValidationError(field='event_version', code='unsupported_event_version', message=f'field "event_version" has unsupported value "{normalized.get("event_version")}"'))
     _req_service(normalized, errors)
+    _req_str(normalized, 'kind', 'missing_kind', errors)
     _req_enum(normalized, 'kind', ALLOWED_KINDS, errors)
     _opt_enum(normalized, 'level', ALLOWED_LEVELS, errors)
     _opt_enum(normalized, 'outcome', ALLOWED_OUTCOMES, errors)
