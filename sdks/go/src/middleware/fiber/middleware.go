@@ -42,11 +42,16 @@ func MiddlewareWithConfig(cfg Config) fiberpkg.Handler {
 					panic(rec)
 				}
 				if c.Response().StatusCode() < fiberpkg.StatusBadRequest {
-					c.Status(fiberpkg.StatusInternalServerError)
+					// Send a generic 500 body. SendStatus only writes a body when
+					// none exists yet, so a partially written response is kept.
+					_ = c.SendStatus(fiberpkg.StatusInternalServerError)
 				}
-				err = panicErr{value: rec}
-				loza.FinishError(ctx, err, loza.Int("status_code", c.Response().StatusCode()))
+				// Keep the detailed panic value in telemetry only. Returning it as
+				// the handler error would make Fiber's default error handler write
+				// err.Error() into the response body, disclosing the panic value.
+				loza.FinishError(ctx, panicErr{value: rec}, loza.Int("status_code", c.Response().StatusCode()))
 				_ = loza.Emit(ctx)
+				err = nil
 			}
 		}()
 
