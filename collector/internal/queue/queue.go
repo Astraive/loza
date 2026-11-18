@@ -32,6 +32,10 @@ type Event struct {
 	Payload   []byte         `json:"payload"`
 	Attempts  int            `json:"attempts"`
 	Metadata  map[string]any `json:"metadata,omitempty"`
+
+	// nextAttempt is the earliest time this event may be retried after a
+	// failed flush. It is internal state and is deliberately not serialized.
+	nextAttempt time.Time
 }
 
 type QueueConfig struct {
@@ -91,6 +95,7 @@ type Queue struct {
 	flushDone chan struct{}
 	wg        sync.WaitGroup
 	rng       *rand.Rand
+	rngMu     sync.Mutex
 }
 
 func NewQueue(cfg QueueConfig) (*Queue, error) {
@@ -269,7 +274,7 @@ func (q *Queue) flushLoop() {
 			return
 		case <-ticker.C:
 			q.mu.Lock()
-			if len(q.events) > 0 {
+			if len(q.events) > 0 && q.hasReadyEvent() {
 				q.mu.Unlock()
 				if err := q.doFlush(); err != nil {
 					log.Printf("queue flush error: %v", err)
@@ -279,7 +284,7 @@ func (q *Queue) flushLoop() {
 			}
 		default:
 			q.mu.Lock()
-			if len(q.events) >= q.cfg.BatchSize {
+			if q.hasReadyEvent() && (len(q.events) >= q.cfg.BatchSize || q.hasReadyRetry()) {
 				q.mu.Unlock()
 				if err := q.doFlush(); err != nil {
 					log.Printf("queue flush error: %v", err)
@@ -299,9 +304,23 @@ func (q *Queue) doFlush() error {
 		return nil
 	}
 
-	events := make([]Event, len(q.events))
-	copy(events, q.events)
-	q.events = q.events[:0]
+	// A failed event carries a retry deadline; keep it queued but skip it
+	// until its backoff has elapsed. Only ready events go into this batch.
+	now := time.Now()
+	events := make([]Event, 0, len(q.events))
+	deferred := make([]Event, 0)
+	for _, e := range q.events {
+		if e.nextAttempt.After(now) {
+			deferred = append(deferred, e)
+		} else {
+			events = append(events, e)
+		}
+	}
+	if len(events) == 0 {
+		q.mu.Unlock()
+		return nil
+	}
+	q.events = deferred
 	q.mu.Unlock()
 
 	batch := make([][]byte, len(events))
@@ -341,6 +360,9 @@ func (q *Queue) doFlush() error {
 			for _, e := range events {
 				e.Attempts++
 				if e.Attempts < q.cfg.RetryMaxAttempts {
+					// Wait out the configured exponential backoff before this
+					// event is eligible for another delivery attempt.
+					e.nextAttempt = time.Now().Add(q.retryBackoff(e.Attempts))
 					retryEvents = append(retryEvents, e)
 					// Don't decrement InFlight — retried events stay in flight.
 					delete(q.inflight, e.ID)
@@ -360,12 +382,21 @@ func (q *Queue) doFlush() error {
 	q.stateMu.Unlock()
 	q.inflightMu.Unlock()
 
-	// Append retry events under q.mu (the lock that protects q.events).
+	// Re-queue retry events under q.mu (the lock that protects q.events),
+	// then arrange a wake-up for the earliest pending retry deadline instead
+	// of retrying immediately.
 	if len(retryEvents) > 0 {
 		q.mu.Lock()
 		q.events = append(q.events, retryEvents...)
+		earliest := q.earliestRetry()
 		q.mu.Unlock()
-		q.cond.Signal()
+		if !earliest.IsZero() {
+			time.AfterFunc(time.Until(earliest), func() {
+				q.mu.Lock()
+				q.cond.Signal()
+				q.mu.Unlock()
+			})
+		}
 	}
 
 	// Only flush if WriteBatch succeeded — don't mask the original error.
@@ -375,6 +406,73 @@ func (q *Queue) doFlush() error {
 		}
 	}
 	return flushErr
+}
+
+// retryBackoff returns the delay before the next delivery attempt for an
+// event that has just failed its attempt-th try. It doubles the configured
+// initial backoff for each attempt, caps it at RetryMaxBackoff, and applies
+// multiplicative jitter in the [0.8, 1.2) range when RetryJitter is enabled
+// (mirroring the sibling processing processor).
+func (q *Queue) retryBackoff(attempt int) time.Duration {
+	backoff := q.cfg.RetryInitialBackoff
+	if backoff <= 0 {
+		return 0
+	}
+	for i := 1; i < attempt; i++ {
+		if q.cfg.RetryMaxBackoff > 0 && backoff >= q.cfg.RetryMaxBackoff {
+			break
+		}
+		backoff *= 2
+	}
+	if q.cfg.RetryMaxBackoff > 0 && backoff > q.cfg.RetryMaxBackoff {
+		backoff = q.cfg.RetryMaxBackoff
+	}
+	if q.cfg.RetryJitter {
+		q.rngMu.Lock()
+		factor := 0.8 + 0.4*q.rng.Float64()
+		q.rngMu.Unlock()
+		backoff = time.Duration(float64(backoff) * factor)
+	}
+	return backoff
+}
+
+// hasReadyEvent reports whether any queued event has passed its retry
+// deadline. The caller must hold q.mu.
+func (q *Queue) hasReadyEvent() bool {
+	now := time.Now()
+	for _, e := range q.events {
+		if !e.nextAttempt.After(now) {
+			return true
+		}
+	}
+	return false
+}
+
+// hasReadyRetry reports whether a previously failed event has reached its
+// retry deadline and is ready to be re-attempted. Fresh events (with no
+// deadline) are excluded so normal batching behavior is preserved. The caller
+// must hold q.mu.
+func (q *Queue) hasReadyRetry() bool {
+	now := time.Now()
+	for _, e := range q.events {
+		if !e.nextAttempt.IsZero() && !e.nextAttempt.After(now) {
+			return true
+		}
+	}
+	return false
+}
+
+// earliestRetry returns the soonest future retry deadline among queued
+// events, or the zero time if there are none. The caller must hold q.mu.
+func (q *Queue) earliestRetry() time.Time {
+	now := time.Now()
+	var earliest time.Time
+	for _, e := range q.events {
+		if e.nextAttempt.After(now) && (earliest.IsZero() || e.nextAttempt.Before(earliest)) {
+			earliest = e.nextAttempt
+		}
+	}
+	return earliest
 }
 
 func (q *Queue) recordFailure() {
@@ -451,7 +549,10 @@ func (q *Queue) Close() error {
 }
 
 func (q *Queue) generateEventID() string {
-	return fmt.Sprintf("%d-%s", time.Now().UnixNano(), randomString(q.rng, 16))
+	q.rngMu.Lock()
+	id := fmt.Sprintf("%d-%s", time.Now().UnixNano(), randomString(q.rng, 16))
+	q.rngMu.Unlock()
+	return id
 }
 
 func randomString(rng *rand.Rand, n int) string {
