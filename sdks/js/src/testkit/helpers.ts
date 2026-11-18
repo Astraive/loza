@@ -158,6 +158,7 @@ export function setIdGenerator(fn: () => string): void {
 
 export function resetForTest(): void {
   resetUUIDGenerator();
+  resetClock();
   clearEvents();
 }
 
