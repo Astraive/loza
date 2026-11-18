@@ -22,33 +22,35 @@ import loza
 def run_middleware_simulation_benchmark(iterations: int = 10000) -> dict:
     """Simulate what ASGI middleware does per request and measure overhead."""
     sink = loza.MemorySink()
-    loza.new(loza.test("bench").with_sink(sink))
+    logger = loza.new(loza.test("bench").with_sink(sink))
 
     latencies: list[float] = []
 
     for _ in range(iterations):
         t0 = time.perf_counter()
 
-        # 1. Start HTTP event (what middleware does on request start)
-        ctx = loza.start_http_event(loza.Params(
+        # 1. Start HTTP event (what middleware does on request start).
+        # Use the instance method: the module-level loza.start_http_event facade
+        # delegates to the global default logger, bypassing our configured sink.
+        ctx = logger.start_event(loza.Params(
             event="GET /api/users",
             kind="http",
         ))
 
         # 2. Enrich with HTTP metadata
-        loza.enrich(ctx,
+        logger.enrich(ctx,
             loza.String("http.user_agent", "Mozilla/5.0"),
             loza.String("http.remote_ip", "127.0.0.1"),
         )
 
         # 3. Finish with response metadata (what middleware does on response end)
-        loza.finish(ctx, "success",
+        logger.finish(ctx, "success",
             loza.Int("status_code", 200),
             loza.Int("duration_ms", 15),
         )
 
         # 4. Emit
-        loza.emit(ctx)
+        logger.emit(ctx)
 
         latencies.append((time.perf_counter() - t0) * 1_000_000)
 
@@ -77,8 +79,8 @@ def run_plain_emit_benchmark(iterations: int = 10000) -> dict:
     for _ in range(iterations):
         t0 = time.perf_counter()
         ctx = logger.start_event(loza.Params(event="bench.plain"))
-        loza.finish(ctx, "success")
-        loza.emit(ctx)
+        logger.finish(ctx, "success")
+        logger.emit(ctx)
         latencies.append((time.perf_counter() - t0) * 1_000_000)
 
     latencies.sort()

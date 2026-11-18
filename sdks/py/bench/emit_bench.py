@@ -54,8 +54,8 @@ def run_emit_benchmark(iterations: int = 10000) -> BenchmarkResult:
     for _ in range(iterations):
         t0 = time.perf_counter()
         ctx = logger.start_event(loza.Params(event="bench.emit"))
-        loza.finish(ctx, "success")
-        loza.emit(ctx)
+        logger.finish(ctx, "success")
+        logger.emit(ctx)
         latencies.append((time.perf_counter() - t0) * 1_000_000)
 
     latencies.sort()
@@ -83,14 +83,14 @@ def run_emit_enriched_benchmark(iterations: int = 10000) -> BenchmarkResult:
     for _ in range(iterations):
         t0 = time.perf_counter()
         ctx = logger.start_event(loza.Params(event="bench.emit.enriched"))
-        loza.enrich(ctx,
+        logger.enrich(ctx,
             loza.String("user.id", "u-abc123"),
             loza.Int("status_code", 200),
             loza.Float64("duration_ms", 42.5),
             loza.Bool("cache_hit", True),
         )
-        loza.finish(ctx, "success")
-        loza.emit(ctx)
+        logger.finish(ctx, "success")
+        logger.emit(ctx)
         latencies.append((time.perf_counter() - t0) * 1_000_000)
 
     latencies.sort()
