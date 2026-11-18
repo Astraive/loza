@@ -16,7 +16,7 @@ if (sourceRecords.length === 0) {
 let linesFound = 0;
 let linesHit = 0;
 for (const record of sourceRecords) {
-  const totals = [...record.matchAll(/^DA:\d+,(\d+)$/gm)].map(match => Number(match[1]));
+  const totals = [...record.matchAll(/^DA:\d+,(\d+)(?:,[^,]*)?$/gm)].map(match => Number(match[1]));
   linesFound += totals.length;
   linesHit += totals.filter(count => count > 0).length;
 }
