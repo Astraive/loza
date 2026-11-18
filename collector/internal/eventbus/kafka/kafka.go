@@ -129,6 +129,35 @@ func New(_ context.Context, cfg eventbus.Config) (eventbus.Bus, error) {
 	}, nil
 }
 
+// firstProduceErr records the first non-nil error reported by concurrent
+// produce callbacks. Produce errors within a single batch can have different
+// concrete types (e.g. *kerr.Error and kgo.ErrRecordTimeout), so they must not
+// be stored in a single atomic.Value: atomic.Value.CompareAndSwap panics with
+// "inconsistently typed value into Value" when the new value has a different
+// dynamic type than the value already stored. A mutex guarding a plain error
+// avoids that panic while still keeping only the first failure.
+type firstProduceErr struct {
+	mu  sync.Mutex
+	err error
+}
+
+func (f *firstProduceErr) set(err error) {
+	if err == nil {
+		return
+	}
+	f.mu.Lock()
+	if f.err == nil {
+		f.err = err
+	}
+	f.mu.Unlock()
+}
+
+func (f *firstProduceErr) load() error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.err
+}
+
 func (b *kafkaBus) Publish(ctx context.Context, topic string, events []eventbus.Envelope) error {
 	if b.closed.Load() {
 		return eventbus.ErrBusClosed
@@ -140,7 +169,7 @@ func (b *kafkaBus) Publish(ctx context.Context, topic string, events []eventbus.
 	}
 
 	var wg sync.WaitGroup
-	var firstErr atomic.Value
+	var firstErr firstProduceErr
 
 	for _, env := range events {
 		data, err := json.Marshal(env)
@@ -155,15 +184,13 @@ func (b *kafkaBus) Publish(ctx context.Context, topic string, events []eventbus.
 		}
 		b.client.Produce(ctx, record, func(r *kgo.Record, err error) {
 			defer wg.Done()
-			if err != nil {
-				firstErr.CompareAndSwap(nil, err)
-			}
+			firstErr.set(err)
 		})
 	}
 
 	wg.Wait()
-	if v := firstErr.Load(); v != nil {
-		return fmt.Errorf("eventbus/kafka: produce: %w", v.(error))
+	if err := firstErr.load(); err != nil {
+		return fmt.Errorf("eventbus/kafka: produce: %w", err)
 	}
 	return nil
 }

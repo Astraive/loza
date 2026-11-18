@@ -2,13 +2,23 @@ package kafka
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/astraive/loza/collector/internal/eventbus"
 	"github.com/twmb/franz-go/pkg/kgo"
 )
+
+type errTypeA struct{ msg string }
+
+func (e errTypeA) Error() string { return e.msg }
+
+type errTypeB struct{ msg string }
+
+func (e errTypeB) Error() string { return e.msg }
 
 func TestKafkaRequiresBrokers(t *testing.T) {
 	ctx := context.Background()
@@ -107,5 +117,54 @@ func TestKafkaBusContract(t *testing.T) {
 	case <-done:
 	case <-time.After(15 * time.Second):
 		t.Fatal("timeout waiting for message")
+	}
+}
+
+// TestPublishFirstErrHandlesDifferingErrorTypes reproduces the scenario that
+// previously panicked in Publish: concurrent produce callbacks reporting
+// errors whose concrete (dynamic) types differ. Storing such errors in a
+// single atomic.Value makes CompareAndSwap panic with "inconsistently typed
+// value into Value". The recorder must accept mixed error types without
+// panicking and still return a non-nil error.
+func TestPublishFirstErrHandlesDifferingErrorTypes(t *testing.T) {
+	errs := []error{
+		errTypeA{"a"},                          // distinct struct type
+		errTypeB{"b"},                          // another distinct struct type
+		errors.New("c"),                        // *errors.errorString
+		fmt.Errorf("d: %w", errTypeA{"inner"}), // *fmt.wrapError
+	}
+
+	var first firstProduceErr
+	const calls = 200
+	var wg sync.WaitGroup
+	for i := 0; i < calls; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			first.set(errs[i%len(errs)])
+		}(i)
+	}
+	wg.Wait()
+
+	if got := first.load(); got == nil {
+		t.Fatal("expected an error to be recorded")
+	}
+}
+
+// TestPublishFirstErrKeepsFirstError verifies that nil errors are ignored and
+// that the first non-nil error is preserved even when a later error has a
+// different concrete type.
+func TestPublishFirstErrKeepsFirstError(t *testing.T) {
+	var first firstProduceErr
+	first.set(nil)
+	if got := first.load(); got != nil {
+		t.Fatalf("expected nil error, got %v", got)
+	}
+
+	want := errTypeA{"first"}
+	first.set(want)
+	first.set(errTypeB{"second"})
+	if got := first.load(); got != want {
+		t.Fatalf("first error not preserved: got %v (type %T), want %v", got, got, want)
 	}
 }
