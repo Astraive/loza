@@ -48,6 +48,55 @@ func TestServerHealthAndReadiness(t *testing.T) {
 	}
 }
 
+func TestReadyzHonorsReadyFlag(t *testing.T) {
+	cfg := config.Default()
+	cfg.Storage.DuckDB.Path = filepath.Join(t.TempDir(), "readiness-cortex.duckdb")
+	stor, err := storage.NewStorage(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stor.Close()
+
+	srv := NewServer(cfg, stor)
+
+	// All dependencies are healthy, so an explicitly ready server reports ready.
+	rec := httptest.NewRecorder()
+	srv.Readyz(rec, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected ready with healthy deps, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	// Flipping the explicit ready flag must drain readiness even though every
+	// dependency is still healthy.
+	srv.ready = false
+	rec = httptest.NewRecorder()
+	srv.Readyz(rec, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected not ready when ready flag is false, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		Status string            `json:"status"`
+		Checks map[string]string `json:"checks"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Status != "not_ready" {
+		t.Fatalf("status = %q, want not_ready", body.Status)
+	}
+	if body.Checks["ready"] != "not_ready" {
+		t.Fatalf("checks[ready] = %q, want not_ready: %v", body.Checks["ready"], body.Checks)
+	}
+
+	// Restoring the flag makes the server ready again.
+	srv.ready = true
+	rec = httptest.NewRecorder()
+	srv.Readyz(rec, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected ready after restoring flag, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestRouterServesHealthz(t *testing.T) {
 	srv := &Server{config: &config.Config{}, ready: true}
 	rec := httptest.NewRecorder()
