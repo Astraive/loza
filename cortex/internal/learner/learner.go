@@ -13,10 +13,10 @@ import (
 type Learner struct {
 	remediationStore storage.RemediationStore
 	feedbackStore    storage.FeedbackStore
-	signatureStore  storage.SignatureStore
-	learningRate    float64
-	weightMin       float64
-	weightMax       float64
+	signatureStore   storage.SignatureStore
+	learningRate     float64
+	weightMin        float64
+	weightMax        float64
 }
 
 func NewLearner(
@@ -26,11 +26,11 @@ func NewLearner(
 ) *Learner {
 	return &Learner{
 		remediationStore: remediationStore,
-		feedbackStore:   feedbackStore,
-		signatureStore:  signatureStore,
-		learningRate:    0.1,
-		weightMin:       0.1,
-		weightMax:       2.0,
+		feedbackStore:    feedbackStore,
+		signatureStore:   signatureStore,
+		learningRate:     0.1,
+		weightMin:        0.1,
+		weightMax:        2.0,
 	}
 }
 
@@ -64,11 +64,14 @@ func (l *Learner) RecordFeedback(ctx context.Context, feedback *models.Remediati
 
 	remediation, err := l.remediationStore.Get(ctx, feedback.RemediationID)
 	if err != nil {
-		return nil
+		return fmt.Errorf("failed to get remediation %q: %w", feedback.RemediationID, err)
 	}
 
 	allFeedback, err := l.feedbackStore.GetByRemediation(ctx, feedback.RemediationID)
-	if err != nil || len(allFeedback) == 0 {
+	if err != nil {
+		return fmt.Errorf("failed to get feedback for remediation %q: %w", feedback.RemediationID, err)
+	}
+	if len(allFeedback) == 0 {
 		return nil
 	}
 
