@@ -48,6 +48,28 @@ func TestApplyConfigAsyncOptionHelpers(t *testing.T) {
 	}
 }
 
+func TestApplyConfigOtelBridgeOption(t *testing.T) {
+	t.Run("true enables the OTel bridge without enabling async", func(t *testing.T) {
+		cfg := ApplyConfig(Test(), WithOtelBridge(true))
+		if !cfg.OTelBridge {
+			t.Fatal("expected OTelBridge to be enabled")
+		}
+		if cfg.Async.Enabled {
+			t.Fatal("expected Async.Enabled to remain untouched")
+		}
+	})
+
+	t.Run("false disables a previously enabled OTel bridge", func(t *testing.T) {
+		cfg := ApplyConfig(Test().WithOTelBridge(true), WithOtelBridge(false))
+		if cfg.OTelBridge {
+			t.Fatal("expected OTelBridge to be disabled")
+		}
+		if cfg.Async.Enabled {
+			t.Fatal("expected Async.Enabled to remain untouched")
+		}
+	})
+}
+
 func TestApplyConfigExtendedHelpers(t *testing.T) {
 	sink, _ := testFallbackSink()
 	enc := JSONEncoder()

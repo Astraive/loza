@@ -289,12 +289,7 @@ func WithInsecure(insecure bool) ConfigOption {
 
 // WithOtelBridge enables or disables OpenTelemetry bridge integration.
 func WithOtelBridge(enabled bool) ConfigOption {
-	return func(cfg Config) Config {
-		if enabled {
-			cfg.Async.Enabled = true
-		}
-		return cfg
-	}
+	return func(cfg Config) Config { return cfg.WithOTelBridge(enabled) }
 }
 
 // WithRetry configures the maximum retry attempts.
