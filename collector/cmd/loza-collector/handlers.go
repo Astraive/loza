@@ -446,7 +446,7 @@ func (s *collectorState) handleTail(w http.ResponseWriter, r *http.Request) {
 			if !ok {
 				return
 			}
-			if !rawMatchesTailFilters(raw, filters) {
+			if !s.TailMatches(r.Context(), raw, filters) {
 				continue
 			}
 			if err := writeNDJSONFrame(bw, raw); err != nil {

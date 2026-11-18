@@ -3,14 +3,18 @@ package main
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
+	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	serverruntime "github.com/astraive/loza/collector/internal/server"
 	duckdbsink "github.com/astraive/loza/collector/internal/sinks/duckdb"
 	publichttp "github.com/astraive/loza/collector/server/http"
+	"github.com/gorilla/websocket"
 )
 
 func TestParseTailFilters(t *testing.T) {
@@ -48,6 +52,78 @@ func TestTailMatchesAuthorizedCollectorScope(t *testing.T) {
 	}
 	if state.TailMatches(ctx, crossScope, serverruntime.TailFilters{Service: "checkout"}) {
 		t.Fatal("cross-collector event must not match an authorized stream")
+	}
+}
+
+// Regression test for MASS-0131: the live event loop must enforce the same
+// authorized collector/environment scope that the historical path applies.
+func TestHandleTailWebSocketRestrictsLiveEventsToAuthorizedScope(t *testing.T) {
+	state := &collectorState{}
+	ctx, cancel := context.WithCancel(context.Background())
+
+	// Simulate the route protector that attaches the authorized scope before
+	// the handler runs. A cancelable context lets the handler exit cleanly at
+	// the end of the test (the handler itself does not watch for client close).
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		scoped := publichttp.WithAuthorizedCollector(ctx, "orders", "production")
+		state.handleTailWebSocket(w, r.WithContext(scoped))
+	})
+	srv := httptest.NewServer(handler)
+	defer srv.Close()
+	defer cancel()
+
+	conn, _, err := websocket.DefaultDialer.Dial(
+		"ws"+strings.TrimPrefix(srv.URL, "http")+"/ws/tail?service=checkout", nil)
+	if err != nil {
+		t.Fatalf("dial tail websocket: %v", err)
+	}
+	defer conn.Close()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		state.tailMu.Lock()
+		subscribed := len(state.tailSubscribers) > 0
+		state.tailMu.Unlock()
+		if subscribed {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("tail subscriber was not registered")
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+
+	// Both events match the raw service filter, but only one belongs to the
+	// authorized collector scope.
+	state.broadcastTail([]byte(`{"collector":"payments","environment":"production","service":"checkout"}`))
+	state.broadcastTail([]byte(`{"collector":"orders","environment":"production","service":"checkout"}`))
+
+	_ = conn.SetReadDeadline(time.Now().Add(time.Second))
+	seen := map[string]bool{}
+	for {
+		_, msg, err := conn.ReadMessage()
+		if err != nil {
+			break
+		}
+		var resp struct {
+			Type string         `json:"type"`
+			Data map[string]any `json:"data"`
+		}
+		if err := json.Unmarshal(msg, &resp); err != nil {
+			t.Fatalf("unmarshal live event %q: %v", msg, err)
+		}
+		if resp.Type == "event" {
+			if collector, ok := resp.Data["collector"].(string); ok {
+				seen[collector] = true
+			}
+		}
+	}
+
+	if !seen["orders"] {
+		t.Fatal("in-scope live event was not delivered; live loop was not exercised")
+	}
+	if seen["payments"] {
+		t.Fatal("live tail leaked an event from a collector outside the authorized scope")
 	}
 }
 
