@@ -3,6 +3,7 @@ package topology
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/astraive/loza/cortex/internal/models"
@@ -14,6 +15,7 @@ type AliasCallback func(ctx context.Context, from, to string, validFrom time.Tim
 
 type Resolver struct {
 	topologyStore storage.TopologyStore
+	mu            sync.RWMutex
 	callbacks     []AliasCallback
 }
 
@@ -23,6 +25,8 @@ func NewResolver(store storage.TopologyStore) *Resolver {
 
 // RegisterCallback adds a callback that fires when a new alias is registered.
 func (r *Resolver) RegisterCallback(cb AliasCallback) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.callbacks = append(r.callbacks, cb)
 }
 
@@ -63,8 +67,14 @@ func (r *Resolver) RegisterAlias(ctx context.Context, from string, to string, va
 		return err
 	}
 
-	// Fire callbacks
-	for _, cb := range r.callbacks {
+	// Snapshot the callbacks under the read lock so concurrent registrations
+	// cannot race with iteration. Invoke them after releasing the lock because
+	// a callback may itself register another callback.
+	r.mu.RLock()
+	callbacks := append([]AliasCallback(nil), r.callbacks...)
+	r.mu.RUnlock()
+
+	for _, cb := range callbacks {
 		cb(ctx, from, to, validFrom)
 	}
 
