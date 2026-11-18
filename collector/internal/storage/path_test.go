@@ -97,3 +97,48 @@ func TestArchiveKeyHasNoTraversalSegments(t *testing.T) {
 		t.Fatalf("unexpected key with traversal prefix:\nwant: %s\ngot:  %s", want, got)
 	}
 }
+
+func TestArchiveKeyOutsideUnixNanoRange(t *testing.T) {
+	// Year 2300 is past the int64-nanosecond limit (~2262): UnixNano wraps to a
+	// negative, undefined value. The part name must still encode the exact
+	// nanosecond count so distinct instants cannot share a key.
+	future := time.Date(2300, time.March, 9, 14, 5, 6, 123456789, time.UTC)
+	if future.UnixNano() >= 0 {
+		t.Fatalf("precondition: expected UnixNano overflow for year 2300, got %d", future.UnixNano())
+	}
+	want := "archive/raw/dataset=events/date=2300-03-09/hour=14/part-10419631506123456789.ndjson"
+	if got := NDJSONArchiveKey("archive/raw", future); got != want {
+		t.Fatalf("unexpected future key:\nwant: %s\ngot:  %s", want, got)
+	}
+
+	// The same must hold before ~1678, where UnixNano also wraps.
+	past := time.Date(1600, time.March, 9, 14, 5, 6, 123456789, time.UTC)
+	if past.UnixNano() <= 0 {
+		t.Fatalf("precondition: expected UnixNano wrap for year 1600, got %d", past.UnixNano())
+	}
+	want = "archive/raw/dataset=events/date=1600-03-09/hour=14/part--11670170093876543211.ndjson"
+	if got := NDJSONArchiveKey("archive/raw", past); got != want {
+		t.Fatalf("unexpected past key:\nwant: %s\ngot:  %s", want, got)
+	}
+}
+
+func TestLocalParquetExportPathOutsideUnixNanoRange(t *testing.T) {
+	future := time.Date(2300, time.March, 9, 14, 5, 6, 123456789, time.UTC)
+	got := filepath.ToSlash(LocalParquetExportPath("exports", "analytics.events", future))
+	want := "exports/table=analytics_events/date=2300-03-09/hour=14/part-10419631506123456789.parquet"
+	if got != want {
+		t.Fatalf("unexpected future path:\nwant: %s\ngot:  %s", want, got)
+	}
+}
+
+func TestArchiveKeyPreservesNanosecondPrecision(t *testing.T) {
+	base := time.Date(2300, time.March, 9, 14, 5, 6, 123456789, time.UTC)
+	a := NDJSONArchiveKey("archive/raw", base)
+	b := NDJSONArchiveKey("archive/raw", base.Add(1*time.Nanosecond))
+	if a == b {
+		t.Fatalf("timestamps one nanosecond apart produced the same key: %s", a)
+	}
+	if a == NDJSONArchiveKey("archive/raw", base.Add(-1*time.Nanosecond)) {
+		t.Fatalf("timestamps one nanosecond apart produced the same key: %s", a)
+	}
+}

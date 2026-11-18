@@ -2,6 +2,7 @@ package storagepath
 
 import (
 	"fmt"
+	"math/big"
 	"path/filepath"
 	"strings"
 	"time"
@@ -25,21 +26,33 @@ func LocalParquetExportPath(baseDir, table string, ts time.Time) string {
 		"table="+sanitizeSegment(table),
 		"date="+utc.Format("2006-01-02"),
 		"hour="+utc.Format("15"),
-		fmt.Sprintf("part-%d.parquet", utc.UnixNano()),
+		fmt.Sprintf("part-%s.parquet", unixNanoString(utc)),
 	)
 }
 
 func archiveObjectKey(prefix, dataset, ext string, ts time.Time) string {
 	utc := ts.UTC()
 	return fmt.Sprintf(
-		"%sdataset=%s/date=%s/hour=%s/part-%d.%s",
+		"%sdataset=%s/date=%s/hour=%s/part-%s.%s",
 		normalizePrefix(prefix),
 		sanitizeSegment(dataset),
 		utc.Format("2006-01-02"),
 		utc.Format("15"),
-		utc.UnixNano(),
+		unixNanoString(utc),
 		sanitizeExt(ext),
 	)
+}
+
+// unixNanoString returns the number of nanoseconds since the Unix epoch as a
+// decimal string. Unlike time.Time.UnixNano(), it does not overflow int64 for
+// instants outside the representable nanosecond range (before ~1678 or after
+// ~2262), so distinct timestamps never collapse onto the same part name due to
+// wraparound. The arithmetic is done with big.Int so even the seconds-to-
+// nanoseconds multiplication is exact at the extremes of time.Time's range.
+func unixNanoString(t time.Time) string {
+	nanos := new(big.Int).Mul(big.NewInt(t.Unix()), big.NewInt(int64(time.Second)))
+	nanos.Add(nanos, big.NewInt(int64(t.Nanosecond())))
+	return nanos.String()
 }
 
 func normalizePrefix(prefix string) string {
