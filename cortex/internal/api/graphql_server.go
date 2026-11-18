@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sort"
 
 	"github.com/astraive/loza/cortex/internal/config"
 	"github.com/astraive/loza/cortex/internal/graph"
@@ -23,7 +24,10 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-const maxGraphQLDepth = 10
+const (
+	maxGraphQLDepth     = 10
+	maxSimilarIncidents = 10
+)
 
 // Introspection fields are disabled on the externally exposed schema.
 
@@ -609,22 +613,45 @@ func (s *GraphQLServer) handleSimilarIncidents(ctx context.Context, vars map[str
 		return nil, newGraphQLClientError("incidentId required")
 	}
 
-	_, err := s.incidents.Get(ctx, incidentID)
+	target, err := s.incidents.Get(ctx, incidentID)
 	if err != nil {
 		return nil, err
 	}
 
-	sigs, err := s.signatures.List(ctx, 10)
-	if err != nil {
-		return nil, err
+	// Similarity is computed from the target incident's signature. Without one
+	// there is nothing to compare against, so there are no similar incidents.
+	if target.SignatureID == "" {
+		return []*models.Incident{}, nil
 	}
-
-	similar := make([]*models.Incident, 0)
-	for _, sig := range sigs {
-		inc, err := s.incidents.GetBySignature(ctx, sig.SignatureID)
-		if err == nil && inc != nil && inc.ID != incidentID {
-			similar = append(similar, inc)
+	targetSig, err := s.signatures.Get(ctx, target.SignatureID)
+	if err != nil {
+		if errors.Is(err, storage.ErrNotFound) {
+			return []*models.Incident{}, nil
 		}
+		return nil, err
+	}
+
+	matches, err := s.match.FindSimilar(ctx, targetSig, maxSimilarIncidents)
+	if err != nil {
+		return nil, err
+	}
+
+	// FindSimilar may return matches in an arbitrary order (notably from the
+	// storage fallback), so rank them by score before resolving to incidents.
+	sort.SliceStable(matches, func(i, j int) bool {
+		return matches[i].Similarity > matches[j].Similarity
+	})
+
+	similar := make([]*models.Incident, 0, len(matches))
+	seen := map[string]bool{incidentID: true}
+	for _, candidate := range matches {
+		// SimilarIncident.IncidentID carries the matched signature ID.
+		inc, err := s.incidents.GetBySignature(ctx, candidate.IncidentID)
+		if err != nil || inc == nil || seen[inc.ID] {
+			continue
+		}
+		seen[inc.ID] = true
+		similar = append(similar, inc)
 	}
 
 	return similar, nil
