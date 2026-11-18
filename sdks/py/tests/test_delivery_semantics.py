@@ -224,3 +224,53 @@ def test_concurrent_loggers_dont_interfere() -> None:
     assert payload1 != payload2
     assert json.loads(payload1)["service"] == "service1"
     assert json.loads(payload2)["service"] == "service2"
+
+
+def test_failing_sink_does_not_abort_other_sinks_in_client() -> None:
+    """A failing sink must not abort delivery to healthy sinks or raise (client.py logger)."""
+
+    from loza.core.client import Logger as ClientLogger
+
+    class _FailingSink:
+        def write(self, _encoded: str) -> None:
+            raise OSError("sink down")
+
+    class _Stats:
+        def __init__(self) -> None:
+            self.delivery_failures: list[tuple[object, Exception]] = []
+
+        def on_emit(self, _event: object) -> None:
+            pass
+
+        def on_drop(self, _reason: str) -> None:
+            pass
+
+        def on_error(self, _error: Exception) -> None:
+            pass
+
+        def on_collector_ack(self, *_args: object, **_kwargs: object) -> None:
+            pass
+
+        def on_delivery_failed(self, event: object, error: Exception) -> None:
+            self.delivery_failures.append((event, error))
+
+    healthy = loza.MemorySink()
+    stats = _Stats()
+    cfg = loza.Config.test("client-partial").with_sink(_FailingSink()).with_sink(healthy)
+    cfg.stats_handler = stats
+    logger = ClientLogger(cfg)
+
+    ctx = logger.start_event(loza.Params(event="partial.failure"))
+    logger.finish(ctx, "success")
+
+    # Must not raise; a failed sink is reflected without aborting the emit.
+    assert logger.emit(ctx) == ""
+    assert not ctx.emitted
+    assert ctx.event_state == "delivery_failed"
+
+    # The healthy sink still received the payload despite the failing sink.
+    assert len(healthy.events) == 1
+
+    # The failure is reported via the delivery-failure notification.
+    assert len(stats.delivery_failures) == 1
+    assert isinstance(stats.delivery_failures[0][1], OSError)
