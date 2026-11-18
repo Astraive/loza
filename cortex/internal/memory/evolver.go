@@ -12,6 +12,7 @@ import (
 	"github.com/astraive/loza/cortex/internal/models"
 	"github.com/astraive/loza/cortex/internal/storage"
 	"github.com/astraive/loza/cortex/internal/topology"
+	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
 )
 
@@ -106,6 +107,10 @@ func (ev *SignatureEvolver) Evolve(ctx context.Context, sig *models.IncidentSign
 		for _, cand := range candidates {
 			if ev.isSimilarTemporal(sig, cand) {
 				merged := ev.mergeSignatures(cand, sig)
+				// A temporal merge derives a new signature from the candidate. Give it a
+				// distinct ID so Save inserts a child instead of overwriting the parent
+				// with a self-referential ParentSignatureID.
+				merged.SignatureID = uuid.NewString()
 				merged.ParentSignatureID = cand.SignatureID
 				merged.Version = cand.Version + 1
 				if err := ev.signatureStore.Save(ctx, merged); err != nil {
