@@ -12,6 +12,7 @@ type fakeRemediationStore struct {
 	remediations map[string]*models.Remediation
 	stats        map[string][]*models.RemediationStats
 	saved        []*models.Remediation
+	getErr       error
 }
 
 func (f *fakeRemediationStore) Save(_ context.Context, rem *models.Remediation) error {
@@ -21,6 +22,9 @@ func (f *fakeRemediationStore) Save(_ context.Context, rem *models.Remediation) 
 }
 
 func (f *fakeRemediationStore) Get(_ context.Context, id string) (*models.Remediation, error) {
+	if f.getErr != nil {
+		return nil, f.getErr
+	}
 	if rem, ok := f.remediations[id]; ok {
 		return rem, nil
 	}
@@ -44,6 +48,7 @@ type fakeFeedbackStore struct {
 	successRates          map[string]float64
 	averageTimes          map[string]int64
 	saved                 []*models.RemediationFeedback
+	getByRemediationErr   error
 }
 
 func (f *fakeFeedbackStore) Save(_ context.Context, fb *models.RemediationFeedback) error {
@@ -53,6 +58,9 @@ func (f *fakeFeedbackStore) Save(_ context.Context, fb *models.RemediationFeedba
 }
 
 func (f *fakeFeedbackStore) GetByRemediation(_ context.Context, remediationID string) ([]*models.RemediationFeedback, error) {
+	if f.getByRemediationErr != nil {
+		return nil, f.getByRemediationErr
+	}
 	return f.feedbackByRemediation[remediationID], nil
 }
 
@@ -236,5 +244,66 @@ func TestGetAverageTimeToResolveUsesActionAndSignature(t *testing.T) {
 				t.Fatalf("GetAverageTimeToResolve(%q, %q) = %d, want %d", tt.action, tt.signatureID, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestRecordFeedbackReturnsRemediationLookupError(t *testing.T) {
+	lookupErr := errors.New("remediation store unavailable")
+	remStore := &fakeRemediationStore{
+		remediations: map[string]*models.Remediation{},
+		getErr:       lookupErr,
+	}
+	fbStore := &fakeFeedbackStore{
+		feedbackByRemediation: map[string][]*models.RemediationFeedback{},
+	}
+	sigStore := &fakeSignatureStoreForLearner{sigs: map[string]*models.IncidentSignature{}}
+
+	l := NewLearner(remStore, fbStore, sigStore)
+	feedback := &models.RemediationFeedback{RemediationID: "rem-1", IncidentID: "inc-1", OutcomeCode: 200, OutcomeCategory: "success"}
+
+	err := l.RecordFeedback(context.Background(), feedback)
+	if !errors.Is(err, lookupErr) {
+		t.Fatalf("expected remediation lookup error, got %v", err)
+	}
+}
+
+func TestRecordFeedbackReturnsFeedbackLookupError(t *testing.T) {
+	lookupErr := errors.New("feedback store unavailable")
+	remStore := &fakeRemediationStore{
+		remediations: map[string]*models.Remediation{
+			"rem-1": {RemediationID: "rem-1", SignatureID: "sig-1"},
+		},
+	}
+	fbStore := &fakeFeedbackStore{
+		feedbackByRemediation: map[string][]*models.RemediationFeedback{},
+		getByRemediationErr:   lookupErr,
+	}
+	sigStore := &fakeSignatureStoreForLearner{sigs: map[string]*models.IncidentSignature{}}
+
+	l := NewLearner(remStore, fbStore, sigStore)
+	feedback := &models.RemediationFeedback{RemediationID: "rem-1", IncidentID: "inc-1", OutcomeCode: 200, OutcomeCategory: "success"}
+
+	err := l.RecordFeedback(context.Background(), feedback)
+	if !errors.Is(err, lookupErr) {
+		t.Fatalf("expected feedback lookup error, got %v", err)
+	}
+}
+
+func TestRecordFeedbackEmptyFeedbackIsNotAnError(t *testing.T) {
+	remStore := &fakeRemediationStore{
+		remediations: map[string]*models.Remediation{
+			"rem-1": {RemediationID: "rem-1", SignatureID: "sig-1"},
+		},
+	}
+	fbStore := &fakeFeedbackStore{
+		feedbackByRemediation: map[string][]*models.RemediationFeedback{},
+	}
+	sigStore := &fakeSignatureStoreForLearner{sigs: map[string]*models.IncidentSignature{}}
+
+	l := NewLearner(remStore, fbStore, sigStore)
+	feedback := &models.RemediationFeedback{RemediationID: "rem-1", IncidentID: "inc-1", OutcomeCode: 200, OutcomeCategory: "success"}
+
+	if err := l.RecordFeedback(context.Background(), feedback); err != nil {
+		t.Fatalf("expected no error for empty feedback, got %v", err)
 	}
 }
