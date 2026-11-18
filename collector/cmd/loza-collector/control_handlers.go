@@ -174,10 +174,18 @@ func (s *collectorState) handleQuery(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// isAuthorized only proves authentication; require the read permission here
-	// as defense in depth for direct handler calls (the router already enforces
-	// events:read via RequirePermission for both canonical and legacy routes).
+	// as defense in depth for direct handler calls. Router authorization differs
+	// by route family: legacy routes use RequirePermission (role-based), while
+	// canonical routes use AuthorizesCollector, which intentionally supports
+	// roleless collector grants. Accept either form so neither is broken.
 	if s.cfg.authEnabled {
-		if ac := auth.GetAuthContext(r.Context()); ac == nil || !ac.HasPermission(auth.PermEventsRead) {
+		ac := auth.GetAuthContext(r.Context())
+		scope, hasScope := publichttp.AuthorizedCollectorFromContext(r.Context())
+		allowed := ac != nil && ac.HasPermission(auth.PermEventsRead)
+		if !allowed && ac != nil && hasScope {
+			allowed = ac.AuthorizesCollector(scope.Name, scope.Environment, auth.PermEventsRead)
+		}
+		if !allowed {
 			writeJSON(w, http.StatusForbidden, map[string]any{"error": "query_permission_required"})
 			return
 		}
