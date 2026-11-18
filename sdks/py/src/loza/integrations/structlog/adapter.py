@@ -11,8 +11,8 @@ class StructlogProcessor:
 
     def __call__(self, logger, method_name: str, event_dict: dict[str, Any]):
         if self.emit_immediate:
-            message = str(event_dict.pop("event", method_name))
-            Info(message, **event_dict)
+            message = str(event_dict.get("event", method_name))
+            Info(message, **{k: v for k, v in event_dict.items() if k != "event"})
         return event_dict
 
 
