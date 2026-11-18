@@ -552,18 +552,19 @@ func (m *SignatureMatcher) UpdateSignature(ctx context.Context, signatureID stri
 		return fmt.Errorf("signature not found: %w", err)
 	}
 
-	if update.IncrementOccurrence {
+	// An occurrence increment and a new resolution-time measurement represent
+	// the same single event, so the count must advance exactly once and the
+	// running average must be based on the original count/sum.
+	if update.IncrementOccurrence || update.UpdateResolutionTime > 0 {
+		oldTotal := sig.AvgResolutionTime * int64(sig.OccurrenceCount)
 		sig.OccurrenceCount++
+		if update.UpdateResolutionTime > 0 {
+			sig.AvgResolutionTime = (oldTotal + update.UpdateResolutionTime) / int64(sig.OccurrenceCount)
+		}
 	}
 
 	if len(update.AddRemediation) > 0 {
 		sig.Remediation = append(sig.Remediation, update.AddRemediation...)
-	}
-
-	if update.UpdateResolutionTime > 0 {
-		oldTotal := sig.AvgResolutionTime * int64(sig.OccurrenceCount)
-		sig.OccurrenceCount++
-		sig.AvgResolutionTime = (oldTotal + update.UpdateResolutionTime) / int64(sig.OccurrenceCount)
 	}
 
 	sig.UpdatedAt = time.Now()

@@ -176,6 +176,65 @@ func TestExtractAndRegisterSignature(t *testing.T) {
 	}
 }
 
+func TestUpdateSignatureOccurrenceIncrementOnce(t *testing.T) {
+	tests := []struct {
+		name           string
+		count          int
+		avg            int64
+		increment      bool
+		resolutionTime int64
+		wantCount      int
+		wantAvg        int64
+	}{
+		{
+			name:           "increment and resolution time are one event",
+			count:          1,
+			avg:            10,
+			increment:      true,
+			resolutionTime: 20,
+			wantCount:      2,
+			wantAvg:        15,
+		},
+		{
+			name:           "resolution time only",
+			count:          1,
+			avg:            10,
+			resolutionTime: 20,
+			wantCount:      2,
+			wantAvg:        15,
+		},
+		{
+			name:      "increment only",
+			count:     1,
+			avg:       10,
+			increment: true,
+			wantCount: 2,
+			wantAvg:   10,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := &fakeSignatureStore{sigs: map[string]*models.IncidentSignature{
+				"sig": {SignatureID: "sig", OccurrenceCount: tt.count, AvgResolutionTime: tt.avg},
+			}}
+			m := NewSignatureMatcher(store)
+			err := m.UpdateSignature(context.Background(), "sig", &models.SignatureUpdate{
+				IncrementOccurrence:  tt.increment,
+				UpdateResolutionTime: tt.resolutionTime,
+			})
+			if err != nil {
+				t.Fatalf("update: %v", err)
+			}
+			got := store.sigs["sig"]
+			if got.OccurrenceCount != tt.wantCount || got.AvgResolutionTime != tt.wantAvg {
+				t.Fatalf("got count=%d avg=%d, want count=%d avg=%d",
+					got.OccurrenceCount, got.AvgResolutionTime, tt.wantCount, tt.wantAvg)
+			}
+		})
+	}
+}
+
 func TestNewConfiguredSignatureMatcher(t *testing.T) {
 	store := &fakeSignatureStore{sigs: map[string]*models.IncidentSignature{}}
 
