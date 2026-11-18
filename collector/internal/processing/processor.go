@@ -267,20 +267,19 @@ func (p *Processor) Process(ctx context.Context, raw []byte) Result {
 		raw = validated
 	}
 
-	// Apply privacy redaction
+	// Apply privacy redaction. A redaction failure must fail closed in every
+	// active mode: redactPII returns the original (unredacted) payload on error,
+	// so continuing would ship sensitive fields to sinks. "warn" controls how
+	// loudly we report the failure, never whether unredacted data is delivered.
 	if p.cfg.Privacy.Mode != "" && strings.ToLower(p.cfg.Privacy.Mode) != "off" {
 		redacted, redactErr := p.redactPII(raw)
 		if redactErr != nil {
-			if strings.ToLower(p.cfg.Privacy.Mode) == "enforce" {
-				return Result{Invalid: true, Err: fmt.Errorf("privacy redaction failed: %w", redactErr)}
-			}
-			// warn mode: log and continue
 			if p.cfg.LogFunc != nil {
 				p.cfg.LogFunc("warn", "privacy_redaction_failed", map[string]any{"error": redactErr.Error()})
 			}
-		} else {
-			raw = redacted
+			return Result{Invalid: true, Err: fmt.Errorf("privacy redaction failed: %w", redactErr)}
 		}
+		raw = redacted
 	}
 
 	if p.cfg.DedupeEnabled {
