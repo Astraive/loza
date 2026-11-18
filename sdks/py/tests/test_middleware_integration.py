@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import importlib
 import json
+from types import SimpleNamespace
 
 import loza
 import pytest
@@ -269,3 +270,95 @@ def test_django_middleware_records_status_code() -> None:
     assert payload["status_code"] == 202
     assert payload["http"]["status_code"] == 202
     assert "status_code" not in payload.get("attrs", {})
+
+
+def _django_request(path: str, resolver_match=None):
+    return SimpleNamespace(
+        method="GET",
+        path=path,
+        META={},
+        resolver_match=resolver_match,
+    )
+
+
+def test_django_middleware_records_matched_route_template() -> None:
+    from loza.middleware.django import LozaMiddleware
+
+    match = SimpleNamespace(route="users/<int:pk>/", view_name="user-detail")
+    request = _django_request("/users/42/", match)
+
+    sink = loza.MemorySink()
+    loza.Configure(loza.Test("checkout").with_sink(sink))
+    middleware = LozaMiddleware(lambda _req: SimpleNamespace(status_code=200), service="checkout")
+    middleware(request)
+
+    assert len(sink.events) == 1
+    payload = json.loads(sink.events[0])
+    assert payload["path"] == "/users/42/"
+    assert payload["route"] == "users/<int:pk>/"
+    assert payload["http"]["route"] == "users/<int:pk>/"
+
+
+def test_django_middleware_prefers_route_over_view_name() -> None:
+    from loza.middleware.django import LozaMiddleware
+
+    match = SimpleNamespace(route="users/<int:pk>/", view_name="user-detail")
+    request = _django_request("/users/42/", match)
+
+    sink = loza.MemorySink()
+    loza.Configure(loza.Test("checkout").with_sink(sink))
+    middleware = LozaMiddleware(lambda _req: SimpleNamespace(status_code=200), service="checkout")
+    middleware(request)
+
+    payload = json.loads(sink.events[0])
+    assert payload["route"] == "users/<int:pk>/"
+
+
+def test_django_middleware_falls_back_to_view_name() -> None:
+    from loza.middleware.django import LozaMiddleware
+
+    match = SimpleNamespace(view_name="user-detail")
+    request = _django_request("/users/42/", match)
+
+    sink = loza.MemorySink()
+    loza.Configure(loza.Test("checkout").with_sink(sink))
+    middleware = LozaMiddleware(lambda _req: SimpleNamespace(status_code=200), service="checkout")
+    middleware(request)
+
+    payload = json.loads(sink.events[0])
+    assert payload["route"] == "user-detail"
+
+
+def test_django_middleware_falls_back_to_path_without_resolver_match() -> None:
+    from loza.middleware.django import LozaMiddleware
+
+    request = _django_request("/not-a-real-route/")
+
+    sink = loza.MemorySink()
+    loza.Configure(loza.Test("checkout").with_sink(sink))
+    middleware = LozaMiddleware(lambda _req: SimpleNamespace(status_code=404), service="checkout")
+    middleware(request)
+
+    payload = json.loads(sink.events[0])
+    assert payload["route"] == "/not-a-real-route/"
+
+
+def test_django_middleware_uses_route_resolved_during_view_dispatch() -> None:
+    # New-style Django middleware is entered before URL resolution, so
+    # resolver_match does not exist until the view dispatch (get_response).
+    from loza.middleware.django import LozaMiddleware
+
+    request = _django_request("/users/7/")
+
+    def get_response(_req):
+        _req.resolver_match = SimpleNamespace(route="users/<int:pk>/", view_name="user-detail")
+        return SimpleNamespace(status_code=200)
+
+    sink = loza.MemorySink()
+    loza.Configure(loza.Test("checkout").with_sink(sink))
+    middleware = LozaMiddleware(get_response, service="checkout")
+    middleware(request)
+
+    payload = json.loads(sink.events[0])
+    assert payload["path"] == "/users/7/"
+    assert payload["route"] == "users/<int:pk>/"
