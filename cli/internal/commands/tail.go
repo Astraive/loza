@@ -41,17 +41,16 @@ func TailCommand(ctx context.Context, cfg config.Config, args []string) error {
 	defer conn.Close()
 
 	output.PrintSection("Tailing events... (Ctrl+C to stop)")
-	streamLines(ctx, conn)
-	return nil
+	return streamLines(ctx, conn)
 }
 
-func streamLines(ctx context.Context, body io.Reader) {
+func streamLines(ctx context.Context, body io.Reader) error {
 	scanner := bufio.NewScanner(body)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	for scanner.Scan() {
 		select {
 		case <-ctx.Done():
-			return
+			return nil
 		default:
 			line := scanner.Text()
 			if strings.TrimSpace(line) == "" {
@@ -90,4 +89,5 @@ func streamLines(ctx context.Context, body io.Reader) {
 			}
 		}
 	}
+	return scanner.Err()
 }
