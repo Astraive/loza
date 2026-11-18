@@ -1,14 +1,42 @@
 import pytest
 
+from loza.core.config import Config
 from loza.core.http_client import CollectorClient
 from loza.cortex.client import CortexClient
 from loza.core.pipeline import DiskOfflineBuffer
 from loza.sinks.file import FileSink
+from loza.sinks.httpbatch import HTTPBatchSink
 
 
 def test_collector_client_rejects_metadata_endpoint():
     with pytest.raises(ValueError, match="non-public"):
         CollectorClient("http://169.254.169.254/latest/meta-data")
+
+
+@pytest.mark.parametrize("auth_header", ["Authorization", "X-API-Key"])
+def test_api_key_over_cleartext_http_rejected(auth_header):
+    """An api_key must never be POSTed to a non-local plain-HTTP endpoint."""
+    with pytest.raises(ValueError, match="HTTPS"):
+        CollectorClient("http://collector.example/events", api_key="secret", auth_header=auth_header)
+
+
+def test_api_key_over_cleartext_http_rejected_by_sink():
+    with pytest.raises(ValueError, match="HTTPS"):
+        HTTPBatchSink("http://collector.example/events", api_key="secret")
+
+
+def test_api_key_over_cleartext_http_rejected_by_config():
+    with pytest.raises(ValueError, match="HTTPS"):
+        Config(collector_endpoint="http://collector.example/events", api_key="secret").validate()
+
+
+@pytest.mark.parametrize(
+    "endpoint",
+    ["https://collector.example/events", "http://127.0.0.1:9308/events", "http://localhost:9308/events"],
+)
+def test_api_key_allowed_over_tls_and_local_http(endpoint):
+    client = CollectorClient(endpoint, api_key="secret")
+    assert client._auth_headers() == {"Authorization": "Bearer secret"}
 
 
 def test_file_sink_rejects_parent_traversal():
