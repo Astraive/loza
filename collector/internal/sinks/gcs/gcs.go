@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"strings"
 	"sync"
 	"time"
@@ -27,6 +28,12 @@ type Config struct {
 	BatchSize     int
 	FlushInterval time.Duration
 	EncryptKey    string
+
+	// ErrorHandler, when set, receives errors from background (ticker-driven)
+	// flushes, which have no caller to return an error to. It is invoked from
+	// the sink's background goroutine, so it should return promptly and must
+	// not call back into the sink. When nil, such errors are logged instead.
+	ErrorHandler func(error)
 }
 
 type sink struct {
@@ -147,11 +154,27 @@ func (s *sink) flushLoop() {
 	for {
 		select {
 		case <-t.C:
-			_ = s.flushBatch(context.Background())
+			if err := s.flushBatch(context.Background()); err != nil {
+				s.reportFlushError(err)
+			}
 		case <-s.stop:
 			return
 		}
 	}
+}
+
+// reportFlushError makes a background flush failure observable. Without this,
+// a persistent putObject failure (for example an auth or quota error) is
+// silently discarded by the ticker path and only accumulates in the buffer.
+func (s *sink) reportFlushError(err error) {
+	if err == nil {
+		return
+	}
+	if s.cfg.ErrorHandler != nil {
+		s.cfg.ErrorHandler(err)
+		return
+	}
+	log.Printf("gcs: background flush error: %v", err)
 }
 
 func (s *sink) appendLocked(encoded []byte) ([]byte, int, error) {
