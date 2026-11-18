@@ -5,6 +5,12 @@ Generates the L2 public benchmark defaults:
 - 30 deployments, 8 topology mutations (renames)
 - 24 train + 10 eval incidents, 5 recurring families
 - Seeded RNG for reproducibility
+
+Incident IDs use the form ``INC-<phase>-<N>`` (e.g. ``INC-train-100``), where
+the numeric suffix is namespaced by phase (train: 1xx, eval: 2xx). The phase
+prefix guarantees IDs are unique across the whole dataset and makes each ID
+self-describing; this supersedes the former ``INC-<100+i>`` form, which reused
+the same range for train and eval.
 """
 
 from __future__ import annotations
@@ -176,8 +182,8 @@ def _generate_incidents(
     Train incidents are generated only on the days before the eval split and
     eval incidents only on the days on/after it, so a time-based partition can
     never pull a held-out incident into the training set. Incident IDs are also
-    namespaced per phase (train: INC-1xx, eval: INC-2xx) to keep an eval signal
-    distinguishable from a training incident by ID alone.
+    namespaced per phase (train: INC-train-1xx, eval: INC-eval-2xx) to keep an
+    eval signal distinguishable from a training incident by ID alone.
     """
     if phase == "eval":
         day_min, day_max = N_DAYS - 2, N_DAYS - 1
@@ -192,7 +198,12 @@ def _generate_incidents(
         day = rng.randint(day_min, day_max)
         ts = base_time + timedelta(days=day, hours=rng.randint(8, 22))
         svc = rng.choice(SERVICE_NAMES)
-        incident_id = f"INC-{id_start + len(incidents)}"
+        # Combine both uniqueness schemes: the phase prefix (from the bench
+        # fix) makes each ID self-describing and keeps train/eval IDs from
+        # colliding, while the per-phase numeric namespace from id_start
+        # (train 1xx, eval 2xx) keeps the range-based distinction. Format:
+        # INC-<phase>-<id_start + i>.
+        incident_id = f"INC-{phase}-{id_start + len(incidents)}"
 
         # Signal
         signal = {
