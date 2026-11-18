@@ -82,9 +82,13 @@ func (ev *SignatureEvolver) Evolve(ctx context.Context, sig *models.IncidentSign
 	// Compute behavioral hash
 	sig.BehavioralHash = ComputeBehavioralHash(sig)
 
-	// Check for existing behavioral match
+	// Check for existing behavioral match. An empty result with a nil error
+	// means no match; a non-nil error is a store failure and must surface.
 	existing, err := ev.signatureStore.FindByBehavioralHash(ctx, sig.BehavioralHash)
-	if err == nil && len(existing) > 0 {
+	if err != nil {
+		return nil, fmt.Errorf("failed to find signature by behavioral hash: %w", err)
+	}
+	if len(existing) > 0 {
 		// Found a behaviorally equivalent signature — merge
 		best := existing[0]
 		for _, e := range existing[1:] {
@@ -106,23 +110,25 @@ func (ev *SignatureEvolver) Evolve(ctx context.Context, sig *models.IncidentSign
 		return merged, nil
 	}
 
-	// No behavioral match — check for similar temporal patterns
+	// No behavioral match — check for similar temporal patterns. As above,
+	// an empty result is "no match"; a non-nil error is a store failure.
 	candidates, err := ev.signatureStore.List(ctx, 1000)
-	if err == nil {
-		for _, cand := range candidates {
-			if ev.isSimilarTemporal(sig, cand) {
-				merged := ev.mergeSignatures(cand, sig)
-				// A temporal merge derives a new signature from the candidate. Give it a
-				// distinct ID so Save inserts a child instead of overwriting the parent
-				// with a self-referential ParentSignatureID.
-				merged.SignatureID = uuid.NewString()
-				merged.ParentSignatureID = cand.SignatureID
-				merged.Version = cand.Version + 1
-				if err := ev.signatureStore.Save(ctx, merged); err != nil {
-					return nil, fmt.Errorf("failed to save merged signature: %w", err)
-				}
-				return merged, nil
+	if err != nil {
+		return nil, fmt.Errorf("failed to list signatures: %w", err)
+	}
+	for _, cand := range candidates {
+		if ev.isSimilarTemporal(sig, cand) {
+			merged := ev.mergeSignatures(cand, sig)
+			// A temporal merge derives a new signature from the candidate. Give it a
+			// distinct ID so Save inserts a child instead of overwriting the parent
+			// with a self-referential ParentSignatureID.
+			merged.SignatureID = uuid.NewString()
+			merged.ParentSignatureID = cand.SignatureID
+			merged.Version = cand.Version + 1
+			if err := ev.signatureStore.Save(ctx, merged); err != nil {
+				return nil, fmt.Errorf("failed to save merged signature: %w", err)
 			}
+			return merged, nil
 		}
 	}
 
