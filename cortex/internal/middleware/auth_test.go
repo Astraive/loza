@@ -143,3 +143,40 @@ func TestRequireRole(t *testing.T) {
 		})
 	}
 }
+
+func TestRequireRoleRejectsUnknownRequiredRole(t *testing.T) {
+	auth := NewAuth(&config.AuthenticationConfig{Enabled: true})
+
+	tests := []struct {
+		name         string
+		requiredRole string
+		currentRole  string
+		want         int
+	}{
+		{name: "empty required role denied", requiredRole: "", currentRole: "admin", want: http.StatusForbidden},
+		{name: "misspelled required role denied", requiredRole: "administrator", currentRole: "admin", want: http.StatusForbidden},
+		{name: "misspelled lowercase required role denied", requiredRole: "writer ", currentRole: "admin", want: http.StatusForbidden},
+		{name: "valid admin required role allowed", requiredRole: "admin", currentRole: "admin", want: http.StatusOK},
+		{name: "empty current role denied", requiredRole: "reader", currentRole: "", want: http.StatusForbidden},
+		{name: "unknown current role denied", requiredRole: "reader", currentRole: "superuser", want: http.StatusForbidden},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "/", nil)
+			req = req.WithContext(WithAuthResult(req.Context(), &AuthResult{
+				Authorized: true,
+				Role:       tc.currentRole,
+			}))
+			rec := httptest.NewRecorder()
+
+			auth.RequireRole(tc.requiredRole)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusOK)
+			})).ServeHTTP(rec, req)
+
+			if rec.Code != tc.want {
+				t.Fatalf("status = %d, want %d", rec.Code, tc.want)
+			}
+		})
+	}
+}
