@@ -13,13 +13,10 @@ if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
     sys.stderr.reconfigure(encoding="utf-8")  # type: ignore[union-attr]
 
 warnings.filterwarnings("ignore", category=DeprecationWarning, module="jsonschema")
-warnings.filterwarnings(
-    "ignore",
-    category=DeprecationWarning,
-    message=r".*RefResolver is deprecated.*",
-)
 
-from jsonschema import Draft202012Validator, RefResolver
+from jsonschema import Draft202012Validator
+from referencing import Registry, Resource
+from referencing.jsonschema import DRAFT202012
 
 
 _SCHEMA_DIR = Path(__file__).resolve().parents[1] / "schema"
@@ -52,14 +49,20 @@ def _build_validator(
     schema = _load_json(schema_path)
     if schema_override is not None:
         schema = schema_override
-    resolver = RefResolver(
-        base_uri=schema_path.resolve().as_uri(),
-        referrer=schema,
-        store=store or {},
-    )
+
+    # Use the modern referencing registry: unlike the legacy RefResolver it
+    # resolves $refs during annotation collection, which is required for
+    # unevaluatedProperties to enforce the declared strict schema.
+    registry = Registry()
+    for uri, resource_schema in (store or {}).items():
+        if isinstance(resource_schema, dict):
+            registry = registry.with_resource(
+                uri,
+                Resource.from_contents(resource_schema, default_specification=DRAFT202012),
+            )
     return Draft202012Validator(
         schema,
-        resolver=resolver,
+        registry=registry,
         format_checker=Draft202012Validator.FORMAT_CHECKER,
     )
 
@@ -225,6 +228,30 @@ def _validate_ingest_invalid(paths: list[Path], validator: Draft202012Validator)
         print(f"✓ ingest_invalid fail {path}")
 
 
+def _build_event_validators(
+    manifest_dir: Path,
+    manifest: dict[str, object],
+    store: dict[str, object],
+) -> tuple[Draft202012Validator, Draft202012Validator]:
+    """Build loose/strict validators from the schemas declared in the manifest."""
+    strict_path = (manifest_dir / str(manifest["strict_schema"])).resolve()
+    loose_path = (manifest_dir / str(manifest["loose_schema"])).resolve()
+    for path in (strict_path, loose_path):
+        if not path.exists():
+            raise FileNotFoundError(f"manifest schema path must exist: {path}")
+
+    loose_schema = _load_json(loose_path)
+    strict_schema = _load_json(strict_path)
+    if not isinstance(loose_schema, dict) or not isinstance(strict_schema, dict):
+        raise TypeError("manifest event schemas must be objects")
+
+    # Pass the loaded documents explicitly so their declared $ids are used when
+    # resolving relative $refs (e.g. "./event.schema.json") from the store.
+    loose_validator = _build_validator(loose_path, schema_override=loose_schema, store=store)
+    strict_validator = _build_validator(strict_path, schema_override=strict_schema, store=store)
+    return loose_validator, strict_validator
+
+
 def main() -> int:
     spec_root = Path(__file__).resolve().parents[1]
     manifest_path = spec_root / "conformance" / "manifest.json"
@@ -235,25 +262,16 @@ def main() -> int:
         raise TypeError("manifest must be an object")
     manifest_dir = manifest_path.parent
 
-    strict_schema = (manifest_dir / str(manifest["strict_schema"])).resolve()
-    loose_schema = (manifest_dir / str(manifest["loose_schema"])).resolve()
-    event_schema = (spec_root / "schema" / "event.schema.json").resolve()
     ingest_schema = (spec_root / "schema" / "ingest.schema.json").resolve()
     collector_schema = (spec_root / "schema" / "collector-response.schema.json").resolve()
 
-    if not strict_schema.exists() or not loose_schema.exists():
-        raise FileNotFoundError("manifest schema paths must exist")
-
-    event_schema_payload = _load_json(event_schema)
-    if not isinstance(event_schema_payload, dict):
-        raise TypeError("event schema must be an object")
-    strict_event_schema = dict(event_schema_payload)
-    strict_event_schema["additionalProperties"] = False
-
     schema_store = _build_schema_store()
 
-    loose_validator = _build_validator(event_schema, store=schema_store)
-    strict_validator = _build_validator(event_schema, schema_override=strict_event_schema, store=schema_store)
+    # Validate against the schemas the manifest actually declares, rather than
+    # re-deriving "strict" from event.schema.json.
+    loose_validator, strict_validator = _build_event_validators(
+        manifest_dir, manifest, schema_store
+    )
     ingest_validator = _build_validator(ingest_schema, store=schema_store)
     collector_validator = _build_validator(collector_schema, store=schema_store)
 
