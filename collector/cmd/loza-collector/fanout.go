@@ -111,6 +111,53 @@ func validateFanoutRoles(outputs []collectorFanoutOutput) error {
 	return nil
 }
 
+// fanoutSinkFactory builds the sink for a single fanout output. It is a
+// variable so regression tests can substitute a deterministic stub; in
+// production it dispatches to the concrete sink constructors below.
+var fanoutSinkFactory = func(cfg collectorConfig, output collectorFanoutOutput, sinkType string) (collectorevent.Sink, *sql.DB, error) {
+	switch sinkType {
+	case fanoutSinkDuckDB:
+		return newDuckDBFanoutSink(cfg, output)
+	case fanoutSinkLoki:
+		sink, err := newLokiFanoutSink(output)
+		return sink, nil, err
+	case fanoutSinkOTLP:
+		sink, err := newOTLPFanoutSink(output)
+		return sink, nil, err
+	case fanoutSinkClickHouse:
+		sink, err := newClickHouseFanoutSink(cfg, output)
+		return sink, nil, err
+	case fanoutSinkPostgres:
+		sink, err := newPostgresFanoutSink(cfg, output)
+		return sink, nil, err
+	case fanoutSinkS3:
+		sink, err := newS3FanoutSink(cfg, output)
+		return sink, nil, err
+	case fanoutSinkGCS:
+		sink, err := newGCSFanoutSink(cfg, output)
+		return sink, nil, err
+	default:
+		return nil, nil, fmt.Errorf("fanout output %q: unsupported type %q", output.name, sinkType)
+	}
+}
+
+// closeFanoutSinks releases every resource acquired while building fanout
+// sinks. Sinks own background work (flush loops and clients such as GCS's
+// storage.Client), while DuckDB handles may be caller-owned, so both are
+// closed. Closing an already-closed sink or handle is a safe no-op.
+func closeFanoutSinks(sinks []collectorevent.Sink, dbs []*sql.DB) {
+	for _, sink := range sinks {
+		if sink != nil {
+			_ = sink.Close(context.Background())
+		}
+	}
+	for _, fanoutDB := range dbs {
+		if fanoutDB != nil {
+			_ = fanoutDB.Close()
+		}
+	}
+}
+
 func createFanoutSinks(cfg collectorConfig) ([]namedSink, *namedSink, []*sql.DB, error) {
 	if err := validateFanoutRoles(cfg.fanoutOutputs); err != nil {
 		return nil, nil, nil, err
@@ -119,6 +166,7 @@ func createFanoutSinks(cfg collectorConfig) ([]namedSink, *namedSink, []*sql.DB,
 	secondary := make([]namedSink, 0, len(cfg.fanoutOutputs))
 	var fallback *namedSink
 	dbs := make([]*sql.DB, 0, len(cfg.fanoutOutputs))
+	createdSinks := make([]collectorevent.Sink, 0, len(cfg.fanoutOutputs))
 
 	for _, output := range cfg.fanoutOutputs {
 		if !output.enabled {
@@ -133,9 +181,7 @@ func createFanoutSinks(cfg collectorConfig) ([]namedSink, *namedSink, []*sql.DB,
 
 		if output.connection != "" {
 			if err := applyFanoutConnection(&output, cfg); err != nil {
-				for _, fanoutDB := range dbs {
-					_ = fanoutDB.Close()
-				}
+				closeFanoutSinks(createdSinks, dbs)
 				return nil, nil, nil, err
 			}
 		}
@@ -144,36 +190,16 @@ func createFanoutSinks(cfg collectorConfig) ([]namedSink, *namedSink, []*sql.DB,
 			sinkType = fanoutSinkDuckDB
 		}
 
-		switch sinkType {
-		case fanoutSinkDuckDB:
-			sink, db, err = newDuckDBFanoutSink(cfg, output)
-		case fanoutSinkLoki:
-			sink, err = newLokiFanoutSink(output)
-		case fanoutSinkOTLP:
-			sink, err = newOTLPFanoutSink(output)
-		case fanoutSinkClickHouse:
-			sink, err = newClickHouseFanoutSink(cfg, output)
-		case fanoutSinkPostgres:
-			sink, err = newPostgresFanoutSink(cfg, output)
-		case fanoutSinkS3:
-			sink, err = newS3FanoutSink(cfg, output)
-		case fanoutSinkGCS:
-			sink, err = newGCSFanoutSink(cfg, output)
-		default:
-			for _, fanoutDB := range dbs {
-				_ = fanoutDB.Close()
-			}
-			return nil, nil, nil, fmt.Errorf("fanout output %q: unsupported type %q", output.name, sinkType)
-		}
-
-		if err != nil {
-			for _, fanoutDB := range dbs {
-				_ = fanoutDB.Close()
-			}
-			return nil, nil, nil, err
+		sink, db, err = fanoutSinkFactory(cfg, output, sinkType)
+		if sink != nil {
+			createdSinks = append(createdSinks, sink)
 		}
 		if db != nil {
 			dbs = append(dbs, db)
+		}
+		if err != nil {
+			closeFanoutSinks(createdSinks, dbs)
+			return nil, nil, nil, err
 		}
 
 		named := namedSink{Name: output.name, Sink: sink}
