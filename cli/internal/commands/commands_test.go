@@ -287,6 +287,58 @@ func TestRunCortexGraphHitsSharedClientPath(t *testing.T) {
 	}
 }
 
+func TestRunCortexGraphMalformedResponseReturnsError(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+		want string
+	}{
+		{
+			name: "error shape",
+			body: `{"error":"something went wrong"}`,
+			want: "'nodes'",
+		},
+		{
+			name: "missing fields",
+			body: `{}`,
+			want: "'nodes'",
+		},
+		{
+			name: "nodes not an array",
+			body: `{"nodes":{"id":"n1"},"edges":[]}`,
+			want: "'nodes'",
+		},
+		{
+			name: "edges not an array",
+			body: `{"nodes":[],"edges":"bad"}`,
+			want: "'edges'",
+		},
+		{
+			name: "missing edges",
+			body: `{"nodes":[]}`,
+			want: "'edges'",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				_, _ = w.Write([]byte(tt.body))
+			}))
+			defer srv.Close()
+
+			cfg := config.Config{Cortex: &config.CortexConfig{URL: srv.URL}}
+			err := RunCortexGraph(context.Background(), cfg, []string{"--service", "checkout"})
+			if err == nil {
+				t.Fatalf("expected an error for body %s, got nil", tt.body)
+			}
+			if !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("error %q does not contain %q", err.Error(), tt.want)
+			}
+		})
+	}
+}
+
 func TestStatusHitsCollectorAPI(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/status" {
