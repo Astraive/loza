@@ -9,7 +9,7 @@ import {
   assertHasCheckpoint, snapshotEvent, MockSink, FakeClock,
   setClock, setIdGenerator, resetForTest, goldenTest, conformanceSuite,
 } from '../src/testkit/helpers.ts';
-import { String, SensitiveString } from '../src/core/event.ts';
+import { String, SensitiveString, _now } from '../src/core/event.ts';
 
 describe('Testkit boundaries', () => {
   it('creates test loggers and captures emitted events', async () => {
@@ -70,6 +70,16 @@ describe('Testkit boundaries', () => {
     resetForTest();
     setIdGenerator(() => 'fixed-id');
     resetForTest();
+  });
+
+  it('resetForTest restores the real clock after a fake clock is installed', () => {
+    setClock(() => 300);
+    assert.equal(_now(), 300);
+    const before = Date.now();
+    resetForTest();
+    const after = Date.now();
+    const now = _now();
+    assert.ok(now >= before && now <= after, `expected a real timestamp after reset, got ${now}`);
   });
 
   it('writes and compares golden files and reports conformance availability', () => {
