@@ -3,6 +3,7 @@ package main
 import (
 	"crypto/rand"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -102,18 +103,16 @@ func (s *collectorState) handleKeyCreate(w http.ResponseWriter, r *http.Request)
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_env", "message": "env must be 'live', 'test', or 'dev'"})
 		return
 	}
-	token8, err := randomToken(8)
+	keyID, err := generateKeyID()
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "token_generation_failed"})
 		return
 	}
-	token24, err := randomToken(24)
+	secret, err := randomToken(24)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "token_generation_failed"})
 		return
 	}
-	keyID := "k" + token8
-	secret := token24
 	key := "lz_" + kind + "_" + env + "_" + keyID + "_" + secret
 
 	// Store the new key in the key store so it can authenticate requests
@@ -124,12 +123,12 @@ func (s *collectorState) handleKeyCreate(w http.ResponseWriter, r *http.Request)
 			keyKind = auth.KeyKindPublic
 		}
 		newKey := &auth.KeyRecord{
-			ID:           keyID,
-			KeyID:        keyID,
-			SecretHash:   secretHash,
-			Kind:         keyKind,
-			Roles:        []auth.Role{auth.RoleIngestServer},
-			AllowedEnvs:  []string{env},
+			ID:          keyID,
+			KeyID:       keyID,
+			SecretHash:  secretHash,
+			Kind:        keyKind,
+			Roles:       []auth.Role{auth.RoleIngestServer},
+			AllowedEnvs: []string{env},
 		}
 		if err := s.keyStore.CreateKey(newKey); err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "key_store_error"})
@@ -195,12 +194,11 @@ func (s *collectorState) handleKeyRotate(w http.ResponseWriter, r *http.Request)
 	}
 
 	// Generate a NEW keyID for the rotated key
-	token8, err := randomToken(8)
+	newKeyID, err := generateKeyID()
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "token_generation_failed"})
 		return
 	}
-	newKeyID := "k" + token8
 	newSecret, err := randomToken(24)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "token_generation_failed"})
@@ -209,12 +207,12 @@ func (s *collectorState) handleKeyRotate(w http.ResponseWriter, r *http.Request)
 	// Store the NEW key FIRST, then revoke old (order matters: never leave zero keys)
 	secretHash := auth.HashSecret(newSecret, s.serverSecret)
 	newKey := &auth.KeyRecord{
-		ID:           newKeyID,
-		KeyID:        newKeyID,
-		SecretHash:   secretHash,
-		Kind:         oldRecord.Kind,
-		Roles:        []auth.Role{auth.RoleIngestServer},
-		AllowedEnvs:  []string{env},
+		ID:          newKeyID,
+		KeyID:       newKeyID,
+		SecretHash:  secretHash,
+		Kind:        oldRecord.Kind,
+		Roles:       []auth.Role{auth.RoleIngestServer},
+		AllowedEnvs: []string{env},
 	}
 	if err := s.keyStore.CreateKey(newKey); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "key_store_error"})
@@ -317,4 +315,17 @@ func randomToken(size int) (string, error) {
 	// Use base64 RawStdEncoding (uses + and /, not _) to avoid
 	// conflicts with the _ separator in the key format lz_{kind}_{env}_{keyID}_{secret}.
 	return strings.TrimRight(base64.RawStdEncoding.EncodeToString(buf), "="), nil
+}
+
+// generateKeyID returns a key identifier that is safe to use as a single path
+// segment in the /keys/{id}, /keys/{id}/revoke and /keys/{id}/rotate routes.
+// The random component is hex encoded: unlike base64's standard alphabet it
+// never contains '/', and unlike base64's URL alphabet it never contains '_'
+// (the separator in lz_{kind}_{env}_{keyID}_{secret}).
+func generateKeyID() (string, error) {
+	buf := make([]byte, 8)
+	if _, err := rand.Read(buf); err != nil {
+		return "", fmt.Errorf("crypto/rand.Read failed: %w", err)
+	}
+	return "k" + hex.EncodeToString(buf), nil
 }
