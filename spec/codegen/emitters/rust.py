@@ -4,11 +4,33 @@ import json
 from typing import Any
 
 
+def _rust_raw_string(text: str) -> str:
+    """Wrap ``text`` in a Rust raw string literal with a safe hash delimiter.
+
+    Raw strings do not interpret backslash escapes, so ``text`` (the JSON
+    produced by ``json.dumps``) must be inserted verbatim. The only sequence
+    that can close the literal is ``"`` followed by the chosen run of ``#``,
+    so use one more ``#`` than the longest run present in the payload.
+    """
+    hashes = 1
+    run = 0
+    for char in text:
+        if char == "#":
+            run += 1
+            hashes = max(hashes, run + 1)
+        else:
+            run = 0
+    delim = "#" * hashes
+    return f'r{delim}"{text}"{delim}'
+
+
 def render_rust_contract(contract: dict[str, Any]) -> str:
     return (
         "use serde::{Deserialize, Serialize};\n"
-        "pub const CONTRACT_JSON: &str = r#\"" + json.dumps(contract, indent=2).replace("\\", "\\\\").replace('"', '\\"') + "\"#;\n"
-        "pub const LOZA_SPEC_VERSION: &str = \"{}\";\n".format(contract["spec_version"])
+        + "pub const CONTRACT_JSON: &str = "
+        + _rust_raw_string(json.dumps(contract, indent=2))
+        + ";\n"
+        + "pub const LOZA_SPEC_VERSION: &str = \"{}\";\n".format(contract["spec_version"])
         + "pub const LOZA_INGEST_API_VERSION: &str = \"{}\";\n".format(contract["api_version"])
         + "pub const LOZA_EVENT_VERSION: &str = \"{}\";\n".format(contract["event_version"])
         + "pub const MAX_EVENT_BYTES: usize = {};\n".format(contract["limits"]["max_event_size_bytes"])
