@@ -252,6 +252,8 @@ def _http_error(status: int, raw: bytes) -> QueryError:
         payload = json.loads(raw)
     except (ValueError, json.JSONDecodeError):
         payload = {}
+    if not isinstance(payload, dict):
+        payload = {}
     message = str(payload.get("error") or payload.get("message") or f"LQL query failed with HTTP {status}")
     category = {
         400: ErrorCategory.DIAGNOSTICS,

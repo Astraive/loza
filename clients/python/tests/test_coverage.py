@@ -10,7 +10,7 @@ from typing import Any
 import pytest
 
 from lql_client import Client, ConnectionConfig, ErrorCategory, QueryColumn, QueryError, QueryResult, QueryValue
-from lql_client.client import _parse_dsn, _valid_collector
+from lql_client.client import _http_error, _parse_dsn, _valid_collector
 
 
 class FakeResponse:
@@ -312,6 +312,37 @@ def test_query_maps_http_error_statuses(status: int, payload: bytes, category: E
     assert caught.value.category == category
     assert caught.value.status == status
     assert str(caught.value) == message
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        b"[]",
+        b"123",
+        b'"oops"',
+        b"null",
+        b"true",
+    ],
+)
+def test_http_error_coerces_non_object_json_bodies(payload: bytes) -> None:
+    error = _http_error(400, payload)
+    assert isinstance(error, QueryError)
+    assert error.category == ErrorCategory.DIAGNOSTICS
+    assert error.status == 400
+    assert str(error) == "LQL query failed with HTTP 400"
+    assert error.diagnostics == []
+
+
+def test_query_surfaces_query_error_for_non_object_json_error_body(monkeypatch: pytest.MonkeyPatch) -> None:
+    def urlopen(_request: Any, timeout: float) -> Any:
+        raise urllib.error.HTTPError("https://collector.example", 400, "failed", {}, io.BytesIO(b"[]"))
+
+    monkeypatch.setattr("lql_client.client.urllib.request.urlopen", urlopen)
+    with pytest.raises(QueryError) as caught:
+        make_client().query("from events")
+    assert caught.value.category == ErrorCategory.DIAGNOSTICS
+    assert caught.value.status == 400
+    assert str(caught.value) == "LQL query failed with HTTP 400"
 
 
 @pytest.mark.parametrize(
