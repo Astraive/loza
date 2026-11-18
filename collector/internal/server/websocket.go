@@ -2,7 +2,6 @@ package server
 
 import (
 	"context"
-	"crypto/subtle"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -118,7 +117,7 @@ func NewTailWebSocketHandler(cfg HTTPConfig, state TailState) http.Handler {
 			if credential := auth.WebSocketCredential(r); credential != "" {
 				provided = credential
 			}
-			if subtle.ConstantTimeCompare([]byte(provided), []byte(cfg.AuthValue)) != 1 {
+			if !authorizedCredential(cfg, provided) {
 				http.Error(w, "Unauthorized", http.StatusUnauthorized)
 				return
 			}

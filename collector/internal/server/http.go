@@ -2,7 +2,6 @@ package server
 
 import (
 	"context"
-	"crypto/subtle"
 	"net/http"
 	"sync/atomic"
 	"time"
@@ -100,11 +99,9 @@ func (s *HTTPServer) Stop(ctx context.Context) error {
 }
 
 func (s *HTTPServer) handleIngest(w http.ResponseWriter, r *http.Request) {
-	if s.cfg.AuthEnabled {
-		if subtle.ConstantTimeCompare([]byte(r.Header.Get(s.cfg.AuthHeader)), []byte(s.cfg.AuthValue)) != 1 {
-			http.Error(w, "Unauthorized", http.StatusUnauthorized)
-			return
-		}
+	if s.cfg.AuthEnabled && !authorizedCredential(s.cfg, r.Header.Get(s.cfg.AuthHeader)) {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
 	}
 
 	if s.cfg.RateLimitEnabled && !s.limiter.Allow() {
