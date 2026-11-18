@@ -53,8 +53,12 @@ pub fn should_sample(event: &EventContext, sampler: &SamplerConfig) -> bool {
             }
             // Simple rate limit: allow events at roughly rate/window frequency
             // (Note: This is a simplified approximation; actual token-bucket tracking would require state)
-            let window_ms = window.as_millis() as f64;
-            let rate_per_ms = *rate / window_ms;
+            // `as_millis()` truncates sub-millisecond windows to 0, which would make
+            // `rate / 0.0` evaluate to +infinity and sample every event. Compute the
+            // window as a fractional number of milliseconds to keep the precision and
+            // clamp the resulting probability to the valid [0, 1] range.
+            let window_ms = window.as_secs_f64() * 1000.0;
+            let rate_per_ms = (*rate / window_ms).clamp(0.0, 1.0);
             fastrand::f64() < rate_per_ms
         }
         SamplerConfig::Custom(f) => f(event),
