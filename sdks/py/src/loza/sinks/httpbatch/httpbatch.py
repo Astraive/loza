@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import gzip as gzip_mod
+import json
 import time
 import urllib.request
 from dataclasses import dataclass, field
@@ -118,7 +119,7 @@ class HTTPBatchSink:
                     time.sleep(_retry_delay(attempt, self.base_delay, self.max_delay, retry_after))
                     continue
                 raise last_error
-            except (URLError, TimeoutError) as exc:
+            except (URLError, TimeoutError, json.JSONDecodeError, ValueError) as exc:
                 last_error = exc
                 if attempt < self.retries:
                     time.sleep(_retry_delay(attempt, self.base_delay, self.max_delay))
