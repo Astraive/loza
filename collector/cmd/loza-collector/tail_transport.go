@@ -68,7 +68,7 @@ func (s *collectorState) handleTailWebSocket(w http.ResponseWriter, r *http.Requ
 			if !ok {
 				return
 			}
-			if !rawMatchesTailFilters(raw, filters) {
+			if !s.TailMatches(r.Context(), raw, filters) {
 				continue
 			}
 			if err := s.writeTailWebSocketEvent(conn, raw); err != nil {
