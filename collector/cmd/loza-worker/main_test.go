@@ -81,6 +81,67 @@ func TestHandleRecordCommitsInvalidEvent(t *testing.T) {
 	}
 }
 
+type closeCountingReader struct {
+	mu      sync.Mutex
+	closes  int
+	closeFn func() error
+}
+
+func (r *closeCountingReader) Poll(context.Context, time.Duration) ([]queueRecord, error) {
+	return nil, nil
+}
+
+func (r *closeCountingReader) Close() error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.closes++
+	if r.closeFn != nil {
+		return r.closeFn()
+	}
+	return nil
+}
+
+func (r *closeCountingReader) closeCount() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.closes
+}
+
+// Reproduces the shutdown path in runWorker: a deferred Close plus an explicit
+// Close. The underlying reader must be closed exactly once even though Close is
+// invoked twice (kgo.Client.Close is not idempotent).
+func TestCloseOnceReaderClosesUnderlyingReaderOnce(t *testing.T) {
+	base := &closeCountingReader{}
+	reader := &closeOnceReader{queueReader: base}
+
+	// Simulate the explicit shutdown call followed by the deferred cleanup.
+	if err := reader.Close(); err != nil {
+		t.Fatalf("first close: %v", err)
+	}
+	if err := reader.Close(); err != nil {
+		t.Fatalf("second close: %v", err)
+	}
+	if got := base.closeCount(); got != 1 {
+		t.Fatalf("underlying reader closed %d times, want 1", got)
+	}
+}
+
+func TestCloseOnceReaderPropagatesFirstErrorWithoutReclosing(t *testing.T) {
+	wantErr := errors.New("close failed")
+	base := &closeCountingReader{closeFn: func() error { return wantErr }}
+	reader := &closeOnceReader{queueReader: base}
+
+	if err := reader.Close(); !errors.Is(err, wantErr) {
+		t.Fatalf("first close error = %v, want %v", err, wantErr)
+	}
+	if err := reader.Close(); !errors.Is(err, wantErr) {
+		t.Fatalf("second close error = %v, want %v", err, wantErr)
+	}
+	if got := base.closeCount(); got != 1 {
+		t.Fatalf("underlying reader closed %d times, want 1", got)
+	}
+}
+
 func TestLoadWorkerConfigFromArgsQueueOverrides(t *testing.T) {
 	t.Setenv("COLLECTOR_KAFKA_BROKERS", "k1:9092,k2:9092")
 	t.Setenv("COLLECTOR_KAFKA_TOPIC", "topic-a")

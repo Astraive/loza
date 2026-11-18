@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -32,6 +33,22 @@ type queueRecord struct {
 type queueReader interface {
 	Poll(context.Context, time.Duration) ([]queueRecord, error)
 	Close() error
+}
+
+// closeOnceReader guarantees the wrapped reader is closed at most once. Both
+// the deferred cleanup and the explicit graceful-shutdown call invoke Close on
+// this wrapper; without the guard the Kafka reader would call kgo.Client.Close
+// twice, which is not idempotent. The guard also keeps the deferred cleanup
+// effective on early error returns while preserving shutdown ordering.
+type closeOnceReader struct {
+	queueReader
+	once sync.Once
+	err  error
+}
+
+func (r *closeOnceReader) Close() error {
+	r.once.Do(func() { r.err = r.queueReader.Close() })
+	return r.err
 }
 
 type kafkaQueueReader struct {
@@ -249,6 +266,7 @@ func runWorker(cfg workerConfig) error {
 			return fmt.Errorf("failed to create kafka reader: %w", kErr)
 		}
 	}
+	reader = &closeOnceReader{queueReader: reader}
 	defer func() { _ = reader.Close() }()
 
 	state := &workerState{cfg: cfg, processor: processor}
