@@ -97,8 +97,16 @@ export class RotatingFileSink implements Sink {
   }
 
   private rotate(): void {
-    const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-    const backupPath = `${this.path}.${timestamp}`;
+    // Keep milliseconds and append a numeric suffix on collision so two
+    // rotations in the same second (or millisecond) cannot resolve to the
+    // same destination. `fs.renameSync` overwrites on POSIX, so reusing a
+    // name would silently discard the earlier backup.
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+    let backupPath = `${this.path}.${timestamp}`;
+    let suffix = 1;
+    while (fs.existsSync(backupPath)) {
+      backupPath = `${this.path}.${timestamp}.${suffix++}`;
+    }
     try {
       fs.renameSync(this.path, backupPath);
     } catch {
