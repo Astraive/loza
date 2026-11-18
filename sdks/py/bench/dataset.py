@@ -116,9 +116,12 @@ def generate_dataset(seed: int = 42) -> dict:
         if inc.get("remediation"):
             all_events.append(inc["remediation"])
 
-    # Generate eval incidents (held-out)
+    # Generate eval incidents (held-out). They must be generated entirely after
+    # split_time so their events/signals cannot land in train_events. Using the
+    # unshifted base_time here matters: _generate_incidents confines each phase
+    # to its own day window (see below).
     eval_incidents = _generate_incidents(
-        rng, base_time + timedelta(days=N_DAYS // 2), N_EVAL_INCIDENTS, deploy_times, "eval",
+        rng, base_time, N_EVAL_INCIDENTS, deploy_times, "eval",
     )
     for inc in eval_incidents:
         all_events.extend(inc["events"])
@@ -168,13 +171,28 @@ def _generate_incidents(
     deploy_times: list[tuple],
     phase: str,
 ) -> list[dict]:
+    """Generate incidents confined to the time window of their phase.
+
+    Train incidents are generated only on the days before the eval split and
+    eval incidents only on the days on/after it, so a time-based partition can
+    never pull a held-out incident into the training set. Incident IDs are also
+    namespaced per phase (train: INC-1xx, eval: INC-2xx) to keep an eval signal
+    distinguishable from a training incident by ID alone.
+    """
+    if phase == "eval":
+        day_min, day_max = N_DAYS - 2, N_DAYS - 1
+        id_start = 200
+    else:
+        day_min, day_max = 0, N_DAYS - 3
+        id_start = 100
+
     incidents = []
     for i in range(count):
         family = INCIDENT_FAMILIES[i % len(INCIDENT_FAMILIES)]
-        day = rng.randint(0, 6)
+        day = rng.randint(day_min, day_max)
         ts = base_time + timedelta(days=day, hours=rng.randint(8, 22))
         svc = rng.choice(SERVICE_NAMES)
-        incident_id = f"INC-{100 + len(incidents)}"
+        incident_id = f"INC-{id_start + len(incidents)}"
 
         # Signal
         signal = {
