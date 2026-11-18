@@ -4,9 +4,7 @@ use super::security::SecurityConfig;
 
 impl Config {
     pub fn dev(service: impl Into<String>) -> Self {
-        let mut cfg = super::config::load_layered_file_config()
-            .unwrap_or_default()
-            .apply(Self::base());
+        let mut cfg = super::config::load_layered_file_config_or_default().apply(Self::base());
         cfg.service = service.into();
         cfg.environment = "development".to_string();
         cfg.level = "debug".to_string();
@@ -18,9 +16,7 @@ impl Config {
     }
 
     pub fn production(service: impl Into<String>) -> Self {
-        let mut cfg = super::config::load_layered_file_config()
-            .unwrap_or_default()
-            .apply(Self::base());
+        let mut cfg = super::config::load_layered_file_config_or_default().apply(Self::base());
         cfg.service = service.into();
         cfg.environment = "production".to_string();
         cfg.level = "info".to_string();
@@ -33,9 +29,7 @@ impl Config {
     }
 
     pub fn test(service: impl Into<String>) -> Self {
-        let mut cfg = super::config::load_layered_file_config()
-            .unwrap_or_default()
-            .apply(Self::base());
+        let mut cfg = super::config::load_layered_file_config_or_default().apply(Self::base());
         cfg.service = service.into();
         cfg.environment = "test".to_string();
         cfg.level = "debug".to_string();
