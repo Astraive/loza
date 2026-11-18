@@ -52,6 +52,13 @@ type Pipeline struct {
 	pending   atomic.Int64
 	drainMu   sync.Mutex
 	drainCond *sync.Cond
+
+	// enqueueMu is the shutdown gate. Enqueue holds a read lock for its whole
+	// check-then-reserve-then-send sequence; Shutdown takes the write lock before
+	// closing done. This guarantees that once done is closed no Enqueue is still
+	// in flight, so every accepted item is already in the queue before workers
+	// begin draining and waitForDrain observes pending == 0.
+	enqueueMu sync.RWMutex
 }
 
 // ErrPipelineClosed is returned when enqueueing after shutdown starts.
@@ -88,6 +95,13 @@ func NewPipeline(cfg PipelineConfig) *Pipeline {
 
 // Enqueue sends an item to the async queue per the backpressure policy.
 func (p *Pipeline) Enqueue(item PipelineItem) (bool, error) {
+	// Hold the read lock across the entire admission path so Shutdown cannot
+	// close done (and let workers exit) while this call is between its done
+	// check and its queue send. A writer waiting in Shutdown also blocks new
+	// readers, so no Enqueue can be admitted once shutdown has begun.
+	p.enqueueMu.RLock()
+	defer p.enqueueMu.RUnlock()
+
 	select {
 	case <-p.done:
 		return false, ErrPipelineClosed
@@ -265,7 +279,13 @@ func (p *Pipeline) Flush(ctx context.Context) error {
 
 // Shutdown closes the pipeline and waits for drain.
 func (p *Pipeline) Shutdown(ctx context.Context) error {
+	// Wait for every in-flight Enqueue to publish its item before closing done.
+	// Once done is closed, workers are free to exit on an empty queue; admitting
+	// an Enqueue after that point could strand its item and leave it unflushed.
+	p.enqueueMu.Lock()
 	p.stopOnce.Do(func() { close(p.done) })
+	p.enqueueMu.Unlock()
+
 	if err := p.waitForDrain(ctx); err != nil {
 		return err
 	}
