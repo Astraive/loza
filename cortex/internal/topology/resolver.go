@@ -49,7 +49,7 @@ func (r *Resolver) RegisterAlias(ctx context.Context, from string, to string, va
 			if existing.Canonical == to {
 				continue
 			}
-			if existing.ValidTo == nil || existing.ValidTo.After(validFrom) {
+			if aliasPeriodsOverlap(existing.ValidFrom, existing.ValidTo, validFrom, validTo) {
 				return fmt.Errorf("overlapping alias period for service %s", from)
 			}
 		}
@@ -79,6 +79,21 @@ func (r *Resolver) RegisterAlias(ctx context.Context, from string, to string, va
 	}
 
 	return nil
+}
+
+// aliasPeriodsOverlap reports whether two alias validity periods intersect.
+// A nil bound denotes an open-ended period (no end / no known start). Periods
+// are treated as half-open intervals, so touching endpoints do not overlap.
+func aliasPeriodsOverlap(fromA time.Time, toA *time.Time, fromB time.Time, toB *time.Time) bool {
+	// a.from < b.to (an open-ended b has no upper bound)
+	if toB != nil && !fromA.Before(*toB) {
+		return false
+	}
+	// b.from < a.to (an open-ended a has no upper bound)
+	if toA != nil && !fromB.Before(*toA) {
+		return false
+	}
+	return true
 }
 
 func (r *Resolver) GetServiceHistory(ctx context.Context, service string) ([]*models.ServiceAlias, error) {
