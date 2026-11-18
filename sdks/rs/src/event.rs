@@ -489,7 +489,17 @@ impl EventContext {
     pub fn delete_attr(&mut self, key: &str) {
         let _ = self.ensure_mutable();
         self.mark_active_if_created();
-        self.attrs.remove(key);
+        if let Some(child) = key.strip_prefix("user.") {
+            remove_nested(&mut self.user, child);
+        } else if let Some(child) = key.strip_prefix("tenant.") {
+            remove_nested(&mut self.tenant, child);
+        } else if let Some(child) = key.strip_prefix("http.") {
+            remove_nested(&mut self.http, child);
+        } else if let Some(child) = key.strip_prefix("resource.") {
+            remove_nested(&mut self.resource, child);
+        } else {
+            remove_nested(&mut self.attrs, key);
+        }
     }
 
     pub fn checkpoint(&mut self, name: &str) {
@@ -770,6 +780,24 @@ fn set_nested(target: &mut Map<String, Value>, key: &str, value: Value) {
             *entry = Value::Object(Map::new());
         }
         current = entry.as_object_mut().expect("object");
+    }
+}
+
+fn remove_nested(target: &mut Map<String, Value>, key: &str) {
+    let mut current = target;
+    let mut parts = key.split('.').peekable();
+    while let Some(part) = parts.next() {
+        if parts.peek().is_none() {
+            current.remove(part);
+            return;
+        }
+        let Some(entry) = current.get_mut(part) else {
+            return;
+        };
+        let Some(child) = entry.as_object_mut() else {
+            return;
+        };
+        current = child;
     }
 }
 
