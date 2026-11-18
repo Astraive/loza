@@ -50,6 +50,9 @@ var tableIdentPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
 // New creates a ClickHouse sink.
 func New(cfg Config) (collectorevent.Sink, error) {
+	if cfg.EncryptRaw && strings.TrimSpace(cfg.EncryptKey) == "" {
+		return nil, fmt.Errorf("clickhouse: encrypt_key must not be empty when encrypt_raw is enabled")
+	}
 	if len(cfg.Addrs) == 0 {
 		return nil, fmt.Errorf("clickhouse: Addrs is required")
 	}

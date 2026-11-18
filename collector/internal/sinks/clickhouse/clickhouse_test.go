@@ -1,6 +1,7 @@
 package clickhouse
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -15,6 +16,32 @@ func TestNewRejectsInvalidTableIdentifier(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "invalid table identifier") {
 		t.Fatalf("expected invalid identifier error, got: %v", err)
+	}
+}
+
+func TestNewRejectsBlankEncryptionKeyWhenRawEncryptionEnabled(t *testing.T) {
+	for _, key := range []string{"", "   ", "\t\n"} {
+		t.Run(fmt.Sprintf("key_%q", key), func(t *testing.T) {
+			_, err := New(Config{
+				Addrs:      []string{"127.0.0.1:9000"},
+				EncryptRaw: true,
+				EncryptKey: key,
+			})
+			if err == nil || !strings.Contains(err.Error(), "encrypt_key") {
+				t.Fatalf("expected blank encryption key error for %q, got: %v", key, err)
+			}
+		})
+	}
+}
+
+func TestNewAcceptsEncryptionWhenKeyProvided(t *testing.T) {
+	_, err := New(Config{
+		Addrs:      []string{"127.0.0.1:9000"},
+		EncryptRaw: true,
+		EncryptKey: "test-storage-encryption-key",
+	})
+	if err != nil {
+		t.Fatalf("expected configured encryption key to be accepted, got: %v", err)
 	}
 }
 
