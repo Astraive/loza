@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 )
@@ -45,6 +46,29 @@ func TestWorkerEventCount(t *testing.T) {
 				if got[w] != tt.want[w] {
 					t.Errorf("worker %d count = %d, want %d (counts: %v)", w, got[w], tt.want[w], got)
 				}
+			}
+		})
+	}
+}
+
+func TestValidateConfig(t *testing.T) {
+	tests := []struct {
+		name    string
+		cfg     Config
+		wantErr bool
+	}{
+		{name: "valid config", cfg: Config{Workers: 4, Events: 10000}, wantErr: false},
+		{name: "zero events is allowed", cfg: Config{Workers: 4, Events: 0}, wantErr: false},
+		{name: "zero workers", cfg: Config{Workers: 0, Events: 10000}, wantErr: true},
+		{name: "negative workers", cfg: Config{Workers: -1, Events: 10000}, wantErr: true},
+		{name: "negative events", cfg: Config{Workers: 4, Events: -1}, wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateConfig(tt.cfg)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("validateConfig(%+v) error = %v, wantErr %v", tt.cfg, err, tt.wantErr)
 			}
 		})
 	}
@@ -140,5 +164,33 @@ func TestSendBatchValidURL(t *testing.T) {
 	}
 	if got := atomic.LoadInt64(&stats.errors); got != 0 {
 		t.Fatalf("stats.errors = %d, want 0", got)
+	}
+}
+
+// TestRunRejectsInvalidFlags reproduces the reported behavior: invalid
+// -workers/-events flags used to reach cfg.Events/cfg.Workers and panic with a
+// division by zero before any request was sent. run must instead return an
+// error.
+func TestRunRejectsInvalidFlags(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+		want string
+	}{
+		{name: "zero workers", args: []string{"-workers", "0"}, want: "workers"},
+		{name: "negative workers", args: []string{"-workers", "-1"}, want: "workers"},
+		{name: "negative events", args: []string{"-events", "-1"}, want: "events"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := run(tt.args)
+			if err == nil {
+				t.Fatalf("run(%v) expected an error for invalid flags, got nil", tt.args)
+			}
+			if !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("run(%v) error = %q, want it to mention %q", tt.args, err, tt.want)
+			}
+		})
 	}
 }
