@@ -54,6 +54,42 @@ func TestRouterServesHealthz(t *testing.T) {
 	}
 }
 
+// TestRouterRateLimitIgnoresSpoofedForwardedFor guards against reintroducing
+// chi's global RealIP middleware. RealIP overwrites r.RemoteAddr from the
+// client-controlled X-Forwarded-For header with no trust check; the rate
+// limiter then reads that forged address and hands every request a fresh
+// bucket, defeating per-IP throttling. With RealIP absent, all requests share
+// the single bucket keyed by the real socket RemoteAddr and get throttled.
+func TestRouterRateLimitIgnoresSpoofedForwardedFor(t *testing.T) {
+	// perIPRPM=10 gives a burst of 10/10+1 = 2, so a shared bucket is
+	// exhausted after two requests from the same socket address.
+	srv := &Server{
+		config:    &config.Config{},
+		rateLimit: middleware.NewRateLimiter(100, 10),
+		ready:     true,
+	}
+	router := srv.Router()
+
+	const socketRemoteAddr = "198.51.100.7:40000"
+	const requests = 6
+	limited := 0
+	for i := range requests {
+		req := httptest.NewRequest(http.MethodPost, "/events", nil)
+		req.RemoteAddr = socketRemoteAddr
+		// A different forged client address on every request. If RealIP were
+		// installed globally, each value would create a fresh limiter bucket.
+		req.Header.Set("X-Forwarded-For", fmt.Sprintf("203.0.113.%d", i+1))
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		if rec.Code == http.StatusTooManyRequests {
+			limited++
+		}
+	}
+	if limited == 0 {
+		t.Fatal("rotating X-Forwarded-For headers bypassed the per-IP rate limiter")
+	}
+}
+
 func TestNewServerDoesNotStartUnownedWorkers(t *testing.T) {
 	cfg := config.Default()
 	cfg.Storage.DuckDB.Path = filepath.Join(t.TempDir(), "cortex.duckdb")
