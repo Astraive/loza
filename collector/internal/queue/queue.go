@@ -563,7 +563,12 @@ func (s *DiskSink) rotateFile() error {
 	ext := filepath.Ext(base)
 	name := base[:len(base)-len(ext)]
 
-	for i := s.cfg.MaxFiles - 1; i > 0; i-- {
+	// Backups are numbered .0 (newest) through .(MaxFiles-1) (oldest). Shift
+	// each existing backup up by one slot before the active file is renamed to
+	// .0, so older generations are retained up to MaxFiles. Iterating in
+	// descending order moves a source before the next iteration can overwrite
+	// it; the oldest backup is overwritten and thereby discarded.
+	for i := s.cfg.MaxFiles - 2; i >= 0; i-- {
 		oldPath := filepath.Join(dir, fmt.Sprintf("%s.%d%s", name, i, ext))
 		newPath := filepath.Join(dir, fmt.Sprintf("%s.%d%s", name, i+1, ext))
 		if err := os.Rename(oldPath, newPath); err != nil && !os.IsNotExist(err) {
