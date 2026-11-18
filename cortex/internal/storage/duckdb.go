@@ -584,12 +584,19 @@ func (s *DuckDBEventStore) ListLifecycleSummaries(ctx context.Context, filter *L
 		}
 	}
 
+	// json_array_length returns a scalar, so it must be selected directly.
+	// json_extract_string(col, '$') normalizes values that DuckDB stored as a
+	// JSON string (rather than a JSON array) back into array text before the
+	// cast, so the count is correct for both storage representations.
+	childCount := func(col string) string {
+		return " COALESCE(json_array_length(try_cast(json_extract_string(" + col + ", '$') AS JSON)), 0)"
+	}
 	query := "SELECT id, event, service, outcome, duration_ms," +
-		" (SELECT COUNT(*) FROM json_array_length(COALESCE(checkpoints, '[]'))) as cp_count," +
-		" (SELECT COUNT(*) FROM json_array_length(COALESCE(processes, '[]'))) as pr_count," +
-		" (SELECT COUNT(*) FROM json_array_length(COALESCE(groups, '[]'))) as gr_count," +
-		" (SELECT COUNT(*) FROM json_array_length(COALESCE(timers, '[]'))) as ti_count," +
-		" (SELECT COUNT(*) FROM json_array_length(COALESCE(links, '[]'))) as li_count," +
+		childCount("checkpoints") + " as cp_count," +
+		childCount("processes") + " as pr_count," +
+		childCount("groups") + " as gr_count," +
+		childCount("timers") + " as ti_count," +
+		childCount("links") + " as li_count," +
 		" trace_id" +
 		" FROM events " + where + " ORDER BY timestamp DESC LIMIT ? OFFSET ?"
 	args = append(args, limit, offset)
