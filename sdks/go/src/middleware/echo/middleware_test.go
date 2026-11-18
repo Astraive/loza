@@ -42,6 +42,39 @@ func TestMiddlewareEmitsSuccessAndErrorEvents(t *testing.T) {
 	}
 }
 
+func TestMiddlewareHandlesHandlerErrorOnlyOnce(t *testing.T) {
+	store := configureEcho(t, false)
+	e := echopkg.New()
+	calls := 0
+	e.HTTPErrorHandler = func(err error, c echopkg.Context) {
+		calls++
+		_ = c.String(http.StatusInternalServerError, err.Error())
+	}
+	e.Use(Middleware())
+	e.GET("/error", func(echopkg.Context) error { return errors.New("handler failure") })
+
+	req := httptest.NewRequest(http.MethodGet, "/error", nil)
+	rr := httptest.NewRecorder()
+	e.ServeHTTP(rr, req)
+
+	if calls != 1 {
+		t.Fatalf("HTTP error handler calls = %d, want 1", calls)
+	}
+	if err := loza.Flush(context.Background()); err != nil {
+		t.Fatalf("Flush: %v", err)
+	}
+	if store.Len() != 1 {
+		t.Fatalf("events = %d, want 1", store.Len())
+	}
+	ev := store.Events()[0]
+	if ev.Error == nil {
+		t.Fatalf("error event missing error: %+v", ev)
+	}
+	if ev.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("error event status_code = %d, want %d", ev.StatusCode, http.StatusInternalServerError)
+	}
+}
+
 func TestMiddlewareRecoversPanicAndUsesConfiguredEvent(t *testing.T) {
 	store := configureEcho(t, true)
 	e := echopkg.New()
