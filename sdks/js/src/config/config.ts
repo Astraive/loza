@@ -8,6 +8,7 @@ import type { Schema } from '../core/schema.ts';
 import { DefaultSchema } from '../core/schema.ts';
 import type { Level } from '../core/level.ts';
 import { loadFileConfig, mergeFileConfig } from './config-file.ts';
+import { applyDSN } from './dsn-config.ts';
 import { isPublicDSNUsername, parse as parseDSN } from './dsn.ts';
 
 function isLocalhost(host: string): boolean {
@@ -29,15 +30,7 @@ function applyCollectorURL(cfg: Config, raw: string): void {
     cfg.collectorUrl = raw;
     return;
   }
-  const dsn = parseDSN(raw);
-  cfg.collectorUrl = dsn.baseURL;
-  cfg.collectorName = dsn.collectorName;
-  if (dsn.username !== undefined) {
-    cfg.username = dsn.username;
-    cfg.password = dsn.password ?? '';
-  }
-  if (dsn.env && dsn.env !== 'default') cfg.environment = dsn.env;
-  if (dsn.service) cfg.service = dsn.service;
+  applyDSN(cfg, parseDSN(raw));
 }
 
 /** Reject credentialed non-local plaintext HTTP before any request is made. */
@@ -389,13 +382,14 @@ export class ConfigBuilder implements Config {
 /** Create a config from a base config and options. */
 export function withOptions(base: Config, opts: ConfigOptions): Config {
   const cfg = { ...base };
+  // Apply the DSN first so explicit options below override DSN-derived values.
+  if (opts.collectorUrl !== undefined) applyCollectorURL(cfg, opts.collectorUrl);
   if (opts.service !== undefined) cfg.service = opts.service;
   if (opts.alias !== undefined) cfg.alias = opts.alias;
   if (opts.version !== undefined) cfg.version = opts.version;
   if (opts.environment !== undefined) cfg.environment = opts.environment;
   if (opts.release !== undefined) cfg.release = opts.release;
   if (opts.namespace !== undefined) cfg.namespace = opts.namespace;
-  if (opts.collectorUrl !== undefined) applyCollectorURL(cfg, opts.collectorUrl);
   if (opts.collectorName !== undefined) cfg.collectorName = opts.collectorName;
   if (opts.apiKey !== undefined) cfg.apiKey = opts.apiKey.trim();
   if (opts.username !== undefined) cfg.username = opts.username;
