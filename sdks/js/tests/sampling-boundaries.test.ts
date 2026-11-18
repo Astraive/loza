@@ -79,6 +79,29 @@ describe('Sampler boundaries', () => {
     }
   });
 
+  it('accumulates fractional rate credit across windows to emit samples', () => {
+    const originalNow = Date.now;
+    let now = 1000;
+    Date.now = () => now;
+    try {
+      const limited = sampleRateLimited(0.5, 1000);
+      const event = makeEvent();
+      // Starts half full: a single window is not enough credit yet.
+      assert.equal(limited(event), false);
+      // After one window the bucket reaches a full token and emits once.
+      now += 1000;
+      assert.equal(limited(event), true);
+      assert.equal(limited(event), false);
+      // It takes two more windows to rebuild a full token (~1 per 2s).
+      now += 1000;
+      assert.equal(limited(event), false);
+      now += 1000;
+      assert.equal(limited(event), true);
+    } finally {
+      Date.now = originalNow;
+    }
+  });
+
   it('returns policy option objects without mutation', () => {
     const policy = { key: 'value' };
     assert.deepEqual(maxAttrLength(5), { maxAttrLength: 5 });
