@@ -434,7 +434,9 @@ impl EventContext {
     }
 
     pub fn set_attr(&mut self, key: impl Into<String>, value: impl Into<Value>) {
-        let _ = self.ensure_mutable();
+        if self.ensure_mutable().is_err() {
+            return;
+        }
         self.mark_active_if_created();
         let key = key.into();
         let value = value.into();
@@ -452,7 +454,9 @@ impl EventContext {
     }
 
     pub fn append_attr(&mut self, attr: Attr) {
-        let _ = self.ensure_mutable();
+        if self.ensure_mutable().is_err() {
+            return;
+        }
         self.mark_active_if_created();
         if attr.sensitive {
             self.sensitive_keys.push(attr.key.clone());
@@ -474,7 +478,9 @@ impl EventContext {
     }
 
     pub fn merge_group(&mut self, group: &str, key: impl Into<String>, value: impl Into<Value>) {
-        let _ = self.ensure_mutable();
+        if self.ensure_mutable().is_err() {
+            return;
+        }
         self.mark_active_if_created();
         let target = match group {
             "http" => &mut self.http,
@@ -487,7 +493,9 @@ impl EventContext {
     }
 
     pub fn delete_attr(&mut self, key: &str) {
-        let _ = self.ensure_mutable();
+        if self.ensure_mutable().is_err() {
+            return;
+        }
         self.mark_active_if_created();
         if let Some(child) = key.strip_prefix("user.") {
             remove_nested(&mut self.user, child);
@@ -507,7 +515,9 @@ impl EventContext {
     }
 
     pub fn checkpoint_with_attrs(&mut self, name: &str, attrs: &[Attr]) {
-        let _ = self.ensure_mutable();
+        if self.ensure_mutable().is_err() {
+            return;
+        }
         self.mark_active_if_created();
         let mut checkpoint = Map::new();
         checkpoint.insert("name".to_string(), Value::String(name.to_string()));
@@ -525,9 +535,11 @@ impl EventContext {
 
     /// Start a named process step and return a handle to finish it.
     pub fn start_process(&mut self, name: &str) -> ProcessHandle {
-        let _ = self.ensure_mutable();
-        self.mark_active_if_created();
-        self.process_step += 1;
+        let mutable = self.ensure_mutable().is_ok();
+        if mutable {
+            self.mark_active_if_created();
+            self.process_step += 1;
+        }
         ProcessHandle {
             name: name.to_string(),
             step: self.process_step,
@@ -538,8 +550,10 @@ impl EventContext {
 
     /// Start a named timer and return a handle to stop it.
     pub fn start_timer(&mut self, name: &str) -> TimerHandle {
-        let _ = self.ensure_mutable();
-        self.mark_active_if_created();
+        let mutable = self.ensure_mutable().is_ok();
+        if mutable {
+            self.mark_active_if_created();
+        }
         TimerHandle {
             name: name.to_string(),
             started_at_instant: std::time::Instant::now(),
@@ -548,8 +562,10 @@ impl EventContext {
 
     /// Start a named group phase and return a handle to finish it.
     pub fn start_group(&mut self, name: &str) -> GroupHandle {
-        let _ = self.ensure_mutable();
-        self.mark_active_if_created();
+        let mutable = self.ensure_mutable().is_ok();
+        if mutable {
+            self.mark_active_if_created();
+        }
         GroupHandle {
             name: name.to_string(),
             started_at_instant: std::time::Instant::now(),
