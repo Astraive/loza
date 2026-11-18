@@ -23,3 +23,29 @@ def test_testing_and_conformance_helpers():
     fixed = loza.DecodeEvents(sink2)[0]
     assert fixed.get("event_id") == "evt_fixed"
     loza.reset_for_test()
+
+
+def test_testkit_events_helpers_capture_emitted_events():
+    from loza.testkit import helpers as testkit
+
+    testkit.reset_for_test()
+    kit = testkit.testkit("testkit-events")
+    logger = kit["logger"]
+
+    ctx = logger.start_event(loza.Params(event="captured"))
+    logger.finish(ctx, "success")
+    logger.emit(ctx)
+
+    events = kit["events"]()
+    assert len(events) == 1
+    assert events[0]["event"] == "captured"
+    assert kit["last_event"]()["event"] == "captured"
+
+    # Module-level helpers share the same capture buffer as the testkit dict.
+    assert testkit.events() == events
+    assert testkit.last_event()["event"] == "captured"
+
+    kit["clear_events"]()
+    assert kit["events"]() == []
+    assert testkit.last_event() is None
+    testkit.reset_for_test()
