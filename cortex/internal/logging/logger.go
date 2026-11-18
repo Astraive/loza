@@ -16,9 +16,10 @@ type Logger struct {
 
 // New creates a new logger with the specified configuration
 func New(level, format string) *Logger {
-	// Set log level
+	// Resolve the level but keep it instance-scoped: calling New must not
+	// silently change the verbosity of every other zerolog logger in the
+	// process, which contradicts the per-instance Logger abstraction.
 	logLevel := parseLevel(level)
-	zerolog.SetGlobalLevel(logLevel)
 
 	// Configure output format
 	var output io.Writer = os.Stdout
@@ -26,8 +27,8 @@ func New(level, format string) *Logger {
 		output = zerolog.ConsoleWriter{Out: os.Stdout}
 	}
 
-	// Create logger
-	logger := zerolog.New(output).With().Timestamp().Logger()
+	// Create logger with the level applied to this instance only.
+	logger := zerolog.New(output).Level(logLevel).With().Timestamp().Logger()
 
 	return &Logger{logger: logger}
 }
