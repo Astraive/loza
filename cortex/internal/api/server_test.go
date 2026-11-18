@@ -613,3 +613,124 @@ func TestGraphQLRemediationSuggestionsReturnIncidentSpecificAction(t *testing.T)
 		t.Fatalf("signature_id = %v, want sig-1", signature["signature_id"])
 	}
 }
+
+type similarIncidentIncidentStore struct {
+	incidents map[string]*models.Incident
+}
+
+func (*similarIncidentIncidentStore) Save(context.Context, *models.Incident) error { return nil }
+func (s *similarIncidentIncidentStore) Get(_ context.Context, id string) (*models.Incident, error) {
+	inc := s.incidents[id]
+	if inc == nil {
+		return nil, storage.ErrNotFound
+	}
+	return inc, nil
+}
+func (s *similarIncidentIncidentStore) GetBySignature(_ context.Context, signatureID string) (*models.Incident, error) {
+	for _, inc := range s.incidents {
+		if inc.SignatureID == signatureID {
+			return inc, nil
+		}
+	}
+	return nil, storage.ErrNotFound
+}
+func (*similarIncidentIncidentStore) List(context.Context, int, int) ([]*models.Incident, error) {
+	return nil, nil
+}
+
+type similarIncidentMatcher struct {
+	querySig  *models.IncidentSignature
+	callCount int
+	similar   []*models.SimilarIncident
+}
+
+func (*similarIncidentMatcher) Score(*models.IncidentSignature, *models.IncidentSignature) (float64, error) {
+	return 0, nil
+}
+func (*similarIncidentMatcher) TopK(*models.IncidentSignature, []*models.IncidentSignature, int) ([]matcher.Match, error) {
+	return nil, nil
+}
+func (*similarIncidentMatcher) ExtractSignature(context.Context, *models.IncidentContext) (*models.IncidentSignature, error) {
+	return nil, nil
+}
+func (m *similarIncidentMatcher) FindSimilar(_ context.Context, sig *models.IncidentSignature, _ int) ([]*models.SimilarIncident, error) {
+	m.callCount++
+	m.querySig = sig
+	return m.similar, nil
+}
+func (*similarIncidentMatcher) RegisterSignature(context.Context, *models.IncidentSignature) error {
+	return nil
+}
+func (*similarIncidentMatcher) UpdateSignature(context.Context, string, *models.SignatureUpdate) error {
+	return nil
+}
+
+func TestHandleSimilarIncidentsRanksBySimilarityToTarget(t *testing.T) {
+	server := &GraphQLServer{
+		incidents: &similarIncidentIncidentStore{incidents: map[string]*models.Incident{
+			"inc-target": {ID: "inc-target", SignatureID: "sig-target"},
+			"inc-low":    {ID: "inc-low", SignatureID: "sig-low"},
+			"inc-high":   {ID: "inc-high", SignatureID: "sig-high"},
+			"inc-mid":    {ID: "inc-mid", SignatureID: "sig-mid"},
+		}},
+		signatures: &graphQLSignatureStore{signatures: map[string]*models.IncidentSignature{
+			"sig-target": {SignatureID: "sig-target", Shape: "target"},
+			"sig-high":   {SignatureID: "sig-high"},
+			"sig-mid":    {SignatureID: "sig-mid"},
+			"sig-low":    {SignatureID: "sig-low"},
+		}},
+		// Deliberately unsorted: FindSimilar does not guarantee ranking.
+		match: &similarIncidentMatcher{similar: []*models.SimilarIncident{
+			{IncidentID: "sig-mid", Similarity: 0.7},
+			{IncidentID: "sig-high", Similarity: 0.95},
+			{IncidentID: "sig-low", Similarity: 0.55},
+		}},
+	}
+
+	got, err := server.handleSimilarIncidents(context.Background(), map[string]interface{}{"incidentId": "inc-target"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, ok := got.([]*models.Incident)
+	if !ok {
+		t.Fatalf("unexpected result type %T", got)
+	}
+
+	matchSvc := server.match.(*similarIncidentMatcher)
+	if matchSvc.callCount != 1 {
+		t.Fatalf("FindSimilar called %d times, want 1", matchSvc.callCount)
+	}
+	if matchSvc.querySig == nil || matchSvc.querySig.SignatureID != "sig-target" {
+		t.Fatalf("FindSimilar queried with %#v, want the target incident's signature", matchSvc.querySig)
+	}
+
+	want := []string{"inc-high", "inc-mid", "inc-low"}
+	if len(result) != len(want) {
+		t.Fatalf("got %d incidents, want %d: %#v", len(result), len(want), result)
+	}
+	for i, id := range want {
+		if result[i].ID != id {
+			t.Errorf("result[%d] = %q, want %q", i, result[i].ID, id)
+		}
+	}
+}
+
+func TestHandleSimilarIncidentsWithoutSignatureReturnsEmpty(t *testing.T) {
+	server := &GraphQLServer{
+		incidents:  &similarIncidentIncidentStore{incidents: map[string]*models.Incident{"inc-target": {ID: "inc-target"}}},
+		signatures: &graphQLSignatureStore{signatures: map[string]*models.IncidentSignature{}},
+		match:      &similarIncidentMatcher{},
+	}
+
+	got, err := server.handleSimilarIncidents(context.Background(), map[string]interface{}{"incidentId": "inc-target"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, ok := got.([]*models.Incident)
+	if !ok || len(result) != 0 {
+		t.Fatalf("expected empty incident list, got %#v", got)
+	}
+	if calls := server.match.(*similarIncidentMatcher).callCount; calls != 0 {
+		t.Fatalf("FindSimilar called %d times, want 0", calls)
+	}
+}
