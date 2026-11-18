@@ -303,15 +303,13 @@ func (p *EventProcessor) createGraphNodesBatch(ctx context.Context, events []*mo
 		if err := p.linkGroupedEvents(ctx, group, seenEdges, models.EdgeTypeSameTrace); err != nil {
 			return err
 		}
-		if len(group) <= 1 {
-			relatedEvents, err := p.eventStore.FindByTraceID(ctx, traceID)
-			if err != nil {
-				return fmt.Errorf("failed to find events for trace %s: %w", traceID, err)
-			}
-			for _, event := range group {
-				if err := p.linkExternalEvents(ctx, event, relatedEvents, seenEdges, models.EdgeTypeSameTrace); err != nil {
-					return err
-				}
+		relatedEvents, err := p.eventStore.FindByTraceID(ctx, traceID)
+		if err != nil {
+			return fmt.Errorf("failed to find events for trace %s: %w", traceID, err)
+		}
+		for _, event := range group {
+			if err := p.linkExternalEvents(ctx, event, relatedEvents, seenEdges, models.EdgeTypeSameTrace); err != nil {
+				return err
 			}
 		}
 	}
@@ -320,15 +318,13 @@ func (p *EventProcessor) createGraphNodesBatch(ctx context.Context, events []*mo
 		if err := p.linkGroupedEvents(ctx, group, seenEdges, models.EdgeTypeSameIncident); err != nil {
 			return err
 		}
-		if len(group) <= 1 {
-			relatedEvents, err := p.eventStore.FindByIncidentID(ctx, incidentID)
-			if err != nil {
-				return fmt.Errorf("failed to find events for incident %s: %w", incidentID, err)
-			}
-			for _, event := range group {
-				if err := p.linkExternalEvents(ctx, event, relatedEvents, seenEdges, models.EdgeTypeSameIncident); err != nil {
-					return err
-				}
+		relatedEvents, err := p.eventStore.FindByIncidentID(ctx, incidentID)
+		if err != nil {
+			return fmt.Errorf("failed to find events for incident %s: %w", incidentID, err)
+		}
+		for _, event := range group {
+			if err := p.linkExternalEvents(ctx, event, relatedEvents, seenEdges, models.EdgeTypeSameIncident); err != nil {
+				return err
 			}
 		}
 	}
