@@ -26,6 +26,11 @@ describe('CollectorClient boundaries', () => {
     assert.throws(() => new CollectorClient({ url: 'https://example.com', password: 'secret' }), /password requires/);
     assert.throws(() => new CollectorClient({ url: 'https://example.com', username: 'private' }), /require a password/);
     assert.throws(() => new CollectorClient({ url: 'http://example.com', username: 'u', password: 'p' }), /require HTTPS/);
+    // Regression: API keys must not be sent over cleartext HTTP to non-local hosts.
+    assert.throws(() => new CollectorClient({ url: 'http://example.com', apiKey: 'secret-key' }), /require HTTPS/);
+    assert.throws(() => new CollectorClient({ url: 'http://example.com', apiKey: 'secret-key', authHeader: 'Authorization' }), /require HTTPS/);
+    assert.doesNotThrow(() => new CollectorClient({ url: 'http://127.0.0.1:9308', apiKey: 'secret-key' }));
+    assert.doesNotThrow(() => new CollectorClient({ url: 'https://example.com', apiKey: 'secret-key' }));
     let requests = 0;
     const { server, url } = await startCollector((req, res) => {
       requests++;

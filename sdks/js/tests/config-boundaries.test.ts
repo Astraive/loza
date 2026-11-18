@@ -88,6 +88,19 @@ describe('Config boundaries', () => {
     plaintext.username = 'user';
     plaintext.password = 'pass';
     assert.throws(() => validateConfig(plaintext), /require HTTPS/);
+    // Regression: API keys must not be sent over cleartext HTTP to non-local hosts.
+    const plaintextApiKey = defaultConfig();
+    plaintextApiKey.collectorUrl = 'http://collector.example/events';
+    plaintextApiKey.apiKey = 'secret-key';
+    assert.throws(() => validateConfig(plaintextApiKey), /require HTTPS/);
+    const httpsApiKey = defaultConfig();
+    httpsApiKey.collectorUrl = 'https://collector.example/events';
+    httpsApiKey.apiKey = 'secret-key';
+    assert.equal(validateConfig(httpsApiKey), httpsApiKey);
+    const localApiKey = defaultConfig();
+    localApiKey.collectorUrl = 'http://localhost/events';
+    localApiKey.apiKey = 'secret-key';
+    assert.equal(validateConfig(localApiKey), localApiKey);
     const localhost = defaultConfig();
     localhost.collectorUrl = 'http://localhost/events';
     localhost.username = 'user';

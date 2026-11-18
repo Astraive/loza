@@ -211,10 +211,10 @@ export class HTTPBatchSink implements Sink {
     if (this.username && !this.password && !isPublicDSNUsername(this.username)) {
       throw new Error('invalid HTTP sink options: Basic credentials require a password unless username is an lz_pub_ capability');
     }
-    if (!this.apiKey && this.username &&
+    if ((this.apiKey || this.username) &&
       endpoint.protocol === 'http:' &&
       !['localhost', '127.0.0.1', '::1'].includes(endpoint.hostname)) {
-      throw new Error('invalid HTTP sink options: Basic credentials require HTTPS (HTTP is allowed only for localhost)');
+      throw new Error('invalid HTTP sink options: credentials require HTTPS (HTTP is allowed only for localhost)');
     }
     this.authHeader = opts.authHeader || 'Authorization';
     this.sdkName = opts.sdkName || 'loza-js';
