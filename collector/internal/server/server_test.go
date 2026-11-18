@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"io"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -71,6 +72,100 @@ func TestHTTPServerIngest(t *testing.T) {
 	require.True(t, srv.IsReady())
 
 	_ = srv.Stop(context.Background())
+}
+
+// Regression test for MASS-0213: auth must fail closed when the configured
+// secret or header name is empty. Previously an empty AuthValue made
+// ConstantTimeCompare("" , "") return 1, so a request with no credential was
+// granted unauthenticated ingest.
+func TestHTTPServerIngestAuthFailsClosedWithEmptyConfiguredSecret(t *testing.T) {
+	const (
+		authHeader = "X-API-Key"
+		secret     = "lz_sec_live_ksec1_testsecret"
+	)
+	body := `{"event_id":"evt-1","timestamp":"2026-08-24T00:00:00Z"}` + "\n"
+
+	tests := []struct {
+		name      string
+		authValue string
+		hdrName   string
+		presented string
+		wantCode  int
+	}{
+		{
+			name:      "empty secret with missing header is rejected",
+			authValue: "",
+			hdrName:   authHeader,
+			presented: "",
+			wantCode:  http.StatusUnauthorized,
+		},
+		{
+			name:      "empty secret with arbitrary header is rejected",
+			authValue: "",
+			hdrName:   authHeader,
+			presented: "anything",
+			wantCode:  http.StatusUnauthorized,
+		},
+		{
+			name:      "empty header name is rejected",
+			authValue: secret,
+			hdrName:   "",
+			presented: secret,
+			wantCode:  http.StatusUnauthorized,
+		},
+		{
+			name:      "configured secret with missing header is rejected",
+			authValue: secret,
+			hdrName:   authHeader,
+			presented: "",
+			wantCode:  http.StatusUnauthorized,
+		},
+		{
+			name:      "configured secret with wrong header is rejected",
+			authValue: secret,
+			hdrName:   authHeader,
+			presented: "wrong-secret",
+			wantCode:  http.StatusUnauthorized,
+		},
+		{
+			name:      "configured secret with matching header is accepted",
+			authValue: secret,
+			hdrName:   authHeader,
+			presented: secret,
+			wantCode:  http.StatusOK,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := HTTPConfig{
+				Enabled:      true,
+				IngestPath:   "/ingest",
+				MaxBodyBytes: 10 * 1024 * 1024,
+				AuthEnabled:  true,
+				AuthHeader:   tt.hdrName,
+				AuthValue:    tt.authValue,
+			}
+			state := &mockState{ready: true, healthy: true}
+			srv := NewHTTPServer(cfg, state)
+
+			req := httptest.NewRequest(http.MethodPost, "/ingest", strings.NewReader(body))
+			if tt.presented != "" && tt.hdrName != "" {
+				req.Header.Set(tt.hdrName, tt.presented)
+			}
+			rec := httptest.NewRecorder()
+
+			srv.handleIngest(rec, req)
+
+			require.Equal(t, tt.wantCode, rec.Code, "response body: %s", rec.Body.String())
+			if tt.wantCode == http.StatusUnauthorized {
+				assert.Zero(t, state.metrics.EventsAccepted, "unauthorized request must not ingest events")
+				assert.Contains(t, rec.Body.String(), "Unauthorized")
+			} else {
+				assert.Equal(t, int64(1), state.metrics.EventsAccepted)
+			}
+		})
+	}
 }
 
 func TestHTTPServerHealthReady(t *testing.T) {

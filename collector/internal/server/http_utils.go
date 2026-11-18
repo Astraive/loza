@@ -3,6 +3,7 @@ package server
 import (
 	"bufio"
 	"bytes"
+	"crypto/subtle"
 	"errors"
 	"io"
 	"strconv"
@@ -37,4 +38,17 @@ func parseNDJSONEvents(body io.Reader, maxBytes int64) ([][]byte, error) {
 
 func itoa(n int) string {
 	return strconv.Itoa(n)
+}
+
+// authorizedCredential reports whether presented satisfies the configured
+// legacy header auth. It fails closed: an empty configured header name, empty
+// configured secret, or empty presented credential is never a match.
+// subtle.ConstantTimeCompare reports two empty inputs as equal, so without
+// these guards a request with no credential would be authenticated whenever
+// AuthValue is empty (for example when auth is enabled via keys/tokens only).
+func authorizedCredential(cfg HTTPConfig, presented string) bool {
+	if cfg.AuthHeader == "" || cfg.AuthValue == "" || presented == "" {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(presented), []byte(cfg.AuthValue)) == 1
 }
