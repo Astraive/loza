@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"syscall"
@@ -452,6 +453,57 @@ func shutdownCollector(server *http.Server, auxServers []serverruntime.Server, s
 	logJSON("info", "collector_shutdown_complete", nil)
 }
 
+// collectorStartupAuthPolicy captures the authentication and authorization
+// settings that are wired into the HTTP mux, the auxiliary servers and the key
+// store when the collector starts. The auth middleware and the per-collector
+// authorization guard are built once in buildMux, and the gRPC/GraphQL servers
+// get their auth interceptors at startup too. Applying a different auth policy
+// on SIGHUP would leave those layers disagreeing: disabling auth would strip
+// the AuthorizesCollector check while the authentication middleware stayed in
+// place, and enabling it would add the check without any authentication. These
+// settings therefore require a full restart, and hot reload must reject them.
+type collectorStartupAuthPolicy struct {
+	enabled           bool
+	allowLocalDevKeys bool
+	serverSecret      string
+	cacheTTL          time.Duration
+	negativeCacheTTL  time.Duration
+	defaultCollector  string
+	collectors        []string
+	keys              []collectorAuthKey
+	tokens            []collectorAuthToken
+	grants            []collectorAuthGrant
+	apiKeyHeader      string
+	apiKey            string
+	trustedProxies    []string
+	identityMode      string
+	mtlsAllowedCNs    []string
+	mtlsAllowedDNS    []string
+	mtlsAllowedEmails []string
+}
+
+func startupAuthPolicy(cfg collectorConfig) collectorStartupAuthPolicy {
+	return collectorStartupAuthPolicy{
+		enabled:           cfg.authEnabled,
+		allowLocalDevKeys: cfg.authAllowLocalDevKeys,
+		serverSecret:      cfg.authServerSecret,
+		cacheTTL:          cfg.authCacheTTL,
+		negativeCacheTTL:  cfg.authNegativeCacheTTL,
+		defaultCollector:  cfg.authDefaultCollector,
+		collectors:        cfg.authCollectors,
+		keys:              cfg.authKeys,
+		tokens:            cfg.authTokens,
+		grants:            cfg.authGrants,
+		apiKeyHeader:      cfg.apiKeyHeader,
+		apiKey:            cfg.apiKey,
+		trustedProxies:    cfg.trustedProxies,
+		identityMode:      cfg.identityMode,
+		mtlsAllowedCNs:    cfg.mtlsAllowedCNs,
+		mtlsAllowedDNS:    cfg.mtlsAllowedDNS,
+		mtlsAllowedEmails: cfg.mtlsAllowedEmails,
+	}
+}
+
 func reloadCollectorState(state *collectorState) error {
 	if len(state.cfg.configArgs) == 0 {
 		return fmt.Errorf("collector reload requires original startup arguments")
@@ -474,6 +526,14 @@ func reloadCollectorState(state *collectorState) error {
 	next.queueDir = state.cfg.queueDir
 	next.kafkaBrokers = append([]string(nil), state.cfg.kafkaBrokers...)
 	next.kafkaTopic = state.cfg.kafkaTopic
+
+	// Auth policy is fixed at startup. Reject a reload that would change it
+	// instead of applying it partially: the request-time authorization guard
+	// reads state.cfg while the authentication middleware is already wired into
+	// the mux. Leave state.cfg untouched so the running policy stays consistent.
+	if !reflect.DeepEqual(startupAuthPolicy(next), startupAuthPolicy(state.cfg)) {
+		return errors.New("collector reload cannot change authentication or authorization settings; restart the collector to apply auth changes")
+	}
 
 	state.cfg = next
 	if state.rateLimiter != nil {
@@ -507,6 +567,8 @@ func buildMux(state *collectorState) *http.ServeMux {
 				return
 			}
 			environment := strings.TrimSpace(r.Header.Get("X-Loza-Env"))
+			// authEnabled is immutable for the lifetime of the mux: hot reload rejects
+			// changes to the startup auth policy, so this stays in sync with authMW.
 			if state.cfg.authEnabled && mode == publichttp.CanonicalCollectorRoute {
 				ac := auth.GetAuthContext(r.Context())
 				if ac == nil || !ac.AuthorizesCollector(collector, environment, auth.Permission(permission)) {
