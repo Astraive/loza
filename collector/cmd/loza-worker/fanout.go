@@ -255,7 +255,7 @@ func ensureSchema(db *sql.DB, cfg workerConfig) error {
 		}
 		columns = append(columns, fmt.Sprintf("%s TEXT", rawIdent))
 	}
-	tableIdent, err := quoteWorkerSQLIdent(cfg.duckDBTable)
+	tableIdent, err := quoteWorkerSQLTableName(cfg.duckDBTable)
 	if err != nil {
 		return err
 	}
@@ -273,6 +273,28 @@ func quoteWorkerSQLIdent(ident string) (string, error) {
 		return "", fmt.Errorf("invalid sql identifier %q", ident)
 	}
 	return `"` + strings.ReplaceAll(ident, `"`, `""`) + `"`, nil
+}
+
+// quoteWorkerSQLTableName quotes a (possibly qualified) table name by quoting
+// each dot-separated part individually. This mirrors the DuckDB sink's
+// quoteTableName so that names accepted by validWorkerTableName do not fail
+// when ensureSchema creates the table at startup. Column identifiers still use
+// quoteWorkerSQLIdent, which correctly rejects qualification.
+func quoteWorkerSQLTableName(table string) (string, error) {
+	table = strings.TrimSpace(table)
+	if table == "" {
+		return "", fmt.Errorf("sql table name cannot be empty")
+	}
+	parts := strings.Split(table, ".")
+	quoted := make([]string, 0, len(parts))
+	for _, part := range parts {
+		ident, err := quoteWorkerSQLIdent(part)
+		if err != nil {
+			return "", fmt.Errorf("invalid sql table name %q: %w", table, err)
+		}
+		quoted = append(quoted, ident)
+	}
+	return strings.Join(quoted, "."), nil
 }
 
 func validateWorkerSQLType(typ string) (string, error) {
