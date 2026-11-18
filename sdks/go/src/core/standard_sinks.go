@@ -185,6 +185,24 @@ func (s *rotatingFileSink) WriteEvent(_ context.Context, encoded []byte, _ *Even
 	return err
 }
 
+// uniqueRotatedPath returns a rotation destination that does not exist yet.
+// Timestamped names have one-second resolution, so two rotations within the
+// same second would otherwise resolve to the same path and os.Rename would
+// overwrite the earlier rotated file. A numeric suffix keeps each rotation
+// distinct.
+func uniqueRotatedPath(path string, now time.Time) string {
+	base := path + "." + now.Format("20060102-150405")
+	candidate := base
+	for n := 1; ; n++ {
+		if _, err := os.Lstat(candidate); err != nil {
+			if os.IsNotExist(err) {
+				return candidate
+			}
+		}
+		candidate = fmt.Sprintf("%s.%d", base, n)
+	}
+}
+
 func (s *rotatingFileSink) rotate() error {
 	if s.f == nil {
 		return fmt.Errorf("loza: rotating file sink %q not open", s.cfg.Path)
@@ -192,8 +210,7 @@ func (s *rotatingFileSink) rotate() error {
 	if err := s.f.Close(); err != nil {
 		return fmt.Errorf("loza: close rotating file %q: %w", s.cfg.Path, err)
 	}
-	ts := time.Now().Format("20060102-150405")
-	rotated := s.cfg.Path + "." + ts
+	rotated := uniqueRotatedPath(s.cfg.Path, time.Now())
 	if err := os.Rename(s.cfg.Path, rotated); err != nil {
 		reopenErr := s.open()
 		if reopenErr != nil {
