@@ -1,11 +1,16 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"database/sql"
+	"errors"
+	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -150,5 +155,98 @@ func TestLQLStdioCompilerBacksOffFailedRestarts(t *testing.T) {
 	time.Sleep(150 * time.Millisecond)
 	if _, err := compiler.Compile(context.Background(), request); err != nil {
 		t.Fatalf("compile after restart backoff: %v", err)
+	}
+}
+
+// discardWriteCloser stands in for the compiler's stdin in requestLocked tests.
+type discardWriteCloser struct{}
+
+func (discardWriteCloser) Write(p []byte) (int, error) { return len(p), nil }
+func (discardWriteCloser) Close() error                { return nil }
+
+// signalingReader reports the first Read call and can be held open with gate.
+// It lets a test observe which pipe a reader goroutine actually attached to.
+type signalingReader struct {
+	called chan struct{}
+	gate   chan struct{}
+	line   string
+	once   sync.Once
+}
+
+func (r *signalingReader) Read(p []byte) (int, error) {
+	r.once.Do(func() { close(r.called) })
+	if r.gate != nil {
+		<-r.gate
+	}
+	if r.line == "" {
+		return 0, io.EOF
+	}
+	n := copy(p, r.line)
+	r.line = ""
+	return n, nil
+}
+
+// TestRequestLockedRejectsMismatchedResponseID guards the response-id check:
+// a reply belonging to another (for example, stale) request must not satisfy
+// the in-flight one.
+func TestRequestLockedRejectsMismatchedResponseID(t *testing.T) {
+	compiler := &lqlStdioCompiler{
+		stdin:    discardWriteCloser{},
+		stdout:   bufio.NewReader(strings.NewReader(`{"id":999,"result":{"ok":true}}` + "\n")),
+		protocol: 1,
+		language: "0.1",
+	}
+	_, err := compiler.requestLocked(context.Background(), "compile", map[string]any{})
+	if err == nil || !strings.Contains(err.Error(), "id mismatch") {
+		t.Fatalf("expected response id mismatch error, got %v", err)
+	}
+}
+
+// TestRequestLockedBindsReaderBeforeTimeout reproduces the reported race: a
+// request that times out must leave its reader goroutine attached to the
+// process it started with, so a restart's new stdout is never consumed by the
+// abandoned goroutine. Running on one P keeps the goroutine from being
+// scheduled until after the simulated restart swaps c.stdout.
+func TestRequestLockedBindsReaderBeforeTimeout(t *testing.T) {
+	previous := runtime.GOMAXPROCS(1)
+	defer runtime.GOMAXPROCS(previous)
+
+	for attempt := 0; attempt < 8; attempt++ {
+		oldSource := &signalingReader{
+			called: make(chan struct{}),
+			gate:   make(chan struct{}),
+			line:   `{"id":1,"result":{}}` + "\n",
+		}
+		newSource := &signalingReader{
+			called: make(chan struct{}),
+			line:   `{"id":1,"result":{"other":true}}` + "\n",
+		}
+		compiler := &lqlStdioCompiler{
+			stdin:    discardWriteCloser{},
+			stdout:   bufio.NewReader(oldSource),
+			protocol: 1,
+			language: "0.1",
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel() // make the request return through ctx.Done() immediately
+
+		if _, err := compiler.requestLocked(ctx, "compile", nil); !errors.Is(err, context.Canceled) {
+			close(oldSource.gate)
+			t.Fatalf("attempt %d: expected cancellation, got %v", attempt, err)
+		}
+
+		// Simulate killLocked/startLocked installing a new process's stdout.
+		compiler.stdout = bufio.NewReader(newSource)
+
+		select {
+		case <-newSource.called:
+			close(oldSource.gate)
+			t.Fatalf("attempt %d: timed-out reader goroutine consumed the replacement stdout", attempt)
+		case <-oldSource.called:
+			close(oldSource.gate)
+		case <-time.After(2 * time.Second):
+			close(oldSource.gate)
+			t.Fatalf("attempt %d: reader goroutine did not start", attempt)
+		}
 	}
 }
