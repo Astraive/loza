@@ -256,13 +256,24 @@ func validateCollectorPayload(payload map[string]any, strict bool) error {
 func validatePolicyMap(policy map[string]any) []string {
 	var errors []string
 	for _, key := range []string{"max_attr_length", "max_event_bytes", "max_attrs"} {
-		if value, ok := policy[key]; ok && numeric(value) < 0 {
+		value, ok := policy[key]
+		if !ok {
+			continue
+		}
+		n, isNumeric := numeric(value)
+		if !isNumeric {
+			errors = append(errors, key+" must be a number")
+			continue
+		}
+		if n < 0 {
 			errors = append(errors, key+" must be non-negative")
 		}
 	}
 	if rate, ok := policy["sample_rate"]; ok {
-		value := numeric(rate)
-		if value < 0 || value > 1 {
+		value, isNumeric := numeric(rate)
+		if !isNumeric {
+			errors = append(errors, "sample_rate must be a number")
+		} else if value < 0 || value > 1 {
 			errors = append(errors, "sample_rate must be between 0 and 1")
 		}
 	}
@@ -276,14 +287,18 @@ func statusForValidation(errors []string) int {
 	return http.StatusBadRequest
 }
 
-func numeric(value any) float64 {
+// numeric reports the numeric value of v and whether v was actually a
+// supported numeric type. Callers must check the boolean: treating an
+// unsupported type as zero would let wrong-typed policy values pass range
+// validation (e.g. sample_rate: "9" becoming 0).
+func numeric(value any) (float64, bool) {
 	switch v := value.(type) {
 	case float64:
-		return v
+		return v, true
 	case int:
-		return float64(v)
+		return float64(v), true
 	default:
-		return 0
+		return 0, false
 	}
 }
 
