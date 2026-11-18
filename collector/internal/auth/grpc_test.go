@@ -65,3 +65,54 @@ func TestGRPCAuthenticate_AllowedIPsEnforced(t *testing.T) {
 		}
 	})
 }
+
+func TestGRPCAuthenticatePropagatesCollectorGrants(t *testing.T) {
+	serverSecret := []byte("test-server-secret")
+	keyID := "kgrpc1"
+	store := &testKeyStore{
+		keys: map[string]*KeyRecord{
+			keyID: {
+				ID:         "id_grpc1",
+				OrgID:      "org_1",
+				ProjectID:  "proj_1",
+				KeyID:      keyID,
+				SecretHash: HashSecret("testsecret", serverSecret),
+				Kind:       KeyKindSecret,
+				Roles:      []Role{RoleIngestServer},
+				CollectorGrants: []CollectorGrant{{
+					Collector:    "payments",
+					Environments: []string{"prod"},
+					Permissions:  map[Permission]bool{PermEventsWrite: true},
+				}},
+			},
+		},
+	}
+
+	ctx := metadata.NewIncomingContext(context.Background(), metadata.Pairs(
+		"authorization", "Bearer lz_sec_live_"+keyID+"_testsecret",
+	))
+	ac, err := grpcAuthenticate(ctx, store, nil, serverSecret, nil, false, nil)
+	if err != nil {
+		t.Fatalf("grpcAuthenticate() unexpected error: %v", err)
+	}
+	if ac == nil {
+		t.Fatal("grpcAuthenticate() returned nil auth context")
+	}
+
+	if !ac.AuthorizesCollector("payments", "prod", PermEventsWrite) {
+		t.Fatal("gRPC auth context must authorize the configured collector grant")
+	}
+	if ac.AuthorizesCollector("analytics", "prod", PermEventsWrite) {
+		t.Fatal("gRPC auth context must deny a different collector")
+	}
+	if ac.AuthorizesCollector("payments", "prod", PermEventsRead) {
+		t.Fatal("gRPC auth context must deny an ungranted permission")
+	}
+
+	// Grants must be defensively cloned, matching the HTTP middleware path,
+	// so mutating the stored record cannot change authorization decisions.
+	store.keys[keyID].CollectorGrants[0].Permissions[PermEventsWrite] = false
+	if !ac.AuthorizesCollector("payments", "prod", PermEventsWrite) {
+		t.Fatal("gRPC auth context must not alias the stored collector grant")
+	}
+}
