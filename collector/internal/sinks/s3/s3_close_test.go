@@ -157,3 +157,80 @@ func TestCloseReportsFailedFinalFlush(t *testing.T) {
 		t.Fatal("expected the failed record to remain buffered for a future retry")
 	}
 }
+
+// stallOnceHTTPClient stalls the first request until its context is cancelled
+// (simulating a stalled S3 PutObject) and lets subsequent requests succeed.
+type stallOnceHTTPClient struct {
+	firstStarted chan struct{}
+	startOnce    sync.Once
+	mu           sync.Mutex
+	calls        int
+}
+
+func (c *stallOnceHTTPClient) Do(req *http.Request) (*http.Response, error) {
+	c.mu.Lock()
+	c.calls++
+	call := c.calls
+	c.mu.Unlock()
+
+	if call == 1 {
+		c.startOnce.Do(func() { close(c.firstStarted) })
+		<-req.Context().Done()
+		return nil, req.Context().Err()
+	}
+	return &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"ETag": []string{`"stall-test-etag"`}},
+		Body:       io.NopCloser(strings.NewReader("")),
+		Request:    req,
+	}, nil
+}
+
+// TestCloseReturnsWhenPeriodicFlushStalls reproduces the reported defect: the
+// ticker-driven flush used an unbounded context, so a stalled PutObject pinned
+// the flush-loop goroutine and Close hung forever on wg.Wait(). With the fix,
+// Close cancels the in-flight periodic flush and returns promptly.
+func TestCloseReturnsWhenPeriodicFlushStalls(t *testing.T) {
+	firstStarted := make(chan struct{})
+	client := awss3.NewFromConfig(aws.Config{
+		Region:      "us-east-1",
+		Credentials: credentials.NewStaticCredentialsProvider("key", "secret", ""),
+		HTTPClient:  &stallOnceHTTPClient{firstStarted: firstStarted},
+	}, func(o *awss3.Options) {
+		o.UsePathStyle = true
+	})
+
+	gotSink, err := New(Config{
+		Client:        client,
+		Bucket:        "bucket",
+		BatchSize:     100, // avoid flushing on WriteEvent
+		FlushInterval: 10 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("new sink: %v", err)
+	}
+	s := gotSink.(*sink)
+
+	if err := s.WriteEvent(context.Background(), []byte(`{"event_id":"e1"}`+"\n"), nil); err != nil {
+		t.Fatalf("write event: %v", err)
+	}
+
+	// Wait until the periodic flush is actually blocked inside PutObject.
+	select {
+	case <-firstStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("periodic flush never started a PutObject")
+	}
+
+	done := make(chan error, 1)
+	go func() { done <- s.Close(context.Background()) }()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Close returned error: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Close hung while a periodic flush was stalled")
+	}
+}

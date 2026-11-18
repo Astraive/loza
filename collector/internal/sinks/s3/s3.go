@@ -26,7 +26,11 @@ type Config struct {
 	Schema        map[string]string
 	BatchSize     int
 	FlushInterval time.Duration
-	EncryptKey    string
+	// FlushTimeout bounds each ticker-driven flush so a stalled S3 call cannot
+	// pin the flush loop (and, transitively, Close) indefinitely. Optional;
+	// defaults to 30s when unset.
+	FlushTimeout time.Duration
+	EncryptKey   string
 }
 
 type sink struct {
@@ -42,8 +46,10 @@ type sink struct {
 	wg        sync.WaitGroup
 	// inflight tracks every putObject that may restore records to the buffer.
 	// Close waits for it so restored records are included in the final flush.
-	inflight sync.WaitGroup
-	closeErr error
+	inflight    sync.WaitGroup
+	closeErr    error
+	flushCtx    context.Context
+	cancelFlush context.CancelFunc
 }
 
 // New creates an S3 sink.
@@ -66,11 +72,17 @@ func New(cfg Config) (collectorevent.Sink, error) {
 	if cfg.FlushInterval <= 0 {
 		cfg.FlushInterval = 5 * time.Second
 	}
+	if cfg.FlushTimeout <= 0 {
+		cfg.FlushTimeout = 30 * time.Second
+	}
 
+	flushCtx, cancelFlush := context.WithCancel(context.Background())
 	s := &sink{
-		cfg:       cfg,
-		batchSize: cfg.BatchSize,
-		stop:      make(chan struct{}),
+		cfg:         cfg,
+		batchSize:   cfg.BatchSize,
+		stop:        make(chan struct{}),
+		flushCtx:    flushCtx,
+		cancelFlush: cancelFlush,
 	}
 	if len(cfg.Schema) > 0 {
 		s.cfg.Schema = make(map[string]string, len(cfg.Schema))
@@ -123,6 +135,12 @@ func (s *sink) Close(ctx context.Context) error {
 		s.closed = true
 		s.mu.Unlock()
 		close(s.stop)
+		// Cancel any in-flight ticker-driven flush so the loop goroutine can
+		// observe s.stop and let wg.Wait() return promptly. The payload is
+		// restored by flushBatch and re-sent by the final flush below.
+		if s.cancelFlush != nil {
+			s.cancelFlush()
+		}
 		s.wg.Wait()
 		// An in-flight put may still fail and restore its payload after the
 		// flush loop has stopped. Wait for all of them before the final flush
@@ -140,7 +158,15 @@ func (s *sink) flushLoop() {
 	for {
 		select {
 		case <-t.C:
-			_ = s.flushBatch(context.Background())
+			// Bound every periodic flush with a deadline, and derive it from
+			// flushCtx so Close() can cancel it immediately via cancelFlush.
+			parent := s.flushCtx
+			if parent == nil {
+				parent = context.Background()
+			}
+			flushCtx, cancel := context.WithTimeout(parent, s.cfg.FlushTimeout)
+			_ = s.flushBatch(flushCtx)
+			cancel()
 		case <-s.stop:
 			return
 		}
