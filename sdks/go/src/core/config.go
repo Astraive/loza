@@ -1107,6 +1107,16 @@ func NewClient(cfg Config) (*Logger, error) {
 			headers["X-Loza-Env"] = merged.Environment
 		}
 
+		// Build a transport that honors the configured timeout, connection
+		// timeout, retry count and backoff. Previously the default sink used
+		// a hard-coded HTTP client and silently ignored all four settings.
+		transport := NewHTTPTransport(HTTPTransportConfig{
+			MaxRetries:        merged.MaxRetries,
+			MaxBackoff:        merged.MaxBackoff,
+			Timeout:           merged.Timeout,
+			ConnectionTimeout: merged.ConnectionTimeout,
+		})
+
 		batchSink, err := HTTPBatchSink(HTTPBatchSinkConfig{
 			Endpoint:      collectorRouteURL(merged.CollectorURL, merged.CollectorName, "/events"),
 			Headers:       headers,
@@ -1114,6 +1124,8 @@ func NewClient(cfg Config) (*Logger, error) {
 			FlushInterval: merged.Async.FlushInterval,
 			Gzip:          merged.EnableCompression,
 			Insecure:      merged.Insecure,
+			Client:        transport.Client(),
+			Transport:     transport,
 			OnError: func(err error) {
 				if merged.StatsHandler != nil {
 					merged.StatsHandler.OnError(err)
