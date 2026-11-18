@@ -11,7 +11,7 @@ from os import getenv
 from typing import Any, Iterable
 from urllib.parse import urlencode, urlparse
 from urllib.error import HTTPError, URLError
-from urllib.request import Request, urlopen
+from urllib.request import HTTPRedirectHandler, Request, build_opener, urlopen
 from ..generated.spec_contract import (
     CollectorResponse,
     LOZA_INGEST_API_VERSION,
@@ -171,7 +171,7 @@ class CollectorClient:
         for attempt in range(self.retries + 1):
             try:
                 try:
-                    with urlopen(request, timeout=self.timeout) as response:
+                    with _open_with_redirect_guard(request, self.timeout, self.endpoint) as response:
                         status = getattr(response, "status", response.getcode())
                         headers_obj = getattr(response, "headers", None)
                         raw = response.read()
@@ -323,6 +323,47 @@ def _private_endpoint_allowed() -> bool:
 
 def _default_port(scheme: str) -> int:
     return 443 if scheme == "https" else 80
+
+
+def _origin(url: str) -> tuple[str, str, int]:
+    """Return the normalized (scheme, host, port) origin of a URL."""
+    try:
+        parsed = urlparse(url)
+        return (parsed.scheme.lower(), (parsed.hostname or "").lower(), parsed.port or _default_port(parsed.scheme))
+    except ValueError as exc:
+        raise ValueError("redirect target is malformed") from exc
+
+
+class _SameOriginRedirectHandler(HTTPRedirectHandler):
+    """Refuse redirects that would leave the configured collector origin.
+
+    urllib copies the request's custom headers (including Authorization) onto
+    the redirected request, and endpoint validation only happens once at
+    construction time. Allowing an arbitrary collector-supplied Location would
+    therefore forward credentials to an unvalidated host and enable SSRF.
+    """
+
+    def __init__(self, endpoint: str) -> None:
+        self._endpoint = endpoint
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        try:
+            _validate_collector_endpoint(newurl)
+            target_origin = _origin(newurl)
+            allowed_origin = _origin(self._endpoint)
+        except ValueError:
+            # A None result makes urllib surface the 3xx as the final response;
+            # callers already treat status >= 300 as a failed send.
+            return None
+        if target_origin != allowed_origin:
+            return None
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+def _open_with_redirect_guard(request: Request, timeout: float, endpoint: str):
+    """Open a credentialed request without following off-origin redirects."""
+    opener = build_opener(_SameOriginRedirectHandler(endpoint))
+    return opener.open(request, timeout=timeout)
 
 
 def WrapHTTPClient(client=None):
