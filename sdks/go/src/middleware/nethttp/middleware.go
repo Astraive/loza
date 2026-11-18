@@ -1,6 +1,7 @@
 package nethttp
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"net/http"
@@ -43,6 +44,53 @@ func MiddlewareWithConfig(cfg Config) func(http.Handler) http.Handler {
 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// Register recovery and cleanup before any request setup. Setup includes
+			// the user-supplied RouteExtractor, attribute construction and response
+			// writer wrapping, any of which may panic. Tracking how far setup got
+			// lets the defer always emit an event that was actually started, and
+			// still write a 500 when no wrapped writer exists yet.
+			rw := w
+			var state *responseWriter
+			var ctx context.Context
+			eventStarted := false
+
+			defer func() {
+				rec := recover()
+
+				if rec != nil && (state == nil || !state.wroteHeader) {
+					http.Error(rw, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				}
+
+				// Read counters after writing the 500 so the event reports the
+				// status code and body that were actually sent to the client.
+				statusCode := http.StatusOK
+				var responseBytes int64
+				if state != nil {
+					statusCode = state.statusCode
+					responseBytes = int64(state.bytes)
+				}
+
+				if rec != nil {
+					if eventStarted {
+						loza.FinishError(ctx, panicErr{value: rec},
+							loza.Int("status_code", statusCode),
+							loza.Int64("response_bytes", responseBytes),
+						)
+						_ = loza.Emit(ctx)
+					}
+					return
+				}
+
+				if !eventStarted {
+					return
+				}
+				loza.Finish(ctx, "success",
+					loza.Int("status_code", statusCode),
+					loza.Int64("response_bytes", responseBytes),
+				)
+				_ = loza.Emit(ctx)
+			}()
+
 			route := ""
 			if cfg.RouteExtractor != nil {
 				route = cfg.RouteExtractor(r)
@@ -63,7 +111,7 @@ func MiddlewareWithConfig(cfg Config) func(http.Handler) http.Handler {
 			}
 			customAttrs = append(customAttrs, selectedHeaderAttrs(r, cfg.HeaderAttrs)...)
 
-			ctx := loza.StartHTTPEvent(r.Context(), loza.Params{
+			ctx = loza.StartHTTPEvent(r.Context(), loza.Params{
 				Event:     eventName,
 				Kind:      "http",
 				Method:    r.Method,
@@ -74,28 +122,9 @@ func MiddlewareWithConfig(cfg Config) func(http.Handler) http.Handler {
 				TraceID:   traceID,
 				Custom:    customAttrs,
 			})
+			eventStarted = true
 
-			rw, state := newResponseWriter(w)
-
-			defer func() {
-				if rec := recover(); rec != nil {
-					if !state.wroteHeader {
-						http.Error(rw, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-					}
-					loza.FinishError(ctx, panicErr{value: rec},
-						loza.Int("status_code", state.statusCode),
-						loza.Int64("response_bytes", int64(state.bytes)),
-					)
-					_ = loza.Emit(ctx)
-					return
-				}
-
-				loza.Finish(ctx, "success",
-					loza.Int("status_code", state.statusCode),
-					loza.Int64("response_bytes", int64(state.bytes)),
-				)
-				_ = loza.Emit(ctx)
-			}()
+			rw, state = newResponseWriter(w)
 
 			next.ServeHTTP(rw, r.WithContext(ctx))
 		})
