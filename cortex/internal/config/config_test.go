@@ -147,6 +147,61 @@ func TestDefaultEnvOverridesUserFile(t *testing.T) {
 	}
 }
 
+func TestDefaultRejectsMalformedUserOverrideFile(t *testing.T) {
+	dir := t.TempDir()
+	// A malformed override previously had its load error discarded, silently
+	// dropping the whole file (including any auth/TLS settings it enabled).
+	writeConfigFile(t, filepath.Join(dir, "loza-cortex.yaml"), "server: [")
+	changeWorkingDirectory(t, dir)
+
+	_, err := Default()
+	if err == nil || !strings.Contains(err.Error(), "failed to parse runtime override") {
+		t.Fatalf("Default error = %v, want runtime override parse error", err)
+	}
+}
+
+func TestDefaultRejectsInvalidUserOverrideFields(t *testing.T) {
+	dir := t.TempDir()
+	// KnownFields rejects unknown keys; the old _ = loadFile(...) discarded
+	// that error even though it can hide a misspelled security setting.
+	writeConfigFile(t, filepath.Join(dir, "loza.yaml"), "server:\n  port: 7777\nnonexistent_setting: true\n")
+	changeWorkingDirectory(t, dir)
+
+	_, err := Default()
+	if err == nil || !strings.Contains(err.Error(), "nonexistent_setting") {
+		t.Fatalf("Default error = %v, want unknown-field parse error", err)
+	}
+}
+
+func TestDefaultValidatesResultingConfig(t *testing.T) {
+	dir := t.TempDir()
+	// Enabling authentication without API keys must not yield a config that
+	// callers can use; the old Default never called Validate.
+	writeConfigFile(t, filepath.Join(dir, "loza-cortex.yaml"), "authentication:\n  enabled: true\n")
+	changeWorkingDirectory(t, dir)
+
+	_, err := Default()
+	if err == nil || !strings.Contains(err.Error(), "at least one api key is required") {
+		t.Fatalf("Default error = %v, want authentication validation error", err)
+	}
+}
+
+func TestDefaultReturnsValidConfigWithoutOverride(t *testing.T) {
+	dir := t.TempDir()
+	changeWorkingDirectory(t, dir)
+
+	cfg, err := Default()
+	if err != nil {
+		t.Fatalf("Default: %v", err)
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Default returned an invalid config: %v", err)
+	}
+	if cfg.Server.Port != 9312 || cfg.Storage.Backend != "duckdb" {
+		t.Fatalf("unexpected in-memory defaults: port=%d backend=%s", cfg.Server.Port, cfg.Storage.Backend)
+	}
+}
+
 func TestLoadAppliesEnvironmentOverrides(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")

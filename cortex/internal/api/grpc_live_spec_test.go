@@ -184,7 +184,8 @@ func TestProtoEventToModelRejectsNilEvent(t *testing.T) {
 func TestReconstructReturnsGraphBuildError(t *testing.T) {
 	t.Parallel()
 
-	cfg := config.Default()
+	cfg, err := config.Default()
+	require.NoError(t, err)
 	cfg.Storage.Backend = "duckdb"
 	cfg.Storage.DuckDB.Path = filepath.Join(t.TempDir(), "cortex.duckdb")
 	cfg.Collector.SourceOfTruth = false

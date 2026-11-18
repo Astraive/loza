@@ -780,21 +780,31 @@ func (c *Config) Validate() error {
 	return nil
 }
 
-// Default returns the legacy in-memory defaults for library callers. Production
-// startup must use LoadDefault or Load so configuration errors cannot be
-// ignored.
+// Default returns the legacy in-memory defaults for library callers, overlaid
+// with a runtime override file and environment variables, then validated.
 //
-// Default now returns (*Config, error) so that an invalid environment override
-// is reported instead of being silently discarded. Callers must handle the
-// error. This package is internal to the cortex module, so no externally
-// importable API is broken; in-module callers have been updated.
+// Default now returns (*Config, error) so that load errors, invalid environment
+// overrides, and validation failures are reported instead of being silently
+// discarded. Callers must handle the error. This package is internal to the
+// cortex module, so no externally importable API is broken; in-module callers
+// have been updated. Production startup should use LoadDefault or Load, which
+// start from the bundled defaults file rather than the legacy in-memory values.
 func Default() (*Config, error) {
 	cfg := defaultConfig()
-	if path, err := findUserConfigFile(); err == nil && path != "" {
-		_ = loadFile(cfg, path)
+	path, err := findUserConfigFile()
+	if err != nil {
+		return nil, err
+	}
+	if path != "" {
+		if err := loadFile(cfg, path); err != nil {
+			return nil, err
+		}
 	}
 	if err := applyEnvOverrides(cfg); err != nil {
 		return nil, err
+	}
+	if err := cfg.Validate(); err != nil {
+		return nil, fmt.Errorf("invalid configuration: %w", err)
 	}
 	return cfg, nil
 }
