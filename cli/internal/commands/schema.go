@@ -27,6 +27,9 @@ func SchemaCommand(cfg config.Config, args []string) error {
 		}
 		remaining := fs.Args()
 		if len(remaining) == 0 {
+			if *strict {
+				return fmt.Errorf("--strict requires a schema file argument: strict validation applies to event files, not spec-asset checks")
+			}
 			if err := schema.ValidateSpecAssets(cfg.SpecRepoPath); err != nil {
 				return err
 			}
