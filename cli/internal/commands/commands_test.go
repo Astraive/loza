@@ -27,6 +27,20 @@ func captureStdout(t *testing.T, run func() error) (string, error) {
 	return string(buf[:n]), err
 }
 
+func captureStderr(t *testing.T, run func() error) (string, error) {
+	t.Helper()
+	old := os.Stderr
+	r, w, _ := os.Pipe()
+	os.Stderr = w
+	defer func() { os.Stderr = old }()
+
+	err := run()
+	_ = w.Close()
+	buf := make([]byte, 8192)
+	n, _ := r.Read(buf)
+	return string(buf[:n]), err
+}
+
 func TestEmitSamplePrintsEnvelope(t *testing.T) {
 	cfg := config.Config{CollectorURL: "http://127.0.0.1:9308"}
 	old := os.Stdout
@@ -358,6 +372,67 @@ func TestSinksTestTextOutput(t *testing.T) {
 	}
 	if !strings.Contains(out, "sink test passed") {
 		t.Fatalf("expected readable sink test output, got %s", out)
+	}
+}
+
+func TestIncidentCommandWarnsWhenGraphFetchFails(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/reconstruct":
+			_, _ = w.Write([]byte(`{"incident_id":"inc_1","timestamp":"2026-05-17T00:00:00Z","confidence":0.9,"primary_service":"checkout","severity":"high","related_services":[],"causal_chain":[],"symptoms":[],"suggested_remediations":[]}`))
+		case strings.HasPrefix(r.URL.Path, "/graph/incident/"):
+			http.Error(w, "graph backend unavailable", http.StatusInternalServerError)
+		default:
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	cfg := config.Config{Cortex: &config.CortexConfig{URL: srv.URL}}
+	stderr, err := captureStderr(t, func() error {
+		return IncidentCommand(context.Background(), cfg, []string{"inc_1"})
+	})
+	if err != nil {
+		t.Fatalf("incident command should still succeed when only the graph fetch fails: %v", err)
+	}
+	if !strings.Contains(stderr, "warning") || !strings.Contains(stderr, "graph") {
+		t.Fatalf("expected a stderr warning about the missing dependency graph, got %q", stderr)
+	}
+	if !strings.Contains(stderr, "500") {
+		t.Fatalf("expected the underlying fetch error to be surfaced, got %q", stderr)
+	}
+}
+
+func TestIncidentCommandRendersGraphOnSuccess(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/reconstruct":
+			_, _ = w.Write([]byte(`{"incident_id":"inc_1","timestamp":"2026-05-17T00:00:00Z","confidence":0.9,"primary_service":"checkout","severity":"high","related_services":[],"causal_chain":[],"symptoms":[],"suggested_remediations":[]}`))
+		case strings.HasPrefix(r.URL.Path, "/graph/incident/"):
+			_, _ = w.Write([]byte(`{"nodes":[{"id":"n1","label":"checkout","type":"service"}],"edges":[]}`))
+		default:
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	cfg := config.Config{Cortex: &config.CortexConfig{URL: srv.URL}}
+	var stderr string
+	out, err := captureStdout(t, func() error {
+		var captureErr error
+		stderr, captureErr = captureStderr(t, func() error {
+			return IncidentCommand(context.Background(), cfg, []string{"inc_1"})
+		})
+		return captureErr
+	})
+	if err != nil {
+		t.Fatalf("incident command: %v", err)
+	}
+	if !strings.Contains(out, "Dependency Graph:") || !strings.Contains(out, "checkout") {
+		t.Fatalf("expected rendered dependency graph, got %s", out)
+	}
+	if stderr != "" {
+		t.Fatalf("unexpected stderr warning on successful graph fetch: %q", stderr)
 	}
 }
 

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"os"
 
 	"github.com/astraive/loza/cli/internal/client"
 	"github.com/astraive/loza/cli/internal/config"
@@ -92,13 +93,19 @@ func IncidentCommand(ctx context.Context, cfg config.Config, args []string) erro
 	}
 
 	graph, err := client.FetchCortexIncidentGraph(ctx, cortexURL, incidentID, *depth)
-	if err == nil {
-		var g map[string]any
-		if json.Unmarshal(graph, &g) == nil {
-			fmt.Println()
-			fmt.Println(output.Bold("Dependency Graph:"))
-			fmt.Println(output.RenderASCIIGraph(g))
-		}
+	if err != nil {
+		// The graph is supplementary enrichment: the reconstruction above has
+		// already been printed, so keep the command successful but make the
+		// incomplete output visible instead of silently swallowing the error.
+		fmt.Fprintf(os.Stderr, "warning: could not fetch dependency graph: %v\n", err)
+		return nil
+	}
+
+	var g map[string]any
+	if json.Unmarshal(graph, &g) == nil {
+		fmt.Println()
+		fmt.Println(output.Bold("Dependency Graph:"))
+		fmt.Println(output.RenderASCIIGraph(g))
 	}
 
 	return nil
