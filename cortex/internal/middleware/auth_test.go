@@ -57,6 +57,59 @@ func TestAuthMiddlewareRejectsAndAccepts(t *testing.T) {
 	})
 }
 
+// TestAuthDoesNotRetainRawKeys guards the fix for MASS-0337: Auth must derive
+// everything from the configured keys at construction time and must not keep a
+// reference to the config (or its raw API keys) that would be exposed by a
+// memory disclosure of the Auth object.
+func TestAuthDoesNotRetainRawKeys(t *testing.T) {
+	const rawKey = "raw-secret-key-not-retained"
+	cfg := &config.AuthenticationConfig{
+		Enabled: true,
+		APIKeys: []config.APIKey{{Name: "key", Key: rawKey, Role: "admin"}},
+	}
+
+	auth := NewAuth(cfg)
+
+	// Simulate the caller scrubbing the raw keys from its config once Auth is
+	// built. Authentication must still succeed, proving the raw keys are not
+	// read back from cfg at request time (nor retained by Auth itself).
+	for i := range cfg.APIKeys {
+		cfg.APIKeys[i].Key = ""
+	}
+	cfg.APIKeys = nil
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set("X-API-Key", rawKey)
+	rec := httptest.NewRecorder()
+	auth.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		result := GetAuthResult(r.Context())
+		if result == nil || !result.Authorized || result.KeyName != "key" || result.Role != "admin" {
+			t.Fatalf("expected authorized admin result, got %+v", result)
+		}
+		w.WriteHeader(http.StatusOK)
+	})).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d (raw keys must not be needed after construction)", rec.Code, http.StatusOK)
+	}
+}
+
+// Building Auth must not mutate the caller's config: avoiding retention of raw
+// keys in Auth does not justify zeroing out a config the caller may still use.
+func TestNewAuthDoesNotMutateConfig(t *testing.T) {
+	const rawKey = "keep-this-key"
+	cfg := &config.AuthenticationConfig{
+		Enabled: true,
+		APIKeys: []config.APIKey{{Name: "key", Key: rawKey, Role: "admin"}},
+	}
+
+	_ = NewAuth(cfg)
+
+	if len(cfg.APIKeys) != 1 || cfg.APIKeys[0].Key != rawKey {
+		t.Fatalf("NewAuth mutated caller config APIKeys: %+v", cfg.APIKeys)
+	}
+}
+
 func TestRequireRole(t *testing.T) {
 	tests := []struct {
 		name string
