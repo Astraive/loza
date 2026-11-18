@@ -2,6 +2,96 @@
 
 import time
 import loza
+from loza.core.timing import EventGroup, EventProcess, EventTimer
+
+
+def test_attrs_cannot_override_reserved_process_fields():
+    p = EventProcess(
+        step=1,
+        name="real",
+        started_at_ms=10,
+        ended_at_ms=20,
+        duration_ms=10,
+        status_code=200,
+        attrs={
+            "step": 999,
+            "name": "spoofed",
+            "started_at_ms": -1,
+            "ended_at_ms": -2,
+            "duration_ms": 9999,
+            "status_code": 500,
+            "gateway": "stripe",
+        },
+    )
+    d = p.to_dict()
+    assert d["step"] == 1
+    assert d["name"] == "real"
+    assert d["started_at_ms"] == 10
+    assert d["ended_at_ms"] == 20
+    assert d["duration_ms"] == 10
+    assert d["status_code"] == 200
+    assert d["gateway"] == "stripe"
+
+
+def test_attrs_cannot_override_reserved_group_fields():
+    g = EventGroup(
+        name="real",
+        started_at_ms=10,
+        ended_at_ms=20,
+        duration_ms=10,
+        attrs={
+            "name": "spoofed",
+            "started_at_ms": -1,
+            "ended_at_ms": -2,
+            "duration_ms": 9999,
+            "reason": "ok",
+        },
+    )
+    d = g.to_dict()
+    assert d["name"] == "real"
+    assert d["started_at_ms"] == 10
+    assert d["ended_at_ms"] == 20
+    assert d["duration_ms"] == 10
+    assert d["reason"] == "ok"
+
+
+def test_attrs_cannot_override_reserved_timer_fields():
+    t = EventTimer(
+        name="real",
+        duration_ms=10,
+        attrs={"name": "spoofed", "duration_ms": 9999, "region": "us"},
+    )
+    d = t.to_dict()
+    assert d["name"] == "real"
+    assert d["duration_ms"] == 10
+    assert d["region"] == "us"
+
+
+def test_handle_attrs_cannot_override_measured_values():
+    ev = loza.start_event(loza.Params(service="test", event="test.event"))
+    proc = ev.start_process("real_step")
+    proc.finish(name="spoofed", duration_ms=9999, step=42, gateway="stripe")
+    timer = ev.start_timer("real_timer")
+    timer.stop(name="spoofed", duration_ms=9999, region="us")
+    group = ev.start_group("real_group")
+    group.finish(name="spoofed", duration_ms=9999, reason="ok")
+
+    p = ev.processes[0]
+    assert p["name"] == "real_step"
+    assert p["step"] == 1
+    assert p["duration_ms"] >= 0
+    assert p["duration_ms"] != 9999
+    assert p["gateway"] == "stripe"
+
+    t = ev.timers[0]
+    assert t["name"] == "real_timer"
+    assert t["duration_ms"] != 9999
+    assert t["region"] == "us"
+
+    g = ev.groups[0]
+    assert g["name"] == "real_group"
+    assert g["duration_ms"] != 9999
+    assert g["reason"] == "ok"
 
 
 def test_process_basic():
