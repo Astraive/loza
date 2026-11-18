@@ -548,6 +548,25 @@ impl Config {
                 ),
             ));
         }
+        // Sinks are the actual transports. Each HttpBatch sink carries its own
+        // endpoint and credentials, so guarding only `collector_endpoint` lets a
+        // credentialed sink send secrets in plaintext.
+        for sink in &self.sinks {
+            if let SinkConfig::HttpBatch {
+                endpoint,
+                api_key,
+                basic_username,
+                basic_password,
+                insecure,
+                ..
+            } = sink
+            {
+                let has_credentials = api_key.as_deref().is_some_and(|key| !key.is_empty())
+                    || basic_username.is_some()
+                    || basic_password.is_some();
+                validate_credentialed_sink(endpoint, has_credentials, *insecure)?;
+            }
+        }
         Ok(())
     }
 }
@@ -785,6 +804,43 @@ fn overlay_file_config(mut base: FileConfig, override_cfg: FileConfig) -> FileCo
         base.max_event_bytes = override_cfg.max_event_bytes;
     }
     base
+}
+
+/// Credentials (API key or Basic auth) must never be sent over an endpoint
+/// whose transport is not provably safe. Require HTTPS, or an explicitly
+/// insecure local endpoint for development. Scheme-less endpoints are rejected
+/// because their scheme cannot be proven safe.
+fn validate_credentialed_sink(
+    endpoint: &str,
+    has_credentials: bool,
+    insecure: bool,
+) -> Result<(), crate::errors::LozaError> {
+    if !has_credentials || endpoint.trim().is_empty() {
+        return Ok(());
+    }
+    let error = |code: &str, message: &str| {
+        crate::errors::LozaError::Validation(crate::errors::ValidationError::new(
+            Some("sinks"),
+            code,
+            message.to_string(),
+        ))
+    };
+    let Some((scheme, _rest)) = endpoint.split_once("://") else {
+        return Err(error(
+            "insecure_basic_auth",
+            "credentialed endpoints must use an explicit http:// or https:// scheme",
+        ));
+    };
+    if scheme.eq_ignore_ascii_case("https") {
+        return Ok(());
+    }
+    if scheme.eq_ignore_ascii_case("http") && insecure && is_local_endpoint(endpoint) {
+        return Ok(());
+    }
+    Err(error(
+        "insecure_basic_auth",
+        "credentialed HTTP requires an explicit local/insecure configuration",
+    ))
 }
 
 fn is_local_endpoint(endpoint: &str) -> bool {
