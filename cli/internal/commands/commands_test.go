@@ -613,6 +613,38 @@ func TestCollectorHealthURLUsesConfiguredEndpoint(t *testing.T) {
 	}
 }
 
+func TestSchemaValidateStrictRequiresFileArgument(t *testing.T) {
+	cfg := config.Config{SpecRepoPath: t.TempDir()}
+
+	_, err := captureStdout(t, func() error {
+		return SchemaCommand(cfg, []string{"validate", "--strict"})
+	})
+	if err == nil {
+		t.Fatal("expected --strict with no file argument to fail")
+	}
+	if !strings.Contains(err.Error(), "--strict") || !strings.Contains(err.Error(), "file argument") {
+		t.Fatalf("expected error explaining --strict requires a file argument, got %v", err)
+	}
+}
+
+func TestSchemaValidateNoPathWithoutStrictChecksSpecAssets(t *testing.T) {
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	cfg := config.Config{SpecRepoPath: filepath.Clean(filepath.Join(wd, "..", "..", "..", "spec"))}
+
+	out, err := captureStdout(t, func() error {
+		return SchemaCommand(cfg, []string{"validate"})
+	})
+	if err != nil {
+		t.Fatalf("schema validate without strict: %v", err)
+	}
+	if !strings.Contains(out, "Spec assets validated successfully") {
+		t.Fatalf("expected spec-asset validation success message, got %s", out)
+	}
+}
+
 func TestEmitWithCustomKindAndOutcome(t *testing.T) {
 	cfg := config.Config{CollectorURL: "http://127.0.0.1:9308"}
 	old := os.Stdout
