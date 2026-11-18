@@ -74,6 +74,42 @@ func TestMiddlewarePanicAfterWritePreservesResponseAndEventStatus(t *testing.T) 
 	}
 }
 
+func TestMiddlewareRecoversPanicInRouteExtractor(t *testing.T) {
+	store := configureMemoryStore(t)
+	h := MiddlewareWithConfig(Config{
+		RouteExtractor: func(*http.Request) string {
+			panic("boom-route-extractor")
+		},
+	})(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		t.Error("next handler must not run when request setup panics")
+	}))
+
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/users/123", nil)
+
+	// A panic in the user-supplied extractor must be contained by the
+	// middleware instead of escaping to the caller.
+	func() {
+		defer func() {
+			if rec := recover(); rec != nil {
+				t.Fatalf("panic escaped middleware: %v", rec)
+			}
+		}()
+		h.ServeHTTP(rr, req)
+	}()
+
+	if rr.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500 after setup panic, got %d", rr.Code)
+	}
+	if body := rr.Body.String(); !strings.Contains(body, http.StatusText(http.StatusInternalServerError)) {
+		t.Fatalf("expected 500 response body, got %q", body)
+	}
+	// The panic happened before an event was started, so none should be emitted.
+	if store.Len() != 0 {
+		t.Fatalf("expected no emitted events for pre-start panic, got %d", store.Len())
+	}
+}
+
 func TestMiddlewareCapturesRouteAndSelectedHeaders(t *testing.T) {
 	store := configureMemoryStore(t)
 	extractorCalls := 0
