@@ -2,6 +2,7 @@ package core
 
 import (
 	"fmt"
+	"math"
 	"math/rand/v2"
 	"strings"
 	"sync"
@@ -59,17 +60,12 @@ func SampleErrors() Sampler {
 }
 
 // SampleSlowRequests keeps events with duration >= threshold.
-// threshold may be time.Duration, int64 (milliseconds), or int (milliseconds).
+// threshold may be a time.Duration or any numeric value expressed in
+// milliseconds (int, uint and float variants). Non-numeric or non-finite
+// thresholds are invalid and drop every event.
 func SampleSlowRequests(threshold any) Sampler {
-	var thresholdMS int64
-	switch v := threshold.(type) {
-	case time.Duration:
-		thresholdMS = v.Milliseconds()
-	case int64:
-		thresholdMS = v
-	case int:
-		thresholdMS = int64(v)
-	default:
+	thresholdMS, ok := numericThresholdMS(threshold)
+	if !ok {
 		return SampleNone()
 	}
 	if thresholdMS <= 0 {
@@ -83,6 +79,58 @@ func SampleSlowRequests(threshold any) Sampler {
 		defer ev.MuUnlock()
 		return ev.DurationMS >= thresholdMS
 	})
+}
+
+// numericThresholdMS converts a numeric threshold to milliseconds. The second
+// return value is false for values that cannot sensibly be used as a
+// threshold (non-numeric types, NaN and infinities).
+func numericThresholdMS(threshold any) (int64, bool) {
+	switch v := threshold.(type) {
+	case time.Duration:
+		return v.Milliseconds(), true
+	case int:
+		return int64(v), true
+	case int8:
+		return int64(v), true
+	case int16:
+		return int64(v), true
+	case int32:
+		return int64(v), true
+	case int64:
+		return v, true
+	case uint:
+		return int64(v), true
+	case uint8:
+		return int64(v), true
+	case uint16:
+		return int64(v), true
+	case uint32:
+		return int64(v), true
+	case uint64:
+		if v > math.MaxInt64 {
+			return math.MaxInt64, true
+		}
+		return int64(v), true
+	case float32:
+		return floatThresholdMS(float64(v))
+	case float64:
+		return floatThresholdMS(v)
+	default:
+		return 0, false
+	}
+}
+
+func floatThresholdMS(v float64) (int64, bool) {
+	if math.IsNaN(v) || math.IsInf(v, 0) {
+		return 0, false
+	}
+	if v >= float64(math.MaxInt64) {
+		return math.MaxInt64, true
+	}
+	if v <= float64(math.MinInt64) {
+		return math.MinInt64, true
+	}
+	return int64(v), true
 }
 
 // SampleUsers keeps events whose user identifier matches one of ids.
