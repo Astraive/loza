@@ -108,10 +108,7 @@ export class Client {
         body: JSON.stringify({ query: source, parameters: encodedParameters, limit: normalizedLimit }),
         signal: controller.signal,
       });
-      const raw = await response.arrayBuffer();
-      if (raw.byteLength > this.config.maxResponseBytes) {
-        throw new QueryError('LQL response exceeds the configured size limit', ErrorCategory.MalformedResponse);
-      }
+      const raw = await readBoundedResponse(response, this.config.maxResponseBytes);
       const text = new TextDecoder().decode(raw);
       if (!response.ok) {
         throw decodeHTTPError(response.status, text);
@@ -186,6 +183,39 @@ function parseDSN(raw: string): { endpoint: string; collector: string; username:
     collector, username, password,
     env: parsed.searchParams.get('env') || 'default', service: parsed.searchParams.get('service') || '',
   };
+}
+
+async function readBoundedResponse(response: Response, maxBytes: number): Promise<Uint8Array> {
+  const declared = response.headers.get('content-length');
+  if (declared !== null && Number(declared) > maxBytes) {
+    throw new QueryError('LQL response exceeds the configured size limit', ErrorCategory.MalformedResponse);
+  }
+  const body = response.body;
+  if (!body) return new Uint8Array(0);
+  const reader = body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > maxBytes) {
+        await reader.cancel();
+        throw new QueryError('LQL response exceeds the configured size limit', ErrorCategory.MalformedResponse);
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  const merged = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    merged.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return merged;
 }
 
 function decodeResult(text: string): QueryResult {

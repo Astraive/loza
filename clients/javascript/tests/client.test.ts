@@ -194,6 +194,70 @@ test('rejects oversized responses and malformed result envelopes', async () => {
   }
 });
 
+test('streams the response body and cancels once the size limit is exceeded', async () => {
+  const encoder = new TextEncoder();
+  let pulls = 0;
+  let cancelled = false;
+  const body = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      pulls += 1;
+      controller.enqueue(encoder.encode('x'.repeat(1024)));
+      if (pulls >= 64) controller.close();
+    },
+    cancel() { cancelled = true; },
+  });
+  const client = new Client({
+    endpoint: 'https://api.example',
+    collector: 'demo',
+    maxResponseBytes: 4096,
+    fetch: async () => new Response(body),
+  });
+  await assert.rejects(client.query('from events'), error => error instanceof QueryError && error.category === ErrorCategory.MalformedResponse);
+  assert.equal(cancelled, true, 'the body stream must be cancelled when the limit is exceeded');
+  assert.ok(pulls < 64, 'reading must stop before the whole body is pulled into memory');
+});
+
+test('rejects an oversized Content-Length before consuming the body', async () => {
+  let pulls = 0;
+  const body = new ReadableStream<Uint8Array>({
+    pull(controller) { pulls += 1; controller.enqueue(new TextEncoder().encode('x')); },
+  }, { highWaterMark: 0 });
+  const client = new Client({
+    endpoint: 'https://api.example',
+    collector: 'demo',
+    maxResponseBytes: 16,
+    fetch: async () => new Response(body, { headers: { 'Content-Length': '1024' } }),
+  });
+  await assert.rejects(client.query('from events'), error => error instanceof QueryError && error.category === ErrorCategory.MalformedResponse);
+  assert.equal(pulls, 0, 'the body must not be read when Content-Length already exceeds the limit');
+});
+
+test('reassembles a chunked streamed body and handles an empty body', async () => {
+  const payload = JSON.stringify({ columns: ['name'], rows: [{ name: 'caf\u00e9' }] });
+  const bytes = new TextEncoder().encode(payload);
+  const body = new ReadableStream<Uint8Array>({
+    start(controller) {
+      for (let offset = 0; offset < bytes.byteLength; offset += 3) {
+        controller.enqueue(bytes.subarray(offset, offset + 3));
+      }
+      controller.close();
+    },
+  });
+  const chunked = new Client({
+    endpoint: 'https://api.example',
+    collector: 'demo',
+    fetch: async () => new Response(body),
+  });
+  assert.deepEqual((await chunked.query('from events')).rows, [{ name: 'caf\u00e9' }]);
+
+  const empty = new Client({
+    endpoint: 'https://api.example',
+    collector: 'demo',
+    fetch: async () => new Response(null),
+  });
+  await assert.rejects(empty.query('from events'), error => error instanceof QueryError && error.category === ErrorCategory.MalformedResponse);
+});
+
 test('maps transport failures and aborts to transport and timeout errors', async () => {
   const transportClient = new Client({
     endpoint: 'https://api.example',
