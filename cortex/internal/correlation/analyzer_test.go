@@ -7,7 +7,44 @@ import (
 	"time"
 
 	"github.com/astraive/loza/cortex/internal/models"
+	"github.com/astraive/loza/cortex/internal/storage"
 )
+
+// stubEventStore embeds the interface and overrides only List, which is the
+// sole EventStore method analyze() calls.
+type stubEventStore struct {
+	storage.EventStore
+	events []*models.Event
+}
+
+func (s *stubEventStore) List(context.Context, int, int) ([]*models.Event, error) {
+	return s.events, nil
+}
+
+// capturingGraphStore records every edge saved by the analyzer. All GraphStore
+// methods are implemented explicitly (rather than relying on an embedded,
+// otherwise-nil interface) so every synthesis path can be exercised safely.
+type capturingGraphStore struct {
+	edges []*models.Edge
+}
+
+func (s *capturingGraphStore) SaveNode(context.Context, *models.Node) error { return nil }
+func (s *capturingGraphStore) GetNode(context.Context, string) (*models.Node, error) {
+	return nil, nil
+}
+func (s *capturingGraphStore) ListNodes(context.Context, string, int) ([]*models.Node, error) {
+	return nil, nil
+}
+func (s *capturingGraphStore) SaveEdge(_ context.Context, e *models.Edge) error {
+	s.edges = append(s.edges, e)
+	return nil
+}
+func (s *capturingGraphStore) GetEdges(context.Context, string, string) ([]*models.Edge, error) {
+	return nil, nil
+}
+func (s *capturingGraphStore) Traverse(context.Context, string, models.TraversalOptions) (*models.GraphView, error) {
+	return nil, nil
+}
 
 type failingGraphStore struct {
 	err      error
@@ -29,28 +66,6 @@ func (s *failingGraphStore) GetEdges(context.Context, string, string) ([]*models
 	return nil, nil
 }
 func (s *failingGraphStore) Traverse(context.Context, string, models.TraversalOptions) (*models.GraphView, error) {
-	return nil, nil
-}
-
-type capturingGraphStore struct {
-	edges []*models.Edge
-}
-
-func (s *capturingGraphStore) SaveNode(context.Context, *models.Node) error { return nil }
-func (s *capturingGraphStore) GetNode(context.Context, string) (*models.Node, error) {
-	return nil, nil
-}
-func (s *capturingGraphStore) ListNodes(context.Context, string, int) ([]*models.Node, error) {
-	return nil, nil
-}
-func (s *capturingGraphStore) SaveEdge(_ context.Context, e *models.Edge) error {
-	s.edges = append(s.edges, e)
-	return nil
-}
-func (s *capturingGraphStore) GetEdges(context.Context, string, string) ([]*models.Edge, error) {
-	return nil, nil
-}
-func (s *capturingGraphStore) Traverse(context.Context, string, models.TraversalOptions) (*models.GraphView, error) {
 	return nil, nil
 }
 
@@ -122,4 +137,35 @@ func TestSynthesizeCoOccurrenceIgnoresEventsOutsideWindow(t *testing.T) {
 	if len(graph.edges) != 0 {
 		t.Fatalf("expected no edge for events outside the window, got %d", len(graph.edges))
 	}
+}
+
+// TestAnalyzeUsesDeploymentAdjacencyWindow reproduces MASS-0299: a deploy
+// older than CoOccurrenceWindow*2 (10 min) but inside DeploymentAdjacencyWindow
+// (30 min) must still produce a deployment_adjacent edge. Before the fix the
+// deploy was pruned by analyze() before synthesizeDeploymentAdjacency ran.
+func TestAnalyzeUsesDeploymentAdjacencyWindow(t *testing.T) {
+	cfg := DefaultConfig()
+	now := time.Now()
+	events := []*models.Event{
+		// 15 minutes old: beyond the 10-minute co-occurrence cutoff, but
+		// inside the 30-minute deployment adjacency window.
+		{ID: "deploy-1", Service: "api", Kind: models.EventKindDeploy, Timestamp: now.Add(-15 * time.Minute)},
+		// 5 minutes old on a different service: 10 minutes after the deploy,
+		// also inside the deployment adjacency window.
+		{ID: "anomaly-1", Service: "db", Kind: models.EventKindIncidentSignal, Timestamp: now.Add(-5 * time.Minute)},
+	}
+
+	graph := &capturingGraphStore{}
+	analyzer := NewAnalyzer(cfg, &stubEventStore{events: events}, graph)
+	if err := analyzer.analyze(context.Background()); err != nil {
+		t.Fatalf("analyze returned error: %v", err)
+	}
+
+	for _, edge := range graph.edges {
+		if edge.Type == models.EdgeTypeDeploymentAdjacent &&
+			edge.FromNodeID == "deploy-1" && edge.ToNodeID == "anomaly-1" {
+			return
+		}
+	}
+	t.Fatalf("expected a deployment_adjacent edge from deploy-1 to anomaly-1, got %d edges: %+v", len(graph.edges), graph.edges)
 }
