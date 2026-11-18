@@ -34,7 +34,26 @@ export async function capture(fn: (logger: Logger) => void | Promise<void>): Pro
   return sink.getEvents();
 }
 
-const capturedEvents: string[] = [];
+/**
+ * Buffer behind the module-level `events()` / `lastEvent()` / `clearEvents()`
+ * helpers. It follows the most recently created testkit so the shared free
+ * functions keep reflecting the active kit for backwards compatibility, while
+ * each kit's own accessors stay bound to its private buffer.
+ */
+let activeCapturedEvents: string[] = [];
+
+/** Build capture accessors bound to one specific buffer. */
+function bindCapture(store: string[]): {
+  events: () => string[];
+  lastEvent: () => string | undefined;
+  clearEvents: () => void;
+} {
+  return {
+    events: () => [...store],
+    lastEvent: () => store[store.length - 1],
+    clearEvents: () => { store.length = 0; },
+  };
+}
 
 export function testkit(): TestLoggerResult & {
   capture: typeof capture;
@@ -43,30 +62,32 @@ export function testkit(): TestLoggerResult & {
   clearEvents: () => void;
 } {
   const kit = testLogger();
+  // Per-instance buffer: a kit captures only its own sink's events, so two
+  // independent/parallel testkits can never bleed into one another.
+  const capturedEvents: string[] = [];
   const originalWrite = kit.sink.write.bind(kit.sink);
   kit.sink.write = (encoded: string) => {
     capturedEvents.push(encoded);
     return originalWrite(encoded);
   };
+  activeCapturedEvents = capturedEvents;
   return {
     ...kit,
     capture,
-    events,
-    lastEvent,
-    clearEvents,
+    ...bindCapture(capturedEvents),
   };
 }
 
 export function events(): string[] {
-  return [...capturedEvents];
+  return [...activeCapturedEvents];
 }
 
 export function lastEvent(): string | undefined {
-  return capturedEvents[capturedEvents.length - 1];
+  return activeCapturedEvents[activeCapturedEvents.length - 1];
 }
 
 export function clearEvents(): void {
-  capturedEvents.length = 0;
+  activeCapturedEvents.length = 0;
 }
 
 /** Asserts that a decoded event JSON contains the expected key-value pair. */
