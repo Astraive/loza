@@ -109,6 +109,21 @@ func TestValidateWrappedAndNDJSON(t *testing.T) {
 	}
 }
 
+func TestValidateWrappedEventsWithNullAPIVersion(t *testing.T) {
+	// "api_version": null unmarshals to a nil interface value, which must not be
+	// confused with an absent api_version key. An explicit null is a present key
+	// and must be routed through full ingest-envelope validation, which requires
+	// a non-empty string api_version.
+	nullVersion := []byte(`{"api_version":null,"source":{"sdk":"loza-cli","service":"checkout"},"events":[{"schema_version":"v1","event_version":"v1","timestamp":"2026-05-12T00:00:00Z","event_id":"evt_1","service":"checkout","event":"checkout.request","kind":"http"}]}`)
+
+	if err := speccontract.ValidateFlexibleJSONBytes(nullVersion, true); err == nil {
+		t.Fatal("spec contract should reject an explicit null api_version")
+	}
+	if err := ValidateEventBytes(nullVersion); err == nil {
+		t.Fatal("ValidateEventBytes should reject an explicit null api_version instead of taking the wrapped-events shortcut")
+	}
+}
+
 func specRepoRoot(t *testing.T) string {
 	t.Helper()
 	_, file, _, ok := runtime.Caller(0)

@@ -116,7 +116,13 @@ func ValidateEventBytesStrict(raw []byte, strict bool) error {
 		if len(raw) > speccontract.MaxEventBytes && payload["events"] == nil {
 			return fmt.Errorf("payload exceeds max_event_size_bytes (%d > %d)", len(raw), speccontract.MaxEventBytes)
 		}
-		if eventsRaw, ok := payload["events"].([]any); ok && payload["api_version"] == nil {
+		// Test for key presence, not value: json.Unmarshal maps an explicit
+		// "api_version": null to a nil interface value, which must not be
+		// mistaken for a missing key. Only payloads without the key at all may
+		// take the wrapped-events shortcut; an explicit null is routed to full
+		// ingest-envelope validation.
+		_, hasAPIVersion := payload["api_version"]
+		if eventsRaw, ok := payload["events"].([]any); ok && !hasAPIVersion {
 			for _, item := range eventsRaw {
 				event, ok := item.(map[string]any)
 				if !ok {
