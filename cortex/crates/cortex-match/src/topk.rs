@@ -39,6 +39,7 @@ impl Ord for PQItem {
 
 /// Efficient top-k matching using priority queue
 /// Avoids sorting all candidates, only maintains heap of size k
+#[derive(Clone)]
 pub struct TopK {
     k: usize,
     threshold: f64,
