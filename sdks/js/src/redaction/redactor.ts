@@ -33,12 +33,22 @@ function matchesKey(key: string, keys: Set<string>): boolean {
   return false;
 }
 
+/** True for objects whose contents are represented by own enumerable string keys.
+ *  This covers plain objects (in any realm), Object.create(null) objects and class
+ *  instances, while leaving opaque built-ins (Date, Map, Set, RegExp, typed arrays,
+ *  ...) untouched so their internal data is not flattened into an empty object. */
+function isDictionaryObject(obj: any): boolean {
+  return obj !== null
+    && typeof obj === 'object'
+    && Object.prototype.toString.call(obj) === '[object Object]';
+}
+
 /** Walk a payload recursively, applying a transform to matching keys. */
 function walk(obj: any, keys: Set<string>, transform: (key: string, value: any) => [boolean, any]): any {
   if (Array.isArray(obj)) {
     return obj.map(item => walk(item, keys, transform));
   }
-  if (obj && typeof obj === 'object' && obj.constructor === Object) {
+  if (isDictionaryObject(obj)) {
     const out: Record<string, any> = {};
     for (const [k, v] of Object.entries(obj)) {
       const [keep, newVal] = transform(k, v);
