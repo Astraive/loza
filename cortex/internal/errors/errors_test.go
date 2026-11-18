@@ -68,3 +68,23 @@ func TestIsTimeoutWrapped(t *testing.T) {
 		t.Fatal("non-timeout error should not be detected as a timeout")
 	}
 }
+
+func TestIsRetryableWrappedContextErrors(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+	}{
+		{"wrapped canceled", fmt.Errorf("op: %w", context.Canceled)},
+		{"wrapped deadline", fmt.Errorf("op: %w", context.DeadlineExceeded)},
+		{"double wrapped canceled", fmt.Errorf("outer: %w", fmt.Errorf("inner: %w", context.Canceled))},
+		{"timeout error wrapping canceled", NewTimeoutError(true, context.Canceled)},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if IsRetryable(tt.err) {
+				t.Fatalf("wrapped context error %v should not be retryable", tt.err)
+			}
+		})
+	}
+}
