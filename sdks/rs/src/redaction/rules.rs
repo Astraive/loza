@@ -28,7 +28,10 @@ pub fn redact(mut value: Value, redactor: &RedactorConfig) -> Value {
             value
         }
         RedactorConfig::Compose(redactors) => redactors.iter().fold(value, redact),
-        RedactorConfig::AllowKeys(_keys) => value,
+        RedactorConfig::AllowKeys(keys) => {
+            let refs: Vec<_> = keys.iter().map(String::as_str).collect();
+            redact_allowlist(&mut value, &refs)
+        }
         RedactorConfig::None => value,
     }
 }
@@ -43,6 +46,39 @@ pub enum RedactionMode {
 fn redact_keys(value: &mut Value, keys: &[&str], mode: RedactionMode) -> Value {
     walk(value, keys, &mode);
     value.clone()
+}
+
+// Allowlist semantics: keep every scalar field whose key is in `keys` and
+// redact every other scalar field. Containers are always traversed so that
+// allowed fields nested inside them are preserved.
+fn redact_allowlist(value: &mut Value, keys: &[&str]) -> Value {
+    walk_allowlist(value, keys);
+    value.clone()
+}
+
+fn walk_allowlist(value: &mut Value, keys: &[&str]) {
+    match value {
+        Value::Object(map) => {
+            let names: Vec<_> = map.keys().cloned().collect();
+            for key in names {
+                let is_container = matches!(
+                    map.get(&key),
+                    Some(Value::Object(_)) | Some(Value::Array(_))
+                );
+                if !is_container && !matches_key(&key, keys) {
+                    map.insert(key, Value::String("[REDACTED]".to_string()));
+                } else if let Some(child) = map.get_mut(&key) {
+                    walk_allowlist(child, keys);
+                }
+            }
+        }
+        Value::Array(values) => {
+            for child in values {
+                walk_allowlist(child, keys);
+            }
+        }
+        _ => {}
+    }
 }
 
 fn redact_patterns(value: &mut Value, patterns: &[String]) {
@@ -120,5 +156,44 @@ fn walk(value: &mut Value, keys: &[&str], mode: &RedactionMode) {
             }
         }
         _ => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn allow_keys_redacts_every_field_not_in_the_allowlist() {
+        let value = json!({
+            "user_id": "u1",
+            "attrs": {
+                "message": "hello",
+                "token": "abc123",
+                "nested": { "city": "X", "zip": "12345" }
+            }
+        });
+
+        let redacted = redact(
+            value,
+            &RedactorConfig::AllowKeys(vec!["message".into(), "city".into()]),
+        );
+
+        assert_eq!(redacted["attrs"]["message"], "hello");
+        assert_eq!(redacted["attrs"]["token"], "[REDACTED]");
+        assert_eq!(redacted["attrs"]["nested"]["city"], "X");
+        assert_eq!(redacted["attrs"]["nested"]["zip"], "[REDACTED]");
+        assert_eq!(redacted["user_id"], "[REDACTED]");
+    }
+
+    #[test]
+    fn allow_keys_redacts_everything_when_no_allowlist_is_given() {
+        let value = json!({ "message": "hello", "token": "abc123" });
+
+        let redacted = redact(value, &RedactorConfig::AllowKeys(vec![]));
+
+        assert_eq!(redacted["message"], "[REDACTED]");
+        assert_eq!(redacted["token"], "[REDACTED]");
     }
 }
