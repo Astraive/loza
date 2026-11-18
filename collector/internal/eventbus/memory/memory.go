@@ -106,6 +106,27 @@ func (b *Bus) bufferSize() int {
 	return 10000
 }
 
+// cloneEnvelope returns a deep copy of env. Envelope contains reference fields
+// (Headers and Body), so a shallow value copy still aliases the publisher's
+// data. Every party that processes an envelope (the bus, each handler and the
+// DLQ) must own an independent copy to avoid map races and lost dlq_reason
+// values.
+func cloneEnvelope(env eventbus.Envelope) eventbus.Envelope {
+	if env.Headers != nil {
+		headers := make(map[string]string, len(env.Headers))
+		for k, v := range env.Headers {
+			headers[k] = v
+		}
+		env.Headers = headers
+	}
+	if env.Body != nil {
+		body := make([]byte, len(env.Body))
+		copy(body, env.Body)
+		env.Body = body
+	}
+	return env
+}
+
 func (b *Bus) getOrCreateTopic(name string) *topic {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -132,6 +153,9 @@ func (b *Bus) Publish(ctx context.Context, topicName string, events []eventbus.E
 	t := b.getOrCreateTopic(topicName)
 
 	for _, env := range events {
+		// Take ownership of the data at the boundary so a caller reusing its
+		// Headers/Body cannot race with the consumer goroutines.
+		env = cloneEnvelope(env)
 		select {
 		case t.ch <- env:
 		case <-ctx.Done():
@@ -183,12 +207,13 @@ func (b *Bus) consumeLoop(t *topic) {
 		t.mu.RUnlock()
 
 		for _, h := range handlers {
+			// Each handler receives its own deep copy so mutations by one
+			// handler cannot be observed by another or by the DLQ.
 			msg := &Message{
 				id:       env.ID,
 				topic:    t.name,
-				envelope: env,
+				envelope: cloneEnvelope(env),
 			}
-
 			// The returned error is the primary failure signal; an explicit
 			// Nack is the alternative for handlers that prefer the Message API.
 			handlerErr := h.handler(context.Background(), msg)
@@ -206,7 +231,9 @@ func (b *Bus) consumeLoop(t *topic) {
 			}
 
 			if failure != nil {
-				b.handleFailure(t, env, failure)
+				// Hand the failure path an independent copy so retries and the
+				// DLQ never mutate the shared envelope Headers/Body maps.
+				b.handleFailure(t, cloneEnvelope(env), failure)
 			}
 		}
 	}
@@ -277,7 +304,9 @@ func (b *Bus) Health(_ context.Context) eventbus.Health {
 
 // PublishDLQ sends an envelope to the in-process DLQ.
 func (b *Bus) PublishDLQ(_ context.Context, original eventbus.Envelope, reason error) error {
-	b.appendToDLQ(original, reason)
+	// Clone before recording so dlq_reason is never written into the caller's
+	// shared Headers map (MASS-0178).
+	b.appendToDLQ(cloneEnvelope(original), reason)
 	return nil
 }
 
@@ -286,7 +315,9 @@ func (b *Bus) DLQMessages() []eventbus.Envelope {
 	b.dlqMu.Lock()
 	defer b.dlqMu.Unlock()
 	out := make([]eventbus.Envelope, len(b.dlq))
-	copy(out, b.dlq)
+	for i := range b.dlq {
+		out[i] = cloneEnvelope(b.dlq[i])
+	}
 	return out
 }
 

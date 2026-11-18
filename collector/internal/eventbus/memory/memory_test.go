@@ -295,3 +295,114 @@ func TestAckPreventsRetry(t *testing.T) {
 		t.Fatalf("acked message must not reach the DLQ, got %d messages", got)
 	}
 }
+
+// TestHandlersDoNotShareHeaders reproduces MASS-0178: the same envelope is
+// delivered to every handler, and on failure dlq_reason was written into the
+// shared Headers map. Each failing handler must keep its own reason, and the
+// original publisher's Headers/Body must not be mutated.
+func TestHandlersDoNotShareHeaders(t *testing.T) {
+	bus, err := New(context.Background(), eventbus.Config{})
+	if err != nil {
+		t.Fatalf("new bus: %v", err)
+	}
+	defer bus.Close(context.Background())
+
+	memBus := bus.(*Bus)
+	ctx := context.Background()
+
+	sharedHeaders := map[string]string{"trace": "abc"}
+	originalBody := []byte(`{"n":1}`)
+	env := eventbus.Envelope{
+		ID: "shared", Event: "test.event",
+		Headers: sharedHeaders, Body: originalBody,
+	}
+
+	done := make(chan struct{}, 2)
+	if err := memBus.Subscribe(ctx, "shared-topic", "g1", func(_ context.Context, msg eventbus.Message) error {
+		defer func() { done <- struct{}{} }()
+		e := msg.Envelope()
+		e.Headers["handler"] = "one"
+		e.Body[0] = 'X'
+		return errors.New("reason-one")
+	}); err != nil {
+		t.Fatalf("subscribe g1: %v", err)
+	}
+	if err := memBus.Subscribe(ctx, "shared-topic", "g2", func(_ context.Context, msg eventbus.Message) error {
+		defer func() { done <- struct{}{} }()
+		e := msg.Envelope()
+		e.Headers["handler"] = "two"
+		return errors.New("reason-two")
+	}); err != nil {
+		t.Fatalf("subscribe g2: %v", err)
+	}
+
+	if err := memBus.Publish(ctx, "shared-topic", []eventbus.Envelope{env}); err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+	for i := 0; i < 2; i++ {
+		select {
+		case <-done:
+		case <-time.After(2 * time.Second):
+			t.Fatal("timed out waiting for handlers")
+		}
+	}
+
+	msgs := memBus.DLQMessages()
+	if len(msgs) != 2 {
+		t.Fatalf("expected 2 DLQ messages, got %d", len(msgs))
+	}
+	reasons := map[string]bool{}
+	for _, m := range msgs {
+		reasons[m.Headers["dlq_reason"]] = true
+	}
+	if !reasons["reason-one"] || !reasons["reason-two"] {
+		t.Fatalf("each handler must keep its own dlq_reason, got %v", reasons)
+	}
+
+	if _, ok := sharedHeaders["dlq_reason"]; ok {
+		t.Fatal("publisher Headers was mutated with dlq_reason")
+	}
+	if _, ok := sharedHeaders["handler"]; ok {
+		t.Fatal("publisher Headers was mutated by a handler")
+	}
+	if originalBody[0] != '{' {
+		t.Fatalf("publisher Body was mutated by a handler: %q", originalBody)
+	}
+}
+
+// TestPublishDLQDoesNotShareMaps verifies the adjacent PublishDLQ/DLQMessages
+// paths also break aliasing with the caller's envelope.
+func TestPublishDLQDoesNotShareMaps(t *testing.T) {
+	bus, err := New(context.Background(), eventbus.Config{})
+	if err != nil {
+		t.Fatalf("new bus: %v", err)
+	}
+	defer bus.Close(context.Background())
+
+	memBus := bus.(*Bus)
+	headers := map[string]string{"k": "v"}
+	body := []byte("body")
+	env := eventbus.Envelope{ID: "dlq-copy", Event: "failed", Headers: headers, Body: body}
+
+	if err := memBus.PublishDLQ(context.Background(), env, errors.New("boom")); err != nil {
+		t.Fatalf("publish dlq: %v", err)
+	}
+	if _, ok := headers["dlq_reason"]; ok {
+		t.Fatal("PublishDLQ mutated the caller's Headers map")
+	}
+
+	msgs := memBus.DLQMessages()
+	if len(msgs) != 1 || msgs[0].Headers["dlq_reason"] != "boom" {
+		t.Fatalf("unexpected DLQ entry: %+v", msgs)
+	}
+	// Mutating a returned copy must not alter stored DLQ state.
+	msgs[0].Headers["dlq_reason"] = "tampered"
+	msgs[0].Body[0] = 'X'
+	again := memBus.DLQMessages()
+	if again[0].Headers["dlq_reason"] != "boom" || again[0].Body[0] != 'b' {
+		t.Fatalf("DLQMessages returned aliased data: %+v", again[0])
+	}
+	if body[0] != 'b' {
+		t.Fatalf("PublishDLQ/caller Body was mutated: %q", body)
+	}
+}
