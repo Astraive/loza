@@ -174,7 +174,7 @@ func TestSpoolCrashReplay(t *testing.T) {
 	cfg.spoolFsync = true
 
 	var state1 collectorState
-	state1.cfg = cfg
+	state1.setConfig(cfg)
 	state1.ingestSink = errSink{err: context.DeadlineExceeded}
 	state1.rateLimiter = rate.NewLimiter(rate.Limit(1000), 1000)
 	state1.rng = randSourceForTests()
@@ -194,7 +194,7 @@ func TestSpoolCrashReplay(t *testing.T) {
 	// simulate restart with working sink
 	sink := &capturedSink{}
 	var state2 collectorState
-	state2.cfg = cfg
+	state2.setConfig(cfg)
 	state2.ingestSink = sink
 	state2.rateLimiter = rate.NewLimiter(rate.Limit(1000), 1000)
 	state2.rng = randSourceForTests()
@@ -550,8 +550,8 @@ func TestSpoolLimitRejectsBeforeWriting(t *testing.T) {
 
 func TestEffectiveSpoolHealthHonorsHybridMode(t *testing.T) {
 	tests := []struct {
-		name             string
-		mode             string
+		name              string
+		mode              string
 		wantWhenUnhealthy bool
 	}{
 		{name: "spool", mode: "spool", wantWhenUnhealthy: false},

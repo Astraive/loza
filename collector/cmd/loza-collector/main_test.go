@@ -594,7 +594,7 @@ func TestHandleSchemaPublishAndDiff(t *testing.T) {
 	if publishRec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d body=%s", publishRec.Code, publishRec.Body.String())
 	}
-	if len(state.cfg.schemaRegistry) == 0 {
+	if len(state.config().schemaRegistry) == 0 {
 		t.Fatal("expected registry entry to be published")
 	}
 

@@ -263,8 +263,8 @@ func runCollector(cfg collectorConfig) error {
 		DLQPath:                 cfg.dlqPath,
 		DLQOnPrimaryFail:        cfg.dlqOnPrimaryFail,
 		DLQOnSecondaryFail:      cfg.dlqOnSecondaryFail,
-		DLQOnFallbackFail:       state.cfg.dlqOnFallbackFail,
-		DLQOnPolicyFail:         state.cfg.dlqOnPolicyFail,
+		DLQOnFallbackFail:       state.config().dlqOnFallbackFail,
+		DLQOnPolicyFail:         state.config().dlqOnPolicyFail,
 		DedupeEnabled:           state.dedupeEnabled(),
 		DedupeKey:               cfg.dedupeKey,
 		DedupeWindow:            cfg.dedupeWindow,
@@ -284,9 +284,9 @@ func runCollector(cfg collectorConfig) error {
 		},
 		Schema: processing.SchemaConfig{
 			Mode:           schemaModeForProcessor(state),
-			SchemaVersion:  state.cfg.schemaSchemaVersion,
-			EventVersion:   state.cfg.schemaEventVersion,
-			QuarantinePath: state.cfg.schemaQuarantinePath,
+			SchemaVersion:  state.config().schemaSchemaVersion,
+			EventVersion:   state.config().schemaEventVersion,
+			QuarantinePath: state.config().schemaQuarantinePath,
 			Registry:       state.convertSchemaRegistry(),
 		},
 	}, sink, secondarySinks, fallbackSink, state.rng)
@@ -380,7 +380,7 @@ func runCollector(cfg collectorConfig) error {
 				if err := reloadCollectorState(state); err != nil {
 					logJSON("error", "collector_reload_failed", map[string]any{"error": err.Error()})
 				} else {
-					logJSON("info", "collector_reload_complete", map[string]any{"config": state.cfg.configFile})
+					logJSON("info", "collector_reload_complete", map[string]any{"config": state.config().configFile})
 				}
 				continue
 			}
@@ -505,37 +505,41 @@ func startupAuthPolicy(cfg collectorConfig) collectorStartupAuthPolicy {
 }
 
 func reloadCollectorState(state *collectorState) error {
-	if len(state.cfg.configArgs) == 0 {
+	// Take one consistent snapshot: the swap below must not observe a config
+	// published by another reload halfway through building the next one.
+	current := state.config()
+	if len(current.configArgs) == 0 {
 		return fmt.Errorf("collector reload requires original startup arguments")
 	}
-	next, err := loadCollectorConfigFromArgs(state.cfg.configArgs)
+	next, err := loadCollectorConfigFromArgs(current.configArgs)
 	if err != nil {
 		return err
 	}
 	// Keep transport/storage topology stable during hot reload; only update mutable runtime policy.
-	next.addr = state.cfg.addr
-	next.serverConfig = state.cfg.serverConfig
-	next.duckDBPath = state.cfg.duckDBPath
-	next.duckDBDriver = state.cfg.duckDBDriver
-	next.duckDBTable = state.cfg.duckDBTable
-	next.duckDBRawColumn = state.cfg.duckDBRawColumn
-	next.duckDBStoreRaw = state.cfg.duckDBStoreRaw
-	next.reliabilityMode = state.cfg.reliabilityMode
-	next.spoolDir = state.cfg.spoolDir
-	next.spoolFile = state.cfg.spoolFile
-	next.queueDir = state.cfg.queueDir
-	next.kafkaBrokers = append([]string(nil), state.cfg.kafkaBrokers...)
-	next.kafkaTopic = state.cfg.kafkaTopic
+	next.addr = current.addr
+	next.serverConfig = current.serverConfig
+	next.duckDBPath = current.duckDBPath
+	next.duckDBDriver = current.duckDBDriver
+	next.duckDBTable = current.duckDBTable
+	next.duckDBRawColumn = current.duckDBRawColumn
+	next.duckDBStoreRaw = current.duckDBStoreRaw
+	next.reliabilityMode = current.reliabilityMode
+	next.spoolDir = current.spoolDir
+	next.spoolFile = current.spoolFile
+	next.queueDir = current.queueDir
+	next.kafkaBrokers = append([]string(nil), current.kafkaBrokers...)
+	next.kafkaTopic = current.kafkaTopic
 
 	// Auth policy is fixed at startup. Reject a reload that would change it
 	// instead of applying it partially: the request-time authorization guard
-	// reads state.cfg while the authentication middleware is already wired into
-	// the mux. Leave state.cfg untouched so the running policy stays consistent.
-	if !reflect.DeepEqual(startupAuthPolicy(next), startupAuthPolicy(state.cfg)) {
+	// reads the config snapshot while the authentication middleware is already
+	// wired into the mux. Leave the live config untouched so the running policy
+	// stays consistent.
+	if !reflect.DeepEqual(startupAuthPolicy(next), startupAuthPolicy(current)) {
 		return errors.New("collector reload cannot change authentication or authorization settings; restart the collector to apply auth changes")
 	}
 
-	state.cfg = next
+	state.setConfig(next)
 	if state.rateLimiter != nil {
 		if next.rateLimitEnabled {
 			state.rateLimiter.SetLimit(rate.Limit(next.rateLimitRPS))
@@ -555,7 +559,7 @@ func reloadCollectorState(state *collectorState) error {
 }
 
 func buildMux(state *collectorState) *http.ServeMux {
-	tailWSHandler := serverruntime.NewTailWebSocketHandler(state.cfg.serverConfig.HTTP, state)
+	tailWSHandler := serverruntime.NewTailWebSocketHandler(state.config().serverConfig.HTTP, state)
 
 	var protector publichttp.RouteProtector
 	var authMW func(http.Handler) http.Handler
@@ -569,7 +573,7 @@ func buildMux(state *collectorState) *http.ServeMux {
 			environment := strings.TrimSpace(r.Header.Get("X-Loza-Env"))
 			// authEnabled is immutable for the lifetime of the mux: hot reload rejects
 			// changes to the startup auth policy, so this stays in sync with authMW.
-			if state.cfg.authEnabled && mode == publichttp.CanonicalCollectorRoute {
+			if state.config().authEnabled && mode == publichttp.CanonicalCollectorRoute {
 				ac := auth.GetAuthContext(r.Context())
 				if ac == nil || !ac.AuthorizesCollector(collector, environment, auth.Permission(permission)) {
 					http.Error(w, "Forbidden", http.StatusForbidden)
@@ -579,19 +583,19 @@ func buildMux(state *collectorState) *http.ServeMux {
 			ctx := publichttp.WithAuthorizedCollector(r.Context(), collector, environment)
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
-		if state.cfg.authEnabled && mode == publichttp.CanonicalCollectorRoute {
+		if state.config().authEnabled && mode == publichttp.CanonicalCollectorRoute {
 			return authMW(guard)
 		}
 		return guard
 	}
-	if state.cfg.authEnabled {
+	if state.config().authEnabled {
 		if state.keyStore == nil || state.keyCache == nil || len(state.serverSecret) == 0 {
 			if err := initializeAuthState(state); err != nil {
 				log.Fatal().Err(err).Msg("invalid collector authentication configuration")
 			}
 		}
 		var trustedCIDRs []*net.IPNet
-		for _, cidr := range state.cfg.trustedProxies {
+		for _, cidr := range state.config().trustedProxies {
 			_, ipNet, err := net.ParseCIDR(cidr)
 			if err != nil {
 				log.Fatal().Err(err).Msgf("invalid trusted_proxies CIDR %q", cidr)
@@ -600,7 +604,7 @@ func buildMux(state *collectorState) *http.ServeMux {
 		}
 
 		authMW = auth.Middleware(state.keyStore, state.keyCache, state.serverSecret,
-			auth.WithAllowLocalDevKeys(state.cfg.authAllowLocalDevKeys),
+			auth.WithAllowLocalDevKeys(state.config().authAllowLocalDevKeys),
 			auth.WithTrustedProxies(trustedCIDRs),
 			auth.WithRateLimiter(state.keyRateLimiter),
 		)
@@ -610,36 +614,36 @@ func buildMux(state *collectorState) *http.ServeMux {
 	}
 
 	return publichttp.BuildMux(
-		state.cfg.ingestPath,
-		state.cfg.healthPath,
-		state.cfg.readyPath,
-		state.cfg.metricsPath,
-		state.cfg.metricsPrometheus,
+		state.config().ingestPath,
+		state.config().healthPath,
+		state.config().readyPath,
+		state.config().metricsPath,
+		state.config().metricsPrometheus,
 		state.metricsHandler(),
 		tailWSHandler,
 		state,
 		protector,
 		collectorProtector,
-		state.cfg.authDefaultCollector,
+		state.config().authDefaultCollector,
 	)
 }
 
 func initializeAuthState(state *collectorState) error {
-	if !state.cfg.authEnabled {
+	if !state.config().authEnabled {
 		return nil
 	}
-	if strings.TrimSpace(state.cfg.authServerSecret) == "" {
+	if strings.TrimSpace(state.config().authServerSecret) == "" {
 		return errors.New("auth.enabled requires a resolved auth.server_secret")
 	}
-	if len(state.cfg.authKeys) == 0 && len(state.cfg.authTokens) == 0 && strings.TrimSpace(state.cfg.apiKey) == "" {
+	if len(state.config().authKeys) == 0 && len(state.config().authTokens) == 0 && strings.TrimSpace(state.config().apiKey) == "" {
 		return errors.New("auth.enabled requires at least one configured key, token, or auth.value")
 	}
-	if state.cfg.authCacheTTL <= 0 || state.cfg.authNegativeCacheTTL <= 0 {
+	if state.config().authCacheTTL <= 0 || state.config().authNegativeCacheTTL <= 0 {
 		return errors.New("auth cache TTLs must be positive")
 	}
-	state.serverSecret = []byte(state.cfg.authServerSecret)
+	state.serverSecret = []byte(state.config().authServerSecret)
 	state.keyStore = newMemoryKeyStoreFromConfig(state.cfg, state.serverSecret)
-	state.keyCache = auth.NewMemoryKeyCache(state.cfg.authCacheTTL, state.cfg.authNegativeCacheTTL)
+	state.keyCache = auth.NewMemoryKeyCache(state.config().authCacheTTL, state.config().authNegativeCacheTTL)
 	state.keyRateLimiter = auth.NewKeyRateLimiter()
 	return nil
 }

@@ -28,8 +28,8 @@ type databaseQueryRequest struct {
 func (s *collectorState) databaseConnection(name string) (database.Connection, time.Duration, error) {
 	name = strings.TrimSpace(name)
 	if name == "" {
-		if s.cfg.storageConnection != "" {
-			name = s.cfg.storageConnection
+		if s.config().storageConnection != "" {
+			name = s.config().storageConnection
 		} else if s.queryConnection != nil {
 			return s.queryConnection, 10 * time.Second, nil
 		}
@@ -38,7 +38,7 @@ func (s *collectorState) databaseConnection(name string) (database.Connection, t
 	if connection == nil {
 		return nil, 0, fmt.Errorf("database connection %q not found", name)
 	}
-	for _, configured := range s.cfg.databaseConnections {
+	for _, configured := range s.config().databaseConnections {
 		if configured.name == name {
 			return connection, configured.queryTimeout, nil
 		}

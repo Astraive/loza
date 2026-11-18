@@ -98,11 +98,11 @@ func (s *collectorState) queryTailHistory(ctx context.Context, filters serverrun
 	if s.queryDB == nil {
 		return nil, nil
 	}
-	rawIdent, err := quoteSQLIdent(s.cfg.duckDBRawColumn)
+	rawIdent, err := quoteSQLIdent(s.config().duckDBRawColumn)
 	if err != nil {
 		return nil, err
 	}
-	tableIdent, err := quoteSQLIdent(s.cfg.duckDBTable)
+	tableIdent, err := quoteSQLIdent(s.config().duckDBTable)
 	if err != nil {
 		return nil, err
 	}
@@ -114,7 +114,7 @@ func (s *collectorState) queryTailHistory(ctx context.Context, filters serverrun
 	if err != nil {
 		return nil, err
 	}
-	if encryptionEnabled(s.cfg.storageEncryptionKey) {
+	if encryptionEnabled(s.config().storageEncryptionKey) {
 		return s.queryEncryptedTailHistory(ctx, filters, rawIdent, tableIdent, tsIdent)
 	}
 	idExpr := fmt.Sprintf("coalesce(json_extract_string(%s, '$.event_id'), json_extract_string(%s, '$.id'), '')", rawIdent, rawIdent)
@@ -191,7 +191,7 @@ func (s *collectorState) queryEncryptedTailHistory(
 		if err != nil {
 			return nil, err
 		}
-		raw, err := duckdbsink.DecryptRaw(encrypted, s.cfg.storageEncryptionKey)
+		raw, err := duckdbsink.DecryptRaw(encrypted, s.config().storageEncryptionKey)
 		if err != nil {
 			return nil, fmt.Errorf("decrypt tail history: %w", err)
 		}
@@ -235,7 +235,7 @@ func rawMatchesTailCursor(raw []byte, filters serverruntime.TailFilters) bool {
 // ambiguity as an error instead of silently picking a varying column.
 func (s *collectorState) tailTimestampColumn() (string, error) {
 	var candidates []string
-	for col, path := range s.cfg.duckDBSchema {
+	for col, path := range s.config().duckDBSchema {
 		if path == "timestamp" {
 			candidates = append(candidates, col)
 		}

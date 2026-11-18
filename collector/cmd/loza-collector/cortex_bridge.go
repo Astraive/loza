@@ -293,6 +293,6 @@ func (s *collectorState) forwardAcceptedToCortex(ctx context.Context, raws [][]b
 		return
 	}
 	if err := s.cortexBridge.Deliver(ctx, raws); err != nil {
-		logJSON("warn", "collector_cortex_bridge_delivery_failed", map[string]any{"error": err.Error(), "count": len(raws), "mode": s.cfg.cortexBridgeMode})
+		logJSON("warn", "collector_cortex_bridge_delivery_failed", map[string]any{"error": err.Error(), "count": len(raws), "mode": s.config().cortexBridgeMode})
 	}
 }
