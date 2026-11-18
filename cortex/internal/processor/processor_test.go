@@ -229,7 +229,7 @@ func TestProcessJSONLDefaultsProvenance(t *testing.T) {
 	}
 }
 
-func TestProcessBatchLinksLocalTraceWithoutStoreLookup(t *testing.T) {
+func TestProcessBatchLinksLocalTrace(t *testing.T) {
 	events := &fakeEventStore{}
 	topology := &fakeTopologyStoreForProcessor{}
 	graphStore := &fakeGraphStoreForProcessor{}
@@ -258,19 +258,148 @@ func TestProcessBatchLinksLocalTraceWithoutStoreLookup(t *testing.T) {
 	if err := p.ProcessBatch(context.Background(), batch); err != nil {
 		t.Fatalf("process batch: %v", err)
 	}
-	if events.traceCalls != 0 {
-		t.Fatalf("expected same-batch trace linking without store lookup, got %d trace lookups", events.traceCalls)
+	// External trace events must be queried even when multiple batch events share
+	// the trace, so pre-existing events connected to the trace are not omitted.
+	if events.traceCalls != 1 {
+		t.Fatalf("expected one trace lookup for the shared-trace group, got %d", events.traceCalls)
 	}
 
-	foundTraceEdge := false
+	foundLocalTraceEdge := false
 	for _, edge := range graphStore.edges {
-		if edge.Type == models.EdgeTypeSameTrace {
-			foundTraceEdge = true
+		if edge.Type == models.EdgeTypeSameTrace &&
+			((edge.FromNodeID == "evt-1" && edge.ToNodeID == "evt-2") ||
+				(edge.FromNodeID == "evt-2" && edge.ToNodeID == "evt-1")) {
+			foundLocalTraceEdge = true
 			break
 		}
 	}
-	if !foundTraceEdge {
-		t.Fatalf("expected same-trace edge in batch graph build, got %+v", graphStore.edges)
+	if !foundLocalTraceEdge {
+		t.Fatalf("expected same-trace edge between local batch events, got %+v", graphStore.edges)
+	}
+}
+
+func TestProcessBatchLinksExternalTraceEventsWithMultipleLocalEvents(t *testing.T) {
+	external := &models.Event{
+		ID:         "external-1",
+		Timestamp:  time.Now().Add(-time.Hour),
+		Kind:       models.EventKindLog,
+		Service:    "svc-a",
+		TraceID:    "trace-1",
+		Provenance: "jsonl",
+	}
+	events := &fakeEventStore{
+		byTraceID: map[string][]*models.Event{
+			"trace-1": {external},
+		},
+	}
+	topology := &fakeTopologyStoreForProcessor{}
+	graphStore := &fakeGraphStoreForProcessor{}
+	p := NewEventProcessor(events, topology, graphStore)
+
+	ts := time.Now()
+	batch := []*models.Event{
+		{
+			ID:         "evt-1",
+			Timestamp:  ts,
+			Kind:       models.EventKindLog,
+			Service:    "svc-a",
+			TraceID:    "trace-1",
+			Provenance: "jsonl",
+		},
+		{
+			ID:         "evt-2",
+			Timestamp:  ts.Add(time.Second),
+			Kind:       models.EventKindMetric,
+			Service:    "svc-a",
+			TraceID:    "trace-1",
+			Provenance: "jsonl",
+		},
+	}
+
+	if err := p.ProcessBatch(context.Background(), batch); err != nil {
+		t.Fatalf("process batch: %v", err)
+	}
+
+	connected := map[string]bool{}
+	for _, edge := range graphStore.edges {
+		if edge.Type != models.EdgeTypeSameTrace {
+			continue
+		}
+		for _, localID := range []string{"evt-1", "evt-2"} {
+			if (edge.FromNodeID == localID && edge.ToNodeID == external.ID) ||
+				(edge.ToNodeID == localID && edge.FromNodeID == external.ID) {
+				connected[localID] = true
+			}
+		}
+	}
+	for _, localID := range []string{"evt-1", "evt-2"} {
+		if !connected[localID] {
+			t.Fatalf("expected external trace event to be linked to %s, got edges %+v", localID, graphStore.edges)
+		}
+	}
+}
+
+func TestProcessBatchLinksExternalIncidentEventsWithMultipleLocalEvents(t *testing.T) {
+	external := &models.Event{
+		ID:         "external-incident-1",
+		Timestamp:  time.Now().Add(-time.Hour),
+		Kind:       models.EventKindLog,
+		Service:    "svc-a",
+		IncidentID: "incident-1",
+		Provenance: "jsonl",
+	}
+	events := &fakeEventStore{
+		byIncident: map[string][]*models.Event{
+			"incident-1": {external},
+		},
+	}
+	topology := &fakeTopologyStoreForProcessor{}
+	graphStore := &fakeGraphStoreForProcessor{}
+	p := NewEventProcessor(events, topology, graphStore)
+
+	ts := time.Now()
+	batch := []*models.Event{
+		{
+			ID:         "evt-1",
+			Timestamp:  ts,
+			Kind:       models.EventKindLog,
+			Service:    "svc-a",
+			IncidentID: "incident-1",
+			Provenance: "jsonl",
+		},
+		{
+			ID:         "evt-2",
+			Timestamp:  ts.Add(time.Second),
+			Kind:       models.EventKindMetric,
+			Service:    "svc-a",
+			IncidentID: "incident-1",
+			Provenance: "jsonl",
+		},
+	}
+
+	if err := p.ProcessBatch(context.Background(), batch); err != nil {
+		t.Fatalf("process batch: %v", err)
+	}
+	if events.incidentCalls != 1 {
+		t.Fatalf("expected one incident lookup for the shared-incident group, got %d", events.incidentCalls)
+	}
+
+	connected := map[string]bool{}
+	for _, edge := range graphStore.edges {
+		if edge.Type != models.EdgeTypeSameIncident {
+			continue
+		}
+		for _, localID := range []string{"evt-1", "evt-2"} {
+			if (edge.FromNodeID == localID && edge.ToNodeID == external.ID) ||
+				(edge.ToNodeID == localID && edge.FromNodeID == external.ID) {
+				connected[localID] = true
+			}
+		}
+	}
+	for _, localID := range []string{"evt-1", "evt-2"} {
+		if !connected[localID] {
+			t.Fatalf("expected external incident event to be linked to %s, got edges %+v", localID, graphStore.edges)
+		}
 	}
 }
 
