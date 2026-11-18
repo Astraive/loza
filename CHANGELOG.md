@@ -3,6 +3,23 @@
 All notable changes to the LOZA project are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/0.2.0/).
+
+## [Unreleased]
+
+### Fixed
+
+- Go SDK: `FinishGroupError` now records the supplied error status code on the
+  group, so failed `Phase` calls emit a non-zero `status_code` like failed
+  `Step` calls instead of `0`.
+
+### Changed
+
+- Go SDK migration note (breaking): `core.FinishGroupError`,
+  `loza.FinishGroupError`, and `(*Logger).FinishGroupError` now accept an
+  explicit `statusCode int` between `err` and the trailing attrs, mirroring
+  `FinishProcessError`. Update `FinishGroupError(h, err, attrs...)` to
+  `FinishGroupError(h, err, statusCode, attrs...)`.
+
 ## [0.4.1] - 2026-08-27
 
 ### Fixed

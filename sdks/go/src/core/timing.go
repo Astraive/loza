@@ -187,11 +187,11 @@ func (h *StopwatchHandle) Elapsed() time.Duration {
 }
 
 // FinishGroupError completes the group with an error status code and error info.
-func FinishGroupError(handle *GroupHandle, err error, attrs ...Attr) error {
+func FinishGroupError(handle *GroupHandle, err error, statusCode int, attrs ...Attr) error {
 	if err != nil {
 		attrs = append(attrs, Attr{Key: "error_message", Kind: KindString, Value: err.Error()})
 	}
-	return handle.Finish(attrs...)
+	return handle.FinishError(statusCode, attrs...)
 }
 
 // Measure runs fn, measures its duration, and returns it as an Attr.
@@ -229,7 +229,7 @@ func Phase(ctx context.Context, name string, fn func() error) error {
 		return err
 	}
 	if err := fn(); err != nil {
-		_ = FinishGroupError(h, err)
+		_ = FinishGroupError(h, err, 1)
 		return err
 	}
 	return h.Finish()
