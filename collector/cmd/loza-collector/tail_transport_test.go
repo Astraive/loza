@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -101,5 +102,92 @@ func TestQueryTailHistoryDecryptsBeforeFiltering(t *testing.T) {
 	}
 	if len(rows) != 1 || string(rows[0]) != string(local) {
 		t.Fatalf("encrypted tail history = %q, want %q", rows, local)
+	}
+}
+
+func TestTailTimestampColumnSingleCandidate(t *testing.T) {
+	state := &collectorState{
+		cfg: collectorConfig{
+			duckDBSchema: map[string]string{
+				"event_ts": "timestamp",
+				"id":       "id",
+			},
+		},
+	}
+	col, err := state.tailTimestampColumn()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if col != "event_ts" {
+		t.Fatalf("timestamp column = %q, want %q", col, "event_ts")
+	}
+}
+
+func TestTailTimestampColumnDefault(t *testing.T) {
+	for _, schema := range []map[string]string{
+		nil,
+		{"id": "id"},
+	} {
+		state := &collectorState{cfg: collectorConfig{duckDBSchema: schema}}
+		col, err := state.tailTimestampColumn()
+		if err != nil {
+			t.Fatalf("unexpected error for schema %v: %v", schema, err)
+		}
+		if col != "timestamp" {
+			t.Fatalf("timestamp column = %q, want default %q", col, "timestamp")
+		}
+	}
+}
+
+// Regression test for MASS-0132: with more than one column mapped to the
+// "timestamp" path, the old implementation returned whichever column Go's
+// randomized map iteration happened to visit first. The resolved column must
+// instead be deterministic; ambiguity is reported as a stable error.
+func TestTailTimestampColumnAmbiguousIsDeterministic(t *testing.T) {
+	const wantErr = "ambiguous timestamp column: 3 columns map to the timestamp path (alpha, mid, zeta)"
+
+	// Build the map with different insertion orders across iterations to
+	// exercise randomized map traversal.
+	orders := [][]string{
+		{"alpha", "mid", "zeta"},
+		{"zeta", "mid", "alpha"},
+		{"mid", "zeta", "alpha"},
+	}
+	for _, order := range orders {
+		schema := map[string]string{"id": "id"}
+		for _, col := range order {
+			schema[col] = "timestamp"
+		}
+		state := &collectorState{cfg: collectorConfig{duckDBSchema: schema}}
+		for i := 0; i < 50; i++ {
+			col, err := state.tailTimestampColumn()
+			if err == nil {
+				t.Fatalf("expected ambiguity error, got column %q", col)
+			}
+			if err.Error() != wantErr {
+				t.Fatalf("error = %q, want %q", err.Error(), wantErr)
+			}
+		}
+	}
+}
+
+func TestQueryTailHistoryReportsAmbiguousTimestampColumn(t *testing.T) {
+	state := &collectorState{
+		cfg: collectorConfig{
+			duckDBTable:     "events",
+			duckDBRawColumn: "raw",
+			duckDBSchema: map[string]string{
+				"ts_a": "timestamp",
+				"ts_b": "timestamp",
+			},
+		},
+		queryDB: new(sql.DB),
+	}
+	_, err := state.queryTailHistory(context.Background(), serverruntime.TailFilters{Limit: 10})
+	if err == nil {
+		t.Fatal("expected queryTailHistory to reject an ambiguous timestamp column")
+	}
+	if !strings.Contains(err.Error(), "ambiguous timestamp column") {
+		t.Fatalf("error = %q, want it to mention ambiguous timestamp column", err.Error())
 	}
 }
