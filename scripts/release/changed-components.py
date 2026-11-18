@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
@@ -134,9 +135,10 @@ def compact_matrix(changes: dict[str, dict[str, Any]], include_unchanged: bool =
 
 
 def write_github_output(values: dict[str, str]) -> None:
-    output_path = Path(str(__import__("os").environ.get("GITHUB_OUTPUT", "")))
-    if not output_path:
+    raw_output_path = os.environ.get("GITHUB_OUTPUT")
+    if not raw_output_path:
         return
+    output_path = Path(raw_output_path)
     with output_path.open("a", encoding="utf-8") as handle:
         for key, value in values.items():
             handle.write(f"{key}={value}\n")
