@@ -85,13 +85,16 @@ export function dropKeys(...keys: string[]): Redactor {
   });
 }
 
-/** Redactor that masks matching key values (first 2 + last 2 chars visible). */
+/** Redactor that masks matching key values (first 2 + last 2 chars visible).
+ *  Non-string values are coerced with String(value) before masking so no typed
+ *  value escapes unmasked. */
 export function maskKeys(...keys: string[]): Redactor {
   const keySet = new Set(keys.map(k => k.toLowerCase()));
   return (payload) => walk(payload, keySet, (key, value) => {
-    if (matchesKey(key, keySet) && typeof value === 'string') {
-      if (value.length <= 4) return [true, '****'];
-      return [true, value.slice(0, 2) + '*'.repeat(value.length - 4) + value.slice(-2)];
+    if (matchesKey(key, keySet)) {
+      const str = String(value);
+      if (str.length <= 4) return [true, '****'];
+      return [true, str.slice(0, 2) + '*'.repeat(str.length - 4) + str.slice(-2)];
     }
     return [true, value];
   });

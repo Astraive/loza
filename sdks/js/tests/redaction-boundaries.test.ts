@@ -29,12 +29,12 @@ describe('Redaction boundaries', () => {
     assert.equal(result.count, 2);
   });
 
-  it('masks short and long strings but leaves non-strings unchanged', () => {
+  it('masks short and long strings and coerces non-strings before masking', () => {
     const result = maskKeys('card')({ card_number: '12345678', card_code: '1234', card_count: 5, name: 'Jane' });
     assert.deepEqual(result, {
       card_number: '12****78',
       card_code: '****',
-      card_count: 5,
+      card_count: '****',
       name: 'Jane',
     });
   });
