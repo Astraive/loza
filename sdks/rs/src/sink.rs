@@ -26,7 +26,18 @@ fn paused_sinks() -> &'static Mutex<HashSet<String>> {
 }
 
 fn sink_key(sink: &SinkConfig) -> String {
-    format!("{:?}", sink)
+    match sink {
+        // `Memory`'s Debug renders the contents of the shared event buffer, which
+        // changes on every write/clear and is identical for two distinct empty
+        // stores. Key instead on the buffer's address: it is stable across content
+        // changes, distinct per store, and shared by clones of the same store.
+        SinkConfig::Memory(store) => {
+            format!("Memory({:p})", std::sync::Arc::as_ptr(&store.events))
+        }
+        // Every other variant is immutable configuration data, so its Debug output
+        // is a stable identity for the lifetime of the sink.
+        other => format!("{other:?}"),
+    }
 }
 
 pub fn pause_sink(sink: &SinkConfig) {
@@ -511,4 +522,65 @@ fn collector_http_client(
         }
     }
     client
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::MemorySinkStore;
+
+    fn memory_sink() -> SinkConfig {
+        SinkConfig::Memory(MemorySinkStore::new())
+    }
+
+    #[test]
+    fn distinct_empty_memory_sinks_do_not_share_pause_state() {
+        let a = memory_sink();
+        let b = memory_sink();
+
+        // Before the fix both rendered as the same Debug string, so pausing `a`
+        // also paused the unrelated sink `b`.
+        assert_ne!(sink_key(&a), sink_key(&b));
+
+        pause_sink(&a);
+        assert!(is_sink_paused(&a));
+        assert!(!is_sink_paused(&b));
+
+        resume_sink(&a);
+        assert!(!is_sink_paused(&a));
+    }
+
+    #[test]
+    fn memory_sink_pause_state_survives_buffer_changes() {
+        let sink = memory_sink();
+        pause_sink(&sink);
+
+        let key_before = sink_key(&sink);
+        write_sink_with_ack(&sink, "event-1", None).unwrap();
+        assert_eq!(key_before, sink_key(&sink));
+        assert!(is_sink_paused(&sink));
+
+        if let SinkConfig::Memory(store) = &sink {
+            store.clear();
+        }
+        assert_eq!(key_before, sink_key(&sink));
+        assert!(is_sink_paused(&sink));
+        assert!(write_sink(&sink, "blocked").is_err());
+
+        resume_sink(&sink);
+        assert!(!is_sink_paused(&sink));
+    }
+
+    #[test]
+    fn cloned_memory_sink_shares_pause_state() {
+        let sink = memory_sink();
+        let clone = sink.clone();
+        assert_eq!(sink_key(&sink), sink_key(&clone));
+
+        pause_sink(&sink);
+        assert!(is_sink_paused(&clone));
+
+        resume_sink(&clone);
+        assert!(!is_sink_paused(&sink));
+    }
 }
