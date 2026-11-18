@@ -70,12 +70,28 @@ func run(args []string) error {
 	cfg.APIKey = *apiKey
 	cfg.BodySize = *bodySize
 
+	if err := validateConfig(cfg); err != nil {
+		return err
+	}
+
 	fmt.Printf("LOZA Load Generator v%s\n", version)
 	fmt.Printf("Target: %s\n", cfg.URL)
 	fmt.Printf("Events: %d, Workers: %d, Batch: %d\n", cfg.Events, cfg.Workers, cfg.BatchSize)
 	fmt.Println()
 
 	return runLoadTest(cfg)
+}
+
+// validateConfig rejects flag combinations that would otherwise cause the
+// load generator to panic (e.g. dividing the event count by zero workers).
+func validateConfig(cfg Config) error {
+	if cfg.Workers <= 0 {
+		return fmt.Errorf("workers must be greater than 0, got %d", cfg.Workers)
+	}
+	if cfg.Events < 0 {
+		return fmt.Errorf("events must be non-negative, got %d", cfg.Events)
+	}
+	return nil
 }
 
 func runLoadTest(cfg Config) error {
