@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Dedupe store prototype: Redis-backed with local fallback.
 
-Provides a tiny interface for idempotency windows: mark_seen(event_id, ttl_seconds) and
-is_seen(event_id). Redis is preferred; if redis-py is not installed or REDIS_URL is not set,
-falls back to a local file-backed store using shelve.
+Provides a tiny interface for idempotency windows: mark_seen(event_id, ttl_seconds),
+is_seen(event_id), and delete(event_id) to release a claim. Redis is preferred; if redis-py
+is not installed or REDIS_URL is not set, falls back to a local file-backed store using shelve.
 """
 from __future__ import annotations
 
@@ -47,6 +47,14 @@ class LocalDedupeStore:
                 del db[key]
             return False
 
+    def delete(self, key: str) -> None:
+        """Release a previously claimed key so a later delivery can retry it."""
+        import shelve
+
+        with shelve.open(self._shelf_path) as db:
+            if key in db:
+                del db[key]
+
 
 class RedisDedupeStore:
     def __init__(self, redis_client) -> None:
@@ -59,6 +67,10 @@ class RedisDedupeStore:
 
     def is_seen(self, key: str) -> bool:
         return bool(self.redis.get(key))
+
+    def delete(self, key: str) -> None:
+        """Release a previously claimed key so a later delivery can retry it."""
+        self.redis.delete(key)
 
 
 def build_store() -> tuple[object, str]:
