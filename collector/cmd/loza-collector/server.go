@@ -765,6 +765,13 @@ func withOwnershipProjections(cfg collectorConfig) collectorConfig {
 }
 
 func ensureSchema(db *sql.DB, cfg collectorConfig) error {
+	return ensureSchemaContext(context.Background(), db, cfg)
+}
+
+// ensureSchemaContext initializes the DuckDB schema while honoring ctx. All
+// database calls use the context-aware database/sql methods so a slow or
+// locked database cannot block startup beyond the caller's deadline.
+func ensureSchemaContext(ctx context.Context, db *sql.DB, cfg collectorConfig) error {
 	cfg = withOwnershipProjections(cfg)
 	columns := make([]string, 0, len(cfg.duckDBSchema)+1)
 	for col, path := range cfg.duckDBSchema {
@@ -790,12 +797,12 @@ func ensureSchema(db *sql.DB, cfg collectorConfig) error {
 		return err
 	}
 	query := fmt.Sprintf("CREATE TABLE IF NOT EXISTS %s (%s)", tableIdent, strings.Join(columns, ", "))
-	if _, err := db.Exec(query); err != nil {
+	if _, err := db.ExecContext(ctx, query); err != nil {
 		return err
 	}
 
 	// Auto-migrate: add any missing blueprint columns via ALTER TABLE
-	if err := autoMigrateBlueprintColumns(db, cfg); err != nil {
+	if err := autoMigrateBlueprintColumnsContext(ctx, db, cfg); err != nil {
 		return err
 	}
 
@@ -803,7 +810,11 @@ func ensureSchema(db *sql.DB, cfg collectorConfig) error {
 }
 
 func autoMigrateBlueprintColumns(db *sql.DB, cfg collectorConfig) error {
-	rows, err := db.Query("SELECT column_name FROM information_schema.columns WHERE table_name = ?", cfg.duckDBTable)
+	return autoMigrateBlueprintColumnsContext(context.Background(), db, cfg)
+}
+
+func autoMigrateBlueprintColumnsContext(ctx context.Context, db *sql.DB, cfg collectorConfig) error {
+	rows, err := db.QueryContext(ctx, "SELECT column_name FROM information_schema.columns WHERE table_name = ?", cfg.duckDBTable)
 	if err != nil {
 		return err
 	}
@@ -835,7 +846,7 @@ func autoMigrateBlueprintColumns(db *sql.DB, cfg collectorConfig) error {
 			typ = t
 		}
 		query := fmt.Sprintf("ALTER TABLE %s ADD COLUMN IF NOT EXISTS %s %s", tableIdent, colIdent, typ)
-		if _, err := db.Exec(query); err != nil {
+		if _, err := db.ExecContext(ctx, query); err != nil {
 			return err
 		}
 	}
