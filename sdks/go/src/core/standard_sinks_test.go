@@ -44,6 +44,60 @@ func TestRotatingFileSinkRotateIncludesReopenError(t *testing.T) {
 	}
 }
 
+func TestRotatingFileSinkRotationsWithinSameSecondDoNotOverwrite(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "app.log")
+
+	s, err := RotatingFileSink(RotatingFileConfig{
+		Path:     path,
+		MaxBytes: 1024 * 1024,
+		MaxAge:   time.Hour,
+	})
+	if err != nil {
+		t.Fatalf("RotatingFileSink() error = %v", err)
+	}
+	defer func() { _ = s.Close(context.Background()) }()
+
+	rs := s.(*rotatingFileSink)
+	writes := []string{"first\n", "second\n", "third\n"}
+	for _, content := range writes {
+		if _, err := rs.f.WriteString(content); err != nil {
+			t.Fatalf("write %q: %v", content, err)
+		}
+		// Consecutive rotations land in the same second; each must produce a
+		// distinct rotated file rather than overwriting the previous one.
+		if err := rs.rotate(); err != nil {
+			t.Fatalf("rotate() error = %v", err)
+		}
+	}
+
+	matches, err := filepath.Glob(filepath.Join(dir, "app.log*"))
+	if err != nil {
+		t.Fatalf("glob rotated files: %v", err)
+	}
+	if len(matches) < len(writes) {
+		t.Fatalf("expected at least %d distinct log files, got %d: %v", len(writes), len(matches), matches)
+	}
+
+	contents := make(map[string]string, len(matches))
+	for _, match := range matches {
+		data, err := os.ReadFile(match)
+		if err != nil {
+			t.Fatalf("read %q: %v", match, err)
+		}
+		contents[match] = string(data)
+	}
+	for _, want := range writes {
+		found := 0
+		for _, data := range contents {
+			found += strings.Count(data, want)
+		}
+		if found != 1 {
+			t.Fatalf("content %q found %d times across %v; log data was lost or duplicated", want, found, contents)
+		}
+	}
+}
+
 func TestCollectorSink_RetriesRetryableResponse(t *testing.T) {
 	var attempts atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
