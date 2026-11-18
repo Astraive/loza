@@ -196,7 +196,9 @@ fn post_http_batch_with_ack(
     auth: (Option<&str>, Option<&str>, Option<&str>, bool),
 ) -> io::Result<()> {
     let client = collector_http_client(endpoint, auth);
-    let payload = client.envelope(encoded_events);
+    let payload = client
+        .try_envelope(encoded_events)
+        .map_err(|err| io::Error::other(format!("collector envelope build failed: {err}")))?;
     client
         .validate_envelope(&payload)
         .map_err(|err| io::Error::other(format!("collector envelope validation failed: {err}")))?;
