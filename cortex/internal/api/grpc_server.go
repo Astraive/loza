@@ -339,7 +339,10 @@ func (s *GRPCServer) Reconstruct(ctx context.Context, req *lozav1.ReconstructReq
 		return nil, err
 	}
 
-	graphView, _ := s.graph.GetIncidentGraph(ctx, req.IncidentId, 3)
+	graphView, err := s.graph.GetIncidentGraph(ctx, req.IncidentId, 3)
+	if err != nil {
+		return nil, err
+	}
 
 	nodes := make([]*lozav1.GraphNode, 0)
 	edges := make([]*lozav1.GraphEdge, 0)

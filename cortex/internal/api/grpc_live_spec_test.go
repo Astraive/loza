@@ -177,3 +177,37 @@ func TestProtoEventToModelRejectsNilEvent(t *testing.T) {
 	require.Error(t, err)
 	require.Equal(t, codes.InvalidArgument, status.Code(err))
 }
+
+func TestReconstructReturnsGraphBuildError(t *testing.T) {
+	t.Parallel()
+
+	cfg := config.Default()
+	cfg.Storage.Backend = "duckdb"
+	cfg.Storage.DuckDB.Path = filepath.Join(t.TempDir(), "cortex.duckdb")
+	cfg.Collector.SourceOfTruth = false
+
+	stor, err := storage.NewStorage(cfg)
+	require.NoError(t, err)
+	defer stor.Close()
+
+	const incidentID = "inc-graph-build-failure"
+	err = stor.Incidents().Save(context.Background(), &models.Incident{
+		ID:               incidentID,
+		Timestamp:        time.Now().UTC(),
+		Status:           "active",
+		Severity:         "critical",
+		PrimaryService:   "checkout",
+		AffectedServices: []string{"checkout"},
+	})
+	require.NoError(t, err)
+
+	srv := NewGRPCServer(cfg, stor, redaction.Config{})
+
+	resp, err := srv.Reconstruct(context.Background(), &lozav1.ReconstructRequest{IncidentId: incidentID})
+
+	// The incident exists but has no graph node, so graph construction fails.
+	// Reconstruct must surface that failure instead of returning a response with
+	// empty Nodes/Edges and a nil error.
+	require.Error(t, err)
+	require.Nil(t, resp)
+}
