@@ -1308,8 +1308,14 @@ pub fn OtlpSink(endpoint: impl Into<String>) -> SinkConfig {
     }
 }
 
-pub fn Drain(sink: &SinkConfig) {
-    let _ = crate::sink::flush_sink(sink);
+/// Flush a sink, propagating any I/O error (see [`crate::sinks::drain`]).
+///
+/// # Migration note
+/// Previously returned `()` and discarded the flush result; now returns
+/// `std::io::Result<()>` so failures are observable. Use `let _ = Drain(sink);`
+/// to keep the old fire-and-forget behaviour.
+pub fn Drain(sink: &SinkConfig) -> std::io::Result<()> {
+    crate::sinks::drain(sink)
 }
 
 pub fn Pause(sink: &SinkConfig) {
@@ -2760,7 +2766,12 @@ pub fn multi_sink(sinks: &[SinkConfig]) -> Vec<SinkConfig> {
 pub fn otlp_sink(endpoint: impl Into<String>) -> SinkConfig {
     OtlpSink(endpoint)
 }
-pub fn drain(sink: &SinkConfig) {
+/// Flush a sink, propagating any I/O error (see [`Drain`]).
+///
+/// # Migration note
+/// Previously returned `()`; now returns `std::io::Result<()>` so flush
+/// failures are observable. Use `let _ = drain(sink);` for the old behaviour.
+pub fn drain(sink: &SinkConfig) -> std::io::Result<()> {
     Drain(sink)
 }
 pub fn pause(sink: &SinkConfig) {

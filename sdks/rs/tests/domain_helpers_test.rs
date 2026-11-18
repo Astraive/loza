@@ -154,7 +154,7 @@ fn test_sink_extras() {
     let _ = MultiSink(&[]);
     let _ = OtlpSink("http://localhost:4317");
     let sink = MemorySink();
-    Drain(&sink);
+    Drain(&sink).expect("drain");
     Pause(&sink);
     Resume(&sink);
     let _ = QueueSize(&sink);
@@ -363,7 +363,7 @@ fn test_drain_sink() {
     let logger = New(cfg);
     let ctx = logger.start_event(Params::new("drain.event"));
     let _ = logger.emit(&ctx);
-    Drain(&sink);
+    Drain(&sink).expect("drain");
 }
 
 #[test]
