@@ -183,22 +183,32 @@ export class Logger {
       return null;
     }
 
-    // Sanitize: clone + apply sensitive/hash/drop
-    const sanitized = sanitizeEvent(ctx);
+    // Sanitize -> encode -> redact -> serialize. `markEmitted()` has already set
+    // `_emitted`, so any failure here must transition the event to a terminal
+    // failed state; otherwise it stays stuck in `emitting` and later emit()
+    // calls short-circuit at the idempotency guard above.
+    let encoded: string;
+    try {
+      // Sanitize: clone + apply sensitive/hash/drop
+      const sanitized = sanitizeEvent(ctx);
 
-    // Create immutable view for schema encoding
-    const view = new EventView(sanitized);
+      // Create immutable view for schema encoding
+      const view = new EventView(sanitized);
 
-    // Encode via schema
-    let payload = this.cfg.schema.encode(view);
+      // Encode via schema
+      let payload = this.cfg.schema.encode(view);
 
-    // Apply redactor
-    if (this.cfg.redactor) {
-      payload = this.cfg.redactor(payload);
+      // Apply redactor
+      if (this.cfg.redactor) {
+        payload = this.cfg.redactor(payload);
+      }
+
+      // Serialize
+      encoded = encodeJSON(payload);
+    } catch (err) {
+      ctx.markFailedValidation();
+      throw err;
     }
-
-    // Serialize
-    const encoded = encodeJSON(payload);
 
     // Deliver to sink
     const sink = this._resolvedSink;
