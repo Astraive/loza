@@ -53,6 +53,19 @@ type ParameterizedPlan struct {
 	SQL          string      `json:"sql"`
 	Args         []any       `json:"-"`
 	OutputSchema []LQLColumn `json:"output_schema,omitempty"`
+	// Limit is the compiler-enforced maximum result row count. It is threaded
+	// into the row collector so the driver stops materializing rows at the
+	// bound even when the generated SQL has no LIMIT clause.
+	Limit int `json:"limit,omitempty"`
+}
+
+// planRowLimit returns the compiler's row bound, falling back to the request's
+// already-clamped limit for compilers that do not populate ParameterizedPlan.Limit.
+func planRowLimit(plan ParameterizedPlan, requestLimit int) int {
+	if plan.Limit > 0 {
+		return plan.Limit
+	}
+	return requestLimit
 }
 
 type LQLColumn struct {
@@ -179,7 +192,7 @@ func (s *collectorState) HandleLQLQuery(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 		start := time.Now()
-		queryResult, err := connection.Query(ctx, plan.SQL, plan.Args...)
+		queryResult, err := connection.QueryWithLimit(ctx, planRowLimit(plan, req.Limit), plan.SQL, plan.Args...)
 		if err != nil {
 			log.Error().Err(err).Str("request_id", requestID).Msg("lql query failed")
 			writeJSON(w, http.StatusUnprocessableEntity, map[string]any{"error": "query_failed", "request_id": requestID})
