@@ -339,6 +339,7 @@ type collectorState struct {
 	dedupeMu            sync.Mutex
 	dedupeSeenAt        map[string]time.Time
 	dedupeStore         dedupeStore
+	dlqMu               sync.Mutex
 	tailMu              sync.Mutex
 	tailSubscribers     map[chan []byte]struct{}
 	processorMu         sync.RWMutex
