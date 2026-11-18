@@ -197,9 +197,9 @@ func buildReconIncidentGraph(store *fakeReconGraphStore, incidentID string) {
 		CreatedAt: now,
 	}
 	store.nodes["metric-1"] = &models.Node{
-		ID:        "metric-1",
-		Type:      models.NodeTypeMetric,
-		Label:     "svc-a",
+		ID:    "metric-1",
+		Type:  models.NodeTypeMetric,
+		Label: "svc-a",
 		Attributes: map[string]interface{}{
 			"service":     "svc-a",
 			"metric_name": "error_rate",
@@ -209,9 +209,9 @@ func buildReconIncidentGraph(store *fakeReconGraphStore, incidentID string) {
 		CreatedAt: now.Add(time.Second),
 	}
 	store.nodes["log-1"] = &models.Node{
-		ID:        "log-1",
-		Type:      models.NodeTypeLog,
-		Label:     "svc-b",
+		ID:    "log-1",
+		Type:  models.NodeTypeLog,
+		Label: "svc-b",
 		Attributes: map[string]interface{}{
 			"service": "svc-b",
 			"level":   "error",
@@ -457,5 +457,70 @@ func TestReconstructFromSignalReportsEnrichmentFailure(t *testing.T) {
 	}
 	if ms.findCallCount != 0 {
 		t.Fatalf("FindSimilar should be skipped after extraction failure, called %d times", ms.findCallCount)
+	}
+}
+
+// TestReconstructAdaptiveExcludesOwnSignature verifies that the adaptive
+// reconstruction path (used by ReconstructFast/ReconstructDeep) filters out the
+// current incident's own stored signature when the incident has a known
+// SignatureID that differs from its IncidentID. Without the override, the
+// stored signature scores ~1.0 and is returned as the most similar past incident.
+func TestReconstructAdaptiveExcludesOwnSignature(t *testing.T) {
+	graphStore := &fakeReconGraphStore{nodes: map[string]*models.Node{}, edges: map[string][]*models.Edge{}}
+	buildReconIncidentGraph(graphStore, "inc-1")
+	incidentStore := &fakeReconIncidentStore{
+		incidents: map[string]*models.Incident{
+			"inc-1": {ID: "inc-1", SignatureID: "sig-1", Status: "active", Severity: "high", PrimaryService: "svc-a"},
+		},
+	}
+	sigStore := &fakeReconSignatureStore{
+		sigs:    map[string]*models.IncidentSignature{},
+		similar: map[string][]*models.SimilarIncident{},
+	}
+	remStore := &fakeReconRemediationStore{stats: map[string][]*models.RemediationStats{}}
+	learnerSvc := learner.NewLearner(remStore, &fakeReconFeedbackStore{}, sigStore)
+
+	// First pass derives the exact signature the adaptive path extracts from
+	// this incident's context. Store it under the incident's known SignatureID
+	// so it would otherwise score ~1.0 against the query signature.
+	matcherSvc := matcher.NewSignatureMatcher(sigStore)
+	recon := NewIncidentReconstructor(graph.NewBuilder(graphStore), matcherSvc, learnerSvc, incidentStore)
+	baseCtx, err := recon.ReconstructFast(context.Background(), "inc-1")
+	if err != nil {
+		t.Fatalf("reconstruct fast (baseline): %v", err)
+	}
+	ownSig, err := matcherSvc.ExtractSignature(context.Background(), baseCtx)
+	if err != nil {
+		t.Fatalf("extract signature: %v", err)
+	}
+	ownSig.SignatureID = "sig-1"
+	sigStore.sigs["sig-1"] = ownSig
+
+	// A genuinely historical signature with the same shape should remain a
+	// valid "similar past incident" result.
+	sigStore.sigs["historic-1"] = &models.IncidentSignature{
+		SignatureID:   "historic-1",
+		Shape:         ownSig.Shape,
+		Symptoms:      ownSig.Symptoms,
+		FeatureVector: append([]float64(nil), ownSig.FeatureVector...),
+		Remediation:   []string{"rollback"},
+	}
+
+	// Fresh matcher so the candidate cache is rebuilt with the new signatures.
+	matcherSvc2 := matcher.NewSignatureMatcher(sigStore)
+	recon2 := NewIncidentReconstructor(graph.NewBuilder(graphStore), matcherSvc2, learnerSvc, incidentStore)
+	result, err := recon2.ReconstructFast(context.Background(), "inc-1")
+	if err != nil {
+		t.Fatalf("reconstruct fast: %v", err)
+	}
+
+	if len(result.SimilarIncidents) != 1 {
+		t.Fatalf("expected only the historical signature as similar, got %+v", result.SimilarIncidents)
+	}
+	if result.SimilarIncidents[0].IncidentID == "sig-1" {
+		t.Fatalf("current incident's own signature returned as similar past incident: %+v", result.SimilarIncidents)
+	}
+	if result.SimilarIncidents[0].IncidentID != "historic-1" {
+		t.Fatalf("expected historical signature as most similar, got %+v", result.SimilarIncidents[0])
 	}
 }

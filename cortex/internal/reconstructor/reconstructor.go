@@ -581,7 +581,7 @@ func (r *IncidentReconstructor) reconstructAdaptive(ctx context.Context, inciden
 
 	graphView, err := r.graphBuilder.TraverseGraph(ctx, incidentID, models.TraversalOptions{
 		MaxDepth:      maxDepth,
-		EdgeTypes:    r.getReconstructionEdgeTypes(),
+		EdgeTypes:     r.getReconstructionEdgeTypes(),
 		TimeWindowMin: windowMin,
 		TimeWindowMax: windowMax,
 	})
@@ -634,6 +634,12 @@ func (r *IncidentReconstructor) reconstructAdaptive(ctx context.Context, inciden
 	if sigErr != nil {
 		r.recordEnrichmentFailure(result, "signature extraction", sigErr)
 	} else {
+		// ExtractSignature uses the incident ID as the signature ID. Propagate the
+		// incident's known signature ID so FindSimilar filters out this incident's
+		// own stored signature instead of returning it as a "similar past incident".
+		if incident != nil && incident.SignatureID != "" {
+			sig.SignatureID = incident.SignatureID
+		}
 		similar, simErr := r.matcher.FindSimilar(ctx, sig, 5)
 		if simErr != nil {
 			r.recordEnrichmentFailure(result, "similarity search", simErr)
