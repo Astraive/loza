@@ -76,6 +76,16 @@ func (s *SinkAdapter) WriteEvent(ctx context.Context, encoded []byte, ev *collec
 		Body:      encoded,
 		Headers:   make(map[string]string),
 	}
+	if ev != nil {
+		env.Event = ev.Event
+		env.Service = ev.Service
+		if ev.EventID != "" {
+			env.ID = ev.EventID
+		}
+		if !ev.Timestamp.IsZero() {
+			env.Timestamp = ev.Timestamp
+		}
+	}
 	return s.bus.Publish(ctx, s.topic, []Envelope{env})
 }
 
