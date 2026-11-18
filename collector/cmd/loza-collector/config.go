@@ -27,6 +27,21 @@ type fileConfig = collectorconfig.Config
 
 func defaultFileConfig() fileConfig { return collectorconfig.Default() }
 
+// loadFileConfig overlays path on top of fc. When cfgFileExplicit is true the
+// user supplied -c, so the file is mandatory: any stat, read, or parse failure
+// is returned to the caller instead of silently falling back to defaults. When
+// no -c was supplied the historical best-effort behaviour is preserved: a
+// missing default file is tolerated and only an existing file is parsed.
+func loadFileConfig(fc *fileConfig, path string, cfgFileExplicit bool) error {
+	if _, err := os.Stat(path); err != nil {
+		if cfgFileExplicit {
+			return fmt.Errorf("config file %q: %w", path, err)
+		}
+		return nil
+	}
+	return collectorconfig.LoadFile(fc, path)
+}
+
 func loadCollectorConfigFromArgs(args []string) (collectorConfig, error) {
 	fs := flag.NewFlagSet("run", flag.ContinueOnError)
 	cfgFile := fs.String("c", "loza.yaml", "path to config file")
@@ -44,14 +59,12 @@ func loadCollectorConfigFromArgs(args []string) (collectorConfig, error) {
 		return collectorConfig{}, err
 	}
 
-	fc := defaultFileConfig()
+	set := map[string]bool{}
+	fs.Visit(func(f *flag.Flag) { set[f.Name] = true })
 
-	if *cfgFile != "" {
-		if _, err := os.Stat(*cfgFile); err == nil {
-			if err := collectorconfig.LoadFile(&fc, *cfgFile); err != nil {
-				return collectorConfig{}, err
-			}
-		}
+	fc := defaultFileConfig()
+	if err := loadFileConfig(&fc, *cfgFile, set["c"]); err != nil {
+		return collectorConfig{}, err
 	}
 	if err := applyEnvOverrides(&fc); err != nil {
 		return collectorConfig{}, err
@@ -59,9 +72,6 @@ func loadCollectorConfigFromArgs(args []string) (collectorConfig, error) {
 	if err := loadSchemaRegistryFile(&fc); err != nil {
 		return collectorConfig{}, err
 	}
-
-	set := map[string]bool{}
-	fs.Visit(func(f *flag.Flag) { set[f.Name] = true })
 
 	if set["addr"] && *addr != "" {
 		fc.Collector.Addr = *addr
@@ -140,11 +150,12 @@ func loadPrintableConfig(args []string) (fileConfig, error) {
 	if err := fs.Parse(args); err != nil {
 		return fileConfig{}, err
 	}
+	set := map[string]bool{}
+	fs.Visit(func(f *flag.Flag) { set[f.Name] = true })
+
 	fc := defaultFileConfig()
-	if _, err := os.Stat(cfgFile); err == nil {
-		if err := collectorconfig.LoadFile(&fc, cfgFile); err != nil {
-			return fileConfig{}, err
-		}
+	if err := loadFileConfig(&fc, cfgFile, set["c"]); err != nil {
+		return fileConfig{}, err
 	}
 	if err := applyEnvOverrides(&fc); err != nil {
 		return fileConfig{}, err

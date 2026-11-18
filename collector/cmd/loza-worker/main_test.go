@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"errors"
+	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -10,6 +12,17 @@ import (
 	collectorevent "github.com/astraive/loza/collector/internal/event"
 	processing "github.com/astraive/loza/collector/internal/processing"
 )
+
+func TestLoadWorkerConfigFromArgsExplicitMissingConfigFileFails(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "does-not-exist.yaml")
+	_, err := loadWorkerConfigFromArgs([]string{"-c", missing})
+	if err == nil {
+		t.Fatal("expected an explicit -c pointing at a missing file to fail")
+	}
+	if !strings.Contains(err.Error(), "config file") || !strings.Contains(err.Error(), missing) {
+		t.Fatalf("expected an error identifying the missing config file, got: %v", err)
+	}
+}
 
 type testSink struct {
 	mu     sync.Mutex
