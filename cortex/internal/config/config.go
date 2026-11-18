@@ -125,6 +125,7 @@ type PostgresConfig struct {
 	User            string        `yaml:"user"`
 	Password        string        `yaml:"password"`
 	SSLMode         string        `yaml:"ssl_mode"`
+	SSLRootCert     string        `yaml:"ssl_root_cert"`
 	MaxConnections  int           `yaml:"max_connections"`
 	MaxIdleConns    int           `yaml:"max_idle_conns"`
 	ConnMaxLifetime time.Duration `yaml:"conn_max_lifetime"`
@@ -376,6 +377,9 @@ func applyEnvOverrides(cfg *Config) {
 	}
 	if v := os.Getenv("CORTEX_POSTGRES_SSL_MODE"); v != "" {
 		cfg.Storage.PostgreSQL.SSLMode = v
+	}
+	if v := os.Getenv("CORTEX_POSTGRES_SSL_ROOT_CERT"); v != "" {
+		cfg.Storage.PostgreSQL.SSLRootCert = v
 	}
 
 	// Authentication overrides
