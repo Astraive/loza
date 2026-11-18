@@ -32,3 +32,15 @@ def test_typed_attribute_helpers_pascal_case():
     assert loza.URL("https://loza.dev").key == "url"
     assert loza.EmailHash("test@test.com").key == "email.hash"
     assert loza.IPHash("10.0.0.1").key == "ip.hash"
+
+
+def test_masked_zero_suffix_does_not_leak_value():
+    # Regression: text[-0:] is the whole string, which previously appended the
+    # entire plaintext after the stars and defeated masking.
+    assert loza.masked("k", "abcdef", 2, 0).value == "ab****"
+    assert loza.Masked("k", "abcdef", 2, 0).value == "ab****"
+
+
+def test_masked_zero_prefix_does_not_leak_value():
+    assert loza.masked("k", "abcdef", 0, 2).value == "****ef"
+    assert loza.masked("k", "abcdef", 0, 0).value == "******"

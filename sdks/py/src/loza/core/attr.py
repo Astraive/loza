@@ -197,9 +197,13 @@ def tags(key: str, *values: str) -> Attr:
 
 def masked(key: str, value: str, prefix: int = 2, suffix: int = 2) -> Attr:
     text = str(value)
+    prefix = max(0, prefix)
+    suffix = max(0, suffix)
     if len(text) <= prefix + suffix:
         return String(key, "*" * max(4, len(text)))
-    return String(key, text[:prefix] + "*" * (len(text) - prefix - suffix) + text[-suffix:])
+    head = text[:prefix] if prefix else ""
+    tail = text[len(text) - suffix:] if suffix else ""
+    return String(key, head + "*" * (len(text) - prefix - suffix) + tail)
 
 
 def url(value: str) -> Attr:
