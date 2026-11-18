@@ -71,6 +71,14 @@ def _decode_query_error(error: urllib.error.HTTPError) -> LQLCompilationError:
     return LQLCompilationError(message, status=error.code, diagnostics=data.get("diagnostics", []))
 
 
+def _coerce_int(value: Any, default: int) -> int:
+    """Coerce ``value`` to int, falling back to ``default`` when it is not numeric."""
+    try:
+        return int(value)
+    except (TypeError, ValueError, OverflowError):
+        return default
+
+
 def query_lql(
     endpoint: str,
     lql: str,
@@ -120,8 +128,8 @@ def query_lql(
     return QueryResult(
         columns=columns,
         rows=rows,
-        duration_ms=int(data.get("duration_ms", 0)),
-        row_count=int(data.get("row_count", len(rows))),
+        duration_ms=_coerce_int(data.get("duration_ms", 0), 0),
+        row_count=_coerce_int(data.get("row_count", len(rows)), len(rows)),
     )
 
 

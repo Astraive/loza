@@ -222,6 +222,36 @@ def test_lql_queries_encode_values_and_decode_failures(monkeypatch: pytest.Monke
     assert lql.query_sql("https://collector", "select 1", api_key="sql-key").rows == []
 
 
+@pytest.mark.parametrize(
+    ("duration_ms", "row_count", "expected_duration_ms", "expected_row_count"),
+    [
+        (None, None, 0, 2),
+        ("not-a-number", "also-bad", 0, 2),
+        ([1, 2], {"bad": True}, 0, 2),
+        (12.9, 7, 12, 7),
+    ],
+)
+def test_lql_query_coerces_invalid_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+    duration_ms: object,
+    row_count: object,
+    expected_duration_ms: int,
+    expected_row_count: int,
+) -> None:
+    payload = json.dumps(
+        {
+            "columns": [],
+            "rows": [{"id": 1}, {"id": 2}],
+            "duration_ms": duration_ms,
+            "row_count": row_count,
+        }
+    ).encode()
+    monkeypatch.setattr(lql.urllib.request, "urlopen", lambda *_args, **_kwargs: _Response(payload))
+    result = lql.query_lql("https://collector", "select")
+    assert result.duration_ms == expected_duration_ms
+    assert result.row_count == expected_row_count
+
+
 def test_metrics_render_all_series_and_escaping() -> None:
     metrics = metric.MetricsCollector("checkout", buffer_capacity=-1, histogram_buckets=[1, 0.5, 1])
     metrics.on_event_created()
