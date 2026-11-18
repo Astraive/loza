@@ -90,6 +90,32 @@ mod tests {
         assert!(!flat.as_object().unwrap().contains_key("empty"));
     }
 
+    #[test]
+    fn otel_schema_converts_rfc3339_timestamp_to_unix_nanos() {
+        let mut event = EventContext::new("service", Params::new("checkout"));
+        event.timestamp = "2026-11-17T00:00:00.123456789Z".into();
+        let encoded = encode_schema(&event, &SchemaConfig::OTel);
+        // OTLP JSON encodes fixed64 fields such as time_unix_nano as decimal strings.
+        assert_eq!(encoded["time_unix_nano"], json!("1794873600123456789"));
+        assert!(encoded.get("timestamp").is_none());
+    }
+
+    #[test]
+    fn otel_schema_timestamp_handles_offsets_and_missing_or_invalid_values() {
+        let with_offset = encode_schema_from_value(
+            json!({"timestamp": "2026-11-17T05:30:00+05:30"}),
+            &SchemaConfig::OTel,
+        );
+        assert_eq!(with_offset["time_unix_nano"], json!("1794873600000000000"));
+
+        let invalid =
+            encode_schema_from_value(json!({"timestamp": "not-a-timestamp"}), &SchemaConfig::OTel);
+        assert!(invalid["time_unix_nano"].is_null());
+
+        let missing = encode_schema_from_value(json!({}), &SchemaConfig::OTel);
+        assert!(missing["time_unix_nano"].is_null());
+    }
+
     struct CustomSchema;
 
     impl Schema for CustomSchema {
