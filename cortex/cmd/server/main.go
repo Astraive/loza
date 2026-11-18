@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"net"
@@ -25,7 +26,13 @@ import (
 
 var version = lozacortex.Version
 
-var grpcServer *grpc.Server
+const (
+	// grpcReadyTimeout bounds how long shutdown waits for startGRPCServer to hand
+	// off the *grpc.Server when a signal arrives before it finishes starting.
+	grpcReadyTimeout = 10 * time.Second
+	// grpcStopTimeout bounds a graceful stop before forcing Stop.
+	grpcStopTimeout = 10 * time.Second
+)
 
 var (
 	configPath = flag.String("config", "", "Path to configuration file")
@@ -77,8 +84,9 @@ func main() {
 			Msg("Collector source-of-truth sync started")
 	}
 
+	var grpcReady <-chan *grpc.Server
 	if cfg.GRPC.Enabled {
-		go startGRPCServer(cfg, stor)
+		grpcReady = startGRPCServer(cfg, stor)
 	}
 
 	addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)
@@ -100,20 +108,7 @@ func main() {
 	<-processCtx.Done()
 	log.Info().Msg("Shutting down server...")
 
-	if grpcServer != nil {
-		stopped := make(chan struct{})
-		go func() {
-			grpcServer.GracefulStop()
-			close(stopped)
-		}()
-		select {
-		case <-stopped:
-			log.Info().Msg("gRPC server stopped")
-		case <-time.After(10 * time.Second):
-			log.Warn().Msg("gRPC graceful stop timed out, forcing")
-			grpcServer.Stop()
-		}
-	}
+	shutdownGRPCServer(grpcReady)
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -139,33 +134,80 @@ func startCollectorSync(ctx context.Context, cfg config.CollectorConfig, proc co
 	return done
 }
 
-func startGRPCServer(cfg *config.Config, stor storage.Storage) {
-	grpcAddr := fmt.Sprintf("%s:%d", cfg.GRPC.Host, cfg.GRPC.Port)
-	log.Info().Str("addr", grpcAddr).Msg("Starting gRPC server")
+// startGRPCServer starts the gRPC server in a goroutine and returns a channel
+// that hands the constructed *grpc.Server back to the caller. The channel is
+// closed without a value if setup fails (e.g. TLS or listener setup errors), so
+// a caller waiting for shutdown never blocks on a server that will not arrive.
+func startGRPCServer(cfg *config.Config, stor storage.Storage) <-chan *grpc.Server {
+	ready := make(chan *grpc.Server, 1)
+	go func() {
+		defer close(ready)
 
-	var opts []grpc.ServerOption
-	if cfg.TLS.Enabled {
-		creds, err := credentials.NewServerTLSFromFile(cfg.TLS.CertFile, cfg.TLS.KeyFile)
+		grpcAddr := fmt.Sprintf("%s:%d", cfg.GRPC.Host, cfg.GRPC.Port)
+		log.Info().Str("addr", grpcAddr).Msg("Starting gRPC server")
+
+		var opts []grpc.ServerOption
+		if cfg.TLS.Enabled {
+			creds, err := credentials.NewServerTLSFromFile(cfg.TLS.CertFile, cfg.TLS.KeyFile)
+			if err != nil {
+				log.Error().Err(err).Msg("Failed to load TLS certs")
+				return
+			}
+			opts = append(opts, grpc.Creds(creds))
+		}
+
+		listener, err := net.Listen("tcp", grpcAddr)
 		if err != nil {
-			log.Error().Err(err).Msg("Failed to load TLS certs")
+			log.Error().Err(err).Msg("Failed to create listener")
 			return
 		}
-		opts = append(opts, grpc.Creds(creds))
-	}
 
-	listener, err := net.Listen("tcp", grpcAddr)
-	if err != nil {
-		log.Error().Err(err).Msg("Failed to create listener")
+		server := grpc.NewServer(opts...)
+		grpcSvc := grpcserver.New(cfg, stor)
+		grpcSvc.RegisterServer(server)
+
+		// Hand off before Serve blocks so shutdown can always reach the server,
+		// even when a signal arrives while it is still starting.
+		ready <- server
+
+		log.Info().Str("addr", grpcAddr).Msg("gRPC server ready")
+		if err := server.Serve(listener); err != nil && !errors.Is(err, grpc.ErrServerStopped) {
+			log.Error().Err(err).Msg("gRPC server failed")
+		}
+	}()
+	return ready
+}
+
+// shutdownGRPCServer waits for the server handed off by startGRPCServer and
+// stops it gracefully, forcing a Stop only if the graceful stop times out.
+// A nil channel means gRPC is disabled and is a no-op.
+func shutdownGRPCServer(ready <-chan *grpc.Server) {
+	if ready == nil {
 		return
 	}
 
-	server := grpc.NewServer(opts...)
-	grpcServer = server
-	grpcSvc := grpcserver.New(cfg, stor)
-	grpcSvc.RegisterServer(server)
+	var server *grpc.Server
+	select {
+	case s, ok := <-ready:
+		if !ok || s == nil {
+			return
+		}
+		server = s
+	case <-time.After(grpcReadyTimeout):
+		log.Warn().Msg("Timed out waiting for gRPC server to start; skipping gRPC shutdown")
+		return
+	}
 
-	log.Info().Str("addr", grpcAddr).Msg("gRPC server ready")
-	if err := server.Serve(listener); err != nil {
-		log.Error().Err(err).Msg("gRPC server failed")
+	stopped := make(chan struct{})
+	go func() {
+		server.GracefulStop()
+		close(stopped)
+	}()
+	select {
+	case <-stopped:
+		log.Info().Msg("gRPC server stopped")
+	case <-time.After(grpcStopTimeout):
+		log.Warn().Msg("gRPC graceful stop timed out, forcing")
+		server.Stop()
 	}
 }
