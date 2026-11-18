@@ -313,10 +313,10 @@ export class CollectorClient {
         headers,
         timeout: this.timeout,
       }, (res) => {
-        let data = '';
-        res.on('data', (chunk: Buffer) => { data += chunk.toString(); });
+        const chunks: Buffer[] = [];
+        res.on('data', (chunk: Buffer) => { chunks.push(chunk); });
         res.on('end', () => {
-          resolve({ statusCode: res.statusCode || 0, body: data });
+          resolve({ statusCode: res.statusCode || 0, body: Buffer.concat(chunks).toString('utf8') });
         });
       });
 

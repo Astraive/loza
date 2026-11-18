@@ -145,6 +145,44 @@ describe('CollectorClient boundaries', () => {
       await stopCollector(emptyServer);
     }
   });
+
+  it('decodes multi-byte UTF-8 response bodies split across chunk boundaries', async () => {
+    const expected = {
+      version: 'café 日本語 🚀',
+      ingest_api_version: 'v1',
+      schema_version: 'v1',
+      event_version: 'v1',
+    };
+    const payload = Buffer.from(JSON.stringify(expected), 'utf8');
+
+    // Locate a lead byte immediately followed by a continuation byte so the
+    // split lands in the middle of a multi-byte UTF-8 sequence.
+    let split = -1;
+    for (let i = 0; i < payload.length - 1; i++) {
+      if (payload[i]! >= 0xC2 && payload[i]! <= 0xF4 && (payload[i + 1]! & 0xC0) === 0x80) {
+        split = i + 1;
+        break;
+      }
+    }
+    assert.ok(split > 0, 'response body must contain a multi-byte UTF-8 sequence');
+    const first = payload.subarray(0, split);
+    const second = payload.subarray(split);
+
+    const { server, url } = await startCollector((_req, res) => {
+      res.setHeader('content-type', 'application/json');
+      res.socket?.setNoDelay(true);
+      // Send the two halves separately so the client observes two `data`
+      // events, with the multi-byte character straddling the boundary.
+      res.write(first);
+      setTimeout(() => res.end(second), 25);
+    });
+    try {
+      const client = new CollectorClient({ url });
+      assert.deepEqual(await client.version(), expected);
+    } finally {
+      await stopCollector(server);
+    }
+  });
 });
 
 it('covers alternate auth headers and sparse LQL compiler payloads', async () => {
