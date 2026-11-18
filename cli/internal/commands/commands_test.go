@@ -432,3 +432,68 @@ func TestEmitWithCustomKindAndOutcome(t *testing.T) {
 		t.Fatalf("expected outcome=error in output, got %s", out)
 	}
 }
+
+func TestSignaturesCommandHandlesUnexpectedJSONShape(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+	}{
+		{"data_missing", `{"other":1}`},
+		{"data_null", `{"data":null}`},
+		{"data_not_object", `{"data":[]}`},
+		{"data_string", `{"data":"unexpected"}`},
+		{"null_body", `null`},
+		{"signatures_missing", `{"data":{}}`},
+		{"signatures_not_array", `{"data":{"signatures":"unexpected"}}`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				_, _ = w.Write([]byte(tt.body))
+			}))
+			defer srv.Close()
+
+			cfg := config.Config{Cortex: &config.CortexConfig{URL: srv.URL}}
+			var out string
+			var err error
+			func() {
+				defer func() {
+					if rec := recover(); rec != nil {
+						t.Fatalf("SignaturesCommand panicked on %s: %v", tt.body, rec)
+					}
+				}()
+				out, err = captureStdout(t, func() error {
+					return SignaturesCommand(context.Background(), cfg, nil)
+				})
+			}()
+			if err != nil {
+				t.Fatalf("signatures: %v", err)
+			}
+			if !strings.Contains(out, tt.body) {
+				t.Fatalf("expected raw body %q in output, got %q", tt.body, out)
+			}
+		})
+	}
+}
+
+func TestSignaturesCommandRendersValidShape(t *testing.T) {
+	body := `{"data":{"signatures":[{"id":"sig_1","pattern":"pay.*fail","count":3,"lastSeen":"2026-01-01"}]}}`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(body))
+	}))
+	defer srv.Close()
+
+	cfg := config.Config{Cortex: &config.CortexConfig{URL: srv.URL}}
+	out, err := captureStdout(t, func() error {
+		return SignaturesCommand(context.Background(), cfg, nil)
+	})
+	if err != nil {
+		t.Fatalf("signatures: %v", err)
+	}
+	if !strings.Contains(out, "Incident Signatures") {
+		t.Fatalf("expected section header in output, got %q", out)
+	}
+	if !strings.Contains(out, "sig_1") {
+		t.Fatalf("expected signature id in output, got %q", out)
+	}
+}

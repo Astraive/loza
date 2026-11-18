@@ -35,7 +35,13 @@ func SignaturesCommand(ctx context.Context, cfg config.Config, args []string) er
 		return nil
 	}
 
-	sigs, ok := result["data"].(map[string]any)["signatures"].([]any)
+	dataObj, ok := result["data"].(map[string]any)
+	if !ok {
+		fmt.Println(string(data))
+		return nil
+	}
+
+	sigs, ok := dataObj["signatures"].([]any)
 	if !ok {
 		fmt.Println(string(data))
 		return nil
