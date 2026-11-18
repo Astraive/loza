@@ -317,6 +317,23 @@ func TestSinksListHitsCollectorAPI(t *testing.T) {
 	}
 }
 
+func TestSinksEmptyFirstArgumentDoesNotPanic(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/sinks" {
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+		_, _ = w.Write([]byte(`{"sinks":[]}`))
+	}))
+	defer srv.Close()
+
+	cfg := config.Config{CollectorURL: srv.URL}
+	// An empty first argument must not panic on args[0][0]; it falls through to
+	// the default "list" subcommand just like a leading flag does.
+	if err := SinksCommand(context.Background(), cfg, []string{""}); err != nil {
+		t.Fatalf("sinks with empty first argument: %v", err)
+	}
+}
+
 func TestSinksTestHitsCollectorAPI(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/sinks/duckdb/test" {

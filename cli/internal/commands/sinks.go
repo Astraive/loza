@@ -12,7 +12,7 @@ import (
 
 func SinksCommand(ctx context.Context, cfg config.Config, args []string) error {
 	sub := "list"
-	if len(args) > 0 && args[0][0] != '-' {
+	if len(args) > 0 && len(args[0]) > 0 && args[0][0] != '-' {
 		sub = args[0]
 		args = args[1:]
 	}
