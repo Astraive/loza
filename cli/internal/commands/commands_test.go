@@ -410,6 +410,25 @@ func TestDebugPipelineShowsStatus(t *testing.T) {
 	}
 }
 
+func TestExportAcceptsOutputFlag(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/query" {
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+		_, _ = w.Write([]byte(`{"columns":["event_id"],"rows":[["evt_1"]]}`))
+	}))
+	defer srv.Close()
+
+	path := filepath.Join(t.TempDir(), "events.json")
+	cfg := config.Config{CollectorURL: srv.URL}
+	if err := ExportCommand(cfg, []string{"--output", path}); err != nil {
+		t.Fatalf("export: %v", err)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("expected export output file at %s: %v", path, err)
+	}
+}
+
 func TestEmitWithCustomKindAndOutcome(t *testing.T) {
 	cfg := config.Config{CollectorURL: "http://127.0.0.1:9308"}
 	old := os.Stdout
