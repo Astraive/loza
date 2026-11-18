@@ -603,7 +603,7 @@ export class Event {
   startProcess(name: string, ...attrs: Attr[]): ProcessHandle {
     this.ensureMutable();
     this._processStep++;
-    return new ProcessHandle(this, name, this._processStep, _now());
+    return new ProcessHandle(this, name, this._processStep, _now(), attrs);
   }
   /** Compatibility alias for startProcess. */
   process(name: string, ...attrs: Attr[]): ProcessHandle {
@@ -613,7 +613,7 @@ export class Event {
   /** Start a named timer and return a handle to stop it. */
   startTimer(name: string, ...attrs: Attr[]): TimerHandle {
     this.ensureMutable();
-    return new TimerHandle(this, name, _now());
+    return new TimerHandle(this, name, _now(), attrs);
   }
   /** Compatibility alias for startTimer. */
   timer(name: string, ...attrs: Attr[]): TimerHandle {
@@ -623,7 +623,7 @@ export class Event {
   /** Start a named group phase and return a handle to finish it. */
   startGroup(name: string, ...attrs: Attr[]): GroupHandle {
     this.ensureMutable();
-    return new GroupHandle(this, name, _now());
+    return new GroupHandle(this, name, _now(), attrs);
   }
   /** Compatibility alias for startGroup. */
   group(name: string, ...attrs: Attr[]): GroupHandle {

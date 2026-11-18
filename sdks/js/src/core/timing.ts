@@ -39,6 +39,22 @@ function extractStatusCode(attrs: Record<string, any>): { code: number; rest: Re
   return { code, rest };
 }
 
+/** Normalize key/value attr objects (Attr or {key, value}) into entry fields. */
+function collectAttrs(attrs: any[]): { code: number; rest: Record<string, any> } {
+  let code = 0;
+  const rest: Record<string, any> = {};
+  for (const a of attrs) {
+    if (a && a.key) {
+      if (a.key === 'status_code' && typeof a.value === 'number') {
+        code = a.value;
+      } else {
+        rest[a.key] = a.value;
+      }
+    }
+  }
+  return { code, rest };
+}
+
 /** Handle for a named process step with automatic duration tracking. */
 export class ProcessHandle {
   private _event: any;
@@ -46,29 +62,23 @@ export class ProcessHandle {
   private _step: number;
   private _startedAt: number;
   private _startedAtMs: number;
+  private _initialAttrs: any[];
 
-  constructor(event: any, name: string, step: number, startedAt: number) {
+  constructor(event: any, name: string, step: number, startedAt: number, initialAttrs: any[] = []) {
     this._event = event;
     this._name = name;
     this._step = step;
     this._startedAt = startedAt;
     this._startedAtMs = startedAt - (this._event.startedAt || startedAt);
+    this._initialAttrs = initialAttrs;
   }
 
   finish(...attrs: any[]): void {
     const now = Date.now();
     const endedMs = now - (this._event.startedAt || now);
-    const extra: Record<string, any> = {};
-    let statusCode = 0;
-    for (const a of attrs) {
-      if (a && a.key) {
-        if (a.key === 'status_code' && typeof a.value === 'number') {
-          statusCode = a.value;
-        } else {
-          extra[a.key] = a.value;
-        }
-      }
-    }
+    const collected = collectAttrs([...this._initialAttrs, ...attrs]);
+    const extra = collected.rest;
+    let statusCode = collected.code;
     const entry: ProcessEntry = {
       step: this._step,
       name: this._name,
@@ -96,26 +106,20 @@ export class TimerHandle {
   private _event: any;
   private _name: string;
   private _startedAt: number;
+  private _initialAttrs: any[];
 
-  constructor(event: any, name: string, startedAt: number) {
+  constructor(event: any, name: string, startedAt: number, initialAttrs: any[] = []) {
     this._event = event;
     this._name = name;
     this._startedAt = startedAt;
+    this._initialAttrs = initialAttrs;
   }
 
   stop(...attrs: any[]): void {
     const durationMs = Date.now() - this._startedAt;
-    const extra: Record<string, any> = {};
-    let statusCode = 0;
-    for (const a of attrs) {
-      if (a && a.key) {
-        if (a.key === 'status_code' && typeof a.value === 'number') {
-          statusCode = a.value;
-        } else {
-          extra[a.key] = a.value;
-        }
-      }
-    }
+    const collected = collectAttrs([...this._initialAttrs, ...attrs]);
+    const extra = collected.rest;
+    let statusCode = collected.code;
     const entry: TimerEntry = {
       name: this._name,
       duration_ms: durationMs,
@@ -162,28 +166,22 @@ export class GroupHandle {
   private _name: string;
   private _startedAt: number;
   private _startedAtMs: number;
+  private _initialAttrs: any[];
 
-  constructor(event: any, name: string, startedAt: number) {
+  constructor(event: any, name: string, startedAt: number, initialAttrs: any[] = []) {
     this._event = event;
     this._name = name;
     this._startedAt = startedAt;
     this._startedAtMs = startedAt - (this._event.startedAt || startedAt);
+    this._initialAttrs = initialAttrs;
   }
 
   finish(...attrs: any[]): void {
     const now = Date.now();
     const endedMs = now - (this._event.startedAt || now);
-    const extra: Record<string, any> = {};
-    let statusCode = 0;
-    for (const a of attrs) {
-      if (a && a.key) {
-        if (a.key === 'status_code' && typeof a.value === 'number') {
-          statusCode = a.value;
-        } else {
-          extra[a.key] = a.value;
-        }
-      }
-    }
+    const collected = collectAttrs([...this._initialAttrs, ...attrs]);
+    const extra = collected.rest;
+    let statusCode = collected.code;
     const entry: GroupEntry = {
       name: this._name,
       started_at_ms: this._startedAtMs,
