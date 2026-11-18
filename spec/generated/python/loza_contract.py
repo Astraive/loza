@@ -521,8 +521,13 @@ def validate_event_payload(payload: dict[str, Any], strict: bool) -> None:
         raise ValidationErrors(errors)
 
 def validate_event_payload_detailed(payload: dict[str, Any], strict: bool) -> list[ValidationError]:
-    normalized, _ = normalize_event_aliases(payload)
     errors: list[ValidationError] = []
+    # Strict mode forbids aliases (CONTRACT alias_policy.strict_mode =
+    # "reject_before_normalization"): reject `event_type` before it is
+    # normalized away, matching the other SDKs' `alias_not_allowed` error.
+    if strict and 'event_type' in payload:
+        errors.append(ValidationError(field='event_type', code='alias_not_allowed', message='field "event_type" is not allowed in strict mode; use "event" instead'))
+    normalized, _ = normalize_event_aliases(payload)
     if strict:
         for key in normalized:
             if key not in ALLOWED_TOP_LEVEL_FIELDS:
