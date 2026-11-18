@@ -157,8 +157,16 @@ func (a *Auth) authorizeRole(r *http.Request, requiredRole string) bool {
 		"admin":  3,
 	}
 
-	requiredLevel := roleHierarchy[requiredRole]
-	currentLevel := roleHierarchy[result.Role]
+	requiredLevel, ok := roleHierarchy[requiredRole]
+	if !ok {
+		// An unknown or empty required role is a configuration/caller error;
+		// never treat it as level 0 and thereby authorize everyone.
+		return false
+	}
+	currentLevel, ok := roleHierarchy[result.Role]
+	if !ok || currentLevel == 0 {
+		return false
+	}
 
 	return currentLevel >= requiredLevel
 }
