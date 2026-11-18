@@ -129,6 +129,10 @@ export class TimerHandle {
     this.stop(...attrs);
   }
 
+  stopError(err: unknown, ...attrs: any[]): void {
+    this.stop({ key: 'error_message', value: String(err) }, ...attrs);
+  }
+
   duration(): number {
     return Date.now() - this._startedAt;
   }
@@ -149,7 +153,7 @@ export function withGroup(event: any, name: string, fn: () => void, ...attrs: an
 /** withTimer wraps fn inside a named timer. */
 export function withTimer(event: any, name: string, fn: () => void, ...attrs: any[]): void {
   const h = event.startTimer(name, ...attrs);
-  try { fn(); h.stop(); } catch (e) { throw e; }
+  try { fn(); h.stop(); } catch (e) { h.stopError(e); throw e; }
 }
 
 /** Handle for a named group phase with automatic duration tracking. */
