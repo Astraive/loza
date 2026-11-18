@@ -20,6 +20,15 @@ import (
 
 var errCortexBridgeClosed = errors.New("cortex bridge is closed")
 
+const (
+	// cortexBridgeMaxFlushAttempts bounds how many times a single async batch is
+	// sent before it is treated as permanently failed and dropped.
+	cortexBridgeMaxFlushAttempts = 3
+	// cortexBridgeRetryBaseDelay is the initial backoff between flush attempts;
+	// it doubles on each subsequent retry.
+	cortexBridgeRetryBaseDelay = 100 * time.Millisecond
+)
+
 type cortexBridgeClient struct {
 	cfg       collectorConfig
 	metrics   *collectorMetrics
@@ -151,13 +160,30 @@ func (c *cortexBridgeClient) run() {
 		if timeout <= 0 {
 			timeout = 5 * time.Second
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), timeout)
-		defer cancel()
-		if err := c.sendBatch(ctx, batch); err != nil {
+		var err error
+		for attempt := 1; attempt <= cortexBridgeMaxFlushAttempts; attempt++ {
+			ctx, cancel := context.WithTimeout(context.Background(), timeout)
+			err = c.sendBatch(ctx, batch)
+			cancel()
+			if err == nil {
+				break
+			}
 			if c.metrics != nil {
 				c.metrics.cortexBridgeErrors.Add(1)
 			}
-			logJSON("warn", "collector_cortex_bridge_flush_failed", map[string]any{"error": err.Error(), "count": len(batch)})
+			logJSON("warn", "collector_cortex_bridge_flush_failed", map[string]any{"error": err.Error(), "count": len(batch), "attempt": attempt})
+			if attempt < cortexBridgeMaxFlushAttempts {
+				// Keep the batch intact and back off before retrying. A transient
+				// Cortex outage must not permanently discard queued telemetry.
+				time.Sleep(cortexBridgeRetryBaseDelay * time.Duration(1<<(attempt-1)))
+			}
+		}
+		if err != nil {
+			// Retry exhaustion: drop the batch, but make the data loss observable.
+			if c.metrics != nil {
+				c.metrics.cortexBridgeDropped.Add(int64(len(batch)))
+			}
+			logJSON("warn", "collector_cortex_bridge_flush_dropped", map[string]any{"error": err.Error(), "count": len(batch), "attempts": cortexBridgeMaxFlushAttempts})
 		} else if c.metrics != nil {
 			c.metrics.cortexBridgeFlushes.Add(1)
 			c.metrics.cortexBridgeEvents.Add(int64(len(batch)))
