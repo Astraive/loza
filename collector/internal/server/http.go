@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"sync/atomic"
 	"time"
@@ -116,6 +117,12 @@ func (s *HTTPServer) handleIngest(w http.ResponseWriter, r *http.Request) {
 
 	events, err := parseNDJSONEvents(r.Body, s.cfg.MaxBodyBytes)
 	if err != nil {
+		if errors.Is(err, errPayloadTooLarge) {
+			http.Error(w, "Payload Too Large", http.StatusRequestEntityTooLarge)
+			return
+		}
+		// Any other read error (for example a truncated body) is a bad
+		// request, not a payload-size violation.
 		http.Error(w, "Bad Request: "+err.Error(), http.StatusBadRequest)
 		return
 	}
