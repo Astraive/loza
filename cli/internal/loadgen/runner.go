@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math/rand"
 	"net/http"
@@ -19,6 +20,17 @@ type RunnerConfig struct {
 	Workers   int
 	BatchSize int
 	BodySize  int
+}
+
+// rejectionError reports a batch the server explicitly refused with a 4xx
+// status code. It lets the runner tell a rejection apart from a transport or
+// server-side failure so Report.Rejected is populated correctly.
+type rejectionError struct {
+	statusCode int
+}
+
+func (e *rejectionError) Error() string {
+	return fmt.Sprintf("loadgen post rejected with %d", e.statusCode)
 }
 
 func Run(ctx context.Context, cfg RunnerConfig) (Report, error) {
@@ -56,7 +68,12 @@ func Run(ctx context.Context, cfg RunnerConfig) (Report, error) {
 				batch = append(batch, event)
 				if len(batch) >= cfg.BatchSize || i == count-1 {
 					if err := postBatch(ctx, client, cfg.URL, batch); err != nil {
-						errorsCount.Add(int64(len(batch)))
+						var rejection *rejectionError
+						if errors.As(err, &rejection) {
+							rejected.Add(int64(len(batch)))
+						} else {
+							errorsCount.Add(int64(len(batch)))
+						}
 					} else {
 						accepted.Add(int64(len(batch)))
 					}
@@ -97,6 +114,9 @@ func postBatch(ctx context.Context, client *http.Client, url string, batch [][]b
 		return err
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode >= 400 && resp.StatusCode < 500 {
+		return &rejectionError{statusCode: resp.StatusCode}
+	}
 	if resp.StatusCode >= 300 {
 		return fmt.Errorf("loadgen post returned %d", resp.StatusCode)
 	}
