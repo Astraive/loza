@@ -1,6 +1,9 @@
 package jsonenc
 
-import "strconv"
+import (
+	"math"
+	"strconv"
+)
 
 // AppendInt64 appends the decimal representation of v to dst.
 func AppendInt64(dst []byte, v int64) []byte {
@@ -16,9 +19,9 @@ func AppendUint64(dst []byte, v uint64) []byte {
 // NaN and Inf are encoded as null to stay valid JSON.
 func AppendFloat64(dst []byte, v float64) []byte {
 	switch {
-	case v != v: // NaN
+	case math.IsNaN(v):
 		return append(dst, "null"...)
-	case v > 1e308 || v < -1e308: // Inf
+	case math.IsInf(v, 0):
 		return append(dst, "null"...)
 	}
 	return strconv.AppendFloat(dst, v, 'f', -1, 64)
