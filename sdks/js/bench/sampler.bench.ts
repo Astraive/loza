@@ -1,18 +1,22 @@
 import { bench, describe } from 'vitest';
 import {
-  createLoza, production, memorySink,
+  createLoza, production, noopSink,
   sampleErrors, sampleRandom, sampleAll,
 } from '../src';
 
 describe('sampler', () => {
+  // Throughput benches measure sampler overhead only: the emitted events are
+  // never read back, so use a non-accumulating sink. A memorySink here would
+  // retain every emitted event for the life of the process, growing without
+  // bound across bench iterations and distorting timings via GC pressure.
   const errorsLogger = createLoza(
-    production('bench').withSink(memorySink()).withSampler(sampleErrors())
+    production('bench').withSink(noopSink()).withSampler(sampleErrors())
   );
   const randomLogger = createLoza(
-    production('bench').withSink(memorySink()).withSampler(sampleRandom(0.5))
+    production('bench').withSink(noopSink()).withSampler(sampleRandom(0.5))
   );
   const allLogger = createLoza(
-    production('bench').withSink(memorySink()).withSampler(sampleAll())
+    production('bench').withSink(noopSink()).withSampler(sampleAll())
   );
 
   bench('SampleErrors - error event', () => {
