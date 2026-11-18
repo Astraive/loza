@@ -221,11 +221,12 @@ type DuckDBEventStore struct {
 func (s *DuckDBEventStore) Save(ctx context.Context, event *models.Event, lifecycle *LifecycleData) error {
 	rawJSON, _ := json.Marshal(event.Raw)
 	attrsJSON, _ := json.Marshal(event.Attrs)
-	checkpointsJSON, _ := json.Marshal(event.Checkpoints)
-	processesJSON, _ := json.Marshal(event.Processes)
-	groupsJSON, _ := json.Marshal(event.Groups)
-	timersJSON, _ := json.Marshal(event.Timers)
-	linksJSON, _ := json.Marshal(event.Links)
+	checkpoints, processes, groups, timers, links := resolveLifecycleArrays(event, lifecycle)
+	checkpointsJSON, _ := json.Marshal(checkpoints)
+	processesJSON, _ := json.Marshal(processes)
+	groupsJSON, _ := json.Marshal(groups)
+	timersJSON, _ := json.Marshal(timers)
+	linksJSON, _ := json.Marshal(links)
 	httpJSON, _ := json.Marshal(event.HTTP)
 	userJSON, _ := json.Marshal(event.User)
 	tenantJSON, _ := json.Marshal(event.Tenant)
@@ -271,14 +272,20 @@ func (s *DuckDBEventStore) SaveBatch(ctx context.Context, events []*models.Event
 	}
 	defer stmt.Close()
 
-	for _, e := range events {
+	for i, e := range events {
+		var lifecycle *LifecycleData
+		if i < len(lifecycles) {
+			lifecycle = lifecycles[i]
+		}
+
 		rawJSON, _ := json.Marshal(e.Raw)
 		attrsJSON, _ := json.Marshal(e.Attrs)
-		checkpointsJSON, _ := json.Marshal(e.Checkpoints)
-		processesJSON, _ := json.Marshal(e.Processes)
-		groupsJSON, _ := json.Marshal(e.Groups)
-		timersJSON, _ := json.Marshal(e.Timers)
-		linksJSON, _ := json.Marshal(e.Links)
+		checkpoints, processes, groups, timers, links := resolveLifecycleArrays(e, lifecycle)
+		checkpointsJSON, _ := json.Marshal(checkpoints)
+		processesJSON, _ := json.Marshal(processes)
+		groupsJSON, _ := json.Marshal(groups)
+		timersJSON, _ := json.Marshal(timers)
+		linksJSON, _ := json.Marshal(links)
 		httpJSON, _ := json.Marshal(e.HTTP)
 		userJSON, _ := json.Marshal(e.User)
 		tenantJSON, _ := json.Marshal(e.Tenant)
@@ -294,7 +301,6 @@ func (s *DuckDBEventStore) SaveBatch(ctx context.Context, events []*models.Event
 			rawJSON, e.Provenance, e.IncidentID, time.Now()); err != nil {
 			return err
 		}
-		_ = lifecycles // lifecycles are embedded in the event struct
 	}
 
 	return tx.Commit()
