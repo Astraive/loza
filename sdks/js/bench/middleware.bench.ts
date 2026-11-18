@@ -1,9 +1,11 @@
 import { bench, describe } from 'vitest';
 import http from 'http';
-import { createLoza, production, memorySink } from '../src';
+import { createLoza, production, noopSink } from '../src';
 
 describe('middleware', () => {
-  const logger = createLoza(production('bench').withSink(memorySink()));
+  // Use a discarding sink: emit() runs on every iteration, and an in-memory
+  // sink would retain every encoded event for the whole run (unbounded growth).
+  const logger = createLoza(production('bench').withSink(noopSink()));
 
   bench('http request capture simulation', () => {
     // Simulate what middleware does per request
