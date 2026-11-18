@@ -63,10 +63,10 @@ class Middleware:
                 outcome = "unknown"
             else:
                 outcome = "error" if status_code >= 500 else "success"
+            ctx.params.status_code = status_code
             Finish(
                 ctx,
                 outcome,
-                Int("status_code", status_code),
                 Int("response_bytes", response_bytes),
                 Int("duration_ms", int((time.perf_counter() - started) * 1000)),
             )
