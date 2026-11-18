@@ -152,6 +152,9 @@ func NewTailWebSocketHandler(cfg HTTPConfig, state TailState) http.Handler {
 			return
 		}
 		for _, raw := range history {
+			if !state.TailMatches(r.Context(), raw, filters) {
+				continue
+			}
 			if err := conn.WriteMessage(websocket.TextMessage, raw); err != nil {
 				return
 			}
