@@ -89,6 +89,42 @@ describe('framework middleware', () => {
     }
   });
 
+  it('finishes HTTP events exactly once when error and end both fire', () => {
+    const middlewares: Array<[string, (opts: { service?: string }) => (req: any, res: any, next: any) => void]> = [
+      ['http', lozaHttpMiddleware],
+      ['express', lozaMiddleware],
+    ];
+    const req = { method: 'GET', url: '/abort', headers: {}, socket: {} };
+
+    for (const [name, create] of middlewares) {
+      // Client abort emits 'error' after the response has ended.
+      {
+        let errorHandler: ((err: Error) => void) | undefined;
+        const res: HttpResponse = {
+          statusCode: 200,
+          end() {},
+          on(evt, handler) { if (evt === 'error') errorHandler = handler; },
+        };
+        create({ service: 'regression' })(req, res, () => {});
+        res.end();
+        assert.doesNotThrow(() => errorHandler?.(new Error('abort')), `${name}: end then error must not throw`);
+      }
+
+      // Client abort emits 'error' before res.end() runs.
+      {
+        let errorHandler: ((err: Error) => void) | undefined;
+        const res: HttpResponse = {
+          statusCode: 200,
+          end() {},
+          on(evt, handler) { if (evt === 'error') errorHandler = handler; },
+        };
+        create({ service: 'regression' })(req, res, () => {});
+        assert.doesNotThrow(() => errorHandler?.(new Error('abort')), `${name}: error handler must not throw`);
+        assert.doesNotThrow(() => res.end(), `${name}: end after error must not throw`);
+      }
+    }
+  });
+
   it('records Express routes from extractor, route path, and request path', () => {
     const responses: number[] = [];
     const makeRes = (statusCode: number): HttpResponse => ({
