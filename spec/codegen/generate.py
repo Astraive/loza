@@ -24,8 +24,11 @@ def main() -> int:
     cortex_contract = build_cortex_contract(spec_root)
 
     python_contract = render_python_contract(loza_contract)
+    # spec/conformance/manifest.json is the canonical hand-maintained input for
+    # fixtures (see model.build_contract). Never emit to it here: doing so makes
+    # the generator overwrite its own source of truth, destroys direct edits,
+    # and turns --check into a tautology. Only generated/ paths are outputs.
     outputs = {
-        spec_root / "conformance" / "manifest.json": render_conformance_manifest(loza_contract),
         spec_root / "generated" / "contract" / "loza-contract.json": render_contract_json(loza_contract),
         spec_root / "generated" / "contract" / "cortex-contract.json": render_cortex_contract_json(cortex_contract),
         spec_root / "generated" / "contract" / "conformance_manifest.json": render_conformance_manifest(loza_contract),
