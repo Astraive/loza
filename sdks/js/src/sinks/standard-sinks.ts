@@ -422,7 +422,7 @@ export class HTTPBatchSink implements Sink {
       const req = mod.request({
         hostname: url.hostname,
         port: url.port || (isHttps ? 443 : 80),
-        path: url.pathname,
+        path: url.pathname + url.search,
         method: 'POST',
         headers,
         timeout: this.timeout,
