@@ -84,7 +84,7 @@ func MiddlewareWithConfig(cfg Config) func(http.Handler) http.Handler {
 				if !eventStarted {
 					return
 				}
-				loza.Finish(ctx, "success",
+				loza.Finish(ctx, outcomeFromStatus(statusCode),
 					loza.Int("status_code", statusCode),
 					loza.Int64("response_bytes", responseBytes),
 				)
@@ -129,6 +129,15 @@ func MiddlewareWithConfig(cfg Config) func(http.Handler) http.Handler {
 			next.ServeHTTP(rw, r.WithContext(ctx))
 		})
 	}
+}
+
+// outcomeFromStatus maps an HTTP response status to a canonical event outcome.
+// Client (4xx) and server (5xx) error responses must not be reported as "success".
+func outcomeFromStatus(statusCode int) string {
+	if statusCode >= http.StatusBadRequest {
+		return "error"
+	}
+	return "success"
 }
 
 type panicErr struct {
