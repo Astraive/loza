@@ -473,9 +473,30 @@ impl Config {
         Self::base()
     }
 
+    /// Build a config from the layered file configuration and environment.
+    ///
+    /// # Errors
+    /// Returns `LozaError::Validation` when a configuration file exists but
+    /// cannot be read or parsed.
+    pub fn try_from_env() -> Result<Self, crate::errors::LozaError> {
+        let file_cfg =
+            super::config::load_layered_file_config().map_err(super::config::config_load_error)?;
+        Ok(file_cfg.apply(Self::base()))
+    }
+
+    /// Build a config from the layered file configuration and environment.
+    ///
+    /// Configuration load failures are reported to stderr and fall back to
+    /// [`Config::base`] because this constructor cannot return a `Result`.
+    /// Use [`Config::try_from_env`] to handle such failures explicitly.
     pub fn from_env() -> Self {
-        let file_cfg = super::config::load_layered_file_config().unwrap_or_default();
-        file_cfg.apply(Self::base())
+        match Self::try_from_env() {
+            Ok(cfg) => cfg,
+            Err(err) => {
+                eprintln!("loza: {err}");
+                Self::base()
+            }
+        }
     }
 
     /// Validate the configuration, returning an error on failure.
@@ -627,15 +648,37 @@ impl FileConfig {
 }
 
 pub(crate) fn load_layered_file_config() -> Result<FileConfig, std::io::Error> {
-    let mut cfg = match find_defaults_config_file() {
-        Ok(path) => load_file_config(path)?,
-        Err(_) => FileConfig::default(),
-    };
+    let mut cfg = load_file_config(find_defaults_config_file()?)?;
     if let Some(path) = find_user_config_file() {
         cfg = overlay_file_config(cfg, load_file_config(path)?);
     }
     cfg = overlay_file_config(cfg, super::env::load_env_config());
     Ok(cfg)
+}
+
+/// Convert a config-file load failure into the public error type.
+pub(crate) fn config_load_error(err: std::io::Error) -> crate::errors::LozaError {
+    crate::errors::LozaError::Validation(crate::errors::ValidationError::new(
+        Some("config_file"),
+        "invalid_config_file",
+        format!("failed to load configuration files: {err}"),
+    ))
+}
+
+/// Load layered file config for infallible constructors.
+///
+/// Parse and IO failures are reported to stderr rather than silently
+/// discarded, because the infallible constructors cannot return a `Result`.
+/// Callers that need to handle such failures explicitly should use
+/// [`Config::try_from_env`] instead.
+pub(crate) fn load_layered_file_config_or_default() -> FileConfig {
+    match load_layered_file_config() {
+        Ok(cfg) => cfg,
+        Err(err) => {
+            eprintln!("loza: failed to load configuration files: {err}");
+            FileConfig::default()
+        }
+    }
 }
 
 /// Create a Logger with 4-layer config precedence: defaults -> file -> env -> code.
@@ -645,7 +688,7 @@ pub fn new_client(code_config: Config) -> Result<crate::Logger, crate::errors::L
     let base = Config::base();
 
     // Step 2: Load file config (defaults YAML + user YAML + env vars)
-    let file_cfg = load_layered_file_config().unwrap_or_default();
+    let file_cfg = load_layered_file_config().map_err(config_load_error)?;
     let mut merged = file_cfg.apply(base);
 
     // Step 3: Apply code config (highest precedence) - only non-default values
@@ -905,9 +948,18 @@ pub(crate) fn collector_events_endpoint(endpoint: &str, collector_name: &str) ->
     )
 }
 fn load_file_config(path: impl AsRef<Path>) -> Result<FileConfig, std::io::Error> {
-    let raw = fs::read_to_string(path)?;
-    let parsed = serde_yaml::from_str::<FileConfig>(&raw).unwrap_or_default();
-    Ok(parsed)
+    let raw = match fs::read_to_string(path.as_ref()) {
+        Ok(raw) => raw,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            // A missing config file is not a failure: it simply contributes no
+            // overrides. This must stay distinct from a malformed file, which
+            // is reported to the caller instead of being silently defaulted.
+            return Ok(FileConfig::default());
+        }
+        Err(err) => return Err(err),
+    };
+    serde_yaml::from_str::<FileConfig>(&raw)
+        .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidData, err))
 }
 
 fn find_defaults_config_file() -> Result<PathBuf, std::io::Error> {
@@ -991,5 +1043,68 @@ mod tests {
         assert_eq!(percent_encode_path_segment("AZaz09-._~"), "AZaz09-._~");
         // Multi-byte UTF-8 is escaped byte-by-byte, producing a valid segment.
         assert_eq!(percent_encode_path_segment("é"), "%C3%A9");
+    }
+}
+
+#[cfg(test)]
+mod config_file_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    static NEXT_ID: AtomicU64 = AtomicU64::new(0);
+
+    fn unique_path(extension: &str) -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time")
+            .as_nanos();
+        let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
+        std::env::temp_dir().join(format!(
+            "loza-rs-config-test-{}-{nanos}-{id}.{extension}",
+            std::process::id()
+        ))
+    }
+
+    fn write_config(content: &str) -> PathBuf {
+        let path = unique_path("yaml");
+        fs::write(&path, content).expect("write temp config");
+        path
+    }
+
+    #[test]
+    fn malformed_yaml_surfaces_invalid_data_error() {
+        let path = write_config("strict: [unterminated\n");
+        let err = load_file_config(&path)
+            .expect_err("malformed YAML must not be silently replaced by defaults");
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn type_error_surfaces_invalid_data_error() {
+        let path = write_config("strict: definitely-not-a-bool\n");
+        let err = load_file_config(&path).expect_err("a type mismatch must propagate");
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn valid_yaml_is_parsed() {
+        let path = write_config("strict: true\napi_key: test-key\nmax_event_bytes: 4096\n");
+        let cfg = load_file_config(&path).expect("valid YAML must parse");
+        assert_eq!(cfg.strict, Some(true));
+        assert_eq!(cfg.api_key.as_deref(), Some("test-key"));
+        assert_eq!(cfg.max_event_bytes, Some(4096));
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn missing_file_is_empty_config_not_error() {
+        let path = unique_path("yaml");
+        assert!(!path.exists(), "test fixture path must not exist");
+        let cfg = load_file_config(&path).expect("a missing file must not be an error");
+        assert!(cfg.strict.is_none());
+        assert!(cfg.api_key.is_none());
     }
 }
