@@ -199,24 +199,34 @@ func (b *natsBus) consume(ctx context.Context, iter messageIterator, subject str
 			continue
 		}
 
-		var env eventbus.Envelope
-		if err := json.Unmarshal(msg.Data(), &env); err != nil {
-			_ = msg.Nak()
-			continue
-		}
-
-		busMsg := &natsMessage{
-			id:    env.ID,
-			topic: subject,
-			env:   env,
-			msg:   msg,
-		}
-		if err := handler(ctx, busMsg); err != nil {
-			_ = msg.Nak()
-		} else {
-			_ = msg.Ack()
-		}
+		handleMessage(ctx, msg, subject, handler)
 	}
+}
+
+// handleMessage delivers one JetStream message to the handler.
+//
+// Acknowledgment is owned exclusively by the handler through Message.Ack and
+// Message.Nack. The handler's return value is deliberately not used to ack or
+// nack the message: a handler may defer Ack until a downstream commit, may call
+// Nack and still return nil, or may call Ack and still return an error. Using
+// the return value here produced double acknowledgments and acked messages the
+// handler had nacked.
+func handleMessage(ctx context.Context, msg jetstream.Msg, subject string, handler eventbus.Handler) {
+	var env eventbus.Envelope
+	if err := json.Unmarshal(msg.Data(), &env); err != nil {
+		// A malformed envelope never reaches the handler, so the adapter nacks it.
+		_ = msg.Nak()
+		return
+	}
+
+	busMsg := &natsMessage{
+		id:    env.ID,
+		topic: subject,
+		env:   env,
+		msg:   msg,
+	}
+	// Informational only: never convert the return value into an adapter ack.
+	_ = handler(ctx, busMsg)
 }
 
 func (b *natsBus) Close(_ context.Context) error {
