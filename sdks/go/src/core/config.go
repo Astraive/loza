@@ -242,9 +242,13 @@ func (c Config) WithEnvironment(environment string) Config {
 	return c
 }
 
-// WithSink appends a sink.
+// WithSink returns a copy of cfg with sink appended to its sinks.
+//
+// The Sinks slice is copied before appending so that Configs derived from the
+// same parent never share a backing array: appending into spare capacity of a
+// shared slice would otherwise overwrite sinks written by sibling Configs.
 func (c Config) WithSink(sink Sink) Config {
-	c.Sinks = append(c.Sinks, sink)
+	c.Sinks = append(append([]Sink(nil), c.Sinks...), sink)
 	return c
 }
 
