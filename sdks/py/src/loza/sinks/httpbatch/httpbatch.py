@@ -17,6 +17,7 @@ except NameError:
 from ...core.http_client import (
     _build_ingest_body,
     _collector_response_outcome,
+    _open_with_redirect_guard,
     _parse_collector_response_body,
     _parse_retry_after,
     _retry_delay,
@@ -91,7 +92,7 @@ class HTTPBatchSink:
         for attempt in range(self.retries + 1):
             try:
                 try:
-                    with urllib.request.urlopen(req, timeout=self.timeout) as response:
+                    with _open_with_redirect_guard(req, self.timeout, self.endpoint) as response:
                         status = getattr(response, "status", response.getcode())
                         headers_obj = getattr(response, "headers", None)
                         raw = response.read()

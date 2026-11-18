@@ -494,10 +494,11 @@ def test_sinks_and_cortex_adapters(monkeypatch: pytest.MonkeyPatch, tmp_path: Pa
 def test_http_batch_auth_and_response_paths(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[object] = []
     monkeypatch.setattr(
-        httpbatch_module.urllib.request,
-        "urlopen",
-        lambda req, **kwargs: (
-            calls.append((req, kwargs)) or _Response(b'{"acks":[{"event_id":"e"}],"errors":[],"request_id":"r"}')
+        httpbatch_module,
+        "_open_with_redirect_guard",
+        lambda req, timeout, endpoint: (
+            calls.append((req, {"timeout": timeout}))
+            or _Response(b'{"acks":[{"event_id":"e"}],"errors":[],"request_id":"r"}')
         ),
     )
     stats = SimpleNamespace(on_collector_ack=lambda **kwargs: calls.append(kwargs))
@@ -514,12 +515,12 @@ def test_http_batch_auth_and_response_paths(monkeypatch: pytest.MonkeyPatch) -> 
     custom = HTTPBatchSink("https://collector/events", api_key="key", auth_header="X-Key")
     assert custom._auth_headers() == {"X-Key": "key"}
     ndjson = HTTPBatchSink("https://collector/events", ndjson=True, enable_compression=False)
-    monkeypatch.setattr(httpbatch_module.urllib.request, "urlopen", lambda *_args, **_kwargs: _Response(b"{}"))
+    monkeypatch.setattr(httpbatch_module, "_open_with_redirect_guard", lambda *_args, **_kwargs: _Response(b"{}"))
     ndjson.write_batch(["one\n", "two"])
     with pytest.raises(ValueError):
         HTTPBatchSink("http://remote.example/events", username="u", password="p")
     monkeypatch.setattr(
-        httpbatch_module.urllib.request, "urlopen", lambda *_args, **_kwargs: (_ for _ in ()).throw(URLError("down"))
+        httpbatch_module, "_open_with_redirect_guard", lambda *_args, **_kwargs: (_ for _ in ()).throw(URLError("down"))
     )
     with pytest.raises(RuntimeError, match="collector send failed"):
         HTTPBatchSink("https://collector/events", retries=0).write(
@@ -780,6 +781,7 @@ def test_collector_client_helpers_and_http_paths(monkeypatch: pytest.MonkeyPatch
             _Response(b'{"state":"ok"}'),
         ]
     )
+    monkeypatch.setattr(http_client, "_open_with_redirect_guard", lambda *_args, **_kwargs: next(responses))
     monkeypatch.setattr(http_client, "urlopen", lambda *_args, **_kwargs: next(responses))
     assert client.send_batch([valid]).accepted == 1
     assert (
