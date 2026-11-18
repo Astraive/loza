@@ -3,6 +3,7 @@ package core
 import (
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -362,7 +363,14 @@ func parseInt(s string) (int, error) {
 		if c < '0' || c > '9' {
 			return 0, fmt.Errorf("invalid integer: %q", s)
 		}
-		n = n*10 + int(c-'0')
+		digit := int(c - '0')
+		// Reject values that would overflow int before accumulating, so long
+		// digit strings return an error instead of wrapping to an arbitrary
+		// (possibly negative) number.
+		if n > (math.MaxInt-digit)/10 {
+			return 0, fmt.Errorf("integer overflow: %q", s)
+		}
+		n = n*10 + digit
 	}
 	return n, nil
 }
