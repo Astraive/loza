@@ -20,6 +20,48 @@ SnakeCaseKeys = "snake_case_keys"
 CamelCaseKeys = "camel_case_keys"
 
 
+class _Unset:
+    """Sentinel for a config field the caller did not specify.
+
+    It behaves like the field's default for ordinary reads (truthiness,
+    equality, repr), so the public API is unchanged, but the config merge
+    layer can tell "not specified" apart from an explicit ``False``/default
+    value by identity. This lets higher-precedence layers explicitly disable
+    flags enabled by lower layers.
+    """
+
+    __slots__ = ("_default",)
+
+    def __init__(self, default: Any) -> None:
+        self._default = default
+
+    def __bool__(self) -> bool:
+        return bool(self._default)
+
+    def __eq__(self, other: object) -> bool:
+        if other is self:
+            return True
+        if isinstance(other, _Unset):
+            return self._default == other._default
+        return self._default == other
+
+    def __hash__(self) -> int:
+        return hash(self._default)
+
+    def __repr__(self) -> str:
+        return repr(self._default)
+
+    def __copy__(self) -> "_Unset":
+        return self
+
+    def __deepcopy__(self, memo: dict) -> "_Unset":
+        return self
+
+
+_UNSET_FALSE = _Unset(False)
+_UNSET_CANONICAL = _Unset(CanonicalWins)
+
+
 @runtime_checkable
 class StatsHandler(Protocol):
     """Receives logger pipeline telemetry callbacks."""
@@ -39,7 +81,7 @@ class DeliveryFailureHandler(StatsHandler, Protocol):
 
 @dataclass(slots=True)
 class AsyncConfig:
-    enabled: bool = False
+    enabled: bool = _UNSET_FALSE  # type: ignore[assignment]
     queue_size: int = 8192
     workers: int = 1
     max_batch_bytes: int = 256 * 1024
@@ -68,10 +110,10 @@ class Config:
     environment: str = "development"
     region: str = ""
     level: str = "info"
-    strict: bool = False
+    strict: bool = _UNSET_FALSE  # type: ignore[assignment]
     sinks: list[Any] = field(default_factory=list)
     collector_endpoint: str = ""
-    duplicate_policy: str = "canonical_wins"
+    duplicate_policy: str = _UNSET_CANONICAL  # type: ignore[assignment]
     schema: Any = None
     sampler: Any = None
     redactor: Any = None
@@ -80,7 +122,7 @@ class Config:
     async_config: AsyncConfig = field(default_factory=AsyncConfig)
     security: SecurityConfig = field(default_factory=SecurityConfig)
     field_naming: FieldNamingConfig = field(default_factory=FieldNamingConfig)
-    checkpoint_emit_immediately: bool = False
+    checkpoint_emit_immediately: bool = _UNSET_FALSE  # type: ignore[assignment]
     deployment_id: str = ""
     include_host: bool = False
     max_checkpoints: int = 32
@@ -157,7 +199,20 @@ def load_layered_config() -> Config:
     user_path = _find_user_config_path()
     if user_path is not None and user_path.exists():
         raw = _merge_dicts(raw, _parse_simple_yaml(user_path.read_text(encoding="utf-8")))
-    return _config_from_mapping(raw)
+    return _resolve_unset(_config_from_mapping(raw))
+
+
+def _resolve_unset(cfg: Config) -> Config:
+    """Replace any still-unset sentinels with their concrete default values."""
+    if cfg.strict is _UNSET_FALSE:
+        cfg.strict = False
+    if cfg.duplicate_policy is _UNSET_CANONICAL:
+        cfg.duplicate_policy = CanonicalWins
+    if cfg.checkpoint_emit_immediately is _UNSET_FALSE:
+        cfg.checkpoint_emit_immediately = False
+    if cfg.async_config.enabled is _UNSET_FALSE:
+        cfg.async_config.enabled = False
+    return cfg
 
 
 def new_client(code_config: Config):  # -> Logger
@@ -184,7 +239,8 @@ def new_client(code_config: Config):  # -> Logger
     # Step 5: Apply code config (highest precedence)
     merged = _merge_code_config(merged, code_config)
 
-    # Step 6: Validate
+    # Step 6: Collapse unset sentinels to concrete defaults, then validate
+    merged = _resolve_unset(merged)
     merged.validate()
 
     from ..core.logger import Logger
@@ -254,14 +310,14 @@ def _merge_file_config(base: Config, file_cfg: Config) -> Config:
         base.region = file_cfg.region
     if file_cfg.level and file_cfg.level != "info":
         base.level = file_cfg.level
-    if file_cfg.strict:
-        base.strict = file_cfg.strict
+    if file_cfg.strict is not _UNSET_FALSE:
+        base.strict = bool(file_cfg.strict)
     if file_cfg.collector_endpoint and not base.collector_endpoint:
         base.collector_endpoint = file_cfg.collector_endpoint
-    if file_cfg.duplicate_policy and file_cfg.duplicate_policy != CanonicalWins:
+    if file_cfg.duplicate_policy is not _UNSET_CANONICAL:
         base.duplicate_policy = file_cfg.duplicate_policy
-    if file_cfg.checkpoint_emit_immediately:
-        base.checkpoint_emit_immediately = file_cfg.checkpoint_emit_immediately
+    if file_cfg.checkpoint_emit_immediately is not _UNSET_FALSE:
+        base.checkpoint_emit_immediately = bool(file_cfg.checkpoint_emit_immediately)
     return base
 
 
@@ -277,11 +333,11 @@ def _merge_code_config(base: Config, code: Config) -> Config:
         base.region = code.region
     if code.level and code.level != "info":
         base.level = code.level
-    if code.strict:
-        base.strict = code.strict
+    if code.strict is not _UNSET_FALSE:
+        base.strict = bool(code.strict)
     if code.collector_endpoint:
         base.collector_endpoint = code.collector_endpoint
-    if code.duplicate_policy and code.duplicate_policy != CanonicalWins:
+    if code.duplicate_policy is not _UNSET_CANONICAL:
         base.duplicate_policy = code.duplicate_policy
     if code.sinks:
         base.sinks = code.sinks
@@ -295,10 +351,10 @@ def _merge_code_config(base: Config, code: Config) -> Config:
         base.stats_handler = code.stats_handler
     if code.schema is not None:
         base.schema = code.schema
-    if code.checkpoint_emit_immediately:
-        base.checkpoint_emit_immediately = code.checkpoint_emit_immediately
-    if code.async_config.enabled:
-        base.async_config.enabled = code.async_config.enabled
+    if code.checkpoint_emit_immediately is not _UNSET_FALSE:
+        base.checkpoint_emit_immediately = bool(code.checkpoint_emit_immediately)
+    if code.async_config.enabled is not _UNSET_FALSE:
+        base.async_config.enabled = bool(code.async_config.enabled)
     if code.async_config.queue_size != 8192:
         base.async_config.queue_size = code.async_config.queue_size
     if code.async_config.workers != 1:
@@ -342,12 +398,14 @@ def _config_from_mapping(data: dict[str, Any]) -> Config:
         environment=str(data.get("environment", "development")),
         region=str(data.get("region", "")),
         level=str(data.get("level", "info")),
-        strict=bool(data.get("strict", False)),
+        strict=_UNSET_FALSE if "strict" not in data else bool(data["strict"]),
         collector_endpoint=str(data.get("collector_endpoint", "")),
-        duplicate_policy=str(data.get("duplicate_policy", CanonicalWins)),
-        checkpoint_emit_immediately=bool(data.get("checkpoint_emit_immediately", False)),
+        duplicate_policy=_UNSET_CANONICAL if "duplicate_policy" not in data else str(data["duplicate_policy"]),
+        checkpoint_emit_immediately=(
+            _UNSET_FALSE if "checkpoint_emit_immediately" not in data else bool(data["checkpoint_emit_immediately"])
+        ),
         async_config=AsyncConfig(
-            enabled=bool(async_map.get("enabled", False)),
+            enabled=_UNSET_FALSE if "enabled" not in async_map else bool(async_map["enabled"]),
             queue_size=int(async_map.get("queue_size", 8192)),
             workers=int(async_map.get("workers", 1)),
             max_batch_bytes=int(async_map.get("max_batch_bytes", 256 * 1024)),
