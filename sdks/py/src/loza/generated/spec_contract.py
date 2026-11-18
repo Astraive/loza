@@ -4,9 +4,12 @@ from __future__ import annotations
 # Do NOT add new constants here—all definitions come from loza-spec/generated/python/loza_contract.py
 
 import sys
+import logging
 import importlib.machinery
 import importlib.util
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 # Try importing from loza-spec (primary path - when installed as dependency)
 try:
@@ -35,7 +38,15 @@ try:
         ValidationError,
         ValidationErrors,
     )
-except Exception:
+except ImportError:
+    # Only a genuinely missing/incomplete dependency may trigger fallback. Any other
+    # import-time failure (NameError, bad constant, validation error, ...) must
+    # propagate instead of silently running against a stale contract.
+    logger.warning(
+        "Could not import the authoritative loza contract; falling back to the "
+        "monorepo/backup contract, which may omit spec/security fixes.",
+        exc_info=True,
+    )
     # Fallback: try importing from sibling loza-spec directory (for development/monorepo)
     try:
         spec_dir = Path(__file__).parent.parent.parent.parent.parent.parent / "spec" / "generated" / "python"
@@ -68,7 +79,12 @@ except Exception:
             )
         else:
             raise ImportError(f"loza-spec not found at {spec_dir}")
-    except Exception as e:
+    except ImportError as e:
+        logger.warning(
+            "Could not import the loza contract from the monorepo path; falling "
+            "back to the backup contract, which may omit spec/security fixes.",
+            exc_info=True,
+        )
         backup_path = Path(__file__).with_name("spec_contract.py.bak")
         if not backup_path.exists():
             raise ImportError(
