@@ -576,9 +576,9 @@ func WithTimer(ctx context.Context, name string, fn func() error, attrs ...Attr)
 	return core.WithTimer(ctx, name, fn, attrs...)
 }
 
-// FinishGroupError completes a group handle with an error.
-func FinishGroupError(h *GroupHandle, err error, attrs ...Attr) error {
-	return core.FinishGroupError(h, err, attrs...)
+// FinishGroupError completes a group handle with an error and status code.
+func FinishGroupError(h *GroupHandle, err error, statusCode int, attrs ...Attr) error {
+	return core.FinishGroupError(h, err, statusCode, attrs...)
 }
 
 // Flush drains the queue.

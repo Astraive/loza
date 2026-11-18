@@ -478,12 +478,12 @@ func (l *Logger) FinishGroup(h *GroupHandle, attrs ...Attr) error {
 	return h.Finish(attrs...)
 }
 
-// FinishGroupError completes a group handle with error metadata.
-func (l *Logger) FinishGroupError(h *GroupHandle, err error, attrs ...Attr) error {
+// FinishGroupError completes a group handle with error metadata and status code.
+func (l *Logger) FinishGroupError(h *GroupHandle, err error, statusCode int, attrs ...Attr) error {
 	if h == nil {
 		return nil
 	}
-	return FinishGroupError(h, err, attrs...)
+	return FinishGroupError(h, err, statusCode, attrs...)
 }
 
 // Emit encodes and delivers the canonical event in ctx to all sinks.

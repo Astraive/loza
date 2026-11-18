@@ -1,6 +1,8 @@
 package core
 
 import (
+	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -112,6 +114,52 @@ func TestGroup_StartFinish(t *testing.T) {
 	}
 	if g.StatusCode != 402 {
 		t.Errorf("expected status_code 402, got %d", g.StatusCode)
+	}
+}
+
+func TestFinishGroupError_RecordsStatusCodeAndError(t *testing.T) {
+	ev := newTestEvent(t)
+	group, err := ev.StartGroup("shipment")
+	if err != nil {
+		t.Fatalf("StartGroup: %v", err)
+	}
+	if err := FinishGroupError(group, errTest, 503); err != nil {
+		t.Fatalf("FinishGroupError: %v", err)
+	}
+
+	if len(ev.Groups) != 1 {
+		t.Fatalf("expected 1 group, got %d", len(ev.Groups))
+	}
+	g := ev.Groups[0]
+	if g.StatusCode != 503 {
+		t.Errorf("expected status_code 503, got %d", g.StatusCode)
+	}
+	var hasErrMsg bool
+	for _, a := range g.Attrs {
+		if a.Key == "error_message" && a.Value == errTest.Error() {
+			hasErrMsg = true
+		}
+	}
+	if !hasErrMsg {
+		t.Errorf("expected error_message attr %q, got %+v", errTest.Error(), g.Attrs)
+	}
+}
+
+func TestPhase_ErrorRecordsStatusCode(t *testing.T) {
+	ev := newTestEvent(t)
+	ctx := storeEvent(context.Background(), ev)
+	wantErr := errors.New("phase failed")
+	if err := Phase(ctx, "failing_phase", func() error { return wantErr }); !errors.Is(err, wantErr) {
+		t.Fatalf("expected Phase to return the fn error, got %v", err)
+	}
+
+	if len(ev.Groups) != 1 {
+		t.Fatalf("expected 1 group, got %d", len(ev.Groups))
+	}
+	g := ev.Groups[0]
+	// Error phases must record the same non-zero status as error steps (Step uses 1).
+	if g.StatusCode != 1 {
+		t.Errorf("expected status_code 1 for failed phase, got %d", g.StatusCode)
 	}
 }
 

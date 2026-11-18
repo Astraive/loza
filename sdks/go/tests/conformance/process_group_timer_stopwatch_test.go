@@ -47,7 +47,7 @@ func TestProcessGroupTimerAndStopwatchHelpers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("start group: %v", err)
 	}
-	if err := loza.FinishGroupError(g2, errors.New("carrier timeout"), loza.HTTPStatus(503)); err != nil {
+	if err := loza.FinishGroupError(g2, errors.New("carrier timeout"), 503); err != nil {
 		t.Fatalf("finish group error: %v", err)
 	}
 	if err := loza.Phase(ctx, "phase.wrap", func() error { return nil }); err != nil {
