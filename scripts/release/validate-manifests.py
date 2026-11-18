@@ -110,7 +110,8 @@ def validate_publish_metadata(component: str, manifest: dict[str, Any], manifest
             images = docker.get("images")
             if not isinstance(images, list) or not all(isinstance(item, str) and item for item in images):
                 errors.append(f"{component}: publish.docker.images must be a non-empty string list")
-            dockerfile = manifest.get("paths", {}).get("dockerfile") or docker.get("dockerfile")
+            paths = manifest.get("paths") if isinstance(manifest.get("paths"), dict) else {}
+            dockerfile = paths.get("dockerfile") or docker.get("dockerfile")
             if not dockerfile:
                 errors.append(f"{component}: paths.dockerfile or publish.docker.dockerfile is required")
             elif not (ROOT / str(dockerfile)).exists():

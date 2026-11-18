@@ -37,5 +37,33 @@ class JavaScriptPackageIdentityTests(unittest.TestCase):
         self.assertEqual(publish_errors, [])
 
 
+class NonDictPathsTests(unittest.TestCase):
+    def test_docker_publish_metadata_does_not_crash_on_non_dict_paths(self) -> None:
+        manifest = {
+            "kind": "docker",
+            "version": "0.3.0",
+            "paths": "not-a-mapping",
+            "publish": {"docker": {"owner": "astraive", "images": ["repo/img"], "dockerfile": "Dockerfile"}},
+        }
+
+        errors = validate_manifests.validate_publish_metadata("docker", manifest, Path("fake.yaml"))
+
+        self.assertEqual(errors, ["docker: dockerfile does not exist: Dockerfile"])
+
+    def test_component_validation_reports_error_instead_of_crashing(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            manifest_path = Path(temporary_directory) / "manifest.yaml"
+            manifest_path.write_text(
+                "name: img\nkind: docker\nversion: 0.3.0\ndescription: d\nlicense: MIT\n"
+                "repository: r\nmodule: m\npaths: not-a-mapping\n"
+                "publish:\n  docker:\n    owner: astraive\n    images: [repo/img]\n    dockerfile: Dockerfile\n",
+                encoding="utf-8",
+            )
+
+            errors = validate_manifests.validate_component("docker", str(manifest_path))
+
+        self.assertIn("docker: paths must be a mapping when present", errors)
+
+
 if __name__ == "__main__":
     unittest.main()
