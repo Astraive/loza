@@ -71,6 +71,30 @@ describe('Config boundaries', () => {
     assert.equal(cfg.includeHost, false);
   });
 
+  it('applies sink, logger and other declared options through the functional option API', () => {
+    const sink = memorySink();
+    const childLogger = new Logger({ service: 'svc' });
+
+    // The headline defect: WithSink must actually install the sink on the config.
+    assert.equal(WithSink(sink)(defaultConfig()).sink, sink);
+
+    // withOptions must apply the declared fields, not silently drop them.
+    const viaOptions = withOptions(defaultConfig(), { sink, logger: childLogger });
+    assert.equal(viaOptions.sink, sink);
+    assert.equal(viaOptions.logger, childLogger);
+
+    // Logger.child() routes through withOptions, so the sink must survive there too.
+    const viaChild = new Logger({ service: 'svc' }).child({ sink });
+    assert.equal(viaChild.getConfig().sink, sink);
+
+    // The remaining declared ConfigOptions must also be applied, not ignored.
+    const stats = { onCollectorAck() {} };
+    assert.equal(WithStatsHandler(stats)(defaultConfig()).statsHandler, stats);
+    assert.equal(WithDeploymentID('dep')(defaultConfig()).deploymentId, 'dep');
+    assert.equal(WithPanicRecovery(true)(defaultConfig()).panicRecovery, true);
+    assert.equal(WithLogger(childLogger)(defaultConfig()).logger, childLogger);
+  });
+
   it('rejects invalid credential and endpoint combinations', () => {
     const embedded = defaultConfig();
     embedded.collectorUrl = 'https://user:pass@example.com/events';

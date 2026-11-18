@@ -114,6 +114,9 @@ export interface Config {
   includeRuntime: boolean;
   duplicatePolicy: string;
   logger: Logger | null;
+  statsHandler?: unknown;
+  deploymentId?: string;
+  panicRecovery?: boolean;
 }
 
 /** Default configuration. */
@@ -217,6 +220,9 @@ export function defaultConfig(): Config {
     includeRuntime: true,
     duplicatePolicy: 'canonical_wins',
     logger: null,
+    statsHandler: undefined,
+    deploymentId: '',
+    panicRecovery: false,
   };
 }
 
@@ -276,6 +282,7 @@ export interface ConfigOptions {
   deploymentId?: string;
   includeHost?: boolean;
   panicRecovery?: boolean;
+  logger?: Logger;
 }
 
 /** Fluent config builder. Implements Config so it can be passed directly to Logger/configure(). */
@@ -310,6 +317,9 @@ export class ConfigBuilder implements Config {
   includeRuntime: boolean;
   duplicatePolicy: string;
   logger: Logger | null;
+  statsHandler?: unknown;
+  deploymentId?: string;
+  panicRecovery?: boolean;
 
   constructor(base: Config) {
     this.service = base.service;
@@ -342,6 +352,9 @@ export class ConfigBuilder implements Config {
     this.includeRuntime = base.includeRuntime;
     this.duplicatePolicy = base.duplicatePolicy;
     this.logger = base.logger;
+    this.statsHandler = base.statsHandler;
+    this.deploymentId = base.deploymentId;
+    this.panicRecovery = base.panicRecovery;
   }
 
   withService(service: string): this { this.service = service; return this; }
@@ -369,10 +382,10 @@ export class ConfigBuilder implements Config {
   withDuplicatePolicy(policy: string): this { this.duplicatePolicy = policy; return this; }
   withAsync(enabled: boolean): this { this.async.enabled = enabled; return this; }
   withCollectorEndpoint(url: string): this { return this.withCollectorUrl(url); }
-  withStatsHandler(_handler: unknown): this { return this; }
-  withDeploymentID(_deploymentId: string): this { return this; }
+  withStatsHandler(statsHandler: unknown): this { this.statsHandler = statsHandler; return this; }
+  withDeploymentID(deploymentId: string): this { this.deploymentId = deploymentId; return this; }
   withIncludeHost(includeHost: boolean): this { this.includeHost = includeHost; return this; }
-  withPanicRecovery(_panicRecovery: boolean): this { return this; }
+  withPanicRecovery(panicRecovery: boolean): this { this.panicRecovery = panicRecovery; return this; }
   withBatchSize(n: number): this { this.batchSize = n; return this; }
   withFlushInterval(ms: number): this { this.flushIntervalMs = ms; return this; }
   withEnableCompression(enabled: boolean): this { this.enableCompression = enabled; return this; }
@@ -417,6 +430,11 @@ export function withOptions(base: Config, opts: ConfigOptions): Config {
   if (opts.enableCompression !== undefined) cfg.enableCompression = opts.enableCompression;
   if (opts.duplicatePolicy !== undefined) cfg.duplicatePolicy = opts.duplicatePolicy;
   if (opts.includeHost !== undefined) cfg.includeHost = opts.includeHost;
+  if (opts.sink !== undefined) cfg.sink = opts.sink;
+  if (opts.logger !== undefined) cfg.logger = opts.logger;
+  if (opts.statsHandler !== undefined) cfg.statsHandler = opts.statsHandler;
+  if (opts.deploymentId !== undefined) cfg.deploymentId = opts.deploymentId;
+  if (opts.panicRecovery !== undefined) cfg.panicRecovery = opts.panicRecovery;
   return validateConfig(cfg);
 }
 
@@ -443,12 +461,12 @@ export function WithDeploymentID(deploymentId: string): ConfigOption { return cf
 export function WithIncludeHost(includeHost: boolean): ConfigOption { return cfg => withOptions(cfg, { includeHost }); }
 export function WithPanicRecovery(panicRecovery: boolean): ConfigOption { return cfg => withOptions(cfg, { panicRecovery }); }
 export function WithApiKey(apiKey: string): ConfigOption { return cfg => { cfg.apiKey = apiKey.trim(); return cfg; }; }
-export function WithRelease(_release: string): ConfigOption { return cfg => cfg; }
-export function WithNamespace(_ns: string): ConfigOption { return cfg => cfg; }
+export function WithRelease(release: string): ConfigOption { return cfg => withOptions(cfg, { release }); }
+export function WithNamespace(ns: string): ConfigOption { return cfg => withOptions(cfg, { namespace: ns }); }
 export function WithOtelBridge(enabled: boolean): ConfigOption {
   return cfg => enabled ? { ...cfg, async: { ...cfg.async, enabled: true } } : cfg;
 }
 export function WithRetry(retries: number): ConfigOption { return cfg => { cfg.maxRetries = retries; return cfg; }; }
 export function WithTimeout(ms: number): ConfigOption { return cfg => { cfg.timeoutMs = ms; return cfg; }; }
 export function WithQueueSize(size: number): ConfigOption { return cfg => { cfg.async.queueSize = size; return cfg; }; }
-export function WithLogger(_logger: Logger): ConfigOption { return cfg => cfg; }
+export function WithLogger(logger: Logger): ConfigOption { return cfg => withOptions(cfg, { logger }); }
