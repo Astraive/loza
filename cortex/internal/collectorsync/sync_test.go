@@ -218,6 +218,93 @@ func TestRunPollCatchupDoesNotAdvanceCursorOnFailure(t *testing.T) {
 	}
 }
 
+func TestCursorLessZeroTimestamps(t *testing.T) {
+	zero := time.Time{}
+	later := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	tests := []struct {
+		name string
+		a    collectorbridge.Cursor
+		b    collectorbridge.Cursor
+		want bool
+	}{
+		{
+			name: "zero timestamps ascending ids",
+			a:    collectorbridge.Cursor{Timestamp: zero, EventID: "a"},
+			b:    collectorbridge.Cursor{Timestamp: zero, EventID: "b"},
+			want: true,
+		},
+		{
+			name: "zero timestamps descending ids",
+			a:    collectorbridge.Cursor{Timestamp: zero, EventID: "b"},
+			b:    collectorbridge.Cursor{Timestamp: zero, EventID: "a"},
+			want: false,
+		},
+		{
+			name: "zero timestamps equal ids are not less",
+			a:    collectorbridge.Cursor{Timestamp: zero, EventID: "a"},
+			b:    collectorbridge.Cursor{Timestamp: zero, EventID: "a"},
+			want: false,
+		},
+		{
+			name: "empty cursor precedes zero timestamp id",
+			a:    collectorbridge.Cursor{Timestamp: zero},
+			b:    collectorbridge.Cursor{Timestamp: zero, EventID: "a"},
+			want: true,
+		},
+		{
+			name: "zero timestamp id does not precede empty cursor",
+			a:    collectorbridge.Cursor{Timestamp: zero, EventID: "a"},
+			b:    collectorbridge.Cursor{Timestamp: zero},
+			want: false,
+		},
+		{
+			name: "zero timestamp precedes real timestamp",
+			a:    collectorbridge.Cursor{Timestamp: zero, EventID: "z"},
+			b:    collectorbridge.Cursor{Timestamp: later, EventID: "a"},
+			want: true,
+		},
+		{
+			name: "real timestamp does not precede zero timestamp",
+			a:    collectorbridge.Cursor{Timestamp: later, EventID: "a"},
+			b:    collectorbridge.Cursor{Timestamp: zero, EventID: "z"},
+			want: false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := cursorLess(tc.a, tc.b); got != tc.want {
+				t.Fatalf("cursorLess(%+v, %+v) = %v, want %v", tc.a, tc.b, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestCursorForEventsZeroTimestampsPicksGreatestID(t *testing.T) {
+	events := []*models.Event{
+		{ID: "c"},
+		{ID: "a"},
+		{ID: "b"},
+	}
+
+	got := cursorForEvents(events)
+	if !got.Timestamp.IsZero() || got.EventID != "c" {
+		t.Fatalf("expected zero-timestamp cursor with greatest ID c, got %+v", got)
+	}
+}
+
+func TestIsEventAfterCursorZeroTimestamps(t *testing.T) {
+	cursor := collectorbridge.Cursor{EventID: "b"}
+
+	if isEventAfterCursor(&models.Event{ID: "a"}, cursor) {
+		t.Fatal("event with smaller ID must not be after a zero-timestamp cursor with larger ID")
+	}
+	if !isEventAfterCursor(&models.Event{ID: "c"}, cursor) {
+		t.Fatal("event with larger ID must be after a zero-timestamp cursor with smaller ID")
+	}
+}
+
 func TestRunSourceOfTruthSyncHaltsOnUnrecoverableCursor(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "collector.cursor")
 	if err := os.WriteFile(path, []byte(`{"timestamp":`), 0o600); err != nil {
