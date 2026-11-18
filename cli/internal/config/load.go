@@ -52,11 +52,15 @@ func Load() (Config, error) {
 			return Config{}, err
 		}
 	}
-	cfg.CollectorRepoPath = filepath.Clean(cfg.CollectorRepoPath)
+	if strings.TrimSpace(cfg.CollectorRepoPath) != "" {
+		cfg.CollectorRepoPath = filepath.Clean(cfg.CollectorRepoPath)
+	}
 	if strings.TrimSpace(cfg.CortexRepoPath) != "" {
 		cfg.CortexRepoPath = filepath.Clean(cfg.CortexRepoPath)
 	}
-	cfg.SpecRepoPath = filepath.Clean(cfg.SpecRepoPath)
+	if strings.TrimSpace(cfg.SpecRepoPath) != "" {
+		cfg.SpecRepoPath = filepath.Clean(cfg.SpecRepoPath)
+	}
 	return cfg, Validate(cfg)
 }
 
