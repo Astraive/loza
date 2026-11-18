@@ -2,6 +2,8 @@ package topology
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -33,7 +35,14 @@ func (r *Resolver) RegisterCallback(cb AliasCallback) {
 func (r *Resolver) ResolveService(ctx context.Context, alias string, timestamp time.Time) (string, error) {
 	aliasObj, err := r.topologyStore.GetAlias(ctx, alias, timestamp.Format(time.RFC3339))
 	if err != nil {
-		return alias, nil
+		// Only an explicit "no alias recorded" result is a successful identity
+		// resolution. Genuine store failures must be surfaced so callers can
+		// distinguish a missing alias from an outage instead of silently
+		// routing on the unresolved name.
+		if errors.Is(err, sql.ErrNoRows) || errors.Is(err, storage.ErrNotFound) {
+			return alias, nil
+		}
+		return "", err
 	}
 	return aliasObj.Canonical, nil
 }
