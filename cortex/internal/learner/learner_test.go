@@ -42,6 +42,7 @@ func (f *fakeRemediationStore) ListBySignature(_ context.Context, signatureID st
 type fakeFeedbackStore struct {
 	feedbackByRemediation map[string][]*models.RemediationFeedback
 	successRates          map[string]float64
+	averageTimes          map[string]int64
 	saved                 []*models.RemediationFeedback
 }
 
@@ -57,6 +58,10 @@ func (f *fakeFeedbackStore) GetByRemediation(_ context.Context, remediationID st
 
 func (f *fakeFeedbackStore) GetSuccessRate(_ context.Context, action string, signatureID string) (float64, error) {
 	return f.successRates[action+"|"+signatureID], nil
+}
+
+func (f *fakeFeedbackStore) GetAverageTimeToResolve(_ context.Context, action string, signatureID string) (int64, error) {
+	return f.averageTimes[action+"|"+signatureID], nil
 }
 
 type fakeSignatureStoreForLearner struct {
@@ -191,5 +196,45 @@ func TestRecordRemediationAndFeedback(t *testing.T) {
 	}
 	if rate != 0.9 {
 		t.Fatalf("unexpected success rate: %v", rate)
+	}
+}
+
+func TestGetAverageTimeToResolveUsesActionAndSignature(t *testing.T) {
+	fbStore := &fakeFeedbackStore{
+		// The previous implementation passed the action string to
+		// GetByRemediation (which expects a remediation ID) and ignored
+		// signatureID, yielding this unrelated value instead of the scoped one.
+		feedbackByRemediation: map[string][]*models.RemediationFeedback{
+			"restart": {{RemediationID: "restart", TimeToResolve: 999}},
+		},
+		averageTimes: map[string]int64{
+			"restart|sig-1":  42,
+			"restart|sig-2":  99,
+			"rollback|sig-1": 7,
+		},
+	}
+	l := NewLearner(&fakeRemediationStore{}, fbStore, &fakeSignatureStoreForLearner{})
+
+	tests := []struct {
+		name        string
+		action      string
+		signatureID string
+		want        int64
+	}{
+		{"action and signature", "restart", "sig-1", 42},
+		{"scoped by signature", "restart", "sig-2", 99},
+		{"scoped by action", "rollback", "sig-1", 7},
+		{"unknown combination", "restart", "sig-404", 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := l.GetAverageTimeToResolve(context.Background(), tt.action, tt.signatureID)
+			if err != nil {
+				t.Fatalf("GetAverageTimeToResolve: %v", err)
+			}
+			if got != tt.want {
+				t.Fatalf("GetAverageTimeToResolve(%q, %q) = %d, want %d", tt.action, tt.signatureID, got, tt.want)
+			}
+		})
 	}
 }
