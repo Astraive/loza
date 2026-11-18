@@ -3,6 +3,7 @@ package eventconv
 import (
 	"fmt"
 	"math"
+	"strconv"
 	"strings"
 	"time"
 
@@ -122,8 +123,8 @@ func FromRawMap(raw map[string]any, defaultProvenance string) (*models.Event, er
 		for _, cpRaw := range cps {
 			if cpMap, ok := cpRaw.(map[string]any); ok {
 				cp := &models.EventCheckpoint{
-					Name:  getString(cpMap, "name"),
-					AtMs:  getInt64(cpMap, "at_ms"),
+					Name: getString(cpMap, "name"),
+					AtMs: getInt64(cpMap, "at_ms"),
 				}
 				if a, ok := cpMap["attrs"].(map[string]any); ok {
 					cp.Attrs = a
@@ -265,7 +266,27 @@ func getString(m map[string]any, key string) string {
 	return ""
 }
 
-// getInt64 safely extracts an int64 from a map (handles float64 JSON unmarshaling)
+// parseInt64String converts a string into an int64 value. It accepts both plain
+// numeric strings (e.g. "1500", the normal JSON representation of *_ms fields,
+// which are already expressed in milliseconds) and Go duration strings (e.g.
+// "1500ms"). The parse error is returned rather than discarded so callers can
+// handle invalid input explicitly.
+func parseInt64String(s string) (int64, error) {
+	s = strings.TrimSpace(s)
+	if v, err := strconv.ParseInt(s, 10, 64); err == nil {
+		return v, nil
+	}
+	d, err := time.ParseDuration(s)
+	if err != nil {
+		return 0, fmt.Errorf("invalid numeric/duration string %q: %w", s, err)
+	}
+	return d.Milliseconds(), nil
+}
+
+// getInt64 safely extracts an int64 from a map (handles float64 JSON unmarshaling).
+// Like the other get* helpers it falls back to the zero value when a value is
+// missing or cannot be parsed; the string parse itself is handled explicitly by
+// parseInt64String so a plain numeric string is no longer silently zeroed.
 func getInt64(m map[string]any, key string) int64 {
 	if v, ok := m[key]; ok {
 		switch val := v.(type) {
@@ -276,8 +297,9 @@ func getInt64(m map[string]any, key string) int64 {
 		case int:
 			return int64(val)
 		case string:
-			i, _ := time.ParseDuration(val)
-			return i.Milliseconds()
+			if parsed, err := parseInt64String(val); err == nil {
+				return parsed
+			}
 		}
 	}
 	return 0
@@ -294,9 +316,12 @@ func getFloat(m map[string]any, key string) (float64, bool) {
 		case int64:
 			return float64(val), true
 		case string:
-			i, err := time.ParseDuration(val)
-			if err == nil {
-				return float64(i.Milliseconds()), true
+			s := strings.TrimSpace(val)
+			if v, err := strconv.ParseFloat(s, 64); err == nil {
+				return v, true
+			}
+			if d, err := time.ParseDuration(s); err == nil {
+				return float64(d.Milliseconds()), true
 			}
 			return 0, false
 		}
