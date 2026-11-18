@@ -24,10 +24,17 @@ package dsn
 import (
 	"fmt"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 	"unicode"
 )
+
+// collectorSlugRE matches the canonical collector slug: a single path segment
+// made only of ASCII letters, digits, dot, underscore, and hyphen. Slashes,
+// backslashes, whitespace, and other punctuation are rejected so the slug can
+// never be encoded into a multi-segment or dot-segment endpoint path.
+var collectorSlugRE = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
 
 // LozaDSN holds the parsed and resolved values from a loza:// connection URI.
 type LozaDSN struct {
@@ -51,6 +58,7 @@ type LozaDSN struct {
 	LQLQueryURL   string // compatibility alias for LQLURL
 
 }
+
 // String returns a credential-free representation suitable for logs.
 func (d LozaDSN) String() string {
 	return d.BaseURL
@@ -67,6 +75,8 @@ func (d LozaDSN) GoString() string {
 //   - Scheme must be loza://
 //   - Host is required (loza:// or loza:///project are rejected)
 //   - Collector path is required (loza://host is rejected)
+//   - Collector path must be a canonical single-segment slug matching
+//     ^[A-Za-z0-9._-]+$ and must not be "." or ".."
 //   - Private userinfo must contain non-empty username/password
 //   - Public userinfo is lz_pub_...: with an explicitly empty password
 //   - Username cannot contain a colon or whitespace after decoding
@@ -127,6 +137,9 @@ func Parse(raw string) (*LozaDSN, error) {
 	collectorName := strings.TrimPrefix(u.Path, "/")
 	if collectorName == "" {
 		return nil, fmt.Errorf("invalid Loza DSN: collector path is required, e.g. loza://host/my-collector")
+	}
+	if !isValidCollectorName(collectorName) {
+		return nil, fmt.Errorf("invalid Loza DSN: collector path must be a single slug of letters, digits, '.', '_' or '-'")
 	}
 
 	q := u.Query()
@@ -233,6 +246,17 @@ func hasWhitespace(value string) bool {
 		}
 	}
 	return false
+}
+
+// isValidCollectorName reports whether name is a canonical collector slug:
+// a single, non-empty path segment that cannot introduce path traversal or be
+// encoded into a multi-segment endpoint URL. The charset alone still admits
+// the "." and ".." dot segments, so those are rejected explicitly.
+func isValidCollectorName(name string) bool {
+	if name == "." || name == ".." {
+		return false
+	}
+	return collectorSlugRE.MatchString(name)
 }
 
 // validateRawPassword enforces that URL-reserved password bytes are encoded.
