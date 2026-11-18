@@ -55,6 +55,27 @@ def parse_semver(version: Any, component: str) -> tuple[int, int, int, str]:
     return int(match.group(1)), int(match.group(2)), int(match.group(3)), value
 
 
+def semver_precedence_key(parsed: tuple[int, int, int, str]) -> tuple[Any, ...]:
+    """Return a sortable key that follows semver precedence (SemVer 2.0.0 §11).
+
+    Numeric major/minor/patch are compared first. A version with no prerelease
+    outranks one with a prerelease. Prerelease identifiers are compared left to
+    right: numeric identifiers numerically, alphanumeric identifiers
+    lexically, with numeric identifiers ranking below alphanumeric ones; when
+    all preceding identifiers are equal, the longer set wins. Build metadata
+    is ignored.
+    """
+    major, minor, patch, value = parsed
+    core = value.split("+", 1)[0]  # build metadata does not affect precedence
+    prerelease = core.split("-", 1)[1] if "-" in core else ""
+    identifiers = tuple(
+        (0, int(part)) if part.isdigit() else (1, part)
+        for part in prerelease.split(".")
+    ) if prerelease else ()
+    # 0 for a prerelease, 1 for a release, so a release sorts above its prereleases.
+    return (major, minor, patch, 0 if prerelease else 1, identifiers)
+
+
 def load_registry() -> dict[str, str]:
     registry = load_current_yaml("release.yaml")
     components = registry.get("components")
@@ -74,13 +95,15 @@ def detect(base_ref: str, components_filter: set[str] | None = None) -> dict[str
         try:
             current = load_current_yaml(manifest_path)
             base = load_base_yaml(base_ref, manifest_path)
-            _, _, _, new_version = parse_semver(current.get("version"), component)
+            new_parsed = parse_semver(current.get("version"), component)
+            new_version = new_parsed[3]
             old_version = None
             changed = base is None
             if base is not None:
-                _, _, _, old_version = parse_semver(base.get("version"), component)
+                old_parsed = parse_semver(base.get("version"), component)
+                old_version = old_parsed[3]
                 changed = old_version != new_version
-                if changed and parse_semver(current.get("version"), component)[:3] <= parse_semver(base.get("version"), component)[:3]:
+                if changed and semver_precedence_key(new_parsed) <= semver_precedence_key(old_parsed):
                     errors.append(f"{component}: version decreased or did not increase ({old_version} -> {new_version})")
 
             result[component] = {
