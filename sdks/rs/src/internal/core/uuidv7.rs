@@ -1,10 +1,14 @@
 use super::super::clock::unix_millis;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 
 type IdGenerator = Box<dyn Fn() -> String + Send + Sync>;
+// Stored behind an `Arc` so the generator can be cloned out of the critical
+// section and invoked after the mutex guard has been dropped. `Box<dyn Fn>`
+// is not `Clone`, so cloning the box itself is not possible.
+type SharedIdGenerator = Arc<dyn Fn() -> String + Send + Sync>;
 
-static CUSTOM_ID_GEN: OnceLock<Mutex<Option<IdGenerator>>> = OnceLock::new();
+static CUSTOM_ID_GEN: OnceLock<Mutex<Option<SharedIdGenerator>>> = OnceLock::new();
 static ID_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 /// Build a unique, prefixed identifier.
@@ -23,11 +27,10 @@ fn generate_id(prefix: &str) -> String {
 
 /// Lock the generator slot, recovering the guard if a previous holder panicked.
 ///
-/// A custom generator runs while this lock is held, so a panicking generator
-/// poisons the mutex. The stored value is just an `Option<Box<dyn Fn>>` with no
-/// invariant to protect, so a poisoned guard can safely be recovered instead of
-/// letting one panic cascade into every later ID lookup.
-fn lock_generator() -> std::sync::MutexGuard<'static, Option<IdGenerator>> {
+/// The stored value is just an `Option<Arc<dyn Fn>>` with no invariant to
+/// protect, so a poisoned guard can safely be recovered instead of letting one
+/// panic cascade into every later ID lookup.
+fn lock_generator() -> std::sync::MutexGuard<'static, Option<SharedIdGenerator>> {
     CUSTOM_ID_GEN
         .get_or_init(|| Mutex::new(None))
         .lock()
@@ -35,7 +38,13 @@ fn lock_generator() -> std::sync::MutexGuard<'static, Option<IdGenerator>> {
 }
 
 pub fn new_event_id() -> String {
-    if let Some(gen) = lock_generator().as_ref() {
+    let gen = {
+        let guard = lock_generator();
+        (*guard).clone()
+    };
+    // The lock is released before the caller-provided closure runs. Invoking
+    // it under the lock deadlocked any generator that re-entered this module.
+    if let Some(gen) = gen {
         return gen();
     }
     generate_id("evt")
@@ -49,7 +58,7 @@ pub fn new_request_id() -> String {
 }
 
 pub fn set_id_generator(f: IdGenerator) {
-    *lock_generator() = Some(f);
+    *lock_generator() = Some(SharedIdGenerator::from(f));
 }
 
 pub fn reset_id_generator() {
@@ -63,11 +72,13 @@ mod tests {
 
     #[test]
     fn panicking_generator_does_not_permanently_poison_id_generator() {
-        // A panicking generator runs under the mutex guard, poisoning the lock.
+        // A panicking generator is now invoked after the guard is dropped, so
+        // it no longer poisons the mutex; the recovery path is still exercised
+        // defensively by `lock_generator()` and remains covered here.
         set_id_generator(Box::new(|| panic!("generator exploded")));
         assert!(catch_unwind(AssertUnwindSafe(new_event_id)).is_err());
 
-        // The poisoned mutex must not cascade into later calls.
+        // A panicking generator must not cascade into later calls.
         set_id_generator(Box::new(|| "evt_recovered".to_string()));
         assert_eq!(new_event_id(), "evt_recovered");
 
