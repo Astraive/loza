@@ -44,7 +44,7 @@ pub extern "C" fn score_ffi(
 /// query_json: JSON-serialized Signature
 /// candidates_json: JSON array of Signature objects
 /// k: number of results to return
-/// Returns: JSON array of {signature_index, similarity} objects
+/// Returns: JSON array of {signature_id, similarity} objects
 #[no_mangle]
 pub extern "C" fn topk_search_ffi(
     query_json: *const c_char,
@@ -76,7 +76,7 @@ pub extern "C" fn topk_search_ffi(
         .iter()
         .map(|m| {
             serde_json::json!({
-                "index": m.index,
+                "signature_id": m.signature_id,
                 "similarity": m.similarity,
             })
         })
@@ -113,6 +113,64 @@ pub extern "C" fn free_c_string(ptr: *mut c_char) {
     if !ptr.is_null() {
         unsafe {
             drop(CString::from_raw(ptr));
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::Signature;
+
+    fn signature(shape: &str) -> Signature {
+        let mut sig = Signature::new();
+        sig.shape = shape.to_string();
+        sig
+    }
+
+    /// Regression test for the FFI top-k result shape: each entry must expose
+    /// the matched candidate's `signature_id` (ScoredMatch has no `index` field).
+    #[test]
+    fn topk_search_ffi_returns_signature_id_not_index() {
+        let query = signature("query-shape");
+        let candidates = vec![signature("candidate-alpha"), signature("candidate-beta")];
+
+        let query_json = CString::new(serde_json::to_string(&query).unwrap()).unwrap();
+        let candidates_json = CString::new(serde_json::to_string(&candidates).unwrap()).unwrap();
+
+        let raw = topk_search_ffi(query_json.as_ptr(), candidates_json.as_ptr(), 2);
+        assert!(!raw.is_null(), "topk_search_ffi returned a null pointer");
+
+        let output = unsafe { CStr::from_ptr(raw) }
+            .to_str()
+            .expect("FFI output must be valid UTF-8")
+            .to_string();
+        // Balance the allocation made by `into_raw` in the FFI function.
+        unsafe { drop(CString::from_raw(raw)) };
+
+        let results: Vec<serde_json::Value> = serde_json::from_str(&output).unwrap();
+        assert_eq!(results.len(), 2);
+
+        let shapes: Vec<&str> = candidates.iter().map(|c| c.shape.as_str()).collect();
+        for entry in &results {
+            assert!(
+                entry.get("index").is_none(),
+                "result must not contain a stale `index` key: {entry}"
+            );
+
+            let id = entry
+                .get("signature_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or_else(|| panic!("result missing `signature_id` key: {entry}"));
+            assert!(
+                shapes.contains(&id),
+                "`signature_id` must be a candidate shape, got {id}"
+            );
+
+            assert!(
+                entry.get("similarity").and_then(|v| v.as_f64()).is_some(),
+                "result missing `similarity` score: {entry}"
+            );
         }
     }
 }
