@@ -14,7 +14,10 @@ type noopBatchProcessor struct{}
 func (noopBatchProcessor) ProcessBatch(context.Context, []*models.Event) error { return nil }
 
 func TestStartCollectorSyncReturnsWaitableCompletion(t *testing.T) {
-	cfg := config.Default()
+	cfg, err := config.Default()
+	if err != nil {
+		t.Fatalf("Default: %v", err)
+	}
 	cfg.Collector.SourceOfTruth = true
 	cfg.Collector.Mode = "pull"
 

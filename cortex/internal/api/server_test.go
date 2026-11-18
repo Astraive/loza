@@ -91,7 +91,10 @@ func TestRouterRateLimitIgnoresSpoofedForwardedFor(t *testing.T) {
 }
 
 func TestNewServerDoesNotStartUnownedWorkers(t *testing.T) {
-	cfg := config.Default()
+	cfg, err := config.Default()
+	if err != nil {
+		t.Fatalf("Default: %v", err)
+	}
 	cfg.Storage.DuckDB.Path = filepath.Join(t.TempDir(), "cortex.duckdb")
 	stor, err := storage.NewStorage(cfg)
 	if err != nil {
@@ -110,7 +113,10 @@ func TestNewServerDoesNotStartUnownedWorkers(t *testing.T) {
 }
 
 func TestReadyzDoesNotExposeStorageErrors(t *testing.T) {
-	cfg := config.Default()
+	cfg, err := config.Default()
+	if err != nil {
+		t.Fatalf("Default: %v", err)
+	}
 	cfg.Storage.DuckDB.Path = filepath.Join(t.TempDir(), "private-cortex.duckdb")
 	stor, err := storage.NewStorage(cfg)
 	if err != nil {
@@ -172,7 +178,10 @@ func TestGraphDepthValidatesInclusiveRange(t *testing.T) {
 }
 
 func TestIngestEventClassifiesStorageFailuresAsServerErrors(t *testing.T) {
-	cfg := config.Default()
+	cfg, err := config.Default()
+	if err != nil {
+		t.Fatalf("Default: %v", err)
+	}
 	cfg.Storage.DuckDB.Path = filepath.Join(t.TempDir(), "cortex.duckdb")
 	stor, err := storage.NewStorage(cfg)
 	if err != nil {
