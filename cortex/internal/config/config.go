@@ -301,7 +301,9 @@ func Load(configPath string) (*Config, error) {
 	if err := loadFile(cfg, configPath); err != nil {
 		return nil, err
 	}
-	applyEnvOverrides(cfg)
+	if err := applyEnvOverrides(cfg); err != nil {
+		return nil, err
+	}
 	if err := cfg.Validate(); err != nil {
 		return nil, fmt.Errorf("invalid configuration: %w", err)
 	}
@@ -325,23 +327,76 @@ func LoadDefault() (*Config, error) {
 		}
 	}
 
-	applyEnvOverrides(cfg)
+	if err := applyEnvOverrides(cfg); err != nil {
+		return nil, err
+	}
 	if err := cfg.Validate(); err != nil {
 		return nil, fmt.Errorf("invalid configuration: %w", err)
 	}
 	return cfg, nil
 }
 
-// applyEnvOverrides applies environment variable overrides to configuration
-func applyEnvOverrides(cfg *Config) {
+// applyEnvOverrides applies environment variable overrides to configuration.
+// Numeric, duration, and boolean overrides are parsed strictly: an invalid
+// value is reported as an error instead of being silently discarded so that
+// an operator typo fails startup rather than quietly changing runtime
+// behavior. String overrides are unchanged.
+func applyEnvOverrides(cfg *Config) error {
+	setInt := func(key string, dst *int) error {
+		v := os.Getenv(key)
+		if v == "" {
+			return nil
+		}
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			return fmt.Errorf("%s: invalid integer %q: %w", key, v, err)
+		}
+		*dst = n
+		return nil
+	}
+	setInt64 := func(key string, dst *int64) error {
+		v := os.Getenv(key)
+		if v == "" {
+			return nil
+		}
+		n, err := strconv.ParseInt(v, 10, 64)
+		if err != nil {
+			return fmt.Errorf("%s: invalid integer %q: %w", key, v, err)
+		}
+		*dst = n
+		return nil
+	}
+	setDuration := func(key string, dst *time.Duration) error {
+		v := os.Getenv(key)
+		if v == "" {
+			return nil
+		}
+		d, err := time.ParseDuration(v)
+		if err != nil {
+			return fmt.Errorf("%s: invalid duration %q: %w", key, v, err)
+		}
+		*dst = d
+		return nil
+	}
+	setBool := func(key string, dst *bool) error {
+		v := os.Getenv(key)
+		if v == "" {
+			return nil
+		}
+		b, err := parseEnvBool(v)
+		if err != nil {
+			return fmt.Errorf("%s: %w", key, err)
+		}
+		*dst = b
+		return nil
+	}
+
 	// Server overrides
 	if v := os.Getenv("CORTEX_SERVER_HOST"); v != "" {
 		cfg.Server.Host = v
 	}
-	if v := os.Getenv("CORTEX_SERVER_PORT"); v != "" {
-		if port, err := strconv.Atoi(v); err == nil {
-			cfg.Server.Port = port
-		}
+	if err := setInt("CORTEX_SERVER_PORT", &cfg.Server.Port); err != nil {
+		return err
 	}
 	if v := os.Getenv("CORTEX_SERVER_ALLOWED_ORIGINS"); v != "" {
 		cfg.Server.AllowedOrigins = strings.Split(v, ",")
@@ -360,10 +415,8 @@ func applyEnvOverrides(cfg *Config) {
 	if v := os.Getenv("CORTEX_POSTGRES_HOST"); v != "" {
 		cfg.Storage.PostgreSQL.Host = v
 	}
-	if v := os.Getenv("CORTEX_POSTGRES_PORT"); v != "" {
-		if port, err := strconv.Atoi(v); err == nil {
-			cfg.Storage.PostgreSQL.Port = port
-		}
+	if err := setInt("CORTEX_POSTGRES_PORT", &cfg.Storage.PostgreSQL.Port); err != nil {
+		return err
 	}
 	if v := os.Getenv("CORTEX_POSTGRES_DATABASE"); v != "" {
 		cfg.Storage.PostgreSQL.Database = v
@@ -379,8 +432,8 @@ func applyEnvOverrides(cfg *Config) {
 	}
 
 	// Authentication overrides
-	if v := os.Getenv("CORTEX_AUTH_ENABLED"); v != "" {
-		cfg.Authentication.Enabled = strings.ToLower(v) == "true"
+	if err := setBool("CORTEX_AUTH_ENABLED", &cfg.Authentication.Enabled); err != nil {
+		return err
 	}
 	if v := os.Getenv("CORTEX_HMAC_SECRET"); v != "" {
 		cfg.Authentication.HMACSecret = v
@@ -395,40 +448,30 @@ func applyEnvOverrides(cfg *Config) {
 	if v := os.Getenv("CORTEX_MATCHER_MODE"); v != "" {
 		cfg.Matcher.Mode = v
 	}
-	if v := os.Getenv("CORTEX_MATCHER_PARALLELISM"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			cfg.Matcher.Parallelism = n
-		}
+	if err := setInt("CORTEX_MATCHER_PARALLELISM", &cfg.Matcher.Parallelism); err != nil {
+		return err
 	}
-	if v := os.Getenv("CORTEX_MATCHER_CACHE_SIZE"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			cfg.Matcher.CacheSize = n
-		}
+	if err := setInt("CORTEX_MATCHER_CACHE_SIZE", &cfg.Matcher.CacheSize); err != nil {
+		return err
 	}
-	if v := os.Getenv("CORTEX_MATCHER_CACHE_TTL"); v != "" {
-		if d, err := time.ParseDuration(v); err == nil {
-			cfg.Matcher.CacheTTL = d
-		}
+	if err := setDuration("CORTEX_MATCHER_CACHE_TTL", &cfg.Matcher.CacheTTL); err != nil {
+		return err
 	}
 
 	// Rate limit overrides
-	if v := os.Getenv("CORTEX_RATELIMIT_ENABLED"); v != "" {
-		cfg.RateLimit.Enabled = strings.ToLower(v) == "true"
+	if err := setBool("CORTEX_RATELIMIT_ENABLED", &cfg.RateLimit.Enabled); err != nil {
+		return err
 	}
-	if v := os.Getenv("CORTEX_RATELIMIT_PER_API_KEY_RPM"); v != "" {
-		if rpm, err := strconv.Atoi(v); err == nil {
-			cfg.RateLimit.PerAPIKeyRPM = rpm
-		}
+	if err := setInt("CORTEX_RATELIMIT_PER_API_KEY_RPM", &cfg.RateLimit.PerAPIKeyRPM); err != nil {
+		return err
 	}
-	if v := os.Getenv("CORTEX_RATELIMIT_PER_IP_RPM"); v != "" {
-		if rpm, err := strconv.Atoi(v); err == nil {
-			cfg.RateLimit.PerIPRPM = rpm
-		}
+	if err := setInt("CORTEX_RATELIMIT_PER_IP_RPM", &cfg.RateLimit.PerIPRPM); err != nil {
+		return err
 	}
 
 	// TLS overrides
-	if v := os.Getenv("CORTEX_TLS_ENABLED"); v != "" {
-		cfg.TLS.Enabled = strings.ToLower(v) == "true"
+	if err := setBool("CORTEX_TLS_ENABLED", &cfg.TLS.Enabled); err != nil {
+		return err
 	}
 	if v := os.Getenv("CORTEX_TLS_CERT_FILE"); v != "" {
 		cfg.TLS.CertFile = v
@@ -438,8 +481,8 @@ func applyEnvOverrides(cfg *Config) {
 	}
 
 	// PII redaction overrides
-	if v := os.Getenv("CORTEX_PII_REDACTION_ENABLED"); v != "" {
-		cfg.PIIRedaction.Enabled = strings.ToLower(v) == "true"
+	if err := setBool("CORTEX_PII_REDACTION_ENABLED", &cfg.PIIRedaction.Enabled); err != nil {
+		return err
 	}
 	if v := os.Getenv("CORTEX_PII_REDACTION_MODE"); v != "" {
 		cfg.PIIRedaction.Mode = v
@@ -468,8 +511,8 @@ func applyEnvOverrides(cfg *Config) {
 	if v := os.Getenv("CORTEX_COLLECTOR_SERVICE"); v != "" {
 		cfg.Collector.Service = v
 	}
-	if v := os.Getenv("CORTEX_COLLECTOR_SOURCE_OF_TRUTH"); v != "" {
-		cfg.Collector.SourceOfTruth = strings.EqualFold(v, "true")
+	if err := setBool("CORTEX_COLLECTOR_SOURCE_OF_TRUTH", &cfg.Collector.SourceOfTruth); err != nil {
+		return err
 	}
 	if v := os.Getenv("CORTEX_COLLECTOR_API_KEY"); v != "" {
 		cfg.Collector.APIKey = v
@@ -486,41 +529,29 @@ func applyEnvOverrides(cfg *Config) {
 	if v := os.Getenv("CORTEX_COLLECTOR_TLS_CA_FILE"); v != "" {
 		cfg.Collector.TLSCAFile = v
 	}
-	if v := os.Getenv("CORTEX_COLLECTOR_TIMEOUT"); v != "" {
-		if d, err := time.ParseDuration(v); err == nil {
-			cfg.Collector.Timeout = d
-		}
+	if err := setDuration("CORTEX_COLLECTOR_TIMEOUT", &cfg.Collector.Timeout); err != nil {
+		return err
 	}
-	if v := os.Getenv("CORTEX_COLLECTOR_MAX_RESPONSE_BYTES"); v != "" {
-		if n, err := strconv.ParseInt(v, 10, 64); err == nil {
-			cfg.Collector.MaxResponseBytes = n
-		}
+	if err := setInt64("CORTEX_COLLECTOR_MAX_RESPONSE_BYTES", &cfg.Collector.MaxResponseBytes); err != nil {
+		return err
 	}
 	if v := os.Getenv("CORTEX_COLLECTOR_TAIL_TRANSPORT"); v != "" {
 		cfg.Collector.TailTransport = strings.ToLower(strings.TrimSpace(v))
 	}
-	if v := os.Getenv("CORTEX_COLLECTOR_TAIL_ENABLED"); v != "" {
-		cfg.Collector.TailEnabled = strings.EqualFold(v, "true")
+	if err := setBool("CORTEX_COLLECTOR_TAIL_ENABLED", &cfg.Collector.TailEnabled); err != nil {
+		return err
 	}
-	if v := os.Getenv("CORTEX_COLLECTOR_TAIL_BUFFER_SIZE"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			cfg.Collector.TailBufferSize = n
-		}
+	if err := setInt("CORTEX_COLLECTOR_TAIL_BUFFER_SIZE", &cfg.Collector.TailBufferSize); err != nil {
+		return err
 	}
-	if v := os.Getenv("CORTEX_COLLECTOR_TAIL_BATCH_SIZE"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			cfg.Collector.TailBatchSize = n
-		}
+	if err := setInt("CORTEX_COLLECTOR_TAIL_BATCH_SIZE", &cfg.Collector.TailBatchSize); err != nil {
+		return err
 	}
-	if v := os.Getenv("CORTEX_COLLECTOR_TAIL_FLUSH_INTERVAL"); v != "" {
-		if d, err := time.ParseDuration(v); err == nil {
-			cfg.Collector.TailFlushInterval = d
-		}
+	if err := setDuration("CORTEX_COLLECTOR_TAIL_FLUSH_INTERVAL", &cfg.Collector.TailFlushInterval); err != nil {
+		return err
 	}
-	if v := os.Getenv("CORTEX_COLLECTOR_TAIL_RECONNECT_BACKOFF"); v != "" {
-		if d, err := time.ParseDuration(v); err == nil {
-			cfg.Collector.TailReconnectBackoff = d
-		}
+	if err := setDuration("CORTEX_COLLECTOR_TAIL_RECONNECT_BACKOFF", &cfg.Collector.TailReconnectBackoff); err != nil {
+		return err
 	}
 	if v := os.Getenv("CORTEX_COLLECTOR_QUERY_TABLE"); v != "" {
 		cfg.Collector.QueryTable = v
@@ -533,6 +564,21 @@ func applyEnvOverrides(cfg *Config) {
 	}
 	if v := os.Getenv("CORTEX_COLLECTOR_CURSOR_PATH"); v != "" {
 		cfg.Collector.CursorPath = v
+	}
+	return nil
+}
+
+// parseEnvBool parses a boolean environment override. It accepts the same
+// case-insensitive spellings as the collector configuration and rejects any
+// other value instead of silently treating it as false.
+func parseEnvBool(v string) (bool, error) {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "1", "true", "yes", "on":
+		return true, nil
+	case "0", "false", "no", "off":
+		return false, nil
+	default:
+		return false, fmt.Errorf("invalid boolean %q", v)
 	}
 }
 
@@ -701,13 +747,20 @@ func (c *Config) Validate() error {
 // Default returns the legacy in-memory defaults for library callers. Production
 // startup must use LoadDefault or Load so configuration errors cannot be
 // ignored.
-func Default() *Config {
+//
+// Default now returns (*Config, error) so that an invalid environment override
+// is reported instead of being silently discarded. Callers must handle the
+// error. This package is internal to the cortex module, so no externally
+// importable API is broken; in-module callers have been updated.
+func Default() (*Config, error) {
 	cfg := defaultConfig()
 	if path, err := findUserConfigFile(); err == nil && path != "" {
 		_ = loadFile(cfg, path)
 	}
-	applyEnvOverrides(cfg)
-	return cfg
+	if err := applyEnvOverrides(cfg); err != nil {
+		return nil, err
+	}
+	return cfg, nil
 }
 
 const bundledDefaultFilename = "loza-cortex.defaults.yaml"

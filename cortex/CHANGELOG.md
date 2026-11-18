@@ -1,5 +1,19 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+- Environment override parse errors are no longer silently swallowed. `CORTEX_*`
+  numeric, duration, and boolean overrides must be well-formed or configuration
+  loading fails at startup with an error naming the offending variable.
+
+### Changed
+- Migration note: `config.Default()` now returns `(*Config, error)` so invalid
+  environment overrides are reported instead of discarded. Callers must handle
+  the returned error; use `LoadDefault` or `Load` for production startup. The
+  package is internal to the Cortex module, so no externally importable API is
+  broken.
+
 ## [0.3.4] - 2026-08-26
 
 ### Changed

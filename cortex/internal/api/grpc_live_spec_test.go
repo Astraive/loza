@@ -23,7 +23,8 @@ import (
 func TestGRPCServerAcceptsCollectorStyleBatch(t *testing.T) {
 	t.Parallel()
 
-	cfg := config.Default()
+	cfg, err := config.Default()
+	require.NoError(t, err)
 	cfg.Storage.Backend = "duckdb"
 	cfg.Storage.DuckDB.Path = filepath.Join(t.TempDir(), "cortex.duckdb")
 	cfg.Collector.SourceOfTruth = false
@@ -73,7 +74,8 @@ func TestGRPCServerAcceptsCollectorStyleBatch(t *testing.T) {
 func TestGRPCServerProvenanceIsGrpc(t *testing.T) {
 	t.Parallel()
 
-	cfg := config.Default()
+	cfg, err := config.Default()
+	require.NoError(t, err)
 	cfg.Storage.Backend = "duckdb"
 	cfg.Storage.DuckDB.Path = filepath.Join(t.TempDir(), "cortex.duckdb")
 	cfg.Collector.SourceOfTruth = false
@@ -142,7 +144,8 @@ func TestGRPCServerProvenanceIsGrpc(t *testing.T) {
 func TestGRPCServerRejectsEmptyIngestEventRequest(t *testing.T) {
 	t.Parallel()
 
-	cfg := config.Default()
+	cfg, err := config.Default()
+	require.NoError(t, err)
 	cfg.Storage.Backend = "duckdb"
 	cfg.Storage.DuckDB.Path = filepath.Join(t.TempDir(), "cortex.duckdb")
 	cfg.Collector.SourceOfTruth = false
