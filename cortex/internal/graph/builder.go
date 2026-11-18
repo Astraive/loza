@@ -74,7 +74,11 @@ func (b *Builder) AddNode(ctx context.Context, node *models.Node) error {
 		return fmt.Errorf("node validation failed: %w", err)
 	}
 	node.CreatedAt = time.Now()
-	return b.graphStore.SaveNode(ctx, node)
+	if err := b.graphStore.SaveNode(ctx, node); err != nil {
+		return err
+	}
+	b.adjCache.Invalidate()
+	return nil
 }
 
 func (b *Builder) AddEdge(ctx context.Context, edge *models.Edge) error {
@@ -93,7 +97,11 @@ func (b *Builder) AddEdge(ctx context.Context, edge *models.Edge) error {
 	}
 
 	edge.CreatedAt = time.Now()
-	return b.graphStore.SaveEdge(ctx, edge)
+	if err := b.graphStore.SaveEdge(ctx, edge); err != nil {
+		return err
+	}
+	b.adjCache.Invalidate()
+	return nil
 }
 
 func (b *Builder) GetNode(ctx context.Context, nodeID string) (*models.Node, error) {

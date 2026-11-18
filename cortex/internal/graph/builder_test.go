@@ -17,9 +17,13 @@ type fakeGraphStore struct {
 	savedEdges []*models.Edge
 	nodeErr    error
 	edgeErr    error
+	saveErr    error
 }
 
 func (f *fakeGraphStore) SaveNode(_ context.Context, node *models.Node) error {
+	if f.saveErr != nil {
+		return f.saveErr
+	}
 	f.savedNodes = append(f.savedNodes, node)
 	f.nodes[node.ID] = node
 	return nil
@@ -49,6 +53,9 @@ func (f *fakeGraphStore) ListNodes(_ context.Context, nodeType string, limit int
 }
 
 func (f *fakeGraphStore) SaveEdge(_ context.Context, edge *models.Edge) error {
+	if f.saveErr != nil {
+		return f.saveErr
+	}
 	f.savedEdges = append(f.savedEdges, edge)
 	f.edges[edge.FromNodeID] = append(f.edges[edge.FromNodeID], edge)
 	return nil
@@ -136,5 +143,93 @@ func TestGraphLookupPreservesNotFoundAndStorageErrors(t *testing.T) {
 	})
 	if _, err := failing.GetIncidentGraph(context.Background(), "inc-1", 3); !errors.Is(err, storageFailure) {
 		t.Fatalf("expected storage error propagation, got %v", err)
+	}
+}
+
+// Regression test: a traversal performed after AddEdge must observe the new
+// edge instead of the edge list cached by an earlier traversal.
+func TestTraverseGraphSeesEdgesAddedAfterFirstTraversal(t *testing.T) {
+	store := &fakeGraphStore{
+		nodes: map[string]*models.Node{},
+		edges: map[string][]*models.Edge{},
+	}
+	store.nodes["n1"] = &models.Node{ID: "n1", Type: models.NodeTypeService, Label: "n1"}
+	store.nodes["n2"] = &models.Node{ID: "n2", Type: models.NodeTypeService, Label: "n2"}
+	store.nodes["n3"] = &models.Node{ID: "n3", Type: models.NodeTypeService, Label: "n3"}
+	store.edges["n1"] = []*models.Edge{{ID: "e1", FromNodeID: "n1", ToNodeID: "n2", Type: models.EdgeTypeDependsOn, Weight: 1}}
+
+	builder := NewBuilder(store)
+	opts := models.TraversalOptions{MaxDepth: 1}
+
+	first, err := builder.TraverseGraph(context.Background(), "n1", opts)
+	if err != nil {
+		t.Fatalf("first traverse: %v", err)
+	}
+	if len(first.Edges) != 1 {
+		t.Fatalf("first traverse: expected 1 edge, got %d", len(first.Edges))
+	}
+	if got := builder.adjCache.GetEdges("n1"); len(got) != 1 {
+		t.Fatalf("expected n1 edges to be cached after first traverse, got %d", len(got))
+	}
+
+	newEdge := &models.Edge{ID: "e2", FromNodeID: "n1", ToNodeID: "n3", Type: models.EdgeTypeDependsOn, Weight: 1}
+	if err := builder.AddEdge(context.Background(), newEdge); err != nil {
+		t.Fatalf("add edge: %v", err)
+	}
+
+	second, err := builder.TraverseGraph(context.Background(), "n1", opts)
+	if err != nil {
+		t.Fatalf("second traverse: %v", err)
+	}
+	if len(second.Edges) != 2 {
+		t.Fatalf("second traverse: expected 2 edges after AddEdge, got %d (stale adjacency cache)", len(second.Edges))
+	}
+}
+
+// Regression test: both write paths invalidate the adjacency cache, and a
+// failed write leaves a previously populated cache untouched.
+func TestGraphWritesInvalidateAdjacencyCache(t *testing.T) {
+	ctx := context.Background()
+	store := &fakeGraphStore{
+		nodes: map[string]*models.Node{},
+		edges: map[string][]*models.Edge{},
+	}
+	store.nodes["n1"] = &models.Node{ID: "n1", Type: models.NodeTypeService, Label: "n1"}
+	store.edges["n1"] = []*models.Edge{{ID: "e1", FromNodeID: "n1", ToNodeID: "n2", Type: models.EdgeTypeDependsOn, Weight: 1}}
+	builder := NewBuilder(store)
+
+	populate := func(expected int) {
+		t.Helper()
+		if _, err := builder.TraverseGraph(ctx, "n1", models.TraversalOptions{MaxDepth: 1}); err != nil {
+			t.Fatalf("traverse: %v", err)
+		}
+		if got := builder.adjCache.GetEdges("n1"); len(got) != expected {
+			t.Fatalf("expected populated adjacency cache with %d edges, got %d", expected, len(got))
+		}
+	}
+
+	populate(1)
+	if err := builder.AddNode(ctx, &models.Node{ID: "n2", Type: models.NodeTypeService, Label: "n2"}); err != nil {
+		t.Fatalf("add node: %v", err)
+	}
+	if got := builder.adjCache.GetEdges("n1"); got != nil {
+		t.Fatalf("expected AddNode to invalidate adjacency cache, got %d edges", len(got))
+	}
+
+	populate(1)
+	if err := builder.AddEdge(ctx, &models.Edge{ID: "e2", FromNodeID: "n1", ToNodeID: "n2", Type: models.EdgeTypeDependsOn, Weight: 1}); err != nil {
+		t.Fatalf("add edge: %v", err)
+	}
+	if got := builder.adjCache.GetEdges("n1"); got != nil {
+		t.Fatalf("expected AddEdge to invalidate adjacency cache, got %d edges", len(got))
+	}
+
+	populate(2)
+	store.saveErr = errors.New("graph store write failed")
+	if err := builder.AddNode(ctx, &models.Node{ID: "n3", Type: models.NodeTypeService, Label: "n3"}); err == nil {
+		t.Fatal("expected AddNode to propagate the storage error")
+	}
+	if got := builder.adjCache.GetEdges("n1"); len(got) != 2 {
+		t.Fatalf("expected failed AddNode to preserve adjacency cache, got %d edges", len(got))
 	}
 }
