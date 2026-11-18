@@ -36,7 +36,7 @@ pub fn normalize_remediation_feedback(feedback: &mut RemediationFeedback) {
 pub fn normalize_graph_nodes(nodes: &mut [Value]) {
     for node in nodes {
         if let Some(id) = node.get("id").and_then(Value::as_str) {
-            let normalized = id.trim().to_string();
+            let normalized = id.trim().to_lowercase();
             node["id"] = Value::String(normalized);
         }
     }
@@ -123,5 +123,37 @@ mod tests {
             "got {:?}",
             feedback.timestamp
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::normalize_graph_nodes;
+    use serde_json::{json, Value};
+
+    #[test]
+    fn normalizes_graph_node_ids_to_lowercase_trimmed_strings() {
+        let mut nodes: Vec<Value> = vec![
+            json!({"id": "  Service-ABC  "}),
+            json!({"id": "MiXeD_Node"}),
+        ];
+
+        normalize_graph_nodes(&mut nodes);
+
+        assert_eq!(nodes[0]["id"], Value::String("service-abc".to_string()));
+        assert_eq!(nodes[1]["id"], Value::String("mixed_node".to_string()));
+    }
+
+    #[test]
+    fn leaves_non_string_and_missing_ids_untouched() {
+        let mut nodes: Vec<Value> = vec![
+            json!({"id": 42}),
+            json!({"name": "no-id"}),
+        ];
+
+        normalize_graph_nodes(&mut nodes);
+
+        assert_eq!(nodes[0]["id"], json!(42));
+        assert_eq!(nodes[1], json!({"name": "no-id"}));
     }
 }
