@@ -65,7 +65,14 @@ impl Signature {
 
         if !timestamps.is_empty() {
             let first = timestamps[0];
-            sig.temporal_sequence = timestamps.iter().map(|&t| t - first).collect();
+            // Saturating subtraction keeps deltas well-defined even when the
+            // span between two timestamps overflows i64 (e.g. i64::MIN to
+            // i64::MAX). A plain `-` would panic in debug builds and wrap to
+            // an incorrect value in release builds.
+            sig.temporal_sequence = timestamps
+                .iter()
+                .map(|&t| t.saturating_sub(first))
+                .collect();
         }
 
         let shape_parts: Vec<String> = events
@@ -250,6 +257,49 @@ mod tests {
         assert!(sig.shape.contains("Latency"));
         assert!(sig.shape.contains("Timeout"));
         assert!(!sig.temporal_sequence.is_empty());
+    }
+
+    #[test]
+    fn test_temporal_sequence_saturates_on_overflow() {
+        // `i64::MAX - i64::MIN` overflows i64. The delta must saturate instead
+        // of panicking (debug) or wrapping to a wrong value (release).
+        let events = vec![
+            Event {
+                kind: "deploy".to_string(),
+                service: None,
+                timestamp_ms: i64::MIN,
+            },
+            Event {
+                kind: "latency_spike".to_string(),
+                service: None,
+                timestamp_ms: i64::MAX,
+            },
+        ];
+
+        let sig = Signature::from_causal_chain(&events);
+
+        assert_eq!(sig.temporal_sequence, vec![0, i64::MAX]);
+    }
+
+    #[test]
+    fn test_temporal_sequence_saturates_on_underflow() {
+        // `i64::MIN - i64::MAX` underflows i64; the delta must saturate.
+        let events = vec![
+            Event {
+                kind: "deploy".to_string(),
+                service: None,
+                timestamp_ms: i64::MAX,
+            },
+            Event {
+                kind: "latency_spike".to_string(),
+                service: None,
+                timestamp_ms: i64::MIN,
+            },
+        ];
+
+        let sig = Signature::from_causal_chain(&events);
+
+        assert_eq!(sig.temporal_sequence, vec![0, i64::MIN]);
     }
 
     #[test]
