@@ -53,3 +53,34 @@ def test_api_key_precedes_public_basic_auth() -> None:
     )
 
     assert sink._auth_headers() == {"Authorization": "Bearer api-key"}
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"api_key": "lz_sec_secret"},
+        {"username": "basic", "password": "secret"},
+    ],
+)
+def test_credentials_reject_plaintext_http_remote_collector(kwargs) -> None:
+    config = Config(collector_endpoint="http://remote.example/events", **kwargs)
+
+    with pytest.raises(ValueError, match="HTTPS"):
+        config.validate()
+
+
+@pytest.mark.parametrize(
+    "endpoint",
+    [
+        "https://remote.example/events",
+        "http://localhost:8080/events",
+        "http://127.0.0.1:8080/events",
+        "http://[::1]:8080/events",
+    ],
+)
+def test_api_key_allows_https_and_local_http_collectors(endpoint) -> None:
+    Config(collector_endpoint=endpoint, api_key="lz_sec_secret").validate()
+
+
+def test_plaintext_http_remote_collector_without_credentials_is_allowed() -> None:
+    Config(collector_endpoint="http://remote.example/events").validate()
