@@ -2,6 +2,8 @@ package commands
 
 import (
 	"context"
+	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -658,5 +660,74 @@ func TestSignaturesCommandRendersValidShape(t *testing.T) {
 	}
 	if !strings.Contains(out, "sig_1") {
 		t.Fatalf("expected signature id in output, got %q", out)
+	}
+}
+
+// errReader emits data first, then fails with err on a later read. This
+// reproduces a stream truncated mid-read, the condition bufio.Scanner
+// reports through Scanner.Err().
+type errReader struct {
+	data []byte
+	err  error
+	sent bool
+}
+
+func (r *errReader) Read(p []byte) (int, error) {
+	if len(r.data) > 0 {
+		n := copy(p, r.data)
+		r.data = r.data[n:]
+		return n, nil
+	}
+	if !r.sent {
+		r.sent = true
+		return 0, r.err
+	}
+	return 0, io.EOF
+}
+
+func TestStreamLinesReturnsScannerError(t *testing.T) {
+	wantErr := errors.New("stream truncated")
+	r := &errReader{data: []byte(`{"level":"info","event":"test.event"}` + "\n"), err: wantErr}
+
+	_, gotErr := captureStdout(t, func() error {
+		return streamLines(context.Background(), r)
+	})
+	if !errors.Is(gotErr, wantErr) {
+		t.Fatalf("streamLines error = %v, want %v", gotErr, wantErr)
+	}
+}
+
+func TestStreamLinesCleanEOFReturnsNil(t *testing.T) {
+	r := strings.NewReader(`{"level":"info","event":"test.event"}` + "\n")
+	_, gotErr := captureStdout(t, func() error {
+		return streamLines(context.Background(), r)
+	})
+	if gotErr != nil {
+		t.Fatalf("streamLines error = %v, want nil", gotErr)
+	}
+}
+
+func TestTailCommandPropagatesStreamError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/tail" {
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+		// Declaring more bytes than we write makes the connection close
+		// early, so the client body read fails with io.ErrUnexpectedEOF.
+		w.Header().Set("Content-Length", "1024")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"level":"info","event":"test.event"}` + "\n"))
+	}))
+	defer srv.Close()
+
+	cfg := config.Config{CollectorURL: srv.URL}
+	_, err := captureStdout(t, func() error {
+		return TailCommand(context.Background(), cfg, nil)
+	})
+	if err == nil {
+		t.Fatal("TailCommand returned nil for a truncated stream, want an error")
+	}
+	if !errors.Is(err, io.ErrUnexpectedEOF) {
+		t.Fatalf("TailCommand error = %v, want io.ErrUnexpectedEOF", err)
 	}
 }
