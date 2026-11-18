@@ -135,6 +135,9 @@ func TestMiddlewareRecoversPanicAndAddsRoute(t *testing.T) {
 	if ev.Event != "fiber.custom" || ev.Error == nil {
 		t.Fatalf("panic event = %+v", ev)
 	}
+	if ev.Route != "/panic" {
+		t.Fatalf("panic event route = %q, want %q", ev.Route, "/panic")
+	}
 	if got := (panicErr{value: "x"}).Error(); got != "panic recovered: x" {
 		t.Fatalf("panicErr = %q", got)
 	}
