@@ -230,6 +230,88 @@ func TestLozaIngestServiceIngestStream(t *testing.T) {
 	assert.Equal(t, int64(3), state.metrics.EventsAccepted)
 }
 
+// partialIngestState accepts a fixed number of events so tests can exercise
+// the Rejected counter returned by ingestGRPCBatch.
+type partialIngestState struct {
+	mockState
+	accepted int
+}
+
+func (s *partialIngestState) Ingest(ctx context.Context, events [][]byte) (int, error) {
+	return s.accepted, nil
+}
+
+func TestGRPCIngestBatchReportsMalformedEventsAsInvalid(t *testing.T) {
+	state := &mockState{ready: true, healthy: true}
+	svc := &logIngestSvcServer{state: state}
+
+	batch := &EventBatch{
+		Events: []*Event{
+			nil,
+			{RawJson: ""},
+			{RawJson: `{"id":"1"}`},
+		},
+	}
+
+	resp, err := svc.Push(context.Background(), batch)
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), resp.Accepted)
+	assert.Equal(t, int64(2), resp.Invalid, "nil and empty-RawJson events must be reported as invalid")
+	assert.Equal(t, int64(0), resp.Rejected)
+	assert.Equal(t, int64(1), state.metrics.EventsAccepted, "only the valid event should reach Ingest")
+}
+
+func TestGRPCIngestBatchAllMalformedReportsInvalid(t *testing.T) {
+	state := &mockState{ready: true, healthy: true}
+	svc := &lozaIngestSvcServer{state: state}
+
+	resp, err := svc.Ingest(context.Background(), &EventBatch{
+		Events: []*Event{nil, {}, {RawJson: ""}},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, int64(0), resp.Accepted)
+	assert.Equal(t, int64(3), resp.Invalid, "an all-malformed batch must still report the dropped events")
+	assert.Equal(t, int64(0), resp.Rejected)
+	assert.Equal(t, int64(0), state.metrics.EventsAccepted)
+}
+
+func TestGRPCIngestBatchReportsRejected(t *testing.T) {
+	state := &partialIngestState{accepted: 1}
+	svc := &logIngestSvcServer{state: state}
+
+	resp, err := svc.Push(context.Background(), &EventBatch{
+		Events: []*Event{
+			{RawJson: `{"id":"1"}`},
+			{RawJson: `{"id":"2"}`},
+			{RawJson: `{"id":"3"}`},
+		},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), resp.Accepted)
+	assert.Equal(t, int64(2), resp.Rejected, "events passed to Ingest but not accepted must be reported as rejected")
+	assert.Equal(t, int64(0), resp.Invalid)
+}
+
+func TestLozaIngestServiceIngestStreamReportsDroppedEvents(t *testing.T) {
+	state := &mockState{ready: true, healthy: true}
+	svc := &lozaIngestSvcServer{state: state}
+	stream := &mockIngestStream{
+		ctx: context.Background(),
+		batches: []*EventBatch{
+			{Events: []*Event{nil, {RawJson: `{"id":"1"}`}}},
+			{Events: []*Event{{RawJson: ""}, {RawJson: `{"id":"2"}`}}},
+		},
+	}
+
+	err := svc.IngestStream(stream)
+	require.NoError(t, err)
+	require.NotNil(t, stream.closed)
+	assert.Equal(t, int64(2), stream.closed.Accepted)
+	assert.Equal(t, int64(2), stream.closed.Invalid, "stream must aggregate the Invalid counter across batches")
+	assert.Equal(t, int64(0), stream.closed.Rejected)
+	assert.Equal(t, int64(2), state.metrics.EventsAccepted)
+}
+
 func TestGraphQLServerDisabled(t *testing.T) {
 	cfg := GraphQLConfig{Enabled: false}
 	state := &mockState{ready: true, healthy: true}

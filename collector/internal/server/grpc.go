@@ -226,18 +226,24 @@ func (s *lozaIngestSvcServer) IngestStream(stream lozav1.LozaIngest_IngestStream
 
 func ingestGRPCBatch(ctx context.Context, state State, batch *lozav1.RawEventBatch) (*lozav1.PushResponse, error) {
 	if batch == nil || batch.Events == nil {
-		return &lozav1.PushResponse{Accepted: 0}, nil
+		return &lozav1.PushResponse{}, nil
 	}
 
 	events := make([][]byte, 0, len(batch.Events))
+	var invalid int64
 	for _, event := range batch.Events {
-		if event != nil && event.RawJson != "" {
-			events = append(events, []byte(event.RawJson))
+		if event == nil || event.RawJson == "" {
+			invalid++
+			continue
 		}
+		events = append(events, []byte(event.RawJson))
 	}
 
+	// Keep the invalid count even when no event survives validation, so callers
+	// can tell an empty batch apart from a batch whose events were all dropped.
+	resp := &lozav1.PushResponse{Invalid: invalid}
 	if len(events) == 0 {
-		return &lozav1.PushResponse{Accepted: 0}, nil
+		return resp, nil
 	}
 
 	accepted, err := state.Ingest(ctx, events)
@@ -245,7 +251,11 @@ func ingestGRPCBatch(ctx context.Context, state State, batch *lozav1.RawEventBat
 		return nil, status.Errorf(codes.Internal, "ingest failed: %v", err)
 	}
 
-	return &lozav1.PushResponse{Accepted: int64(accepted)}, nil
+	resp.Accepted = int64(accepted)
+	resp.Rejected = int64(len(events)) - resp.Accepted
+	// Deduped stays zero: State.Ingest reports only the accepted count and the
+	// cumulative metrics are not attributable to a single batch.
+	return resp, nil
 }
 
 func (s *otlpLogsServiceServer) Export(ctx context.Context, req *collectorlogsv1.ExportLogsServiceRequest) (*collectorlogsv1.ExportLogsServiceResponse, error) {
