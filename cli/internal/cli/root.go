@@ -45,24 +45,36 @@ var CommandMaturity = map[string]string{
 	"debug":       "experimental",
 }
 
-func Run(args []string) error {
-	if len(args) == 0 {
-		printHelp()
-		return nil
+// isGlobalOutputFormat reports whether value is one of the formats accepted by
+// the global --output flag. Subcommands reuse --output for file paths (for
+// example `emit sample --output envelope.json`); a value that is not a known
+// format must therefore be left in place for the subcommand's own flag set.
+func isGlobalOutputFormat(value string) bool {
+	switch value {
+	case "json", "table", "text", "yaml":
+		return true
 	}
+	return false
+}
 
-	// Extract global flags
+// splitGlobalFlags removes global flags from args and returns the remaining
+// command arguments together with the verbose and output-format settings.
+func splitGlobalFlags(args []string) ([]string, bool, string) {
 	verbose := false
 	outputFmt := "text"
-	var filtered []string
+	filtered := make([]string, 0, len(args))
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
 		case "--verbose":
 			verbose = true
 		case "--output":
-			if i+1 < len(args) {
+			if i+1 < len(args) && isGlobalOutputFormat(args[i+1]) {
 				i++
 				outputFmt = args[i]
+			} else {
+				// Not a display format: preserve the flag and its value so the
+				// invoked subcommand can parse it (e.g. a sample output path).
+				filtered = append(filtered, args[i])
 			}
 		case "--output=json", "--output=table", "--output=text":
 			outputFmt = strings.TrimPrefix(args[i], "--output=")
@@ -70,7 +82,16 @@ func Run(args []string) error {
 			filtered = append(filtered, args[i])
 		}
 	}
-	args = filtered
+	return filtered, verbose, outputFmt
+}
+
+func Run(args []string) error {
+	if len(args) == 0 {
+		printHelp()
+		return nil
+	}
+
+	args, verbose, outputFmt := splitGlobalFlags(args)
 
 	if len(args) == 0 {
 		printHelp()
