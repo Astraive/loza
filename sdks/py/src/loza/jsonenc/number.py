@@ -13,7 +13,10 @@ def safe_number(value: Any):
     if isinstance(value, float):
         return value if math.isfinite(value) else None
     if isinstance(value, Decimal):
-        return float(value) if value.is_finite() else None
+        if not value.is_finite():
+            return None
+        result = float(value)
+        return result if math.isfinite(result) else None
     return None
 
 
