@@ -187,7 +187,11 @@ func sendBatch(ctx context.Context, client *http.Client, cfg Config, batch [][]b
 	}
 
 	body, _ := json.Marshal(map[string]any{"events": batch})
-	req, _ := http.NewRequestWithContext(ctx, "POST", cfg.URL, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, cfg.URL, bytes.NewReader(body))
+	if err != nil {
+		atomic.AddInt64(&stats.errors, int64(len(batch)))
+		return
+	}
 	req.Header.Set("Content-Type", "application/json")
 	if cfg.APIKey != "" {
 		req.Header.Set("X-API-Key", cfg.APIKey)
