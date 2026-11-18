@@ -99,6 +99,22 @@ fn composite_redactors_are_real() {
 }
 
 #[test]
+fn allow_fields_redacts_every_field_not_in_the_allowlist() {
+    let logger = New(Config::test("checkout").with_redactor(loza::AllowFields(&["message"])));
+    let mut ctx = logger.start_event(Params::new("redaction.allow_fields"));
+    logger.append(&mut ctx, LozaString("message", "hello world"));
+    logger.append(&mut ctx, LozaString("token", "abc123"));
+    logger.append(&mut ctx, LozaString("password", "secret456"));
+    let _ = logger.finish(&mut ctx, "success");
+
+    let payload: Value = serde_json::from_str(&logger.emit(&ctx).unwrap()).unwrap();
+
+    assert_eq!(payload["attrs"]["message"], "hello world");
+    assert_eq!(payload["attrs"]["token"], "[REDACTED]");
+    assert_eq!(payload["attrs"]["password"], "[REDACTED]");
+}
+
+#[test]
 fn duplicate_policy_keep_both_preserves_values() {
     let logger = New(Config::test("checkout").with_duplicate_policy(loza::KeepBoth));
     let mut ctx = logger.start_event(Params::new("duplicate.keep_both"));

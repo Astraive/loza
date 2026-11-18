@@ -16,6 +16,25 @@ use std::time::Instant;
 const DEFAULT_ASYNC_QUEUE_SIZE: usize = 8192;
 const DEFAULT_ASYNC_MAX_BATCH_BYTES: usize = 256 * 1024;
 
+// An allowlist redactor redacts every key it is not told to keep. The raw
+// event carries the canonical envelope fields, which must survive redaction
+// for validation to succeed, so add them to the caller's allowlist before
+// applying the redactor to a raw event.
+fn with_envelope_allowlist(redactor: &crate::RedactorConfig) -> crate::RedactorConfig {
+    match redactor {
+        crate::RedactorConfig::AllowKeys(keys) => {
+            let mut allowed = keys.clone();
+            for field in spec_contract::ALLOWED_TOP_LEVEL_FIELDS {
+                if !allowed.iter().any(|key| key == field) {
+                    allowed.push((*field).to_string());
+                }
+            }
+            crate::RedactorConfig::AllowKeys(allowed)
+        }
+        other => other.clone(),
+    }
+}
+
 pub struct Logger {
     config: Config,
     async_runtime: Option<Arc<AsyncRuntime>>,
@@ -276,7 +295,8 @@ impl Logger {
                 let raw = serde_json::to_value(ctx)
                     .unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
                 let raw = crate::event::apply_sensitive_to_value(raw, ctx);
-                let redacted = redaction::redact(raw, &self.config.redactor);
+                let redactor = with_envelope_allowlist(&self.config.redactor);
+                let redacted = redaction::redact(raw, &redactor);
                 schema::encode_schema_from_value(redacted, other)
             }
         };
