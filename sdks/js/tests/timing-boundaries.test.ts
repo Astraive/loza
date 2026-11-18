@@ -73,6 +73,21 @@ describe('Timing boundaries', () => {
       assert.equal(stopped.elapsed(), 10);
     });
   });
+  it('records a timer entry when the withTimer wrapped function throws', () => {
+    withClock(setNow => {
+      const event = new Event({ event: 'timed', service: 'svc' }, 'svc', 'test');
+      setNow(1010);
+      assert.throws(
+        () => withTimer(event, 'failing', () => { setNow(1025); throw new Error('timer exploded'); }),
+        /timer exploded/,
+      );
+      assert.equal(event.timers.length, 1);
+      assert.equal(event.timers[0].name, 'failing');
+      assert.equal(event.timers[0].duration_ms, 15);
+      assert.equal(event.timers[0].attrs?.error_message, 'Error: timer exploded');
+    });
+  });
+
   it('handles timing adapters with empty event state and omitted attrs', () => {
     withClock(setNow => {
       const processEvent: Record<string, any> = {};
