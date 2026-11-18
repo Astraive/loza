@@ -1,4 +1,4 @@
-use std::cmp::Ordering;
+use std::cmp::{Ordering, Reverse};
 use std::collections::BinaryHeap;
 
 use crate::signature::Signature;
@@ -77,6 +77,8 @@ impl TopK {
             return Vec::new();
         }
 
+        // Reverse turns BinaryHeap's max-heap into a min-heap, so peek() is
+        // the weakest score currently retained and can be evicted.
         let mut heap = BinaryHeap::with_capacity(k);
 
         for cand in candidates {
@@ -87,22 +89,27 @@ impl TopK {
             }
 
             if heap.len() < k {
-                heap.push(PQItem {
+                heap.push(Reverse(PQItem {
                     score,
                     signature_id: cand.shape.clone(),
-                });
-            } else if score > heap.peek().map(|p| p.score).unwrap_or(0.0) {
+                }));
+            } else if score
+                > heap
+                    .peek()
+                    .map(|p: &Reverse<PQItem>| p.0.score)
+                    .unwrap_or(0.0)
+            {
                 heap.pop();
-                heap.push(PQItem {
+                heap.push(Reverse(PQItem {
                     score,
                     signature_id: cand.shape.clone(),
-                });
+                }));
             }
         }
 
         let mut results: Vec<ScoredMatch> = heap
             .into_iter()
-            .map(|item| ScoredMatch::new(item.signature_id, item.score))
+            .map(|item| ScoredMatch::new(item.0.signature_id, item.0.score))
             .collect();
 
         results.sort_by(|a, b| {
@@ -267,6 +274,35 @@ mod tests {
         assert!((results[0].similarity - 1.0).abs() < 1e-6);
         assert!((results[1].similarity - 0.9).abs() < 1e-6);
         assert_eq!(results[1].signature_id, "mid");
+    }
+
+    #[test]
+    fn test_topk_keeps_highest_scores() {
+        let mut query = Signature::new();
+        query.feature_vector = vec![1.0, 0.0];
+
+        // Candidates are ordered worst-first so that a correct top-k has to
+        // evict early entries once better scores arrive.
+        let candidates: Vec<Signature> = [60.0_f64, 45.0, 30.0, 15.0, 0.0]
+            .iter()
+            .map(|deg| {
+                let rad = deg.to_radians();
+                let mut sig = Signature::new();
+                sig.shape = format!("cand-{deg}");
+                sig.feature_vector = vec![rad.cos(), rad.sin()];
+                sig
+            })
+            .collect();
+
+        let topk = TopK::new(2).with_metric("cosine");
+        let results = topk.search(&query, &candidates);
+        let brute = search_brute(&query, &candidates, 2, "cosine");
+
+        assert_eq!(results.len(), 2);
+        for (got, want) in results.iter().zip(brute.iter()) {
+            assert!((got.similarity - want.similarity).abs() < 1e-9);
+        }
+        assert!(results[0].similarity >= results[1].similarity);
     }
 
     #[test]
