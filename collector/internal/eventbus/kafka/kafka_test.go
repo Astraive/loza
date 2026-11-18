@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/astraive/loza/collector/internal/eventbus"
+	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kgo"
 )
 
@@ -166,5 +167,61 @@ func TestPublishFirstErrKeepsFirstError(t *testing.T) {
 	first.set(errTypeB{"second"})
 	if got := first.load(); got != want {
 		t.Fatalf("first error not preserved: got %v (type %T), want %v", got, got, want)
+	}
+}
+
+func TestIsTopicAlreadyExists(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{
+			name: "typed kerr code 36",
+			err:  kerr.TopicAlreadyExists,
+			want: true,
+		},
+		{
+			// Regression: a code-36 error whose message text does not contain
+			// "TOPIC_ALREADY_EXISTS" must still be treated as benign. The old
+			// string-matching check classified this as a fatal startup error.
+			name: "code 36 with different message text",
+			err: &kerr.Error{
+				Code:        kerr.TopicAlreadyExists.Code,
+				Message:     "TOPIC_EXISTS",
+				Description: "the topic is already present",
+			},
+			want: true,
+		},
+		{
+			name: "wrapped code 36 error",
+			err:  fmt.Errorf("create topic: %w", kerr.TopicAlreadyExists),
+			want: true,
+		},
+		{
+			name: "different typed kafka error",
+			err:  kerr.UnknownTopicOrPartition,
+			want: false,
+		},
+		{
+			// Regression: a non-kafka error merely mentioning the string must
+			// not be mistaken for a benign topic-exists response.
+			name: "plain error containing the old marker string",
+			err:  errors.New("TOPIC_ALREADY_EXISTS is not a kafka error type"),
+			want: false,
+		},
+		{
+			name: "nil error",
+			err:  nil,
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isTopicAlreadyExists(tt.err); got != tt.want {
+				t.Errorf("isTopicAlreadyExists(%v) = %v, want %v", tt.err, got, tt.want)
+			}
+		})
 	}
 }
