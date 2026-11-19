@@ -8,6 +8,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"reflect"
+	"strings"
 	"time"
 )
 
@@ -230,9 +231,60 @@ func BoundedContext(parent context.Context, timeout time.Duration) (context.Cont
 	return context.WithTimeout(parent, timeout)
 }
 
-func ValidateQuery(query string) error {
-	if query == "" {
+// ValidateQuery enforces the Connection query contract declared above: Query
+// accepts only a single, read-only, parameterized statement produced by the
+// LQL compiler. Raw or non-parameterized SQL, stacked statements, comment
+// delimiters, and data-modifying statements are rejected.
+func ValidateQuery(query string, args ...any) error {
+	trimmed := strings.TrimSpace(query)
+	if trimmed == "" {
 		return fmt.Errorf("query is required")
 	}
+	// A single statement without comments is all the compiler may emit. This
+	// blocks stacked statements and comment-based SQL smuggling.
+	if strings.Contains(trimmed, ";") || strings.Contains(trimmed, "--") ||
+		strings.Contains(trimmed, "/*") || strings.Contains(trimmed, "*/") {
+		return fmt.Errorf("query must be a single statement without comments")
+	}
+	lower := strings.ToLower(trimmed)
+	readOnly := false
+	for _, prefix := range []string{"select", "with"} {
+		if strings.HasPrefix(lower, prefix) {
+			readOnly = true
+			break
+		}
+	}
+	if !readOnly {
+		return fmt.Errorf("query must be read-only")
+	}
+	// Bound arguments must travel through placeholders, never interpolated
+	// into the statement text. Supported drivers use ? , $1, @name or :name.
+	if len(args) > 0 && !containsPlaceholder(trimmed) {
+		return fmt.Errorf("query with arguments must use placeholders")
+	}
 	return nil
+}
+
+// containsPlaceholder reports whether sql uses a bind placeholder understood
+// by one of the supported drivers.
+func containsPlaceholder(sql string) bool {
+	for i := 0; i < len(sql); i++ {
+		switch sql[i] {
+		case '?':
+			return true
+		case '$':
+			if i+1 < len(sql) && sql[i+1] >= '0' && sql[i+1] <= '9' {
+				return true
+			}
+		case '@', ':':
+			if i+1 < len(sql) && isPlaceholderName(sql[i+1]) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func isPlaceholderName(b byte) bool {
+	return b == '_' || (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z')
 }

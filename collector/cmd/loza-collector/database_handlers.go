@@ -185,6 +185,10 @@ func (s *collectorState) HandleDatabaseQuery(w http.ResponseWriter, r *http.Requ
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "lql_compile_failed"})
 		return
 	}
+	if err := database.ValidateQuery(plan.SQL, plan.Args...); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_query_plan"})
+		return
+	}
 	start := time.Now()
 	result, err := connection.QueryWithLimit(ctx, planRowLimit(plan, req.Limit), plan.SQL, plan.Args...)
 	if err != nil {

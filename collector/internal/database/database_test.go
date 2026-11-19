@@ -281,4 +281,39 @@ func TestCollectRowsNormalizesValues(t *testing.T) {
 		t.Fatalf("collectRows: %v", err)
 	}
 	assertResultRows(t, result.Rows, [][]any{{"bytes-value", "text-value"}})
+import "testing"
+
+func TestValidateQuery(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		query   string
+		args    []any
+		wantErr bool
+	}{
+		{name: "empty", query: "", wantErr: true},
+		{name: "whitespace only", query: "   \t\n ", wantErr: true},
+		{name: "simple select", query: "SELECT value FROM events", wantErr: false},
+		{name: "cte", query: "WITH recent AS (SELECT 1) SELECT * FROM recent", wantErr: false},
+		{name: "positional postgres placeholder", query: "SELECT * FROM events WHERE name = $1", args: []any{"acme"}, wantErr: false},
+		{name: "question placeholder", query: "SELECT * FROM events WHERE name = ?", args: []any{"acme"}, wantErr: false},
+		{name: "named placeholder", query: "SELECT * FROM events WHERE name = @name", args: []any{"acme"}, wantErr: false},
+		{name: "stacked statements", query: "SELECT 1; DROP TABLE events", wantErr: true},
+		{name: "line comment", query: "SELECT 1 -- trailing", wantErr: true},
+		{name: "block comment", query: "SELECT /* x */ 1", wantErr: true},
+		{name: "delete", query: "DELETE FROM events", wantErr: true},
+		{name: "update", query: "UPDATE events SET name = ?", args: []any{"x"}, wantErr: true},
+		{name: "drop", query: "DROP TABLE events", wantErr: true},
+		{name: "args without placeholder", query: "SELECT 'literal-value'", args: []any{"injected"}, wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateQuery(tt.query, tt.args...)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("ValidateQuery(%q, %d args) error = %v, wantErr %v", tt.query, len(tt.args), err, tt.wantErr)
+			}
+		})
+	}
 }

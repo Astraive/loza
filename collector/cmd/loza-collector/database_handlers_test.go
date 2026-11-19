@@ -44,6 +44,53 @@ func (f fakeLQLCompiler) Compile(_ context.Context, req LQLCompileRequest) (Para
 	return ParameterizedPlan{SQL: "SELECT value", Args: []any{}, Limit: limit}, nil
 }
 func (fakeLQLCompiler) Close(context.Context) error { return nil }
+
+// unsafePlanCompiler stands in for a buggy or compromised compiler that emits
+// raw, non-parameterized SQL instead of a safe parameterized plan.
+type unsafePlanCompiler struct {
+	sql  string
+	args []any
+}
+
+func (c unsafePlanCompiler) Compile(context.Context, LQLCompileRequest) (ParameterizedPlan, error) {
+	return ParameterizedPlan{SQL: c.sql, Args: c.args}, nil
+}
+func (unsafePlanCompiler) Close(context.Context) error { return nil }
+
+type recordingConnection struct {
+	fakeDatabaseConnection
+	queried  bool
+	gotQuery string
+}
+
+func (r *recordingConnection) Query(_ context.Context, query string, _ ...any) (database.Result, error) {
+	r.queried = true
+	r.gotQuery = query
+	return database.Result{Columns: []string{"value"}, Rows: [][]any{{"ok"}}}, nil
+}
+
+func TestDatabaseQueryRejectsUnsafePlanBeforeExecution(t *testing.T) {
+	connection := &recordingConnection{}
+	state := &collectorState{
+		cfg: collectorConfig{
+			authEnabled:         false,
+			databaseConnections: []databaseConnectionConfig{{name: "analytics", queryTimeout: time.Second}},
+		},
+		databaseConnections: map[string]database.Connection{"analytics": connection},
+		lqlCompiler:         unsafePlanCompiler{sql: "SELECT 1; DROP TABLE events"},
+	}
+	request := httptest.NewRequest(http.MethodPost, "/collectors/acme/database/query", strings.NewReader(`{"connection":"analytics","query":"from events | take 1","limit":1}`))
+	request = request.WithContext(publichttp.WithAuthorizedCollector(request.Context(), "acme", "prod"))
+	recorder := httptest.NewRecorder()
+	state.HandleDatabaseQuery(recorder, request)
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body=%s", recorder.Code, recorder.Body.String())
+	}
+	if connection.queried {
+		t.Fatalf("unsafe plan reached the database connection: %q", connection.gotQuery)
+	}
+}
+
 func TestDatabaseConnectionsMetadataIsSanitized(t *testing.T) {
 	connection := &fakeDatabaseConnection{info: database.Metadata{
 		Name: "analytics", Backend: "postgres", Host: "db.internal", Port: 5432,

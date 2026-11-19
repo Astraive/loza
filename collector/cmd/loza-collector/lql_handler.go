@@ -191,6 +191,17 @@ func (s *collectorState) HandleLQLQuery(w http.ResponseWriter, r *http.Request) 
 			})
 			return
 		}
+		if err := database.ValidateQuery(plan.SQL, plan.Args...); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{
+				"error": "lql_compile_failed",
+				"diagnostics": []LQLDiagnostic{{
+					Code:     "invalid_plan",
+					Severity: "error",
+					Message:  "compiler returned a query that violates the parameterized-query contract",
+				}},
+			})
+			return
+		}
 		start := time.Now()
 		queryResult, err := connection.QueryWithLimit(ctx, planRowLimit(plan, req.Limit), plan.SQL, plan.Args...)
 		if err != nil {
