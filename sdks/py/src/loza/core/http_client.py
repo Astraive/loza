@@ -210,7 +210,7 @@ class CollectorClient:
             try:
                 with urlopen(req, timeout=self.timeout) as resp:
                     data = json.loads(resp.read())
-                    if data.get("status") == "ok":
+                    if isinstance(data, dict) and data.get("status") == "ok":
                         return True
             except (URLError, HTTPError, OSError, json.JSONDecodeError):
                 continue
@@ -223,7 +223,7 @@ class CollectorClient:
             try:
                 with urlopen(req, timeout=self.timeout) as resp:
                     data = json.loads(resp.read())
-                    if data.get("status") in ("ok", "ready"):
+                    if isinstance(data, dict) and data.get("status") in ("ok", "ready"):
                         return True
             except (URLError, HTTPError, OSError, json.JSONDecodeError):
                 continue
