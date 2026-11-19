@@ -320,5 +320,46 @@ func TestCloseCancelsBusContextUsedBySubscriptions(t *testing.T) {
 	case <-stopCalled:
 	case <-time.After(time.Second):
 		t.Fatal("subscription stop hook was not called by Close")
+// A zero-value natsBus with its closed flag set short-circuits inside Publish,
+// so PublishDLQ's header logic can be exercised without a running NATS server.
+func TestPublishDLQNilReason(t *testing.T) {
+	bus := &natsBus{}
+	bus.closed.Store(true)
+
+	env := eventbus.Envelope{ID: "dlq-nil-reason", Headers: map[string]string{}}
+
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("PublishDLQ panicked with a nil reason: %v", r)
+		}
+	}()
+
+	err := bus.PublishDLQ(context.Background(), env, nil)
+	if !errors.Is(err, eventbus.ErrBusClosed) {
+		t.Fatalf("PublishDLQ() error = %v, want %v", err, eventbus.ErrBusClosed)
+	}
+	if got, ok := env.Headers["dlq_reason"]; ok {
+		t.Fatalf("PublishDLQ() set dlq_reason for a nil reason: %q", got)
+	}
+	if env.Headers["dlq_time"] == "" {
+		t.Fatal("PublishDLQ() did not set dlq_time")
+	}
+}
+
+func TestPublishDLQNonNilReason(t *testing.T) {
+	bus := &natsBus{}
+	bus.closed.Store(true)
+
+	env := eventbus.Envelope{ID: "dlq-reason", Headers: map[string]string{}}
+
+	err := bus.PublishDLQ(context.Background(), env, errors.New("boom"))
+	if !errors.Is(err, eventbus.ErrBusClosed) {
+		t.Fatalf("PublishDLQ() error = %v, want %v", err, eventbus.ErrBusClosed)
+	}
+	if got := env.Headers["dlq_reason"]; got != "boom" {
+		t.Fatalf("dlq_reason = %q, want %q", got, "boom")
+	}
+	if env.Headers["dlq_time"] == "" {
+		t.Fatal("PublishDLQ() did not set dlq_time")
 	}
 }
