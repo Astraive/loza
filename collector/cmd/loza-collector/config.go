@@ -2026,6 +2026,9 @@ const redactedSecret = "[REDACTED]"
 
 func marshalPrintableConfig(fc fileConfig) ([]byte, error) {
 	redacted := redactConfigForPrint(fc)
+	// Printable() applies an allowlist: only reviewed, non-secret fields keep
+	// their value; every other field becomes collectorconfig.RedactedMarker.
+	redacted := fc.Printable()
 
 	var out bytes.Buffer
 	enc := yaml.NewEncoder(&out)

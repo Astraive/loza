@@ -98,7 +98,10 @@ loza collector version
 
 ### loza collector config print
 
-Print the resolved collector configuration.
+Print the resolved collector configuration. Secrets (API keys, server secrets,
+encryption keys, passwords, DSNs and credential environment references) are
+replaced with `<redacted>`, so the output is safe to paste into terminals, CI
+logs and support tickets.
 
 ```bash
 loza collector config print

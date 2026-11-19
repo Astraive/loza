@@ -852,6 +852,103 @@ func TestValidateFileConfigRedisDedupeRequiresRedisAddr(t *testing.T) {
 	}
 }
 
+// TestMarshalPrintableConfigRedactsAllSecrets is the regression test for the
+// cleartext credential disclosure in `config print`. Every secret-bearing
+// field is populated with a unique sentinel; none of those sentinels may
+// appear in the printable output.
+func TestMarshalPrintableConfigRedactsAllSecrets(t *testing.T) {
+	cfg := validFileConfig()
+
+	// Auth secrets (including values resolved from env at load time).
+	cfg.Auth.ValueEnv = "SENTINEL_AUTH_VALUE_ENV"
+	cfg.Auth.Value = "SENTINEL_AUTH_VALUE"
+	cfg.Auth.ServerSecret = "SENTINEL_AUTH_SERVER_SECRET"
+	cfg.Auth.Grants = []collectorconfig.AuthGrantConfig{{
+		Name: "grant", Collector: "c",
+		PasswordEnv: "SENTINEL_GRANT_PASSWORD_ENV",
+		PublicIDEnv: "SENTINEL_GRANT_PUBLIC_ID_ENV",
+	}}
+	cfg.Auth.Keys = []collectorconfig.AuthKeyConfig{{
+		Name: "key", KeyID: "kid",
+		SecretEnv: "SENTINEL_KEY_SECRET_ENV",
+	}}
+	cfg.Auth.Tokens = []collectorconfig.AuthTokenConfig{{
+		Name: "token", TokenEnv: "SENTINEL_TOKEN_ENV",
+	}}
+
+	// Storage encryption key (the resolved value is yaml:"-" but the env
+	// reference is printable, so redact both).
+	cfg.Storage.EncryptionKeyEnv = "SENTINEL_STORAGE_ENCRYPTION_KEY_ENV"
+	cfg.Storage.EncryptionKey = "SENTINEL_STORAGE_ENCRYPTION_KEY"
+
+	// Database connection credentials.
+	cfg.Database.Connections = []collectorconfig.DatabaseConnectionConfig{{
+		Name: "pg", Type: "postgres",
+		UsernameEnv: "SENTINEL_DB_USERNAME_ENV",
+		PasswordEnv: "SENTINEL_DB_PASSWORD_ENV",
+	}}
+
+	// Fanout destination credentials.
+	cfg.Fanout.Outputs = []collectorconfig.FanoutOutputConfig{{
+		Name: "out", Type: "clickhouse",
+		ClickHouse: collectorconfig.FanoutClickHouseConfig{Password: "SENTINEL_CH_PASSWORD"},
+		Postgres:   collectorconfig.FanoutPostgresConfig{DSN: "SENTINEL_PG_DSN"},
+		S3: collectorconfig.FanoutS3Config{
+			AccessKey: "SENTINEL_S3_ACCESS_KEY", SecretKey: "SENTINEL_S3_SECRET_KEY",
+		},
+		GCS: collectorconfig.FanoutGCSConfig{CredentialsFile: "SENTINEL_GCS_CREDS_FILE"},
+	}}
+
+	// Dedupe, cortex bridge and event bus secrets.
+	cfg.Dedupe.Key = "SENTINEL_DEDUPE_KEY"
+	cfg.Dedupe.RedisPassword = "SENTINEL_DEDUPE_REDIS_PASSWORD"
+	cfg.CortexBridge.APIKey = "SENTINEL_CORTEX_API_KEY"
+	cfg.EventBus.Redis.Password = "SENTINEL_EVENTBUS_REDIS_PASSWORD"
+	cfg.EventBus.NATS.Password = "SENTINEL_EVENTBUS_NATS_PASSWORD"
+
+	secrets := []string{
+		"SENTINEL_AUTH_VALUE_ENV", "SENTINEL_AUTH_VALUE", "SENTINEL_AUTH_SERVER_SECRET",
+		"SENTINEL_GRANT_PASSWORD_ENV", "SENTINEL_GRANT_PUBLIC_ID_ENV",
+		"SENTINEL_KEY_SECRET_ENV", "SENTINEL_TOKEN_ENV",
+		"SENTINEL_STORAGE_ENCRYPTION_KEY_ENV", "SENTINEL_STORAGE_ENCRYPTION_KEY",
+		"SENTINEL_DB_USERNAME_ENV", "SENTINEL_DB_PASSWORD_ENV",
+		"SENTINEL_CH_PASSWORD", "SENTINEL_PG_DSN",
+		"SENTINEL_S3_ACCESS_KEY", "SENTINEL_S3_SECRET_KEY", "SENTINEL_GCS_CREDS_FILE",
+		"SENTINEL_DEDUPE_KEY", "SENTINEL_DEDUPE_REDIS_PASSWORD",
+		"SENTINEL_CORTEX_API_KEY", "SENTINEL_EVENTBUS_REDIS_PASSWORD",
+		"SENTINEL_EVENTBUS_NATS_PASSWORD",
+	}
+	for _, secret := range secrets {
+		if secret == "" {
+			t.Fatal("test sentinel must be non-empty")
+		}
+	}
+
+	out, err := marshalPrintableConfig(cfg)
+	if err != nil {
+		t.Fatalf("marshal printable config: %v", err)
+	}
+	printed := string(out)
+
+	for _, secret := range secrets {
+		if strings.Contains(printed, secret) {
+			t.Errorf("secret %q leaked into config print output:\n%s", secret, printed)
+		}
+	}
+	if !strings.Contains(printed, collectorconfig.RedactedMarker) {
+		t.Errorf("expected %q marker in printable output", collectorconfig.RedactedMarker)
+	}
+
+	// Non-secret fields must still be present, and the source config must not
+	// be mutated by redaction.
+	if cfg.Auth.ServerSecret != "SENTINEL_AUTH_SERVER_SECRET" {
+		t.Fatal("source config was mutated by redaction")
+	}
+	if !strings.Contains(printed, cfg.Collector.Addr) {
+		t.Errorf("non-secret field collector.addr missing from printable output")
+	}
+}
+
 func TestLoadCollectorConfigQueueModeFromEnv(t *testing.T) {
 	t.Setenv("COLLECTOR_RELIABILITY_MODE", "queue")
 	t.Setenv("COLLECTOR_KAFKA_BROKERS", "k1:9092, k2:9092")
