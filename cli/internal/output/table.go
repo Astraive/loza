@@ -21,7 +21,7 @@ func PrintTable(headers []string, rows [][]string) {
 		if i > 0 {
 			fmt.Print("  ")
 		}
-		fmt.Printf("%-*s", widths[i], Bold(h))
+		fmt.Print(Bold(fmt.Sprintf("%-*s", widths[i], h)))
 	}
 	fmt.Println()
 	for i := range headers {
@@ -52,6 +52,6 @@ func PrintKeyValue(pairs map[string]string) {
 		}
 	}
 	for k, v := range pairs {
-		fmt.Printf("  %-*s  %s\n", maxLen, Dim(k), v)
+		fmt.Printf("  %s  %s\n", Dim(fmt.Sprintf("%-*s", maxLen, k)), v)
 	}
 }
