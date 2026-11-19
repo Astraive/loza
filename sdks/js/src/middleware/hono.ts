@@ -21,9 +21,15 @@ export function lozaHonoMiddleware(opts: HonoMiddlewareOptions = {}) {
       service: opts.service,
     });
 
+    // Use the framework-resolved remote address (socket peer / trusted proxy)
+    // instead of the raw, client-controlled `x-forwarded-for` header. Hono
+    // populates `c.req.ip` using its own trusted-proxy rules, so a client
+    // cannot forge the recorded IP by setting that header.
+    const remoteIP = c.req.ip || '';
+
     loza.enrich(ev,
       AttrString('http.user_agent', c.req.header('user-agent') || ''),
-      AttrString('http.remote_ip', c.req.header('x-forwarded-for') || ''),
+      AttrString('http.remote_ip', remoteIP),
     );
 
     try {

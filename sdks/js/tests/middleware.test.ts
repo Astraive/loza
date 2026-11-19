@@ -1,5 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import { Logger } from '../src/core/logger.ts';
 import { lozaHttpMiddleware } from '../src/middleware/http.ts';
 import { lozaMiddleware } from '../src/middleware/express.ts';
 import { lozaKoaMiddleware } from '../src/middleware/koa.ts';
@@ -7,6 +8,24 @@ import { lozaFastifyPlugin } from '../src/middleware/fastify.ts';
 import { lozaHonoMiddleware } from '../src/middleware/hono.ts';
 import { lozaNextMiddleware } from '../src/middleware/next.ts';
 import { Logger } from '../src/core/logger.ts';
+
+/** Capture attribute values the middleware enriches onto an event. */
+async function captureHonoRemoteIP(ctx: any): Promise<unknown> {
+  const captured: Record<string, unknown> = {};
+  const originalEnrich = Logger.prototype.enrich;
+  Logger.prototype.enrich = function (this: Logger, ...args: any[]) {
+    for (const attr of args.slice(1)) {
+      if (attr && typeof attr === 'object' && 'key' in attr) captured[attr.key] = attr.value;
+    }
+    return originalEnrich.apply(this, args as any);
+  };
+  try {
+    await lozaHonoMiddleware({ service: 'hono' })(ctx, async () => {});
+  } finally {
+    Logger.prototype.enrich = originalEnrich;
+  }
+  return captured['http.remote_ip'];
+}
 
 type HttpResponse = {
   statusCode: number;
@@ -270,6 +289,32 @@ describe('framework middleware', () => {
       { req: { method: 'POST', path: '/bad', header: () => '' }, res: { status: 500 } },
       async () => { throw new Error('bad'); },
     );
+  });
+
+  it('does not trust a client-controlled x-forwarded-for for the Hono remote IP', async () => {
+    const spoofed = '203.0.113.66';
+    const trustedIP = '198.51.100.10';
+    const ctx = {
+      req: {
+        method: 'GET', path: '/me', routePath: '/me',
+        ip: trustedIP, // framework-resolved remote address (trusted)
+        header(name: string) {
+          if (name === 'x-forwarded-for') return spoofed;
+          if (name === 'user-agent') return 'curl/8';
+          return undefined;
+        },
+      },
+      res: { status: 200 },
+    };
+    assert.equal(await captureHonoRemoteIP(ctx), trustedIP);
+
+    // Without a framework-resolved IP we must not fall back to the spoofable
+    // header — an empty value is safer than trusting attacker input.
+    const noResolvedIP = {
+      req: { method: 'GET', path: '/me', header: (name: string) => (name === 'x-forwarded-for' ? spoofed : undefined) },
+      res: { status: 200 },
+    };
+    assert.equal(await captureHonoRemoteIP(noResolvedIP), '');
   });
 
   it('returns Next responses and rethrows failures', async () => {
