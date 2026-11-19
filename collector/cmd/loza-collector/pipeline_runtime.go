@@ -37,10 +37,6 @@ func (s *collectorState) limitsEnabled() bool {
 	return s.processorEnabled("size_limit") || s.processorEnabled("cardinality_limit")
 }
 
-func (s *collectorState) memoryLimiterEnabled() bool {
-	return s.processorEnabled("memory_limiter")
-}
-
 func (s *collectorState) acquireIngestCapacity(eventCount int, totalBytes int64) (*governanceError, func()) {
 	if !s.memoryLimiterEnabled() {
 		return nil, func() {}
@@ -52,6 +48,10 @@ func (s *collectorState) acquireIngestCapacity(eventCount int, totalBytes int64)
 	defer s.inflightMu.Unlock()
 
 	if s.config().maxInflightRequests > 0 && s.metrics.inflightRequests.Load() >= int64(s.config().maxInflightRequests) {
+	// The limits.* values are independent, explicitly configured settings. Enforce
+	// them whenever they are configured (> 0), regardless of whether the
+	// memory_limiter processor is listed in components.processors.
+	if s.cfg.maxInflightRequests > 0 && s.metrics.inflightRequests.Load() >= int64(s.cfg.maxInflightRequests) {
 		return &governanceError{
 			Code:      "backpressure",
 			Message:   "collector max_inflight_requests exceeded",
