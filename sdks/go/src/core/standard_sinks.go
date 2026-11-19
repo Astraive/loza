@@ -340,6 +340,7 @@ func CollectorSink(cfg CollectorSinkConfig) (Sink, error) {
 	}
 	if err := validateCollectorCredentials(
 		cfg.Endpoint,
+		"",
 		cfg.BasicUsername,
 		cfg.BasicPassword,
 		bearerCredential(cfg.Headers),
@@ -593,6 +594,7 @@ func HTTPBatchSink(cfg HTTPBatchSinkConfig) (Sink, error) {
 	}
 	if err := validateCollectorCredentials(
 		cfg.Endpoint,
+		"",
 		cfg.BasicUsername,
 		cfg.BasicPassword,
 		bearerCredential(cfg.Headers),

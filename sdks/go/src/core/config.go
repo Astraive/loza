@@ -611,6 +611,7 @@ func (c Config) Validate() error {
 		}
 	}
 	if c.DSNUsername != "" && strings.ContainsAny(c.DSNUsername, ":\t\r\n ") {
+	if strings.ContainsAny(c.DSNUsername, ":\t\r\n ") {
 		return &ConfigValidationError{
 			Field:   "DSNUsername",
 			Problem: "basic auth username must not contain ':' or whitespace",
@@ -620,6 +621,8 @@ func (c Config) Validate() error {
 	// whenever either is configured, unless Insecure is explicitly enabled for
 	// a local development host. Without this, a config that only sets APIKey
 	// could send "Authorization: Bearer <key>" over plaintext HTTP.
+	// Bearer API keys are as sensitive as Basic credentials. A DSN with
+	// tls=false resolves to an http endpoint and is rejected here too.
 	if c.DSNUsername != "" || c.APIKey != "" {
 		if endpointURL, err := url.Parse(strings.TrimSpace(c.CollectorURL)); err == nil &&
 			strings.EqualFold(endpointURL.Scheme, "http") &&
@@ -698,6 +701,7 @@ func isLocalCollectorHost(host string) bool {
 }
 
 func validateCollectorCredentials(endpoint, username, password, apiKey string, insecure bool) error {
+func validateCollectorCredentials(endpoint, apiKey, username, password string, insecure bool) error {
 	if endpointURL, err := url.Parse(strings.TrimSpace(endpoint)); err == nil &&
 		endpointURL.User != nil {
 		return fmt.Errorf("loza: collector credentials must not be embedded in the endpoint URL")
@@ -707,6 +711,9 @@ func validateCollectorCredentials(endpoint, username, password, apiKey string, i
 	}
 	if username != "" && password == "" && !dsn.IsPublicCredentialUsername(username) {
 		return fmt.Errorf("loza: basic auth username requires a password unless it is an lz_pub_ capability")
+	}
+	if apiKey == "" && username == "" {
+		return nil
 	}
 	if username != "" && strings.ContainsAny(username, ":\t\r\n ") {
 		return fmt.Errorf("loza: basic auth username must not contain ':' or whitespace")

@@ -352,5 +352,34 @@ func TestDLQItemHelpersEscapeIDInPath(t *testing.T) {
 				}
 			}
 		})
+func TestAPIKeyAuthRequiresTLSForNonLocalHosts(t *testing.T) {
+	t.Setenv("LOZA_API_KEY", "lz_sec_live_key")
+	t.Setenv("LOZA_COLLECTOR_API_KEY", "")
+	t.Setenv("LOZA_CORTEX_API_KEY", "")
+
+	for _, endpoint := range []string{"http://collector.example/status", "http://cortex.example/healthz"} {
+		req, err := http.NewRequest(http.MethodGet, endpoint, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := applyAPIKeyAuth(req); err == nil {
+			t.Fatalf("expected %s to reject an API key over plaintext HTTP", endpoint)
+		}
+		if got := req.Header.Get("Authorization"); got != "" {
+			t.Fatalf("bearer header must not be set on rejected request, got %q", got)
+		}
+	}
+
+	for _, endpoint := range []string{"https://collector.example/status", "http://127.0.0.1:9308/status", "http://localhost:9308/status"} {
+		req, err := http.NewRequest(http.MethodGet, endpoint, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := applyAPIKeyAuth(req); err != nil {
+			t.Fatalf("expected %s to accept the API key, got %v", endpoint, err)
+		}
+		if got := req.Header.Get("Authorization"); got != "Bearer lz_sec_live_key" {
+			t.Fatalf("Authorization = %q for %s", got, endpoint)
+		}
 	}
 }

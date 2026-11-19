@@ -51,3 +51,22 @@ def test_invalid_configuration_has_stable_category():
         assert getattr(error, "category", None) == ErrorCategory.INVALID_CONFIGURATION
     else:
         raise AssertionError("expected invalid configuration")
+
+
+def test_api_key_over_plaintext_http_is_rejected():
+    for config in (
+        ConnectionConfig(endpoint="http://collector.example", collector="demo", api_key="lz_sec_live_key"),
+        ConnectionConfig(dsn="loza://collector.example/demo?tls=false", api_key="lz_sec_live_key"),
+    ):
+        try:
+            Client(config)
+        except Exception as error:
+            assert getattr(error, "category", None) == ErrorCategory.INVALID_CONFIGURATION
+            assert "require TLS" in str(error)
+        else:
+            raise AssertionError(f"expected plaintext API-key rejection for {config}")
+
+
+def test_api_key_over_loopback_plaintext_http_is_allowed():
+    client = Client(ConnectionConfig(endpoint="http://127.0.0.1:9308", collector="demo", api_key="local-key"))
+    assert client._api_key == "local-key"

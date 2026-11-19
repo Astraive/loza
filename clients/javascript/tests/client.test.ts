@@ -188,6 +188,15 @@ test('allows API-key auth over plaintext HTTP only for localhost endpoints', asy
   });
   await client.query('from events');
   assert.equal(authorization, 'Bearer secret');
+test('rejects bearer API keys over plaintext HTTP for non-local endpoints', () => {
+  const invalidConfigurations = [
+    { endpoint: 'http://collector.example', collector: 'demo', apiKey: 'lz_sec_live_key' },
+    { dsn: 'loza://collector.example/demo?tls=false', apiKey: 'lz_sec_live_key' },
+  ];
+  for (const config of invalidConfigurations) {
+    assert.throws(() => new Client(config), error => error instanceof QueryError && error.category === ErrorCategory.InvalidConfiguration && /require TLS/.test(error.message));
+  }
+  assert.doesNotThrow(() => new Client({ endpoint: 'http://127.0.0.1:9308', collector: 'demo', apiKey: 'local-key' }));
 });
 
 test('rejects an empty query source before making a request', async () => {

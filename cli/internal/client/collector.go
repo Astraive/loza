@@ -84,7 +84,9 @@ func PostIngestContext(ctx context.Context, baseURL, contentType string, payload
 			return err
 		}
 		req.Header.Set("Content-Type", contentType)
-		applyAPIKeyAuth(req)
+		if err := applyAPIKeyAuth(req); err != nil {
+			return err
+		}
 
 		resp, err := clientWithTimeout(defaultTimeout).Do(req)
 		if err != nil {
@@ -147,7 +149,9 @@ func FetchStatusContext(ctx context.Context, baseURL string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	applyAPIKeyAuth(req)
+	if err := applyAPIKeyAuth(req); err != nil {
+		return nil, err
+	}
 	resp, err := clientWithTimeout(defaultTimeout).Do(req)
 	if err != nil {
 		return nil, err
@@ -173,7 +177,9 @@ func FetchMetricsContext(ctx context.Context, baseURL string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	applyAPIKeyAuth(req)
+	if err := applyAPIKeyAuth(req); err != nil {
+		return nil, err
+	}
 	resp, err := clientWithTimeout(defaultTimeout).Do(req)
 	if err != nil {
 		return nil, err
@@ -200,7 +206,9 @@ func Query(baseURL, engine, sqlQuery string) ([]byte, error) {
 		return nil, fmt.Errorf("query request failed: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	applyAPIKeyAuth(req)
+	if err := applyAPIKeyAuth(req); err != nil {
+		return nil, err
+	}
 	resp, err := clientWithTimeout(defaultTimeout).Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("query request failed: %w", err)
@@ -263,7 +271,9 @@ func QueryLQL(baseURL, source string, parameters map[string]any, limit int) ([]b
 		return nil, fmt.Errorf("lql query request failed: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	applyAPIKeyAuth(req)
+	if err := applyAPIKeyAuth(req); err != nil {
+		return nil, err
+	}
 	resp, err := clientWithTimeout(defaultTimeout).Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("lql query request failed: %w", err)
@@ -282,7 +292,9 @@ func TailStream(ctx context.Context, baseURL string) (io.ReadCloser, error) {
 	if err != nil {
 		return nil, fmt.Errorf("tail request failed: %w", err)
 	}
-	applyAPIKeyAuth(req)
+	if err := applyAPIKeyAuth(req); err != nil {
+		return nil, err
+	}
 	resp, err := clientWithTimeout(defaultTimeout).Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("tail request failed: %w", err)
@@ -420,7 +432,9 @@ func WatchStream(ctx context.Context, baseURL string, filters map[string]string)
 	if err != nil {
 		return nil, err
 	}
-	applyAPIKeyAuth(req)
+	if err := applyAPIKeyAuth(req); err != nil {
+		return nil, err
+	}
 	resp, err := clientWithTimeout(0).Do(req)
 	if err != nil {
 		return nil, err
@@ -444,7 +458,9 @@ func expectStatusContext(ctx context.Context, url string, want int) error {
 	if err != nil {
 		return err
 	}
-	applyAPIKeyAuth(req)
+	if err := applyAPIKeyAuth(req); err != nil {
+		return err
+	}
 	resp, err := clientWithTimeout(defaultTimeout).Do(req)
 	if err != nil {
 		return err
@@ -482,7 +498,9 @@ func getJSON(baseURL, path string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	applyAPIKeyAuth(req)
+	if err := applyAPIKeyAuth(req); err != nil {
+		return nil, err
+	}
 	resp, err := clientWithTimeout(defaultTimeout).Do(req)
 	if err != nil {
 		return nil, err
@@ -507,7 +525,9 @@ func postJSON(ctx context.Context, baseURL, path string, payload []byte) ([]byte
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	applyAPIKeyAuth(req)
+	if err := applyAPIKeyAuth(req); err != nil {
+		return nil, err
+	}
 	resp, err := clientWithTimeout(defaultTimeout).Do(req)
 	if err != nil {
 		return nil, err
@@ -537,7 +557,9 @@ func deleteJSON(ctx context.Context, baseURL, path, reason string) ([]byte, erro
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	applyAPIKeyAuth(req)
+	if err := applyAPIKeyAuth(req); err != nil {
+		return nil, err
+	}
 	resp, err := clientWithTimeout(defaultTimeout).Do(req)
 	if err != nil {
 		return nil, err
@@ -679,16 +701,32 @@ func parseRetryAfter(value string) time.Duration {
 	return 0
 }
 
-func applyAPIKeyAuth(req *http.Request) {
-	if req == nil {
-		return
+// applyAPIKeyAuth attaches the configured API key as a Bearer token. It is the
+// single URL-validation gate for CLI requests: credentials are never sent over
+// plaintext HTTP to a non-loopback host.
+func applyAPIKeyAuth(req *http.Request) error {
+	if req == nil || req.URL == nil {
+		return nil
 	}
 	apiKey := getConfiguredAPIKey(req.URL.Host)
 	if apiKey == "" {
-		return
+		return nil
+	}
+	if req.URL.Scheme == "http" && !isLoopbackCLIHost(req.URL.Hostname()) {
+		return fmt.Errorf("refusing to send API key over plaintext HTTP to non-local host %q", req.URL.Hostname())
 	}
 	// Use Authorization: Bearer format (matches collector auth middleware)
 	req.Header.Set("Authorization", "Bearer "+apiKey)
+	return nil
+}
+
+func isLoopbackCLIHost(host string) bool {
+	switch strings.ToLower(strings.TrimSpace(host)) {
+	case "localhost", "127.0.0.1", "::1":
+		return true
+	default:
+		return false
+	}
 }
 
 // cfgAPIKey is an optional package-level API key set from loaded config.

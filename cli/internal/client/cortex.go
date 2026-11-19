@@ -49,7 +49,9 @@ func FetchCortexMetricsContext(ctx context.Context, baseURL string) ([]byte, err
 	if err != nil {
 		return nil, err
 	}
-	applyAPIKeyAuth(req)
+	if err := applyAPIKeyAuth(req); err != nil {
+		return nil, err
+	}
 	resp, err := clientWithTimeout(defaultTimeout).Do(req)
 	if err != nil {
 		return nil, err
@@ -76,7 +78,9 @@ func IngestCortexBatch(ctx context.Context, baseURL string, events []map[string]
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	applyAPIKeyAuth(req)
+	if err := applyAPIKeyAuth(req); err != nil {
+		return err
+	}
 	resp, err := clientWithTimeout(defaultTimeout).Do(req)
 	if err != nil {
 		return err
@@ -132,7 +136,9 @@ func getCortexJSON(ctx context.Context, baseURL, path string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	applyAPIKeyAuth(req)
+	if err := applyAPIKeyAuth(req); err != nil {
+		return nil, err
+	}
 	resp, err := clientWithTimeout(defaultTimeout).Do(req)
 	if err != nil {
 		return nil, err
@@ -194,7 +200,9 @@ func postCortexJSON(ctx context.Context, baseURL, path string, payload []byte) (
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	applyAPIKeyAuth(req)
+	if err := applyAPIKeyAuth(req); err != nil {
+		return nil, err
+	}
 	resp, err := clientWithTimeout(defaultTimeout).Do(req)
 	if err != nil {
 		return nil, err

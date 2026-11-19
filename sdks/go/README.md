@@ -35,6 +35,14 @@ go get github.com/astraive/loza/sdks/go/integrations
 go get github.com/astraive/loza/sdks/go/sinks/httpbatch
 ```
 
+## Credential transport security
+
+API keys (`WithAPIKey` / `LOZA_API_KEY`) and Basic credentials require HTTPS
+whenever the collector host is not loopback (`localhost`, `127.0.0.1`, `::1`).
+Plaintext HTTP is only accepted for local development (`Insecure` on loopback),
+including DSNs with `tls=false`. A remote plaintext endpoint configured with a
+credential is rejected before any request is sent.
+
 ## Quick Start
 
 ```go

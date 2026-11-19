@@ -10,6 +10,14 @@ LOZA wide-event SDK for JavaScript/TypeScript — lightweight bridge connector t
 npm install @astraive/loza
 ```
 
+## Credential transport security
+
+API keys (`withApiKey` / `LOZA_API_KEY`) and Basic credentials require HTTPS
+whenever the collector host is not loopback (`localhost`, `127.0.0.1`, `::1`).
+Plaintext HTTP is only accepted for local development, including DSNs with
+`tls=false`. A remote plaintext endpoint configured with a credential is
+rejected by `validateConfig` before any request is sent.
+
 ## Quick Start
 
 ```typescript

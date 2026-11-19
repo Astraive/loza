@@ -18,8 +18,12 @@ function isLocalhost(host: string): boolean {
 }
 import { isLocalhost, isPublicDSNUsername, parse as parseDSN } from './dsn.ts';
 
-function hasBasicCredentials(cfg: Pick<Config, 'apiKey' | 'username' | 'password'>): boolean {
-  return !cfg.apiKey && !!cfg.username && (!!cfg.password || isPublicDSNUsername(cfg.username));
+/** Single URL validation gate reused by every config entry point. */
+function requireTLSForCredentials(endpoint: URL, cfg: Pick<Config, 'apiKey' | 'username'>): void {
+  const hasCredentials = !!cfg.apiKey || !!cfg.username;
+  if (hasCredentials && endpoint.protocol === 'http:' && !isLocalhost(endpoint.hostname)) {
+    throw new Error('invalid Loza config: credentials require HTTPS (HTTP is allowed only for localhost)');
+  }
 }
 
 function hasCredentials(cfg: Pick<Config, 'apiKey' | 'username' | 'password'>): boolean {
@@ -56,6 +60,7 @@ export function validateConfig(cfg: Config): Config {
   if (hasCredentials(cfg) && endpoint.protocol === 'http:' && !isLocalhost(endpoint.hostname)) {
     throw new Error('invalid Loza config: credentials require HTTPS (HTTP is allowed only for localhost)');
   }
+  requireTLSForCredentials(endpoint, cfg);
   return cfg;
 }
 
@@ -460,6 +465,9 @@ export function WithPanicRecovery(panicRecovery: boolean): ConfigOption { return
 export function WithApiKey(apiKey: string): ConfigOption { return cfg => { cfg.apiKey = apiKey.trim(); return cfg; }; }
 export function WithRelease(release: string): ConfigOption { return cfg => withOptions(cfg, { release }); }
 export function WithNamespace(ns: string): ConfigOption { return cfg => withOptions(cfg, { namespace: ns }); }
+export function WithApiKey(apiKey: string): ConfigOption { return cfg => withOptions(cfg, { apiKey }); }
+export function WithRelease(_release: string): ConfigOption { return cfg => cfg; }
+export function WithNamespace(_ns: string): ConfigOption { return cfg => cfg; }
 export function WithOtelBridge(enabled: boolean): ConfigOption {
   return cfg => enabled ? { ...cfg, async: { ...cfg.async, enabled: true } } : cfg;
 }

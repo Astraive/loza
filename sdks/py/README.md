@@ -12,6 +12,14 @@ Full API conformance with specification is complete. See [SDK_CONFORMANCE_CONTRA
 pip install -e .
 ```
 
+## Credential transport security
+
+API keys (`with_api_key` / `LOZA_API_KEY`) and Basic credentials require HTTPS
+whenever the collector host is not loopback (`localhost`, `127.0.0.1`, `::1`).
+Plaintext HTTP is only accepted for local development, including DSNs with
+`tls=false`. A remote plaintext endpoint configured with a credential is
+rejected before any request is sent.
+
 ## Quick Start
 
 ```python

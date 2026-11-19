@@ -555,14 +555,19 @@ impl Config {
                 ),
             ));
         }
-        if self.basic_username.is_some()
+        // Bearer API keys are as sensitive as Basic credentials: require TLS
+        // for either credential type when the collector is not loopback. A
+        // loza:// DSN with tls=false resolves to an http endpoint and is
+        // rejected here whenever credentials are present.
+        let has_credentials = self.basic_username.is_some() || !self.api_key.is_empty();
+        if has_credentials
             && self.collector_endpoint.starts_with("http://")
             && (!self.insecure || !is_local_endpoint(&self.collector_endpoint))
         {
             return Err(crate::errors::LozaError::Validation(
                 crate::errors::ValidationError::new(
                     Some("collector_endpoint"),
-                    "insecure_basic_auth",
+                    "insecure_credentials",
                     "credentialed HTTP requires an explicit local/insecure configuration"
                         .to_string(),
                 ),

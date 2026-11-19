@@ -389,6 +389,12 @@ impl CollectorHttpClient {
         path: &str,
         body: Option<Value>,
     ) -> Result<CollectorResponse, String> {
+        // A single validation gate for every credentialed request: Bearer API
+        // keys are as sensitive as Basic credentials and must not be sent over
+        // plaintext HTTP to a non-loopback host.
+        if self.api_key.is_some() || self.basic_username.is_some() {
+            validate_credentialed_endpoint(&self.endpoint, self.insecure)?;
+        }
         let url = format!("{}{}", self.endpoint.trim_end_matches('/'), path);
         let client = HTTPClient::with_timeout_ms_and_insecure(self.timeout_ms, self.insecure);
         let mut request = HTTPRequest::new(method, &url);
@@ -761,6 +767,17 @@ pub fn inject_http_headers(request: &mut HTTPRequest, event: &crate::EventContex
 /// Applies to every authenticated request, whether the credential is a Bearer
 /// API key or HTTP Basic auth. HTTPS is always allowed; plaintext HTTP is only
 /// permitted for explicit loopback endpoints or when `insecure` is set.
+/// Validate the Basic username independently of the endpoint URL.
+fn validate_basic_auth_username(username: &str) -> Result<(), String> {
+    if username.is_empty() || username.contains(':') || username.chars().any(char::is_whitespace) {
+        return Err(
+            "basic auth username must be non-empty and contain no ':' or whitespace".into(),
+        );
+    }
+    Ok(())
+}
+
+/// Reject credentialed requests over plaintext HTTP to non-loopback hosts.
 fn validate_credentialed_endpoint(endpoint: &str, insecure: bool) -> Result<(), String> {
     let Some((scheme, rest)) = endpoint.split_once("://") else {
         return Ok(());
