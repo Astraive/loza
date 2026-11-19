@@ -149,6 +149,88 @@ func TestPostIngestExhaustedNetworkErrorsReturnWrappedError(t *testing.T) {
 	}
 }
 
+// TestKeyAndQuarantinePathIDsAreEscaped reproduces MASS-0035: a raw ID such as
+// "x/../../keys?force=true" must stay inside one path segment instead of
+// injecting extra segments or a query string into the request URL.
+func TestKeyAndQuarantinePathIDsAreEscaped(t *testing.T) {
+	const maliciousID = "x/../../keys?force=true"
+
+	tests := []struct {
+		name     string
+		id       string
+		wantPath string
+		call     func(baseURL, id string) error
+	}{
+		{
+			name:     "revoke key with malicious id",
+			id:       maliciousID,
+			wantPath: "/keys/x%2F..%2F..%2Fkeys%3Fforce=true/revoke",
+			call: func(baseURL, id string) error {
+				_, err := RevokeAPIKey(context.Background(), baseURL, id)
+				return err
+			},
+		},
+		{
+			name:     "rotate key with malicious id",
+			id:       maliciousID,
+			wantPath: "/keys/x%2F..%2F..%2Fkeys%3Fforce=true/rotate",
+			call: func(baseURL, id string) error {
+				_, err := RotateAPIKey(context.Background(), baseURL, id)
+				return err
+			},
+		},
+		{
+			name:     "replay quarantine item with malicious id",
+			id:       maliciousID,
+			wantPath: "/quarantine/x%2F..%2F..%2Fkeys%3Fforce=true/replay",
+			call: func(baseURL, id string) error {
+				_, err := ReplayQuarantineItem(context.Background(), baseURL, id)
+				return err
+			},
+		},
+		{
+			name:     "delete quarantine item with malicious id",
+			id:       maliciousID,
+			wantPath: "/quarantine/x%2F..%2F..%2Fkeys%3Fforce=true",
+			call: func(baseURL, id string) error {
+				_, err := DeleteQuarantineItem(context.Background(), baseURL, id)
+				return err
+			},
+		},
+		{
+			name:     "ordinary id is unchanged",
+			id:       "evt_1",
+			wantPath: "/keys/evt_1/revoke",
+			call: func(baseURL, id string) error {
+				_, err := RevokeAPIKey(context.Background(), baseURL, id)
+				return err
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if got := r.URL.EscapedPath(); got != tt.wantPath {
+					t.Errorf("escaped path = %q, want %q", got, tt.wantPath)
+				}
+				if got := r.URL.RawQuery; got != "" {
+					t.Errorf("unexpected query string %q; id must not inject query parameters", got)
+				}
+				if got := r.RequestURI; got != tt.wantPath {
+					t.Errorf("request URI = %q, want %q", got, tt.wantPath)
+				}
+				_, _ = w.Write([]byte(`{"ok":true}`))
+			}))
+			defer srv.Close()
+
+			if err := tt.call(srv.URL, tt.id); err != nil {
+				t.Fatalf("request failed: %v", err)
+			}
+		})
+	}
+}
+
 func TestTestSinkPostsToCollectorEndpoint(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {

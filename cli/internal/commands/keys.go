@@ -49,6 +49,9 @@ func KeysCommand(ctx context.Context, cfg config.Config, args []string) error {
 		if len(args) < 2 {
 			return fmt.Errorf("usage: loza keys revoke <id>")
 		}
+		if err := validatePathID(args[1]); err != nil {
+			return err
+		}
 		body, err := client.RevokeAPIKey(ctx, cfg.CollectorURL, args[1])
 		if err != nil {
 			return err
@@ -58,6 +61,9 @@ func KeysCommand(ctx context.Context, cfg config.Config, args []string) error {
 	case "rotate":
 		if len(args) < 2 {
 			return fmt.Errorf("usage: loza keys rotate <id>")
+		}
+		if err := validatePathID(args[1]); err != nil {
+			return err
 		}
 		body, err := client.RotateAPIKey(ctx, cfg.CollectorURL, args[1])
 		if err != nil {

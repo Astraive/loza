@@ -51,6 +51,9 @@ func QuarantineCommand(ctx context.Context, cfg config.Config, args []string) er
 		if len(args) < 2 {
 			return fmt.Errorf("usage: loza quarantine replay <id>")
 		}
+		if err := validatePathID(args[1]); err != nil {
+			return err
+		}
 		body, err := client.ReplayQuarantineItem(ctx, cfg.CollectorURL, args[1])
 		if err != nil {
 			return err
@@ -60,6 +63,9 @@ func QuarantineCommand(ctx context.Context, cfg config.Config, args []string) er
 	case "delete":
 		if len(args) < 2 {
 			return fmt.Errorf("usage: loza quarantine delete <id>")
+		}
+		if err := validatePathID(args[1]); err != nil {
+			return err
 		}
 		body, err := client.DeleteQuarantineItem(ctx, cfg.CollectorURL, args[1])
 		if err != nil {
