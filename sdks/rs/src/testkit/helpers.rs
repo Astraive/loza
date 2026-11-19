@@ -115,11 +115,116 @@ pub fn reset_for_test() {
     crate::internal::core::uuidv7::reset_id_generator();
 }
 
+/// Split a testkit path into segments.
+///
+/// Segments are separated by unescaped `.` characters. A dot can be matched
+/// literally inside a key by escaping it as `\.`, and a literal backslash as
+/// `\\`. For example, `attrs.a\.b` addresses the key `a.b` inside `attrs`.
+fn split_path(path: &str) -> Vec<String> {
+    let mut segments = Vec::new();
+    let mut current = String::new();
+    let mut chars = path.chars().peekable();
+    while let Some(ch) = chars.next() {
+        match ch {
+            '\\' => match chars.next() {
+                Some('.') => current.push('.'),
+                Some('\\') => current.push('\\'),
+                Some(other) => {
+                    // Preserve unrecognised escapes verbatim rather than
+                    // silently dropping the backslash.
+                    current.push('\\');
+                    current.push(other);
+                }
+                None => current.push('\\'),
+            },
+            '.' => segments.push(std::mem::take(&mut current)),
+            other => current.push(other),
+        }
+    }
+    segments.push(current);
+    segments
+}
+
+/// Resolve a dotted path against a JSON value.
+///
+/// Plain segments address object keys. When the current value is an array, a
+/// numeric segment is used as an index (e.g. `checkpoints.0.name`). Dots that
+/// are part of a key must be escaped (`a\.b`); an unescaped numeric segment on
+/// an object still addresses a key of that name.
 fn get_nested_value<'a>(obj: &'a serde_json::Value, path: &str) -> Option<&'a serde_json::Value> {
-    let parts: Vec<&str> = path.split('.').collect();
     let mut current = obj;
-    for part in parts {
-        current = current.get(part)?;
+    for segment in split_path(path) {
+        current = match current {
+            serde_json::Value::Array(items) => items.get(segment.parse::<usize>().ok()?)?,
+            _ => current.get(segment.as_str())?,
+        };
     }
     Some(current)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sample() -> serde_json::Value {
+        serde_json::json!({
+            "attrs": { "family": "testkit" },
+            "checkpoints": [
+                { "name": "first" },
+                { "name": "second" }
+            ],
+            "dotted.key": "literal",
+            "nested": { "a.b": { "c": "deep" } },
+            "0": "numeric-key"
+        })
+    }
+
+    #[test]
+    fn get_nested_value_indexes_arrays() {
+        let value = sample();
+        assert_eq!(
+            get_nested_value(&value, "checkpoints.0.name").and_then(|v| v.as_str()),
+            Some("first")
+        );
+        assert_eq!(
+            get_nested_value(&value, "checkpoints.1.name").and_then(|v| v.as_str()),
+            Some("second")
+        );
+        assert!(get_nested_value(&value, "checkpoints.2.name").is_none());
+        assert!(get_nested_value(&value, "checkpoints.name").is_none());
+    }
+
+    #[test]
+    fn get_nested_value_resolves_escaped_dotted_keys() {
+        let value = sample();
+        assert_eq!(
+            get_nested_value(&value, "dotted\\.key").and_then(|v| v.as_str()),
+            Some("literal")
+        );
+        assert_eq!(
+            get_nested_value(&value, "nested.a\\.b.c").and_then(|v| v.as_str()),
+            Some("deep")
+        );
+    }
+
+    #[test]
+    fn get_nested_value_preserves_plain_object_paths() {
+        let value = sample();
+        assert_eq!(
+            get_nested_value(&value, "attrs.family").and_then(|v| v.as_str()),
+            Some("testkit")
+        );
+        // A numeric segment still addresses an object key of that name.
+        assert_eq!(
+            get_nested_value(&value, "0").and_then(|v| v.as_str()),
+            Some("numeric-key")
+        );
+    }
+
+    #[test]
+    fn assert_event_supports_array_indices_and_escaped_keys() {
+        let encoded = serde_json::to_string(&sample()).expect("encode sample");
+        assert_event(&encoded, "checkpoints.1.name", "second");
+        assert_event(&encoded, "dotted\\.key", "literal");
+    }
 }
