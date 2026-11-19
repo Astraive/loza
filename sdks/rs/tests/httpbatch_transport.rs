@@ -3,7 +3,7 @@ use loza::{Config, New, Params};
 use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::sync::mpsc;
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Mutex, MutexGuard, OnceLock};
 use std::thread;
 use std::time::Duration;
 
@@ -101,7 +101,7 @@ fn http_batch_sink_posts_gzipped_events_to_collector() {
 
 #[test]
 fn http_batch_sink_uses_api_key_from_environment() {
-    let _guard = env_lock().lock().expect("env lock");
+    let _lock = lock_env();
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind test server");
     let addr = listener.local_addr().expect("listener addr");
     let (tx, rx) = mpsc::channel();
@@ -121,8 +121,10 @@ fn http_batch_sink_uses_api_key_from_environment() {
         );
     });
 
-    std::env::set_var("LOZA_COLLECTOR_API_KEY", "secret-key");
-    std::env::set_var("LOZA_COLLECTOR_API_KEY_HEADER", "X-API-Key");
+    // Guards own restoration, so a panic in the assertions below cannot leak
+    // these process-wide variables into later tests.
+    let _api_key = EnvRestore::set("LOZA_COLLECTOR_API_KEY", "secret-key");
+    let _api_key_header = EnvRestore::set("LOZA_COLLECTOR_API_KEY_HEADER", "X-API-Key");
 
     let endpoint = format!("http://{addr}/events");
     let logger = New(Config::test("checkout").with_sink(loza::HttpBatchSink(&endpoint)));
@@ -134,9 +136,6 @@ fn http_batch_sink_uses_api_key_from_environment() {
         .recv_timeout(Duration::from_secs(5))
         .expect("captured request");
     handle.join().expect("server thread");
-
-    std::env::remove_var("LOZA_COLLECTOR_API_KEY");
-    std::env::remove_var("LOZA_COLLECTOR_API_KEY_HEADER");
 
     assert!(head.contains("X-API-Key: secret-key"));
 }
@@ -234,7 +233,86 @@ fn write_json_response(stream: &mut std::net::TcpStream, body: &str) {
         .expect("write collector response");
 }
 
+/// Restores an environment variable to its prior value when dropped.
+///
+/// Capturing the previous value (rather than unconditionally removing the var)
+/// also avoids clobbering variables already present in the test runner.
+struct EnvRestore {
+    key: &'static str,
+    previous: Option<std::ffi::OsString>,
+}
+
+impl EnvRestore {
+    fn set(key: &'static str, value: &str) -> Self {
+        let previous = std::env::var_os(key);
+        std::env::set_var(key, value);
+        Self { key, previous }
+    }
+}
+
+impl Drop for EnvRestore {
+    fn drop(&mut self) {
+        match &self.previous {
+            Some(value) => std::env::set_var(self.key, value),
+            None => std::env::remove_var(self.key),
+        }
+    }
+}
+
+/// Acquire the env-test mutex, recovering it if an earlier panic poisoned it.
+fn lock_env() -> MutexGuard<'static, ()> {
+    env_lock()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 fn env_lock() -> &'static Mutex<()> {
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
     LOCK.get_or_init(|| Mutex::new(()))
+}
+
+#[test]
+fn env_restore_guard_resets_var_to_previous_value() {
+    const KEY: &str = "LOZA_RS_ENV_RESTORE_PREVIOUS";
+    let _lock = lock_env();
+    std::env::set_var(KEY, "original");
+
+    {
+        let _override = EnvRestore::set(KEY, "temporary");
+        assert_eq!(std::env::var(KEY).unwrap(), "temporary");
+    }
+    assert_eq!(std::env::var(KEY).unwrap(), "original");
+
+    std::env::remove_var(KEY);
+}
+
+#[test]
+fn env_restore_guard_resets_var_even_when_body_panics() {
+    const KEY: &str = "LOZA_RS_ENV_RESTORE_PANIC";
+    let _lock = lock_env();
+    std::env::remove_var(KEY);
+
+    let result = std::panic::catch_unwind(|| {
+        let _override = EnvRestore::set(KEY, "temporary");
+        panic!("intentional panic while env override is active");
+    });
+    assert!(result.is_err(), "the test body should have panicked");
+    assert!(
+        std::env::var_os(KEY).is_none(),
+        "env var must be restored during unwinding"
+    );
+}
+
+#[test]
+fn poisoned_env_lock_can_still_be_acquired() {
+    // Poison the shared mutex the same way a panicking test would.
+    let outcome = thread::spawn(|| {
+        let _guard = env_lock().lock().expect("acquire env lock");
+        panic!("intentional panic to poison env lock");
+    })
+    .join();
+    assert!(outcome.is_err(), "helper thread should poison the mutex");
+
+    // A later test must not panic here just because the mutex was poisoned.
+    let _guard = lock_env();
 }
