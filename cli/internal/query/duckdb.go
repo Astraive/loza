@@ -10,6 +10,16 @@ import (
 	_ "github.com/marcboeker/go-duckdb"
 )
 
+// rowScanner is the subset of *sql.Rows used by printRows. Keeping the
+// iteration behind this small interface lets the rows.Err() handling be
+// exercised with a fake that fails mid-stream.
+type rowScanner interface {
+	Columns() ([]string, error)
+	Next() bool
+	Scan(dest ...any) error
+	Err() error
+}
+
 func RunDuckDB(dbPath, sqlQuery string) error {
 	// DuckDB's enable_external_access guard is connection-scoped and can be
 	// re-enabled from SQL itself (e.g. "SET enable_external_access=true;
@@ -49,6 +59,10 @@ func RunDuckDB(dbPath, sqlQuery string) error {
 	}
 	defer rows.Close()
 
+	return printRows(rows)
+}
+
+func printRows(rows rowScanner) error {
 	columns, err := rows.Columns()
 	if err != nil {
 		return fmt.Errorf("get columns: %w", err)
@@ -71,6 +85,9 @@ func RunDuckDB(dbPath, sqlQuery string) error {
 			fmt.Print(fmt.Sprint(value))
 		}
 		fmt.Println()
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterate rows: %w", err)
 	}
 
 	return nil
