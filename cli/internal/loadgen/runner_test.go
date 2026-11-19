@@ -6,8 +6,103 @@ import (
 	"net/http/httptest"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 )
+
+// cancelAfterContext is a context.Context that starts reporting cancellation
+// after a fixed number of Err() calls. The runner checks ctx.Err() once per
+// worker-loop iteration, so this makes it possible to cancel a worker
+// deterministically while it is accumulating a batch, without relying on
+// timing or sleeps.
+type cancelAfterContext struct {
+	context.Context
+	mu    sync.Mutex
+	calls int
+	after int
+	once  sync.Once
+	done  chan struct{}
+}
+
+func newCancelAfterContext(after int) *cancelAfterContext {
+	return &cancelAfterContext{
+		Context: context.Background(),
+		after:   after,
+		done:    make(chan struct{}),
+	}
+}
+
+func (c *cancelAfterContext) Err() error {
+	c.mu.Lock()
+	c.calls++
+	call := c.calls
+	c.mu.Unlock()
+	if call >= c.after {
+		c.once.Do(func() { close(c.done) })
+		return context.Canceled
+	}
+	return nil
+}
+
+func (c *cancelAfterContext) Done() <-chan struct{} { return c.done }
+
+// TestRunAccountsForBatchBufferedOnCancellation is a regression test for the
+// in-flight batch being silently dropped when the context is cancelled while
+// events are buffered but before the flush condition is met.
+func TestRunAccountsForBatchBufferedOnCancellation(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	// BatchSize is larger than the number of events generated before
+	// cancellation, so no flush happens inside the worker loop. With the
+	// context cancelled on the 4th Err() call, the worker generates 3 events
+	// and exits with all 3 still buffered in `batch`.
+	const cancelAfter = 4
+	const wantGenerated = cancelAfter - 1
+
+	ctx := newCancelAfterContext(cancelAfter)
+	report, err := Run(ctx, RunnerConfig{
+		URL:       server.URL,
+		Events:    10,
+		Workers:   1,
+		BatchSize: 100,
+		BodySize:  8,
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	accounted := report.Accepted + report.Rejected + report.Errors
+	if accounted != wantGenerated {
+		t.Fatalf("accounted events = %d, want %d (accepted=%d rejected=%d errors=%d): "+
+			"events buffered at cancellation must not be silently dropped",
+			accounted, wantGenerated, report.Accepted, report.Rejected, report.Errors)
+	}
+}
+
+func TestRunAccountsForAllEventsWithoutCancellation(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	const events = 10
+	report, err := Run(context.Background(), RunnerConfig{
+		URL:       server.URL,
+		Events:    events,
+		Workers:   2,
+		BatchSize: 3,
+		BodySize:  8,
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if report.Accepted != events || report.Errors != 0 {
+		t.Fatalf("report = %+v, want accepted=%d errors=0", report, events)
+	}
+}
 
 // TestRunCategorizesBatchOutcomes is a regression test for the always-zero
 // Report.Rejected counter: a server that refuses a batch with a 4xx status
