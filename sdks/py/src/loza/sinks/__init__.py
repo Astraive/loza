@@ -71,11 +71,18 @@ def queue_size(sink: Any) -> int:
     return 0
 
 
-def health(sink: Any) -> bool:
+def health(sink: Any) -> bool | None:
+    """Return the sink's reported health, or ``None`` when no check exists.
+
+    ``True``/``False`` are verdicts reported by a sink that implements
+    ``health()``. ``None`` means the check is unavailable, so the sink's health
+    is *unverified* rather than healthy. Callers must handle ``None`` instead of
+    interpreting the former unconditional ``True`` as a clean bill of health.
+    """
     health_fn = getattr(sink, "health", None)
     if callable(health_fn):
         return health_fn()
-    return True
+    return None
 
 
 def otlp_sink(endpoint: str = "", **kwargs: Any) -> HTTPBatchSink:
