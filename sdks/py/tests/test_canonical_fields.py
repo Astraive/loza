@@ -75,7 +75,7 @@ def test_timestamp_is_protected() -> None:
     logger.finish(ctx, "success")
 
     payload = json.loads(logger.emit(ctx))
-    payload["timestamp"]
+    assert "timestamp" in payload
 
     # Attempt to override - should be ignored
     logger2 = loza.New(loza.Test("test"))
@@ -85,6 +85,26 @@ def test_timestamp_is_protected() -> None:
 
     payload2 = json.loads(logger2.emit(ctx2))
     assert payload2["timestamp"] != "1970-01-01T00:00:00Z", "timestamp should be protected, not overridable by user"
+
+
+def test_timestamp_field_is_present_in_payload() -> None:
+    """Regression: the canonical timestamp must be genuinely asserted, not just accessed.
+
+    The original check at this location was a bare ``payload["timestamp"]`` expression
+    that performed no assertion. This test verifies the field is actually emitted with a
+    valid, non-epoch value so a silent regression cannot slip through.
+    """
+    logger = loza.New(loza.Test("test"))
+    ctx = logger.start_event(loza.Params(event="test.event"))
+    logger.finish(ctx, "success")
+
+    payload = json.loads(logger.emit(ctx))
+
+    assert "timestamp" in payload
+    timestamp = payload["timestamp"]
+    assert isinstance(timestamp, str)
+    assert timestamp
+    assert timestamp != "1970-01-01T00:00:00Z"
 
 
 def test_service_is_protected() -> None:
