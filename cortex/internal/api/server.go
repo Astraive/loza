@@ -21,7 +21,6 @@ import (
 	"github.com/astraive/loza/cortex/internal/models"
 	"github.com/astraive/loza/cortex/internal/processor"
 	"github.com/astraive/loza/cortex/internal/reconstructor"
-	"github.com/astraive/loza/cortex/internal/redaction"
 	"github.com/astraive/loza/cortex/internal/storage"
 	"github.com/astraive/loza/cortex/internal/topology"
 	"github.com/go-chi/chi/v5"
@@ -84,14 +83,7 @@ func NewServer(cfg *config.Config, stor storage.Storage) *Server {
 
 	graphBuilder.WithDefaultMaxDepth(cfg.Reconstructor.Graph.DefaultMaxDepth)
 
-	eventProc := processor.NewEventProcessor(stor.Events(), stor.Topology(), stor.Graph())
-	if cfg.PIIRedaction.Enabled {
-		eventProc.WithRedactor(redaction.NewWithConfig(redaction.Config{
-			Mode:      redaction.Mode(cfg.PIIRedaction.Mode),
-			Blocklist: cfg.PIIRedaction.Blocklist,
-			Allowlist: cfg.PIIRedaction.Allowlist,
-		}))
-	}
+	eventProc := processor.NewConfiguredEventProcessor(stor.Events(), stor.Topology(), stor.Graph(), cfg.PIIRedaction)
 
 	authMiddleware := middleware.NewAuthMiddleware(cfg.Authentication)
 	graphqlServer := NewGraphQLServer(cfg, stor)

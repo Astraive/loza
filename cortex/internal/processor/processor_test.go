@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/astraive/loza/cortex/internal/config"
 	"github.com/astraive/loza/cortex/internal/models"
 	"github.com/astraive/loza/cortex/internal/storage"
 )
@@ -170,6 +171,107 @@ func (f *fakeGraphStoreForProcessor) GetEdges(context.Context, string, string) (
 
 func (f *fakeGraphStoreForProcessor) Traverse(context.Context, string, models.TraversalOptions) (*models.GraphView, error) {
 	return nil, nil
+}
+
+func TestNewConfiguredEventProcessorRedactsPII(t *testing.T) {
+	events := &fakeEventStore{}
+	topology := &fakeTopologyStoreForProcessor{}
+	graphStore := &fakeGraphStoreForProcessor{}
+	p := NewConfiguredEventProcessor(events, topology, graphStore, config.PIIRedactionConfig{
+		Enabled: true,
+		Mode:    "enforce",
+	})
+
+	event := &models.Event{
+		ID:         "evt-redact",
+		Timestamp:  time.Now(),
+		Kind:       models.EventKindLog,
+		Service:    "api",
+		Provenance: "loza",
+		Raw: map[string]any{
+			"email":   "alice@example.com",
+			"api_key": "super-secret",
+			"message": "plain text",
+		},
+	}
+	if err := p.ProcessEvent(context.Background(), event); err != nil {
+		t.Fatalf("process event: %v", err)
+	}
+	if len(events.saved) != 1 {
+		t.Fatalf("expected one saved event, got %d", len(events.saved))
+	}
+	raw := events.saved[0].Raw
+	if got := raw["email"]; got != "[REDACTED]" {
+		t.Fatalf("email not redacted: %v", got)
+	}
+	if got := raw["api_key"]; got != "[REDACTED]" {
+		t.Fatalf("api_key not redacted: %v", got)
+	}
+	if got := raw["message"]; got != "plain text" {
+		t.Fatalf("non-sensitive value unexpectedly changed: %v", got)
+	}
+}
+
+func TestNewConfiguredEventProcessorRedactsSyncBatch(t *testing.T) {
+	// The collector source-of-truth sync submits pulled events through ProcessBatch.
+	events := &fakeEventStore{}
+	topology := &fakeTopologyStoreForProcessor{}
+	graphStore := &fakeGraphStoreForProcessor{}
+	p := NewConfiguredEventProcessor(events, topology, graphStore, config.PIIRedactionConfig{
+		Enabled: true,
+		Mode:    "enforce",
+	})
+
+	batch := []*models.Event{{
+		ID:         "evt-sync",
+		Timestamp:  time.Now(),
+		Kind:       models.EventKindLog,
+		Service:    "worker",
+		Provenance: "collector",
+		Raw: map[string]any{
+			"email": "bob@example.com",
+			"note":  "contact bob@example.com for details",
+		},
+	}}
+	if err := p.ProcessBatch(context.Background(), batch); err != nil {
+		t.Fatalf("process batch: %v", err)
+	}
+	if len(events.batchSaved) != 1 || len(events.batchSaved[0]) != 1 {
+		t.Fatalf("expected one saved batch event, got %+v", events.batchSaved)
+	}
+	raw := events.batchSaved[0][0].Raw
+	if got := raw["email"]; got != "[REDACTED]" {
+		t.Fatalf("sync batch email not redacted: %v", got)
+	}
+	if got := raw["note"]; got != "contact [REDACTED] for details" {
+		t.Fatalf("sync batch pattern PII not redacted: %v", got)
+	}
+}
+
+func TestNewConfiguredEventProcessorDisabledIsNoOp(t *testing.T) {
+	events := &fakeEventStore{}
+	p := NewConfiguredEventProcessor(events, &fakeTopologyStoreForProcessor{}, &fakeGraphStoreForProcessor{}, config.PIIRedactionConfig{Enabled: false})
+
+	event := &models.Event{
+		ID: "evt-plain", Timestamp: time.Now(), Kind: models.EventKindLog,
+		Service: "api", Provenance: "loza",
+		Raw: map[string]any{"email": "alice@example.com"},
+	}
+	if err := p.ProcessEvent(context.Background(), event); err != nil {
+		t.Fatalf("process event: %v", err)
+	}
+	if got := events.saved[0].Raw["email"]; got != "alice@example.com" {
+		t.Fatalf("disabled redaction changed value: %v", got)
+	}
+}
+
+func TestNewEventProcessorHasSafeDefaultRedactor(t *testing.T) {
+	// The raw constructor is safe by default: redactor is never nil and is a
+	// no-op, while production paths always attach one via the factory.
+	p := NewEventProcessor(&fakeEventStore{}, &fakeTopologyStoreForProcessor{}, &fakeGraphStoreForProcessor{})
+	if p.redactor == nil {
+		t.Fatal("expected a non-nil default redactor")
+	}
 }
 
 func TestProcessEventCreatesGraphNodes(t *testing.T) {

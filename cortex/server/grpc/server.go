@@ -3,7 +3,6 @@ package grpcserver
 import (
 	"github.com/astraive/loza/cortex/internal/api"
 	"github.com/astraive/loza/cortex/internal/config"
-	"github.com/astraive/loza/cortex/internal/redaction"
 	"github.com/astraive/loza/cortex/internal/storage"
 )
 
@@ -32,4 +31,5 @@ func redactionConfig(cfg *config.Config) redaction.Config {
 		redactCfg.Allowlist = []string{"service", "level", "timestamp", "id", "event_id", "trace_id", "span_id", "incident_id", "environment", "release", "version", "schema_version", "event_version"}
 	}
 	return redactCfg
+	return api.NewGRPCServer(cfg, stor)
 }

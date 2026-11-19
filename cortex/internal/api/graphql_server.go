@@ -80,7 +80,7 @@ func NewGraphQLServer(cfg *config.Config, stor storage.Storage) *GraphQLServer {
 	}
 	remediation := learner.NewLearner(stor.Remediations(), stor.Feedback(), stor.Signatures())
 	recon := reconstructor.NewIncidentReconstructor(graphBuilder, matching, remediation, stor.Incidents())
-	eventProc := processor.NewEventProcessor(stor.Events(), stor.Topology(), stor.Graph())
+	eventProc := processor.NewConfiguredEventProcessor(stor.Events(), stor.Topology(), stor.Graph(), cfg.PIIRedaction)
 
 	server := &GraphQLServer{
 		config:      cfg,

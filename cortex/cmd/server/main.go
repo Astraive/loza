@@ -82,7 +82,7 @@ func main() {
 	processCtx, stopSignals := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stopSignals()
 
-	syncProcessor := processor.NewEventProcessor(stor.Events(), stor.Topology(), stor.Graph())
+	syncProcessor := newSyncProcessor(cfg, stor)
 	syncDone := startCollectorSync(processCtx, cfg.Collector, syncProcessor)
 	if cfg.Collector.SourceOfTruth && cfg.Collector.Mode == "pull" {
 		log.Info().
@@ -153,6 +153,11 @@ func runHTTPServer(httpSrv *http.Server, errCh chan<- error) {
 	if err != nil && !errors.Is(err, http.ErrServerClosed) {
 		errCh <- err
 	}
+// newSyncProcessor builds the EventProcessor used by the collector source-of-truth
+// sync. It routes through the shared factory so PII redaction is applied on the
+// sync ingestion path just like HTTP, gRPC and GraphQL.
+func newSyncProcessor(cfg *config.Config, stor storage.Storage) *processor.EventProcessor {
+	return processor.NewConfiguredEventProcessor(stor.Events(), stor.Topology(), stor.Graph(), cfg.PIIRedaction)
 }
 
 func startCollectorSync(ctx context.Context, cfg config.CollectorConfig, proc collectorsync.BatchProcessor) <-chan struct{} {
