@@ -7,13 +7,21 @@ import (
 )
 
 func PrintTable(headers []string, rows [][]string) {
-	widths := make([]int, len(headers))
+	// Size widths to the longest row as well as the header count so that cells
+	// beyond the header count are not silently dropped during the width pass.
+	n := len(headers)
+	for _, row := range rows {
+		if len(row) > n {
+			n = len(row)
+		}
+	}
+	widths := make([]int, n)
 	for i, h := range headers {
 		widths[i] = len(h)
 	}
 	for _, row := range rows {
 		for i, cell := range row {
-			if i < len(widths) && len(cell) > widths[i] {
+			if len(cell) > widths[i] {
 				widths[i] = len(cell)
 			}
 		}
@@ -37,9 +45,7 @@ func PrintTable(headers []string, rows [][]string) {
 			if i > 0 {
 				fmt.Print("  ")
 			}
-			if i < len(widths) {
-				fmt.Printf("%-*s", widths[i], cell)
-			}
+			fmt.Printf("%-*s", widths[i], cell)
 		}
 		fmt.Println()
 	}
