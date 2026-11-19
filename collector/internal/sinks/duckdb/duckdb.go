@@ -125,6 +125,13 @@ func New(cfg Config) (collectorevent.Sink, error) {
 	if err != nil {
 		return nil, err
 	}
+	if cfg.WriterLoop && cfg.UseAppender {
+		// Fail fast: the Appender cannot address catalog-qualified names, and
+		// silently falling back to the wrong table would corrupt data.
+		if _, _, err := appenderTableRef(quotedTable); err != nil {
+			return nil, err
+		}
+	}
 	quotedRaw, err := quoteIdentifier(rawColumnName)
 	if err != nil {
 		return nil, fmt.Errorf("duckdb: invalid raw column: %w", err)
@@ -503,15 +510,13 @@ func (s *sink) writerWorkerAppender() {
 		if !ok {
 			return fmt.Errorf("duckdb: not a driver.Conn")
 		}
-		// Extract table and schema from the quoted table name.
-		// NewAppenderFromConn expects unquoted names.
-		table := strings.ReplaceAll(s.table, `"`, "")
-		schema := ""
-		if parts := strings.Split(table, "."); len(parts) > 1 {
-			schema = parts[0]
-			table = parts[1]
+		// NewAppenderFromConn expects unquoted schema and table names. Its C
+		// API only understands schema.table, so catalog-qualified names are
+		// rejected rather than silently appending to the wrong table.
+		schema, table, err := appenderTableRef(s.table)
+		if err != nil {
+			return err
 		}
-		var err error
 		appender, err = duckdb.NewAppenderFromConn(dxc, schema, table)
 		return err
 	})
@@ -774,6 +779,23 @@ func quoteTableName(table string) (string, error) {
 		quoted = append(quoted, `"`+part+`"`)
 	}
 	return strings.Join(quoted, "."), nil
+}
+
+// appenderTableRef converts a (possibly quoted) table name into the schema and
+// unqualified table name accepted by duckdb.NewAppenderFromConn. The Appender
+// C API takes only a schema and a table (it has no catalog parameter), so a
+// catalog-qualified three-part name cannot be addressed through it. Such names
+// are rejected explicitly instead of silently appending to the wrong table.
+func appenderTableRef(table string) (schema, name string, err error) {
+	parts := strings.Split(strings.ReplaceAll(strings.TrimSpace(table), `"`, ""), ".")
+	switch len(parts) {
+	case 1:
+		return "", parts[0], nil
+	case 2:
+		return parts[0], parts[1], nil
+	default:
+		return "", "", fmt.Errorf("duckdb: appender does not support catalog-qualified table name %q; use a one- or two-part name or disable UseAppender", table)
+	}
 }
 
 func quoteIdentifier(ident string) (string, error) {

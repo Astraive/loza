@@ -34,6 +34,53 @@ func TestQuoteTableNameRejectsInvalidIdentifier(t *testing.T) {
 	}
 }
 
+func TestAppenderTableRef(t *testing.T) {
+	tests := []struct {
+		name       string
+		table      string
+		wantSchema string
+		wantTable  string
+		wantErr    bool
+	}{
+		{name: "unqualified quoted", table: `"events"`, wantTable: "events"},
+		{name: "unqualified plain", table: "events", wantTable: "events"},
+		{name: "schema qualified quoted", table: `"main"."events"`, wantSchema: "main", wantTable: "events"},
+		{name: "schema qualified plain", table: "main.events", wantSchema: "main", wantTable: "events"},
+		// Regression: a catalog-qualified name used to be parsed as
+		// schema=catalog, table=schema, silently appending to the wrong table.
+		{name: "catalog qualified quoted", table: `"cat"."main"."events"`, wantErr: true},
+		{name: "catalog qualified plain", table: "cat.main.events", wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			schema, table, err := appenderTableRef(tt.table)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("expected error for %q, got schema=%q table=%q", tt.table, schema, table)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if schema != tt.wantSchema || table != tt.wantTable {
+				t.Fatalf("got (%q, %q), want (%q, %q)", schema, table, tt.wantSchema, tt.wantTable)
+			}
+		})
+	}
+}
+
+func TestNewRejectsCatalogQualifiedTableWithAppender(t *testing.T) {
+	_, err := New(Config{
+		Table:       "cat.main.events",
+		WriterLoop:  true,
+		UseAppender: true,
+	})
+	if err == nil || !strings.Contains(err.Error(), "catalog-qualified") {
+		t.Fatalf("expected catalog-qualified table error, got %v", err)
+	}
+}
+
 func TestBuildSchemaInsertQuery(t *testing.T) {
 	q := buildSchemaInsertQuery(`"events"`, []string{"event_id", "status_code"}, true, `"raw"`)
 	want := `INSERT INTO "events" ("event_id", "status_code", "raw") VALUES (?, ?, ?)`
