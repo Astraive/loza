@@ -103,6 +103,9 @@ func ValidateEventBytes(raw []byte) error {
 }
 
 func ValidateEventBytesStrict(raw []byte, strict bool) error {
+	if len(raw) > speccontract.MaxBatchBytes {
+		return fmt.Errorf("payload exceeds max_batch_size_bytes (%d > %d)", len(raw), speccontract.MaxBatchBytes)
+	}
 	var payload map[string]any
 	if err := json.Unmarshal(raw, &payload); err == nil {
 		if _, ok := payload["request_id"]; ok {
@@ -131,6 +134,7 @@ func ValidateEventBytesStrict(raw []byte, strict bool) error {
 		// ingest-envelope validation.
 		_, hasAPIVersion := payload["api_version"]
 		if eventsRaw, ok := payload["events"].([]any); ok && !hasAPIVersion {
+		if eventsRaw, ok := payload["events"].([]any); ok && payload["api_version"] == nil {
 			for _, item := range eventsRaw {
 				event, ok := item.(map[string]any)
 				if !ok {

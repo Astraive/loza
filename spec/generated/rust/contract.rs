@@ -10,6 +10,16 @@ pub const CONTRACT_JSON: &str = r#"{
     "event_loose": "spec/schemas/json/event.loose.schema.json",
     "ingest_envelope": "spec/schemas/json/ingest.schema.json",
     "collector_response": "spec/schemas/json/collector-response.schema.json"
+  \"product_version\": \"0.4.1\",
+  \"spec_version\": \"v1\",
+  \"api_version\": \"v1\",
+  \"event_version\": \"v1\",
+  \"schemas\": {
+    \"event\": \"spec/schemas/json/event.schema.json\",
+    \"event_strict\": \"spec/schemas/json/event.strict.schema.json\",
+    \"event_loose\": \"spec/schemas/json/event.loose.schema.json\",
+    \"ingest_envelope\": \"spec/schemas/json/ingest.schema.json\",
+    \"collector_response\": \"spec/schemas/json/collector-response.schema.json\"
   },
   "required_fields": [
     "schema_version",
@@ -311,6 +321,27 @@ pub const CONTRACT_JSON: &str = r#"{
       "valid/rag_query.json",
       "valid/release_field.json",
       "valid/notice_level.json"
+  \"fixtures\": {
+    \"version\": \"v1\",
+    \"product_version\": \"0.4.1\",
+    \"strict_schema\": \"../schema/event.strict.schema.json\",
+    \"loose_schema\": \"../schema/event.loose.schema.json\",
+    \"valid\": [
+      \"valid/http_success.json\",
+      \"valid/http_error.json\",
+      \"valid/job_success.json\",
+      \"valid/queue_retry.json\",
+      \"valid/cron_run.json\",
+      \"valid/partial_abandoned.json\",
+      \"valid/cli_run.json\",
+      \"valid/duplicate_fields.json\",
+      \"valid/minimal_event.json\",
+      \"valid/error_event.json\",
+      \"valid/trace_context_event.json\",
+      \"valid/agent_run.json\",
+      \"valid/rag_query.json\",
+      \"valid/release_field.json\",
+      \"valid/notice_level.json\"
     ],
     "loose_only_valid": [
       "valid/loose_event_type_alias.json"

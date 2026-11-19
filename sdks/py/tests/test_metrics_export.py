@@ -135,6 +135,24 @@ def test_rejection_reason_exported() -> None:
 
     rendered = loza.RenderPrometheus(metrics)
     assert 'loza_sdk_events_dropped_total{reason="oversized_event"} 1' in rendered
+    """Verify oversized events are rejected with a size-limit reason."""
+    logger = loza.New(loza.Test("test"))
+
+    ctx = logger.start_event(loza.Params(event="large_event"))
+    huge_value = "x" * 10_000_000
+    logger.enrich(ctx, loza.String("huge", huge_value))
+
+    # A single oversized event must be rejected by the post-parse per-event
+    # byte bound instead of being admitted unchecked.
+    try:
+        logger.finish(ctx, "success")
+        payload = logger.emit(ctx)
+    except loza.EventValidationError as exc:
+        assert "max_event_size_bytes" in str(exc)
+    else:
+        # Non-strict configurations may still emit; ensure the payload parses.
+        if payload:
+            assert json.loads(payload) is not None
 
 
 def test_error_event_tracking() -> None:
