@@ -256,7 +256,7 @@ export class FlatSchema implements Schema {
         } else if (typeof v === 'object' && v && !Array.isArray(v) && k !== 'error') {
           flatten(v, key);
         } else {
-          flat[k === 'attrs' ? key : key] = v;
+          flat[key] = v;
         }
       }
     }

@@ -83,6 +83,19 @@ describe('Schema boundaries', () => {
     assert.deepEqual(custom, { name: 'query', attrs: event.attrs });
     assert.equal(new NestedSchema().encode(view).event, 'query');
   });
+
+  it('flattens a primitive attribute named attrs under its full dotted key', () => {
+    // A non-object value with key "attrs" reaches the fallthrough branch of
+    // FlatSchema. It must be emitted under the fully-qualified dotted key, not
+    // collapsed into a bare "attrs" key.
+    const event = new Event({ event: 'attrs-key', service: 'svc' }, 'svc', 'test');
+    event.attrs = { 'user.attrs': 'literal', 'user.id': 'u1', 'meta.attrs': 'meta-literal' };
+    const flat = new FlatSchema().encode(new EventView(event));
+    assert.equal(flat['user.attrs'], 'literal');
+    assert.equal(flat['user.id'], 'u1');
+    assert.equal(flat['meta.attrs'], 'meta-literal');
+    assert.equal('attrs' in flat, false);
+  });
   it('normalizes sparse event collection fields in EventView', () => {
     const event = new Event({ event: 'sparse', service: 'svc' }, 'svc', 'test');
     const sparse = { ...event, processes: undefined, groups: undefined, timers: undefined } as unknown as Event;
