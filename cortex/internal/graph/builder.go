@@ -13,9 +13,8 @@ import (
 
 // AdjacencyCache preloads edges into memory for fast in-memory BFS.
 type AdjacencyCache struct {
-	edges  map[string][]*models.Edge // nodeID -> edges
-	loaded bool
-	mu     sync.RWMutex
+	edges map[string][]*models.Edge // nodeID -> edges
+	mu    sync.RWMutex
 }
 
 func NewAdjacencyCache() *AdjacencyCache {
@@ -24,10 +23,15 @@ func NewAdjacencyCache() *AdjacencyCache {
 	}
 }
 
-func (c *AdjacencyCache) GetEdges(nodeID string) []*models.Edge {
+// GetEdges returns the cached edges for nodeID and whether the node has been
+// loaded into the cache. The boolean is the load sentinel: it distinguishes a
+// node that was never cached from one cached with no (or nil) edges, which a
+// nil-slice check alone cannot do.
+func (c *AdjacencyCache) GetEdges(nodeID string) ([]*models.Edge, bool) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	return c.edges[nodeID]
+	edges, ok := c.edges[nodeID]
+	return edges, ok
 }
 
 func (c *AdjacencyCache) SetEdges(nodeID string, edges []*models.Edge) {
@@ -40,7 +44,6 @@ func (c *AdjacencyCache) Invalidate() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.edges = make(map[string][]*models.Edge)
-	c.loaded = false
 }
 
 type Builder struct {
@@ -154,9 +157,10 @@ func (b *Builder) TraverseGraph(ctx context.Context, startNodeID string, opts mo
 
 			allNodes = append(allNodes, node)
 
-			// Use adjacency cache for edges
-			edges := b.adjCache.GetEdges(nodeID)
-			if edges == nil {
+			// Use adjacency cache for edges. The boolean load sentinel tells
+			// an unloaded node apart from one cached with zero edges.
+			edges, ok := b.adjCache.GetEdges(nodeID)
+			if !ok {
 				fetched, err := b.graphStore.GetEdges(ctx, nodeID, "")
 				if err != nil {
 					return nil, fmt.Errorf("load graph edges for %q: %w", nodeID, err)
