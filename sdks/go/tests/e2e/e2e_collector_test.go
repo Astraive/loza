@@ -3,6 +3,7 @@ package e2e
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -26,6 +27,23 @@ var collectorRequestTimeout = 10 * time.Second
 // probes. Go's default client has a zero timeout, which can hang the suite.
 func collectorHTTPClient() *http.Client {
 	return &http.Client{Timeout: collectorRequestTimeout}
+// fataler is the subset of testing.TB used by readResponseBody. Keeping it as
+// an interface lets the read-error handling be unit tested without a live
+// collector.
+type fataler interface {
+	Helper()
+	Fatalf(format string, args ...any)
+}
+
+// readResponseBody reads the entire response body and fails the test when the
+// read itself fails, so callers never act on a possibly truncated body.
+func readResponseBody(t fataler, r io.Reader) []byte {
+	t.Helper()
+	body, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	return body
 }
 
 func collectorURL() string {
@@ -148,7 +166,7 @@ func fetchCollectorVersion(client *http.Client, baseURL string) (map[string]any,
 	}
 	defer resp.Body.Close()
 
-	body, _ := io.ReadAll(resp.Body)
+	body := readResponseBody(t, resp.Body)
 	var version map[string]any
 	if err := json.Unmarshal(body, &version); err != nil {
 		return nil, err
@@ -204,7 +222,7 @@ func fetchCollectorStatus(client *http.Client, baseURL, token string) ([]byte, e
 		return nil, err
 	}
 	defer resp.Body.Close()
-	body, _ := io.ReadAll(resp.Body)
+	body := readResponseBody(t, resp.Body)
 	if resp.StatusCode != 200 {
 		return nil, fmt.Errorf("status %d: %s", resp.StatusCode, string(body))
 	}
@@ -238,5 +256,69 @@ func TestCollectorHTTPRequestsAreBounded(t *testing.T) {
 	}
 	if elapsed := time.Since(start); elapsed > 2*time.Second {
 		t.Fatalf("stalled collector requests took %s; expected them to be bounded by the client timeout", elapsed)
+	}
+}
+
+// recordingFataler captures Fatalf calls so readResponseBody can be exercised
+// without a real *testing.T (which would abort the goroutine).
+type recordingFataler struct {
+	fatal   bool
+	message string
+}
+
+func (r *recordingFataler) Helper() {}
+
+func (r *recordingFataler) Fatalf(format string, args ...any) {
+	r.fatal = true
+	r.message = fmt.Sprintf(format, args...)
+}
+
+// errReadBody is the sentinel read error used by the regression tests.
+var errReadBody = errors.New("simulated read failure")
+
+// failingBodyReader yields a few bytes and then fails, mimicking a truncated
+// response body where io.ReadAll surfaces an error alongside partial data.
+type failingBodyReader struct {
+	remaining int
+}
+
+func (r *failingBodyReader) Read(p []byte) (int, error) {
+	if r.remaining <= 0 {
+		return 0, errReadBody
+	}
+	if len(p) > r.remaining {
+		p = p[:r.remaining]
+	}
+	for i := range p {
+		p[i] = 'x'
+	}
+	r.remaining -= len(p)
+	return len(p), nil
+}
+
+// Regression test for MASS-0524: a body read failure must be surfaced rather
+// than silently discarded, so callers never act on a truncated body.
+func TestReadResponseBody_SurfacesReadError(t *testing.T) {
+	f := &recordingFataler{}
+	got := readResponseBody(f, &failingBodyReader{remaining: 4})
+	if !f.fatal {
+		t.Fatal("expected the read failure to be reported via Fatalf")
+	}
+	if !strings.Contains(f.message, errReadBody.Error()) {
+		t.Fatalf("expected read error in Fatalf message, got %q", f.message)
+	}
+	if string(got) != "xxxx" {
+		t.Fatalf("expected the bytes read before the failure, got %q", got)
+	}
+}
+
+func TestReadResponseBody_Success(t *testing.T) {
+	f := &recordingFataler{}
+	got := readResponseBody(f, strings.NewReader("ok"))
+	if f.fatal {
+		t.Fatalf("unexpected Fatalf: %s", f.message)
+	}
+	if string(got) != "ok" {
+		t.Fatalf("got %q, want %q", got, "ok")
 	}
 }
