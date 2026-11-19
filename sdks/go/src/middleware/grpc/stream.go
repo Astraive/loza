@@ -65,14 +65,34 @@ func StreamInterceptorWithConfig(cfg Config) grpc.StreamServerInterceptor {
 			}
 			if err != nil {
 				st, _ := status.FromError(err)
-				loza.FinishError(evCtx, err, loza.Int("status_code", int(st.Code())))
+				reportTelemetryError(evCtx, "finish_error", loza.FinishError(evCtx, err, loza.Int("status_code", int(st.Code()))))
 			} else {
-				loza.Finish(evCtx, "success", loza.Int("status_code", int(codes.OK)))
+				reportTelemetryError(evCtx, "finish", loza.Finish(evCtx, "success", loza.Int("status_code", int(codes.OK))))
 			}
 			_ = loza.Emit(evCtx)
 		}()
 
 		err = handler(srv, wrapped)
+			reportTelemetryError(evCtx, "emit", loza.Emit(evCtx))
+			return err
+		}
+
+		defer func() {
+			if rec := recover(); rec != nil {
+				err = status.Error(codes.Internal, fmt.Sprintf("panic recovered: %v", rec))
+				reportTelemetryError(evCtx, "finish_error", loza.FinishError(evCtx, err, loza.Int("status_code", int(codes.Internal))))
+				reportTelemetryError(evCtx, "emit", loza.Emit(evCtx))
+			}
+		}()
+
+		err = handler(srv, wrapped)
+		if err != nil {
+			st, _ := status.FromError(err)
+			reportTelemetryError(evCtx, "finish_error", loza.FinishError(evCtx, err, loza.Int("status_code", int(st.Code()))))
+		} else {
+			reportTelemetryError(evCtx, "finish", loza.Finish(evCtx, "success", loza.Int("status_code", int(codes.OK))))
+		}
+		reportTelemetryError(evCtx, "emit", loza.Emit(evCtx))
 		return err
 	}
 }
