@@ -196,3 +196,62 @@ func TestRunEqualsOutputIsNotPositional(t *testing.T) {
 		}
 	}
 }
+
+const testDefaults = "" +
+	"collector_repo_path: ./collector\n" +
+	"cortex_repo_path: ./cortex\n" +
+	"spec_repo_path: ./spec\n" +
+	"collector_url: http://127.0.0.1:9308\n" +
+	"duckdb_path: loza.db\n" +
+	"spool_dir: loza-spool\n" +
+	"spool_file: spool.ndjson\n" +
+	"dlq_path: loza-dlq.ndjson\n"
+
+func writeTestDefaults(t *testing.T, dir, extra string) string {
+	t.Helper()
+	path := filepath.Join(dir, "loza-cli.defaults.yaml")
+	if err := os.WriteFile(path, []byte(testDefaults+extra), 0o600); err != nil {
+		t.Fatalf("write defaults: %v", err)
+	}
+	return path
+}
+
+// An invalid config must surface as a fatal error for init, just like every
+// other command, instead of being silently replaced by an empty Config{} that
+// generates a broken config file.
+func TestInitPropagatesConfigLoadError(t *testing.T) {
+	dir := t.TempDir()
+	defaultsPath := writeTestDefaults(t, dir, "validation_mode: bogus\n")
+
+	t.Setenv("LOZA_CLI_DEFAULTS", defaultsPath)
+	t.Setenv("LOZA_CLI_CONFIG", filepath.Join(dir, "no-user-config.yaml"))
+
+	target := filepath.Join(dir, "generated.yaml")
+	err := Run([]string{"init", target})
+	if err == nil {
+		t.Fatal("init with invalid config: expected an error, got nil")
+	}
+	if !strings.Contains(err.Error(), "load cli config") {
+		t.Fatalf("error = %q, want it to wrap the config load error", err)
+	}
+	if _, statErr := os.Stat(target); !os.IsNotExist(statErr) {
+		t.Fatalf("config must not be generated on load error; stat err = %v", statErr)
+	}
+}
+
+// init must continue to generate a config when the existing config is valid.
+func TestInitWithValidConfigStillGenerates(t *testing.T) {
+	dir := t.TempDir()
+	defaultsPath := writeTestDefaults(t, dir, "")
+
+	t.Setenv("LOZA_CLI_DEFAULTS", defaultsPath)
+	t.Setenv("LOZA_CLI_CONFIG", filepath.Join(dir, "no-user-config.yaml"))
+
+	target := filepath.Join(dir, "generated.yaml")
+	if err := Run([]string{"init", target}); err != nil {
+		t.Fatalf("init with valid config: %v", err)
+	}
+	if _, statErr := os.Stat(target); statErr != nil {
+		t.Fatalf("expected generated config file: %v", statErr)
+	}
+}
