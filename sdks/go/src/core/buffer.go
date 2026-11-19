@@ -23,6 +23,7 @@ type EventBuffer struct {
 	stopCh        chan struct{}
 	closeOnce     sync.Once
 	closed        bool
+	closeErr      error // result of the close-time Flush, shared with every Close caller
 	droppedCount  int64
 }
 
@@ -176,7 +177,6 @@ func (b *EventBuffer) flushLoop() {
 // Close stops the buffer and flushes remaining events.
 // Requirement 33.7: flush on Shutdown()
 func (b *EventBuffer) Close(ctx context.Context) error {
-	var err error
 	b.closeOnce.Do(func() {
 		// Mark closed before stopping the flush loop so no new events can be
 		// accepted after the final flush. Flush() does not consult this flag,
@@ -186,9 +186,11 @@ func (b *EventBuffer) Close(ctx context.Context) error {
 		b.mu.Unlock()
 		close(b.stopCh)
 		b.ticker.Stop()
-		err = b.Flush(ctx)
+		b.closeErr = b.Flush(ctx)
 	})
-	return err
+	// sync.Once guarantees the write to closeErr in the Do body happens-before
+	// the return of every Do call, so all callers observe the same Flush result.
+	return b.closeErr
 }
 
 // Size returns the current number of buffered events.
