@@ -932,7 +932,7 @@ Redaction transforms **event payloads** before encoding. It runs after schema en
 | `hashKeys(...keys)` | Replace matching values with `sha256:{hash}` |
 | `maskKeys(...keys)` | Mask: first 2 + last 2 chars visible (`ab****yz`) |
 | `dropKeys(...keys)` | Remove matching keys entirely |
-| `composeRedactors(...redactors)` | Chain multiple redactors |
+| `composeRedactors(...redactors)` | Apply redactors in order (last wins on overlapping keys) |
 
 `maskKeys` coerces non-string values to strings before masking (e.g. `1234` → `****`), so numeric, boolean, array, and object values never escape unmasked.
 

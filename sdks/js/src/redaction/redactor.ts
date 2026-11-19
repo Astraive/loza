@@ -123,7 +123,9 @@ export function maskKeys(...keys: string[]): Redactor {
   });
 }
 
-/** Redactor that chains multiple redactors (first match wins per key). */
+/** Redactor that chains multiple redactors, applying each one in order to the
+ *  previous result (so a later redactor can transform the same key as an earlier
+ *  one; when keys overlap, the last redactor wins). */
 export function composeRedactors(...redactors: Redactor[]): Redactor {
   return (payload) => {
     let current = { ...payload };
