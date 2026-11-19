@@ -105,7 +105,9 @@ func (h *SlogHandler) Handle(ctx context.Context, rec slog.Record) error {
 	attrs := root.flatten()
 
 	if ev, ok := loza.FromContext(ctx); ok && ev != nil {
-		loza.Enrich(ctx, attrs...)
+		if err := loza.Enrich(ctx, attrs...); err != nil {
+			return err
+		}
 		return nil
 	}
 
