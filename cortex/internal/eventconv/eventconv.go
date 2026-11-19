@@ -26,13 +26,12 @@ func FromRawMap(raw map[string]any, defaultProvenance string) (*models.Event, er
 	event.ID = getString(raw, "id")
 	event.EventID = getString(raw, "event_id")
 
-	// Timestamp parsing
+	// Timestamp parsing. RFC3339Nano accepts RFC3339 inputs as well (Go's
+	// fractional-second component is optional), so the former time.RFC3339
+	// and "2006-01-02T15:04:05Z07:00" branches were dead duplicates. Keep the
+	// bare wall-clock form, which is the only genuinely distinct layout.
 	if ts, ok := raw["timestamp"].(string); ok {
 		if t, err := time.Parse(time.RFC3339Nano, ts); err == nil {
-			event.Timestamp = t
-		} else if t, err := time.Parse(time.RFC3339, ts); err == nil {
-			event.Timestamp = t
-		} else if t, err := time.Parse("2006-01-02T15:04:05Z07:00", ts); err == nil {
 			event.Timestamp = t
 		} else if t, err := time.Parse("2006-01-02T15:04:05", ts); err == nil {
 			event.Timestamp = t
