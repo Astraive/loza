@@ -2,6 +2,7 @@ package zerolog
 
 import (
 	"bytes"
+	"context"
 	"testing"
 
 	"github.com/astraive/loza/sdks/go"
@@ -9,9 +10,23 @@ import (
 )
 
 func TestHookCompatibility(t *testing.T) {
-	h := Hook()
-	if (h == AdapterHook{}) {
-		// Hook() returns a zero-value AdapterHook; just verify it doesn't panic.
+	// Hook() must return a non-nil value that satisfies zerolog.Hook.
+	var hook zerolog.Hook = Hook()
+	if hook == nil {
+		t.Fatal("Hook() returned a nil zerolog.Hook")
+	}
+
+	sink, store := loza.MemorySink()
+	if err := loza.Configure(loza.Test().WithSink(sink)); err != nil {
+		t.Fatalf("configure: %v", err)
+	}
+	t.Cleanup(func() { _ = loza.Shutdown(context.Background()) })
+
+	zl := zerolog.New(&bytes.Buffer{}).Hook(hook)
+	zl.Info().Msg("compatibility check")
+
+	if store.Len() != 1 {
+		t.Fatalf("expected 1 emitted event, got %d", store.Len())
 	}
 }
 
