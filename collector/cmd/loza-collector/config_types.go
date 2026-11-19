@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"math/rand"
+	"net"
 	"net/http"
 	"os"
 	"sync"
@@ -365,6 +366,7 @@ type collectorState struct {
 	keyCache            *auth.MemoryKeyCache
 	keyRateLimiter      *auth.KeyRateLimiter
 	serverSecret        []byte
+	trustedCIDRs        []*net.IPNet
 }
 
 func (c *collectorConfig) buildEventBusConfig() eventbus.Config {
