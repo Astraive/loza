@@ -570,22 +570,30 @@ type HTTPBatchSinkConfig struct {
 	Insecure      bool
 	BatchSize     int
 	FlushInterval time.Duration
+	// MaxBufferSize caps the number of retained events. When the buffer is
+	// full, the oldest events are dropped so a failing collector cannot make
+	// the buffer grow without bound. Default: 10000.
+	MaxBufferSize int
 	Gzip          bool
 	Client        *http.Client
 	// Transport, when set, is used for delivery and supplies retry/backoff
 	// behavior in addition to the timeout/connection settings on Client.
 	Transport *HTTPTransport
 	OnError   func(error)
+	OnError       func(error)
+	// OnDrop is notified once for every event discarded by the overflow policy.
+	OnDrop func(reason string)
 }
 
 type httpBatchSink struct {
-	cfg       HTTPBatchSinkConfig
-	mu        sync.Mutex
-	flushMu   sync.Mutex
-	buf       [][]byte
-	timer     *time.Ticker
-	stop      chan struct{}
-	closeOnce sync.Once
+	cfg          HTTPBatchSinkConfig
+	mu           sync.Mutex
+	flushMu      sync.Mutex
+	buf          [][]byte
+	droppedCount int64 // guarded by mu
+	timer        *time.Ticker
+	stop         chan struct{}
+	closeOnce    sync.Once
 }
 
 func HTTPBatchSink(cfg HTTPBatchSinkConfig) (Sink, error) {
@@ -619,6 +627,9 @@ func HTTPBatchSink(cfg HTTPBatchSinkConfig) (Sink, error) {
 	if cfg.FlushInterval <= 0 {
 		cfg.FlushInterval = time.Second
 	}
+	if cfg.MaxBufferSize <= 0 {
+		cfg.MaxBufferSize = 10000
+	}
 	if cfg.Client == nil {
 		cfg.Client = &http.Client{Timeout: 5 * time.Second}
 	}
@@ -634,17 +645,56 @@ func HTTPBatchSink(cfg HTTPBatchSinkConfig) (Sink, error) {
 
 func (s *httpBatchSink) Name() string { return "httpbatch" }
 
+// enforceBufferLimitLocked drops the oldest buffered events until the buffer
+// fits MaxBufferSize. The caller must hold s.mu. It returns the number dropped.
+func (s *httpBatchSink) enforceBufferLimitLocked() int {
+	dropped := 0
+	for len(s.buf) > s.cfg.MaxBufferSize {
+		s.buf[0] = nil // release the retained bytes for GC
+		s.buf = s.buf[1:]
+		dropped++
+	}
+	s.droppedCount += int64(dropped)
+	return dropped
+}
+
+func (s *httpBatchSink) notifyDrops(reason string, count int) {
+	if s.cfg.OnDrop == nil {
+		return
+	}
+	for range count {
+		s.cfg.OnDrop(reason)
+	}
+}
+
 func (s *httpBatchSink) WriteEvent(ctx context.Context, encoded []byte, _ *Event) error {
 	s.mu.Lock()
 	cp := make([]byte, len(encoded))
 	copy(cp, encoded)
 	s.buf = append(s.buf, cp)
+	dropped := s.enforceBufferLimitLocked()
 	flush := len(s.buf) >= s.cfg.BatchSize
 	s.mu.Unlock()
+	s.notifyDrops("buffer_overflow_drop_oldest", dropped)
 	if flush {
+		// Propagate the caller's context so cancellation aborts the write.
 		return s.Flush(ctx)
 	}
 	return nil
+}
+
+// Size returns the number of events currently buffered.
+func (s *httpBatchSink) Size() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.buf)
+}
+
+// DroppedCount returns the number of events dropped by the overflow policy.
+func (s *httpBatchSink) DroppedCount() int64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.droppedCount
 }
 
 func (s *httpBatchSink) WriteBatch(ctx context.Context, encoded [][]byte, _ []*Event) error {
@@ -680,9 +730,13 @@ func (s *httpBatchSink) Flush(ctx context.Context) error {
 
 	if err := s.send(ctx, bytes.Join(batch, nil)); err != nil {
 		s.mu.Lock()
+		// Requeue the failed batch ahead of newer events, but keep the total
+		// bounded so repeated collector failures cannot grow the buffer forever.
 		batch = append(batch, s.buf...)
 		s.buf = batch
+		dropped := s.enforceBufferLimitLocked()
 		s.mu.Unlock()
+		s.notifyDrops("buffer_overflow_drop_oldest", dropped)
 		return err
 	}
 	return nil

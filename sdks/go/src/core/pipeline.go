@@ -27,6 +27,10 @@ type PipelineItem struct {
 	Event   *Event
 	Level   int // 0=debug, 1=info, 2=warn, 3=error — used by drop policies
 	IsError bool
+	// Ctx is the caller context captured at emit time. It is propagated to the
+	// sink write so caller cancellation reaches the async write path. A nil Ctx
+	// is treated as context.Background().
+	Ctx context.Context
 }
 
 // PipelineConfig carries the settings the pipeline needs.
@@ -59,6 +63,18 @@ type Pipeline struct {
 	// in flight, so every accepted item is already in the queue before workers
 	// begin draining and waitForDrain observes pending == 0.
 	enqueueMu sync.RWMutex
+	cfg           PipelineConfig
+	queue         chan PipelineItem
+	done          chan struct{}
+	stopOnce      sync.Once
+	workerWG      sync.WaitGroup
+	flusherWG     sync.WaitGroup // tracks the background flusher goroutine
+	flushGate     sync.Mutex     // serializes all sink flush calls
+	sinkCloseOnce sync.Once
+	sinkCloseErr  error
+	pending       atomic.Int64
+	drainMu       sync.Mutex
+	drainCond     *sync.Cond
 }
 
 // ErrPipelineClosed is returned when enqueueing after shutdown starts.
@@ -89,6 +105,7 @@ func NewPipeline(cfg PipelineConfig) *Pipeline {
 	for i := 0; i < cfg.Workers; i++ {
 		go p.worker()
 	}
+	p.flusherWG.Add(1)
 	go p.flusher()
 	return p
 }
@@ -234,8 +251,44 @@ func (p *Pipeline) writeDirect(item PipelineItem) error {
 	return p.writeBatch([]PipelineItem{item})
 }
 
+// batchContext derives the context used for a batch write from the caller
+// contexts carried by its items. Cancellation of any contributing caller
+// context aborts the whole batch. The returned cancel function releases the
+// registered callbacks and must be called once the write is finished.
+func batchContext(items []PipelineItem) (context.Context, context.CancelFunc) {
+	base := context.Background()
+	for _, item := range items {
+		if item.Ctx != nil {
+			base = item.Ctx
+			break
+		}
+	}
+	ctx, cancel := context.WithCancel(base)
+	var stops []func() bool
+	for _, item := range items {
+		if item.Ctx == nil || item.Ctx == base {
+			continue
+		}
+		stops = append(stops, context.AfterFunc(item.Ctx, cancel))
+	}
+	release := func() {
+		for _, stop := range stops {
+			stop()
+		}
+		cancel()
+	}
+	return ctx, release
+}
+
 func (p *Pipeline) writeBatch(items []PipelineItem) error {
-	ctx := context.Background()
+	if len(items) == 0 {
+		return nil
+	}
+	ctx, release := batchContext(items)
+	defer release()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	var last error
 	failed := false
 	for _, s := range p.cfg.Sinks {
@@ -277,7 +330,9 @@ func (p *Pipeline) Flush(ctx context.Context) error {
 	return p.flushSinks(ctx)
 }
 
-// Shutdown closes the pipeline and waits for drain.
+// Shutdown closes the pipeline, waits for drain and goroutines, then flushes
+// and closes sinks. Sinks are always closed, even when draining or waiting
+// fails, so a shutdown error never leaks them. All errors are aggregated.
 func (p *Pipeline) Shutdown(ctx context.Context) error {
 	// Wait for every in-flight Enqueue to publish its item before closing done.
 	// Once done is closed, workers are free to exit on an empty queue; admitting
@@ -286,23 +341,51 @@ func (p *Pipeline) Shutdown(ctx context.Context) error {
 	p.stopOnce.Do(func() { close(p.done) })
 	p.enqueueMu.Unlock()
 
+	var errs []error
 	if err := p.waitForDrain(ctx); err != nil {
-		return err
+		errs = append(errs, err)
 	}
 
 	waitCh := make(chan struct{})
 	go func() {
 		p.workerWG.Wait()
+		p.flusherWG.Wait()
 		close(waitCh)
 	}()
 
 	select {
 	case <-ctx.Done():
-		return ctx.Err()
+		errs = append(errs, ctx.Err())
 	case <-waitCh:
 	}
 
-	return p.flushSinks(ctx)
+	// Flush and close sinks on every path, including drain/cancellation errors.
+	if err := p.flushSinks(ctx); err != nil {
+		errs = append(errs, err)
+	}
+	p.sinkCloseOnce.Do(func() { p.sinkCloseErr = p.closeSinks(ctx) })
+	if p.sinkCloseErr != nil {
+		errs = append(errs, p.sinkCloseErr)
+	}
+	return errors.Join(errs...)
+}
+
+// closeSinks closes every configured sink and the fallback, aggregating errors.
+func (p *Pipeline) closeSinks(ctx context.Context) error {
+	var errs []error
+	for _, s := range p.cfg.Sinks {
+		if err := s.Close(ctx); err != nil {
+			p.notifyError(err)
+			errs = append(errs, err)
+		}
+	}
+	if p.cfg.Fallback != nil {
+		if err := p.cfg.Fallback.Close(ctx); err != nil {
+			p.notifyError(err)
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
 }
 
 func (p *Pipeline) worker() {
@@ -383,6 +466,7 @@ func (p *Pipeline) collectBatch(first PipelineItem, carry **PipelineItem) []Pipe
 }
 
 func (p *Pipeline) flusher() {
+	defer p.flusherWG.Done()
 	t := time.NewTicker(p.cfg.FlushInterval)
 	defer t.Stop()
 	for {
@@ -433,6 +517,9 @@ func (p *Pipeline) finishItems(count int) {
 }
 
 func (p *Pipeline) flushSinks(ctx context.Context) error {
+	p.flushGate.Lock()
+	defer p.flushGate.Unlock()
+
 	var last error
 	for _, s := range p.cfg.Sinks {
 		if err := s.Flush(ctx); err != nil {

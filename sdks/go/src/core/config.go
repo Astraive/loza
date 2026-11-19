@@ -3,6 +3,7 @@ package core
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
@@ -874,13 +875,15 @@ func envOr(key, def string) string {
 	return def
 }
 
-// LoadFromEnv loads configuration from environment variables and applies them
-// to the provided config. Environment variables take precedence over the base config
-// but are overridden by explicit code configuration.
+// LoadFromEnvE loads configuration from environment variables and applies them
+// to the provided config, returning any parse failures to the caller.
+// Environment variables take precedence over the base config but are overridden
+// by explicit code configuration.
 //
 // When LOZA_DSN is set, it is parsed first and sets CollectorURL, Environment,
 // Service, and Insecure. Individual env vars (LOZA_COLLECTOR_URL, etc.) override
-// DSN-derived values when both are present.
+// DSN-derived values when both are present. A malformed value is reported rather
+// than silently ignored; other variables are still applied.
 //
 // Supported environment variables:
 //   - LOZA_DSN: loza:// connection URI (sets CollectorURL, Environment, Service, Insecure)
@@ -896,9 +899,13 @@ func envOr(key, def string) string {
 //   - LOZA_MAX_BACKOFF: Maximum backoff duration (e.g., "30s")
 //   - LOZA_TIMEOUT: Request timeout (e.g., "10s")
 //   - LOZA_CONNECTION_TIMEOUT: Connection timeout (e.g., "5s")
-//   - LOZA_ENABLE_COMPRESSION: Enable compression ("true" or "false")
-func LoadFromEnv(base Config) Config {
+//   - LOZA_ENABLE_COMPRESSION: Enable compression (strconv.ParseBool value)
+func LoadFromEnvE(base Config) (Config, error) {
 	cfg := base
+	var errs []error
+	record := func(name, value string, err error) {
+		errs = append(errs, fmt.Errorf("loza: invalid %s=%q: %w", name, value, err))
+	}
 
 	// Load DSN first (sets CollectorURL, Environment, Service, Insecure, and
 	// credential fields when userinfo is present). Individual env vars below
@@ -916,8 +923,10 @@ func LoadFromEnv(base Config) Config {
 				cfg.DSNUsername = username
 				cfg.DSNPassword = password
 			}
+		} else {
+			// Surface the parse failure instead of silently ignoring it.
+			record("LOZA_DSN", rawDSN, err)
 		}
-		// If DSN parsing fails, fall through to individual env vars.
 	}
 
 	// Load collector URL (overrides DSN-derived value if both are set)
@@ -948,16 +957,22 @@ func LoadFromEnv(base Config) Config {
 	if batchSize := os.Getenv("LOZA_BATCH_SIZE"); batchSize != "" {
 		if size, err := strconv.Atoi(batchSize); err == nil {
 			cfg.BatchSize = size
+		} else {
+			record("LOZA_BATCH_SIZE", batchSize, err)
 		}
 	}
 	if flushInterval := os.Getenv("LOZA_FLUSH_INTERVAL"); flushInterval != "" {
 		if interval, err := time.ParseDuration(flushInterval); err == nil {
 			cfg.FlushInterval = interval
+		} else {
+			record("LOZA_FLUSH_INTERVAL", flushInterval, err)
 		}
 	}
 	if maxBufferSize := os.Getenv("LOZA_MAX_BUFFER_SIZE"); maxBufferSize != "" {
 		if size, err := strconv.Atoi(maxBufferSize); err == nil {
 			cfg.MaxBufferSize = size
+		} else {
+			record("LOZA_MAX_BUFFER_SIZE", maxBufferSize, err)
 		}
 	}
 
@@ -965,29 +980,49 @@ func LoadFromEnv(base Config) Config {
 	if maxRetries := os.Getenv("LOZA_MAX_RETRIES"); maxRetries != "" {
 		if retries, err := strconv.Atoi(maxRetries); err == nil {
 			cfg.MaxRetries = retries
+		} else {
+			record("LOZA_MAX_RETRIES", maxRetries, err)
 		}
 	}
 	if maxBackoff := os.Getenv("LOZA_MAX_BACKOFF"); maxBackoff != "" {
 		if backoff, err := time.ParseDuration(maxBackoff); err == nil {
 			cfg.MaxBackoff = backoff
+		} else {
+			record("LOZA_MAX_BACKOFF", maxBackoff, err)
 		}
 	}
 	if timeout := os.Getenv("LOZA_TIMEOUT"); timeout != "" {
 		if t, err := time.ParseDuration(timeout); err == nil {
 			cfg.Timeout = t
+		} else {
+			record("LOZA_TIMEOUT", timeout, err)
 		}
 	}
 	if connTimeout := os.Getenv("LOZA_CONNECTION_TIMEOUT"); connTimeout != "" {
 		if t, err := time.ParseDuration(connTimeout); err == nil {
 			cfg.ConnectionTimeout = t
+		} else {
+			record("LOZA_CONNECTION_TIMEOUT", connTimeout, err)
 		}
 	}
 
 	// Load compression setting
 	if compression := os.Getenv("LOZA_ENABLE_COMPRESSION"); compression != "" {
-		cfg.EnableCompression = compression == "true" || compression == "1"
+		if enabled, err := strconv.ParseBool(compression); err == nil {
+			cfg.EnableCompression = enabled
+		} else {
+			record("LOZA_ENABLE_COMPRESSION", compression, err)
+		}
 	}
 
+	return cfg, errors.Join(errs...)
+}
+
+// LoadFromEnv loads configuration from environment variables and applies them
+// to the provided config. Parse errors are discarded for backward compatibility;
+// use LoadFromEnvE to surface configuration errors to callers.
+func LoadFromEnv(base Config) Config {
+	cfg, _ := LoadFromEnvE(base)
 	return cfg
 }
 
@@ -1107,8 +1142,12 @@ func NewClient(cfg Config) (*Logger, error) {
 	// Step 1: Apply YAML-based defaults and user config
 	merged := mergeFileConfig(base, combinedFileCfg)
 
-	// Step 2: Apply environment variables (overrides YAML config)
-	merged = LoadFromEnv(merged)
+	// Step 2: Apply environment variables (overrides YAML config). Surface any
+	// malformed values instead of silently misconfiguring the producer.
+	merged, err = LoadFromEnvE(merged)
+	if err != nil {
+		return nil, fmt.Errorf("loza: invalid environment configuration: %w", err)
+	}
 
 	// Step 3: Apply code-level config (highest precedence)
 	merged = mergeCodeConfig(merged, cfg)
@@ -1158,6 +1197,7 @@ func NewClient(cfg Config) (*Logger, error) {
 			Headers:       headers,
 			BatchSize:     merged.BatchSize,
 			FlushInterval: merged.Async.FlushInterval,
+			MaxBufferSize: merged.MaxBufferSize,
 			Gzip:          merged.EnableCompression,
 			Insecure:      merged.Insecure,
 			Client:        transport.Client(),
@@ -1165,6 +1205,11 @@ func NewClient(cfg Config) (*Logger, error) {
 			OnError: func(err error) {
 				if merged.StatsHandler != nil {
 					merged.StatsHandler.OnError(err)
+				}
+			},
+			OnDrop: func(reason string) {
+				if merged.StatsHandler != nil {
+					merged.StatsHandler.OnDrop(reason)
 				}
 			},
 		})

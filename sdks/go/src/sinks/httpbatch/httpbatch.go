@@ -26,19 +26,26 @@ type Config struct {
 	Headers       map[string]string
 	BatchSize     int
 	FlushInterval time.Duration
+	// MaxBufferSize caps the number of retained events. When the buffer is
+	// full, the oldest events are dropped so a failing collector cannot make
+	// the buffer grow without bound. Default: 10000.
+	MaxBufferSize int
 	Gzip          bool
 	Client        *http.Client
 	OnError       func(error)
+	// OnDrop is notified once for every event discarded by the overflow policy.
+	OnDrop func(reason string)
 }
 
 type sink struct {
-	cfg       Config
-	mu        sync.Mutex
-	flushMu   sync.Mutex
-	buf       [][]byte
-	timer     *time.Ticker
-	stop      chan struct{}
-	closeOnce sync.Once
+	cfg          Config
+	mu           sync.Mutex
+	flushMu      sync.Mutex
+	buf          [][]byte
+	droppedCount int64 // guarded by mu
+	timer        *time.Ticker
+	stop         chan struct{}
+	closeOnce    sync.Once
 }
 
 // New creates an HTTP batch sink.
@@ -54,6 +61,9 @@ func New(cfg Config) (loza.Sink, error) {
 	}
 	if cfg.FlushInterval <= 0 {
 		cfg.FlushInterval = time.Second
+	}
+	if cfg.MaxBufferSize <= 0 {
+		cfg.MaxBufferSize = 10000
 	}
 	if cfg.Client == nil {
 		cfg.Client = &http.Client{Timeout: 5 * time.Second}
@@ -112,6 +122,28 @@ func (s *sink) notifyDropped(dropped int) {
 }
 
 func (s *sink) WriteEvent(_ context.Context, encoded []byte, _ *loza.Event) error {
+// enforceBufferLimitLocked drops the oldest buffered events until the buffer
+// fits MaxBufferSize. The caller must hold s.mu. It returns the number dropped.
+func (s *sink) enforceBufferLimitLocked() int {
+	dropped := 0
+	for len(s.buf) > s.cfg.MaxBufferSize {
+		s.buf[0] = nil // release the retained bytes for GC
+		s.buf = s.buf[1:]
+		dropped++
+	}
+	s.droppedCount += int64(dropped)
+	return dropped
+}
+
+func (s *sink) notifyDrops(reason string, count int) {
+	if s.cfg.OnDrop == nil {
+		return
+	}
+	for range count {
+		s.cfg.OnDrop(reason)
+	}
+}
+
 func (s *sink) WriteEvent(ctx context.Context, encoded []byte, _ *loza.Event) error {
 	s.mu.Lock()
 	cp := make([]byte, len(encoded))
@@ -122,9 +154,29 @@ func (s *sink) WriteEvent(ctx context.Context, encoded []byte, _ *loza.Event) er
 	s.mu.Unlock()
 	s.notifyDropped(dropped)
 	if flush {
+	dropped := s.enforceBufferLimitLocked()
+	flush := len(s.buf) >= s.cfg.BatchSize
+	s.mu.Unlock()
+	s.notifyDrops("buffer_overflow_drop_oldest", dropped)
+	if flush {
+		// Propagate the caller's context so cancellation aborts the write.
 		return s.Flush(ctx)
 	}
 	return nil
+}
+
+// Size returns the number of events currently buffered.
+func (s *sink) Size() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.buf)
+}
+
+// DroppedCount returns the number of events dropped by the overflow policy.
+func (s *sink) DroppedCount() int64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.droppedCount
 }
 
 func (s *sink) WriteBatch(ctx context.Context, encoded [][]byte, _ []*loza.Event) error {
@@ -163,6 +215,14 @@ func (s *sink) Flush(ctx context.Context) error {
 		s.mu.Lock()
 		dropped = s.retainFailed(batch)
 		s.mu.Unlock()
+		// Requeue the failed batch ahead of newer events, but keep the total
+		// bounded so repeated collector failures cannot grow the buffer forever.
+		batch = append(batch, s.buf...)
+		s.buf = batch
+		dropped := s.enforceBufferLimitLocked()
+		s.mu.Unlock()
+		s.notifyDrops("buffer_overflow_drop_oldest", dropped)
+		return err
 	}
 	s.flushMu.Unlock()
 
