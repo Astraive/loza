@@ -1,8 +1,11 @@
 package core
 
 import (
+	"errors"
 	"net/http"
 	"net/url"
+	"regexp"
+	"strings"
 	"time"
 
 	"go.opentelemetry.io/otel/propagation"
@@ -75,9 +78,46 @@ func (rt *lozaRoundTripper) RoundTrip(req *http.Request) (*http.Response, error)
 			attrs = append(attrs, Int("http.client.status_code", resp.StatusCode))
 		}
 		if err != nil {
-			attrs = append(attrs, String("http.client.error", err.Error()))
+			attrs = append(attrs, String("http.client.error", sanitizeClientError(err)))
 		}
 		_ = Default().Checkpoint(ctx, "http.client.finished", attrs...)
 	}
 	return resp, err
+}
+
+// clientErrorURLPattern matches absolute URLs embedded in free-form error text.
+var clientErrorURLPattern = regexp.MustCompile(`[a-zA-Z][a-zA-Z0-9+.-]*://[^\s"'<>]+`)
+
+// sanitizeClientError removes sensitive URL components from transport error
+// text before it is recorded as a telemetry attribute. Go's *url.Error embeds
+// the full request URL, which can carry userinfo credentials and query tokens;
+// those must not be exported. Benign error text is returned unchanged.
+func sanitizeClientError(err error) string {
+	if err == nil {
+		return ""
+	}
+	msg := err.Error()
+	var urlErr *url.Error
+	if errors.As(err, &urlErr) && urlErr.URL != "" {
+		msg = strings.ReplaceAll(msg, urlErr.URL, sanitizeTelemetryURL(urlErr.URL))
+	}
+	return clientErrorURLPattern.ReplaceAllStringFunc(msg, sanitizeTelemetryURL)
+}
+
+// sanitizeTelemetryURL drops userinfo, query and fragment from a URL while
+// preserving scheme, host and path so the error remains useful for debugging.
+func sanitizeTelemetryURL(raw string) string {
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return raw
+	}
+	if parsed.User == nil && parsed.RawQuery == "" && !parsed.ForceQuery && parsed.Fragment == "" && parsed.RawFragment == "" {
+		return raw
+	}
+	parsed.User = nil
+	parsed.RawQuery = ""
+	parsed.ForceQuery = false
+	parsed.Fragment = ""
+	parsed.RawFragment = ""
+	return parsed.String()
 }
