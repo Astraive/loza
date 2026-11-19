@@ -1198,7 +1198,12 @@ func mergeCodeConfig(base, code Config) Config {
 	}
 	if code.CollectorEndpoint != "" {
 		base.CollectorEndpoint = code.CollectorEndpoint
-		base.CollectorURL = code.CollectorEndpoint
+		// CollectorEndpoint is deprecated in favor of CollectorURL. Only use it
+		// as a fallback when CollectorURL was not supplied in code, so the
+		// supported field wins when both are provided.
+		if code.CollectorURL == "" {
+			base.CollectorURL = code.CollectorEndpoint
+		}
 	}
 	if code.APIKey != "" {
 		base.APIKey = code.APIKey
