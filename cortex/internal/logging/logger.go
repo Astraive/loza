@@ -1,6 +1,7 @@
 package logging
 
 import (
+	"fmt"
 	"io"
 	"os"
 	"strings"
@@ -20,6 +21,14 @@ func New(level, format string) *Logger {
 	// silently change the verbosity of every other zerolog logger in the
 	// process, which contradicts the per-instance Logger abstraction.
 	logLevel := parseLevel(level)
+	// Set log level. An unknown level is reported before falling back to the
+	// default so that a typo in configuration is never silently downgraded.
+	logLevel, err := parseLevel(level)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: %v; falling back to info level\n", err)
+		logLevel = zerolog.InfoLevel
+	}
+	zerolog.SetGlobalLevel(logLevel)
 
 	// Configure output format
 	var output io.Writer = os.Stdout
@@ -33,19 +42,21 @@ func New(level, format string) *Logger {
 	return &Logger{logger: logger}
 }
 
-// parseLevel converts string level to zerolog.Level
-func parseLevel(level string) zerolog.Level {
-	switch strings.ToLower(level) {
+// parseLevel converts a string level to a zerolog.Level. It returns an error
+// for unrecognized values so callers can report misconfiguration instead of
+// silently falling back to a default verbosity.
+func parseLevel(level string) (zerolog.Level, error) {
+	switch strings.ToLower(strings.TrimSpace(level)) {
 	case "debug":
-		return zerolog.DebugLevel
+		return zerolog.DebugLevel, nil
 	case "info":
-		return zerolog.InfoLevel
+		return zerolog.InfoLevel, nil
 	case "warn":
-		return zerolog.WarnLevel
+		return zerolog.WarnLevel, nil
 	case "error":
-		return zerolog.ErrorLevel
+		return zerolog.ErrorLevel, nil
 	default:
-		return zerolog.InfoLevel
+		return zerolog.InfoLevel, fmt.Errorf("logging: unknown level %q (valid levels: debug, info, warn, error)", level)
 	}
 }
 
