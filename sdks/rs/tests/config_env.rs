@@ -37,6 +37,28 @@ fn plaintext_basic_auth_is_allowed_for_local_dsn_only() {
 }
 
 #[test]
+fn level_validation_is_case_insensitive_and_accepts_full_set() {
+    for level in [
+        "trace", "debug", "info", "notice", "warn", "error", "fatal", "TRACE", "Info", "WaRn",
+        "Notice",
+    ] {
+        let mut cfg = Config::test("checkout");
+        cfg.level = level.to_string();
+        assert!(
+            cfg.validate().is_ok(),
+            "level {level:?} should be accepted after case normalization"
+        );
+    }
+
+    let mut cfg = Config::test("checkout");
+    cfg.level = "verbose".to_string();
+    assert!(
+        cfg.validate().is_err(),
+        "genuinely unsupported levels must still be rejected"
+    );
+}
+
+#[test]
 fn remote_plaintext_basic_auth_is_rejected() {
     let cfg = Config::test("checkout")
         .with_dsn("loza://dsn-user:dsn-secret@collector.example/project?tls=false");
