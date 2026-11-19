@@ -122,15 +122,14 @@ func SnapshotEvent(t testing.TB, ev *Event) string {
 
 // MockSink is a test sink that records events and supports pausing/draining.
 type MockSink struct {
-	events    []*Event
-	raw       [][]byte
-	mu        sync.Mutex
-	paused    bool
-	pauseChan chan struct{}
+	events []*Event
+	raw    [][]byte
+	mu     sync.Mutex
+	paused bool
 }
 
 func NewMockSink() *MockSink {
-	return &MockSink{pauseChan: make(chan struct{})}
+	return &MockSink{}
 }
 
 func (s *MockSink) Name() string { return "mock" }
