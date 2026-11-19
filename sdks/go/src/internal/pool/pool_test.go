@@ -51,3 +51,30 @@ func TestPutDiscardsOversizedBuffer(t *testing.T) {
 	}
 	Put(buf)
 }
+
+// TestGetIgnoresPoisonedValue reproduces the defect where a foreign value in
+// the pool made Get's type assertion panic. With the pool unexported this can
+// only happen from inside the package, but Get must still never panic.
+func TestGetIgnoresPoisonedValue(t *testing.T) {
+	original := bytePool
+	defer func() { bytePool = original }()
+
+	bytePool = &sync.Pool{
+		New: func() any {
+			buf := make([]byte, 0, defaultBufSize)
+			return &buf
+		},
+	}
+	bytePool.Put("not a *[]byte")
+
+	buf := Get()
+	if buf == nil {
+		t.Fatal("Get returned nil after a poisoned value")
+	}
+	if len(buf) != 0 {
+		t.Fatalf("Get length = %d, want 0", len(buf))
+	}
+	if cap(buf) > maxBufSize {
+		t.Fatalf("Get capacity = %d, want <= %d", cap(buf), maxBufSize)
+	}
+}

@@ -7,8 +7,10 @@ const (
 	maxBufSize     = 64 * 1024 // 64 KB — buffers larger than this are discarded
 )
 
-// BytePool is a sync.Pool of []byte buffers.
-var BytePool = &sync.Pool{
+// bytePool is a sync.Pool of []byte buffers. It is deliberately unexported:
+// Get and Put are the only accessors, so callers cannot insert a foreign value
+// and break the *[]byte invariant that Get relies on.
+var bytePool = &sync.Pool{
 	New: func() any {
 		buf := make([]byte, 0, defaultBufSize)
 		return &buf
@@ -17,7 +19,12 @@ var BytePool = &sync.Pool{
 
 // Get returns a zeroed buffer from the pool.
 func Get() []byte {
-	bp := BytePool.Get().(*[]byte)
+	bp, ok := bytePool.Get().(*[]byte)
+	if !ok {
+		// A foreign value must never turn into a panic for callers.
+		buf := make([]byte, 0, defaultBufSize)
+		return buf
+	}
 	buf := (*bp)[:0]
 	// Resetting the length alone leaves the previous owner's bytes in the
 	// backing array, so a caller that reslices past len would read stale data.
@@ -33,5 +40,5 @@ func Put(buf []byte) {
 		return
 	}
 	buf = buf[:0]
-	BytePool.Put(&buf)
+	bytePool.Put(&buf)
 }
