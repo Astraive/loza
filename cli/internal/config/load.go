@@ -60,6 +60,7 @@ func Load() (Config, error) {
 	if strings.TrimSpace(cfg.SpecRepoPath) != "" {
 		cfg.SpecRepoPath = filepath.Clean(cfg.SpecRepoPath)
 	}
+	cfg.ValidationMode = strings.ToLower(strings.TrimSpace(cfg.ValidationMode))
 	return cfg, Validate(cfg)
 }
 
