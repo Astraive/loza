@@ -12,7 +12,9 @@ import { applyDSN } from './dsn-config.ts';
 import { isPublicDSNUsername, parse as parseDSN } from './dsn.ts';
 
 function isLocalhost(host: string): boolean {
-  return host === 'localhost' || host === '127.0.0.1' || host === '::1';
+  // URL.hostname retains IPv6 brackets: new URL('http://[::1]').hostname === '[::1]'.
+  const normalized = host.replace(/^\[|\]$/g, '');
+  return normalized === 'localhost' || normalized === '127.0.0.1' || normalized === '::1';
 }
 import { isLocalhost, isPublicDSNUsername, parse as parseDSN } from './dsn.ts';
 

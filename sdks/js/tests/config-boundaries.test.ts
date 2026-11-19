@@ -168,6 +168,29 @@ describe('Config boundaries', () => {
     const noCredentials = defaultConfig();
     noCredentials.collectorUrl = 'http://collector.example/events';
     assert.equal(validateConfig(noCredentials), noCredentials);
+  it('allows Basic credentials over plaintext HTTP to IPv6 localhost ([::1])', () => {
+    // URL.hostname keeps IPv6 brackets, so the bare '::1' comparison missed this.
+    const ipv6 = defaultConfig();
+    ipv6.collectorUrl = 'http://[::1]:9308/events';
+    ipv6.username = 'user';
+    ipv6.password = 'pass';
+    assert.equal(validateConfig(ipv6), ipv6);
+
+    // The full reported path: a loza:// DSN with credentials on [::1] resolves
+    // to http://[::1]:9308 with Basic auth and must also pass validation.
+    const fromDSN = withOptions(defaultConfig(), {
+      collectorUrl: 'loza://user:pass@[::1]/col',
+    });
+    assert.equal(fromDSN.collectorUrl, 'http://[::1]:9308');
+    assert.equal(fromDSN.username, 'user');
+    assert.equal(fromDSN.password, 'pass');
+
+    // Non-localhost IPv6 endpoints must still be rejected over plaintext HTTP.
+    const remote = defaultConfig();
+    remote.collectorUrl = 'http://[::2]:9308/events';
+    remote.username = 'user';
+    remote.password = 'pass';
+    assert.throws(() => validateConfig(remote), /require HTTPS/);
   });
 
   it('handles collector DSNs with public capabilities', () => {
