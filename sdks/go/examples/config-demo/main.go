@@ -3,11 +3,61 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"time"
 
 	"github.com/astraive/loza/sdks/go"
 )
+
+// envVars are the environment variables exercised by the env-configuration
+// example. They are kept in one place so that every Setenv call is checked.
+var envVars = [][2]string{
+	{"LOZA_SERVICE_NAME", "env-service"},
+	{"LOZA_SERVICE_VERSION", "2.0.0"},
+	{"LOZA_ENVIRONMENT", "staging"},
+	{"LOZA_COLLECTOR_URL", "http://env-collector:9308"},
+	{"LOZA_TENANT_ID", "tenant-env"},
+	{"LOZA_FLUSH_INTERVAL", "15s"},
+}
+
+// setDemoEnvVars applies the demo's environment variables with the supplied
+// setter and returns a descriptive error on the first failure. Passing a nil
+// setter uses os.Setenv. Callers must handle the returned error before relying
+// on the environment-derived configuration.
+func setDemoEnvVars(setenv func(string, string) error) error {
+	if setenv == nil {
+		setenv = os.Setenv
+	}
+	for _, kv := range envVars {
+		if err := setenv(kv[0], kv[1]); err != nil {
+			return fmt.Errorf("os.Setenv(%q, %q): %w", kv[0], kv[1], err)
+		}
+	}
+	return nil
+}
+
+// runEnvExample prints the environment-configuration example. If any variable
+// cannot be set, it reports the error and returns it without printing values
+// that would wrongly appear to come from env configuration.
+func runEnvExample(w io.Writer, setenv func(string, string) error) error {
+	fmt.Fprintln(w, "2. Configuration via environment variables:")
+	if err := setDemoEnvVars(setenv); err != nil {
+		fmt.Fprintf(w, "  ✗ Unable to configure environment: %v\n", err)
+		fmt.Fprintln(w)
+		return err
+	}
+
+	cfg2 := loza.Dev()
+	cfg2 = loza.LoadFromEnv(cfg2)
+	fmt.Fprintf(w, "  Service: %s\n", cfg2.Service)
+	fmt.Fprintf(w, "  Version: %s\n", cfg2.Version)
+	fmt.Fprintf(w, "  Environment: %s\n", cfg2.Environment)
+	fmt.Fprintf(w, "  CollectorURL: %s\n", cfg2.CollectorURL)
+	fmt.Fprintf(w, "  TenantID: %s\n", cfg2.TenantID)
+	fmt.Fprintf(w, "  FlushInterval: %s\n\n", cfg2.FlushInterval)
+	return nil
+}
 
 func main() {
 	fmt.Println("=== LOZA SDK Configuration Demo ===")
@@ -37,27 +87,16 @@ func main() {
 	fmt.Printf("  MaxRetries: %d\n", cfg1.MaxRetries)
 	fmt.Printf("  Timeout: %s\n\n", cfg1.Timeout)
 
-	// Example 2: Configuration via environment variables
-	fmt.Println("2. Configuration via environment variables:")
-	os.Setenv("LOZA_SERVICE_NAME", "env-service")
-	os.Setenv("LOZA_SERVICE_VERSION", "2.0.0")
-	os.Setenv("LOZA_ENVIRONMENT", "staging")
-	os.Setenv("LOZA_COLLECTOR_URL", "http://env-collector:9308")
-	os.Setenv("LOZA_TENANT_ID", "tenant-env")
-	os.Setenv("LOZA_FLUSH_INTERVAL", "15s")
-	
-	cfg2 := loza.Dev()
-	cfg2 = loza.LoadFromEnv(cfg2)
-	fmt.Printf("  Service: %s\n", cfg2.Service)
-	fmt.Printf("  Version: %s\n", cfg2.Version)
-	fmt.Printf("  Environment: %s\n", cfg2.Environment)
-	fmt.Printf("  CollectorURL: %s\n", cfg2.CollectorURL)
-	fmt.Printf("  TenantID: %s\n", cfg2.TenantID)
-	fmt.Printf("  FlushInterval: %s\n\n", cfg2.FlushInterval)
+	// Example 2: Configuration via environment variables. Stop the demo if the
+	// environment cannot be configured, since later examples rely on those values.
+	if err := runEnvExample(os.Stdout, os.Setenv); err != nil {
+		fmt.Printf("  Aborting demo: environment configuration failed.\n")
+		return
+	}
 
 	// Example 3: Configuration precedence (code > env > defaults)
 	fmt.Println("3. Configuration precedence (code > env > defaults):")
-	cfg3 := loza.Dev() // defaults
+	cfg3 := loza.Dev()            // defaults
 	cfg3 = loza.LoadFromEnv(cfg3) // apply env vars
 	cfg3 = loza.ApplyConfig(cfg3, // apply code config (highest precedence)
 		loza.WithService("code-service"),
