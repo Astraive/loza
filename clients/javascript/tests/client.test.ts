@@ -312,3 +312,48 @@ test('exposes QueryError metadata', () => {
   assert.equal(error.status, 403);
   assert.deepEqual(error.diagnostics, [{ field: 'scope' }]);
 });
+
+test('clears the timeout timer when basic-auth setup throws before the request', async () => {
+  const originalBtoa = globalThis.btoa;
+  const originalSetTimeout = globalThis.setTimeout;
+  const originalClearTimeout = globalThis.clearTimeout;
+  let createdTimer: ReturnType<typeof setTimeout> | undefined;
+  let clearedTimer: ReturnType<typeof setTimeout> | undefined;
+  let tracking = false;
+
+  globalThis.setTimeout = ((...args: Parameters<typeof setTimeout>) => {
+    const handle = originalSetTimeout(...args);
+    if (tracking) createdTimer = handle;
+    return handle;
+  }) as typeof setTimeout;
+  globalThis.clearTimeout = ((handle: ReturnType<typeof setTimeout>) => {
+    if (tracking) clearedTimer = handle;
+    return originalClearTimeout(handle);
+  }) as typeof clearTimeout;
+  // Simulate a runtime without btoa so base64() throws during setup.
+  globalThis.btoa = undefined as unknown as typeof globalThis.btoa;
+
+  try {
+    const client = new Client({
+      endpoint: 'https://api.example',
+      collector: 'demo',
+      username: 'user',
+      password: 'pass',
+      timeoutMs: 50,
+      fetch: async () => {
+        throw new Error('request should not be made');
+      },
+    });
+    tracking = true;
+    const pending = client.query('from events');
+    tracking = false;
+    await assert.rejects(pending, error => error instanceof QueryError && error.category === ErrorCategory.InvalidConfiguration);
+
+    assert.ok(createdTimer, 'the query should have created a timeout timer');
+    assert.equal(clearedTimer, createdTimer, 'the timeout timer must be cleared even when setup throws');
+  } finally {
+    globalThis.btoa = originalBtoa;
+    globalThis.setTimeout = originalSetTimeout;
+    globalThis.clearTimeout = originalClearTimeout;
+  }
+});
