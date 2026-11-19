@@ -329,5 +329,29 @@ def main():
     print("=== Equivalence Test PASSED ===")
 
 
+def test_no_events_failure_message_includes_marker(monkeypatch, capsys):
+    """The no-events FAIL diagnostic must print the real marker, not the placeholder."""
+    import pytest
+
+    marker_value = 1700000000
+    expected_marker = f"equiv-{marker_value}"
+    module = sys.modules[__name__]
+
+    # Make main() deterministic and offline: fixed marker, no network, no sleep.
+    monkeypatch.setattr(time, "time", lambda: marker_value)
+    monkeypatch.setattr(time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(module, "check_collector_available", lambda: True)
+    monkeypatch.setattr(module, "emit_event_via_api", lambda event: {"ok": True})
+    monkeypatch.setattr(module, "query_events", lambda marker: [])
+
+    with pytest.raises(SystemExit) as exc:
+        main()
+
+    assert exc.value.code == 1
+    output = capsys.readouterr().out
+    assert f"FAIL: No events found for marker={expected_marker}" in output
+    assert "FAIL: No events found for marker={marker}" not in output
+
+
 if __name__ == "__main__":
     main()
