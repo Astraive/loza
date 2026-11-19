@@ -304,6 +304,15 @@ func (h *PrometheusStatsHandler) OnDrop(reason string) {
 // Requirement: 34.3, 34.4
 func (h *PrometheusStatsHandler) OnError(err error) {
 	_ = err
+	if h != nil && h.metrics != nil {
+		// Validation, duplicate-field and encoding failures terminate an
+		// event through OnError without a matching OnEmit/OnDrop callback.
+		// Release the buffer slot added by OnEventCreated so buffer_size does
+		// not drift upward forever. decrementBufferSize clamps at zero, which
+		// keeps paths that also report a drop/delivery failure from going
+		// negative.
+		h.metrics.decrementBufferSize()
+	}
 }
 
 // OnDeliveryFailed records an explicit delivery failure without counting it as a success emit.
