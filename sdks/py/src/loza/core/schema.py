@@ -74,7 +74,11 @@ class EventView:
         return copy.deepcopy(self._event.attrs)
 
     def attr(self, key: str) -> Any:
-        return _lookup_path(self.attrs(), key)
+        # Resolve the path against the live attrs first, then copy only the
+        # resolved value. Copying the whole dict (via attrs()) for every
+        # single-field lookup is O(n) per field; this keeps EventView read-only
+        # without paying that cost.
+        return copy.deepcopy(_lookup_path(self._event.attrs, key))
 
     def group(self, name: str) -> dict[str, Any] | None:
         groups: dict[str, dict[str, Any]] = {
