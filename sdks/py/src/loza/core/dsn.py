@@ -209,3 +209,27 @@ def parse(raw: str) -> LozaDSN:
         username=username,
         password=password,
     )
+
+
+def resolve_endpoint(path: str = "", default: str = "") -> str:
+    """Resolve an endpoint from LOZA_COLLECTOR_URL env var with a fallback.
+
+    Accepts both loza:// DSN and plain http(s) URLs. If LOZA_COLLECTOR_URL
+    is a loza:// DSN, it is resolved to an HTTP(S) URL first.
+
+    Args:
+        path: Suffix appended to the base URL (e.g. "/events").
+        default: Fallback value when LOZA_COLLECTOR_URL is not set.
+
+    Returns:
+        The resolved endpoint URL.
+    """
+    base = os.getenv("LOZA_COLLECTOR_URL", "").strip()
+    if base:
+        if base.startswith("loza://"):
+            # Let ValueError propagate. Falling back to the raw DSN would
+            # both treat it as an HTTP endpoint and leak any embedded
+            # username:password credentials into the returned URL.
+            base = parse(base).base_url
+        return base.rstrip("/") + path
+    return default

@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from loza.core.dsn import LozaDSN, parse
+from loza.core.dsn import LozaDSN, parse, resolve_endpoint
 
 
 _TEST_CASES_PATH = Path(__file__).resolve().parents[3] / "spec" / "dsn" / "test-cases.json"
@@ -104,3 +104,25 @@ def test_resolve_endpoint_removed_in_favor_of_config_resolver() -> None:
     assert cfg.collector_endpoint == "https://example.com:443"
     assert cfg.collector_name == "tenant"
     assert cfg.environment == "prod"
+def test_resolve_endpoint_uses_default_when_env_unset(monkeypatch) -> None:
+    monkeypatch.delenv("LOZA_COLLECTOR_URL", raising=False)
+    assert resolve_endpoint(default="https://fallback.example") == "https://fallback.example"
+
+
+def test_resolve_endpoint_parses_valid_dsn(monkeypatch) -> None:
+    monkeypatch.setenv("LOZA_COLLECTOR_URL", "loza://example.com/my-collector")
+    assert resolve_endpoint("/events", default="https://fallback.example") == (
+        "https://example.com:443/events"
+    )
+
+
+def test_resolve_endpoint_rejects_malformed_dsn_without_leaking_credentials(monkeypatch) -> None:
+    # A malformed loza:// DSN must not be returned verbatim as an endpoint:
+    # doing so would both treat it as an HTTP URL and expose the embedded
+    # username:password secret. The parse ValueError must propagate instead.
+    monkeypatch.setenv(
+        "LOZA_COLLECTOR_URL",
+        "loza://admin:s3cr3t@bad-host/collector?tls=nonsense",
+    )
+    with pytest.raises(ValueError):
+        resolve_endpoint("/events", default="https://fallback.example")
