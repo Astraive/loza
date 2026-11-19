@@ -2,6 +2,8 @@ package learner
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 
@@ -136,7 +138,10 @@ func (l *Learner) GetAverageTimeToResolve(ctx context.Context, action string, si
 func (l *Learner) UpdateFeatureWeights(ctx context.Context, signatureID string, outcomeCode int) error {
 	sig, err := l.signatureStore.Get(ctx, signatureID)
 	if err != nil {
-		return nil // signature not found, skip
+		if isSignatureNotFound(err) {
+			return nil // signature not found, skip
+		}
+		return fmt.Errorf("get signature %q: %w", signatureID, err)
 	}
 
 	if len(sig.FeatureVector) == 0 {
@@ -177,7 +182,10 @@ func (l *Learner) UpdateFeatureWeights(ctx context.Context, signatureID string, 
 func (l *Learner) ReinforcePattern(ctx context.Context, signatureID string, remediationAction string, resolutionTime int64) error {
 	sig, err := l.signatureStore.Get(ctx, signatureID)
 	if err != nil {
-		return nil
+		if isSignatureNotFound(err) {
+			return nil // signature not found, skip
+		}
+		return fmt.Errorf("get signature %q: %w", signatureID, err)
 	}
 
 	sig.OccurrenceCount++
@@ -209,6 +217,15 @@ func (l *Learner) ReinforcePattern(ctx context.Context, signatureID string, reme
 	sig.UpdatedAt = now
 
 	return l.signatureStore.Save(ctx, sig)
+}
+
+// isSignatureNotFound reports whether err represents a genuinely missing
+// signature. The concrete stores return sql.ErrNoRows for a missing row while
+// other implementations use the storage.ErrNotFound sentinel; wrapped forms of
+// either are also treated as not found so transient failures are never
+// mistaken for an absent signature.
+func isSignatureNotFound(err error) bool {
+	return errors.Is(err, storage.ErrNotFound) || errors.Is(err, sql.ErrNoRows)
 }
 
 func average(v []float64) float64 {
