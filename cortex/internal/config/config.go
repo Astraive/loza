@@ -400,6 +400,24 @@ func applyEnvOverrides(cfg *Config) error {
 // It returns an error when an environment value is malformed (for example a
 // CORTEX_API_KEYS entry that is not a valid name:key:role triple), so callers
 // that load configuration can reject it instead of silently misparsing it.
+// parseEnvBool parses a boolean environment variable value. Surrounding
+// whitespace is trimmed before parsing so values such as "true " (a common
+// artefact of copy/paste in deployment manifests) are accepted. Unlike a
+// comparison against the literal "true", strconv.ParseBool also recognises
+// "1"/"0", "t"/"f" and their case variants, and — importantly — returns an
+// error for malformed values so that a typo cannot silently disable a
+// security control.
+func parseEnvBool(name, v string) (bool, error) {
+	parsed, err := strconv.ParseBool(strings.TrimSpace(v))
+	if err != nil {
+		return false, fmt.Errorf("invalid boolean value for %s: %q (expected one of 1, t, T, TRUE, true, True, 0, f, F, FALSE, false, False)", name, v)
+	}
+	return parsed, nil
+}
+
+// applyEnvOverrides applies environment variable overrides to configuration.
+// It returns an error when a boolean security toggle has a malformed value so
+// callers can fail closed instead of silently running with the toggle off.
 func applyEnvOverrides(cfg *Config) error {
 	// Server overrides
 	if v := os.Getenv("CORTEX_SERVER_HOST"); v != "" {
@@ -447,6 +465,12 @@ func applyEnvOverrides(cfg *Config) error {
 	// Authentication overrides
 	if err := setBool("CORTEX_AUTH_ENABLED", &cfg.Authentication.Enabled); err != nil {
 		return err
+	if v := os.Getenv("CORTEX_AUTH_ENABLED"); v != "" {
+		enabled, err := parseEnvBool("CORTEX_AUTH_ENABLED", v)
+		if err != nil {
+			return err
+		}
+		cfg.Authentication.Enabled = enabled
 	}
 	if v := os.Getenv("CORTEX_HMAC_SECRET"); v != "" {
 		cfg.Authentication.HMACSecret = v
@@ -479,6 +503,12 @@ func applyEnvOverrides(cfg *Config) error {
 	// Rate limit overrides
 	if err := setBool("CORTEX_RATELIMIT_ENABLED", &cfg.RateLimit.Enabled); err != nil {
 		return err
+	if v := os.Getenv("CORTEX_RATELIMIT_ENABLED"); v != "" {
+		enabled, err := parseEnvBool("CORTEX_RATELIMIT_ENABLED", v)
+		if err != nil {
+			return err
+		}
+		cfg.RateLimit.Enabled = enabled
 	}
 	if err := setInt("CORTEX_RATELIMIT_PER_API_KEY_RPM", &cfg.RateLimit.PerAPIKeyRPM); err != nil {
 		return err
@@ -490,6 +520,12 @@ func applyEnvOverrides(cfg *Config) error {
 	// TLS overrides
 	if err := setBool("CORTEX_TLS_ENABLED", &cfg.TLS.Enabled); err != nil {
 		return err
+	if v := os.Getenv("CORTEX_TLS_ENABLED"); v != "" {
+		enabled, err := parseEnvBool("CORTEX_TLS_ENABLED", v)
+		if err != nil {
+			return err
+		}
+		cfg.TLS.Enabled = enabled
 	}
 	if v := os.Getenv("CORTEX_TLS_CERT_FILE"); v != "" {
 		cfg.TLS.CertFile = v
@@ -501,6 +537,12 @@ func applyEnvOverrides(cfg *Config) error {
 	// PII redaction overrides
 	if err := setBool("CORTEX_PII_REDACTION_ENABLED", &cfg.PIIRedaction.Enabled); err != nil {
 		return err
+	if v := os.Getenv("CORTEX_PII_REDACTION_ENABLED"); v != "" {
+		enabled, err := parseEnvBool("CORTEX_PII_REDACTION_ENABLED", v)
+		if err != nil {
+			return err
+		}
+		cfg.PIIRedaction.Enabled = enabled
 	}
 	if v := os.Getenv("CORTEX_PII_REDACTION_MODE"); v != "" {
 		cfg.PIIRedaction.Mode = v
@@ -558,6 +600,12 @@ func applyEnvOverrides(cfg *Config) error {
 	}
 	if err := setBool("CORTEX_COLLECTOR_TAIL_ENABLED", &cfg.Collector.TailEnabled); err != nil {
 		return err
+	if v := os.Getenv("CORTEX_COLLECTOR_TAIL_ENABLED"); v != "" {
+		enabled, err := parseEnvBool("CORTEX_COLLECTOR_TAIL_ENABLED", v)
+		if err != nil {
+			return err
+		}
+		cfg.Collector.TailEnabled = enabled
 	}
 	if err := setInt("CORTEX_COLLECTOR_TAIL_BUFFER_SIZE", &cfg.Collector.TailBufferSize); err != nil {
 		return err
@@ -837,6 +885,8 @@ func Default() (*Config, error) {
 	// Default is a legacy helper that cannot surface errors. Production
 	// startup must use Load or LoadDefault so malformed overrides (such as an
 	// invalid CORTEX_API_KEYS entry) are rejected rather than ignored.
+	// Default is the legacy library entry point and cannot surface errors;
+	// production startup must use Load/LoadDefault so invalid overrides fail.
 	_ = applyEnvOverrides(cfg)
 	return cfg
 }
