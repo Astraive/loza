@@ -130,6 +130,16 @@ describe('Config boundaries', () => {
     localhost.username = 'user';
     localhost.password = 'pass';
     assert.equal(validateConfig(localhost), localhost);
+    const ipv6Loopback = defaultConfig();
+    ipv6Loopback.collectorUrl = 'http://[::1]:9308/events';
+    ipv6Loopback.username = 'user';
+    ipv6Loopback.password = 'pass';
+    assert.equal(validateConfig(ipv6Loopback), ipv6Loopback);
+    const ipv6Remote = defaultConfig();
+    ipv6Remote.collectorUrl = 'http://[::2]:9308/events';
+    ipv6Remote.username = 'user';
+    ipv6Remote.password = 'pass';
+    assert.throws(() => validateConfig(ipv6Remote), /require HTTPS/);
   });
 
   it('requires HTTPS for API-key credentials on non-local hosts', () => {

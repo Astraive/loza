@@ -4,7 +4,7 @@ import { gzip as zlibGzip } from 'node:zlib';
 import { promisify } from 'node:util';
 import { buildIngestEnvelope, parseCollectorResponse } from '../generated/spec-contract.ts';
 import type { CollectorResponse } from '../generated/spec-contract.ts';
-import { isPublicDSNUsername } from '../config/dsn.ts';
+import { isLocalhost, isPublicDSNUsername } from '../config/dsn.ts';
 import { SDK_VERSION } from '../config/version.ts';
 const gzipAsync = promisify(zlibGzip);
 
@@ -85,6 +85,10 @@ export class CollectorClient {
     const hasCredentials = Boolean(this.apiKey) || Boolean(this.username);
     if (hasCredentials && endpoint.protocol === 'http:' && !isLoopback) {
       throw new Error('invalid CollectorClient options: credentials require HTTPS (HTTP is allowed only for localhost)');
+    if (!this.apiKey && this.username &&
+      endpoint.protocol === 'http:' &&
+      !isLocalhost(endpoint.hostname)) {
+      throw new Error('invalid CollectorClient options: Basic credentials require HTTPS (HTTP is allowed only for localhost)');
     }
     this.authHeader = opts.authHeader || 'x-loza-api-key';
     this.timeout = opts.timeout || 5000;

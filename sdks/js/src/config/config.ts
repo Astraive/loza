@@ -14,6 +14,7 @@ import { isPublicDSNUsername, parse as parseDSN } from './dsn.ts';
 function isLocalhost(host: string): boolean {
   return host === 'localhost' || host === '127.0.0.1' || host === '::1';
 }
+import { isLocalhost, isPublicDSNUsername, parse as parseDSN } from './dsn.ts';
 
 function hasBasicCredentials(cfg: Pick<Config, 'apiKey' | 'username' | 'password'>): boolean {
   return !cfg.apiKey && !!cfg.username && (!!cfg.password || isPublicDSNUsername(cfg.username));

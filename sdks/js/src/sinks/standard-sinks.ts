@@ -6,7 +6,7 @@ import { gzip as zlibGzip } from 'node:zlib';
 import { promisify } from 'node:util';
 import { parseCollectorResponse } from '../generated/spec-contract.ts';
 import type { CollectorResponse } from '../generated/spec-contract.ts';
-import { isPublicDSNUsername } from '../config/dsn.ts';
+import { isLocalhost, isPublicDSNUsername } from '../config/dsn.ts';
 import { SDK_VERSION } from '../config/version.ts';
 const gzipAsync = promisify(zlibGzip);
 
@@ -223,6 +223,8 @@ export class HTTPBatchSink implements Sink {
       endpoint.protocol === 'http:' &&
       !['localhost', '127.0.0.1', '::1'].includes(endpoint.hostname)) {
       throw new Error('invalid HTTP sink options: credentials require HTTPS (HTTP is allowed only for localhost)');
+      !isLocalhost(endpoint.hostname)) {
+      throw new Error('invalid HTTP sink options: Basic credentials require HTTPS (HTTP is allowed only for localhost)');
     }
     this.authHeader = opts.authHeader || 'Authorization';
     this.sdkName = opts.sdkName || 'loza-js';
