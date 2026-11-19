@@ -104,7 +104,7 @@ func grpcAuthenticate(ctx context.Context, store KeyStore, cache *MemoryKeyCache
 	// Local dev keys
 	if parsed.Kind == KeyKindLocal {
 		if !allowLocalDevKeys {
-			slog.Warn("local dev key rejected (allow_local_dev_keys=false)", "key", parsed.Raw[:min(len(parsed.Raw), 20)]+"...")
+			slog.Warn("local dev key rejected (allow_local_dev_keys=false)")
 			return nil, status.Error(codes.PermissionDenied, "local dev keys are not allowed in production mode")
 		}
 		return &AuthContext{
