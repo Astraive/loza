@@ -1,6 +1,7 @@
 use super::super::clock::unix_millis;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Mutex, OnceLock};
 
 type IdGenerator = Box<dyn Fn() -> String + Send + Sync>;
 // Stored behind an `Arc` so the generator can be cloned out of the critical
@@ -32,6 +33,19 @@ fn generate_id(prefix: &str) -> String {
 /// panic cascade into every later ID lookup.
 fn lock_generator() -> std::sync::MutexGuard<'static, Option<SharedIdGenerator>> {
     CUSTOM_ID_GEN
+// The clock has millisecond resolution, so a bare `evt_{millis}` collides for
+// every event created within the same millisecond. Seed a process-local
+// monotonic counter with random entropy: the counter guarantees uniqueness
+// within a millisecond, while the random seed keeps IDs distinct across
+// process restarts and concurrent processes.
+static ID_SEQUENCE: OnceLock<AtomicU64> = OnceLock::new();
+
+fn id_sequence() -> &'static AtomicU64 {
+    ID_SEQUENCE.get_or_init(|| AtomicU64::new(fastrand::u64(..)))
+}
+
+pub fn new_event_id() -> String {
+    if let Some(gen) = CUSTOM_ID_GEN
         .get_or_init(|| Mutex::new(None))
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -55,6 +69,8 @@ pub fn new_event_id() -> String {
 /// generator override.
 pub fn new_request_id() -> String {
     generate_id("req")
+    let seq = id_sequence().fetch_add(1, Ordering::Relaxed);
+    format!("evt_{:x}_{:016x}", unix_millis(), seq)
 }
 
 pub fn set_id_generator(f: IdGenerator) {
@@ -90,5 +106,33 @@ mod tests {
 
         // Leave the shared generator slot clean for other tests.
         reset_id_generator();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::internal::clock::{freeze_at, unfreeze};
+    use std::collections::HashSet;
+
+    #[test]
+    fn default_event_ids_are_unique_within_the_same_millisecond() {
+        reset_id_generator();
+        freeze_at(1_700_000_000_000);
+
+        let ids: Vec<String> = (0..1_000).map(|_| new_event_id()).collect();
+
+        unfreeze();
+
+        let unique: HashSet<&String> = ids.iter().collect();
+        assert_eq!(
+            unique.len(),
+            ids.len(),
+            "default event IDs must not collide"
+        );
+        assert!(
+            ids.iter().all(|id| id.starts_with("evt_")),
+            "default event IDs must keep the evt_ prefix"
+        );
     }
 }
