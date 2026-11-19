@@ -168,7 +168,13 @@ def stage_events(
                             queue.ack(source)
                         break
                     sleep_fn(compute_backoff_seconds(attempts, policy, random_fn))
-        except Exception:
+        except Exception as exc:
+            logging.error(
+                "stage message failed unexpectedly source=%s error_type=%s error=%s",
+                _source_suffix(source),
+                type(exc).__name__,
+                exc,
+            )
             continue
     return staged
 

@@ -83,6 +83,67 @@ class TestStagerResilience(unittest.TestCase):
         self.assertIn("stage-failed", queue.dlq[0]["reason"])
         self.assertEqual(sleep_calls, [0.01, 0.02])
 
+    def test_unexpected_backoff_error_is_logged(self):
+        """An exception escaping the retry loop must be logged, not silently swallowed."""
+        queue = InMemoryQueue(
+            [("h-3", {"event_id": "evt-3", "timestamp": "2026-05-18T12:30:45Z", "event": "boom"})]
+        )
+        policy = RetryPolicy(max_attempts=3, base_delay_seconds=0.01, max_delay_seconds=0.1, jitter_ratio=0.0)
+
+        def exploding_sleep(_seconds):
+            raise RuntimeError("backoff failure")
+
+        with patch("services.stager._stage_payload", side_effect=IOError("disk-full")):
+            with self.assertLogs(level="ERROR") as captured:
+                staged = stage_events(
+                    queue,
+                    spec_dir / "tmp_staging_resilience",
+                    retry_policy=policy,
+                    sleep_fn=exploding_sleep,
+                    random_fn=lambda: 0.0,
+                )
+
+        self.assertEqual(staged, 0)
+        self.assertTrue(
+            any("stage message failed unexpectedly" in message
+                and "error_type=RuntimeError" in message
+                and "source=h-3" in message
+                and "backoff failure" in message
+                for message in captured.output),
+            captured.output,
+        )
+
+    def test_unexpected_ack_error_is_logged(self):
+        """A queue.ack failure inside the exhaustion path must be surfaced in logs."""
+        class BrokenAckQueue(InMemoryQueue):
+            def ack(self, source):
+                raise RuntimeError("ack backend unavailable")
+
+        queue = BrokenAckQueue(
+            [("h-4", {"event_id": "evt-4", "timestamp": "2026-05-18T12:30:45Z", "event": "boom"})]
+        )
+        policy = RetryPolicy(max_attempts=2, base_delay_seconds=0.01, max_delay_seconds=0.1, jitter_ratio=0.0)
+
+        with patch("services.stager._stage_payload", side_effect=IOError("disk-full")):
+            with self.assertLogs(level="ERROR") as captured:
+                staged = stage_events(
+                    queue,
+                    spec_dir / "tmp_staging_resilience",
+                    retry_policy=policy,
+                    sleep_fn=lambda _: None,
+                    random_fn=lambda: 0.0,
+                )
+
+        self.assertEqual(staged, 0)
+        self.assertTrue(
+            any("stage message failed unexpectedly" in message
+                and "error_type=RuntimeError" in message
+                and "source=h-4" in message
+                and "ack backend unavailable" in message
+                for message in captured.output),
+            captured.output,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
