@@ -3,12 +3,15 @@ package api
 import (
 	"errors"
 	"fmt"
+	"context"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/astraive/loza/cortex/internal/config"
+	"github.com/astraive/loza/cortex/internal/middleware"
+	transportcontracts "github.com/astraive/loza/spec/transport/contracts"
 	"github.com/gorilla/websocket"
 )
 
@@ -27,6 +30,40 @@ func sendFrameOrFail(t fataler, write func(int, []byte) error, messageType int, 
 	t.Helper()
 	if err := write(messageType, data); err != nil {
 		t.Fatalf("write websocket frame: %v", err)
+// readerRoleContext returns an authenticated context whose role is below writer.
+func readerRoleContext() context.Context {
+	return middleware.WithAuthResult(context.Background(), &middleware.AuthResult{
+		Authorized: true,
+		Role:       "reader",
+	})
+}
+
+// ingest_batch is an HTTP route action (POST /events/batch), never a WebSocket
+// action. It must not pass through the WebSocket write-role gate: doing so made
+// the authorization branch dead code and reported a misleading error to clients.
+func TestExecuteWebSocketAction_IngestBatchIsNotRoleGated(t *testing.T) {
+	srv := &Server{}
+
+	_, err := srv.executeWebSocketAction(readerRoleContext(), transportcontracts.WebSocketRequest{Action: "ingest_batch"})
+	if err == nil {
+		t.Fatal("expected ingest_batch to be rejected as an unknown websocket action")
+	}
+	if !strings.Contains(err.Error(), `unknown websocket action "ingest_batch"`) {
+		t.Fatalf("expected unknown-action error, got %v", err)
+	}
+}
+
+// Removing the dead ingest_batch gate must not weaken the gate on the real
+// WebSocket write action.
+func TestExecuteWebSocketAction_IngestEventStillRequiresWriterRole(t *testing.T) {
+	srv := &Server{}
+
+	_, err := srv.executeWebSocketAction(readerRoleContext(), transportcontracts.WebSocketRequest{Action: "ingest_event"})
+	if err == nil {
+		t.Fatal("expected ingest_event from a reader role to be rejected")
+	}
+	if !strings.Contains(err.Error(), "writer role required for ingest operations") {
+		t.Fatalf("expected writer-role error, got %v", err)
 	}
 // isReadLimitCloseError reports whether err is the CloseMessageTooBig close
 // error the server sends when a frame exceeds its configured read limit.
