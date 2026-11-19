@@ -30,6 +30,9 @@ func ParseNDJSONReader(r io.Reader) ([]map[string]any, error) {
 		if err := json.Unmarshal(raw, &m); err != nil {
 			return nil, fmt.Errorf("utils: parse ndjson line %d: %w", line, err)
 		}
+		if m == nil {
+			return nil, fmt.Errorf("utils: parse ndjson line %d: expected JSON object", line)
+		}
 		out = append(out, m)
 	}
 	if err := scanner.Err(); err != nil {
