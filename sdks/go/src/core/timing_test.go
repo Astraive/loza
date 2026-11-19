@@ -374,6 +374,108 @@ func TestWithHelpers_ForwardAttrs(t *testing.T) {
 			t.Error("expected fn to run when ctx has no event")
 		}
 	})
+// Regression tests for MASS-0424: attrs passed to StartProcess/StartTimer/
+// StartGroup used to be silently discarded. They must be captured on the
+// handle and merged with the attrs supplied at completion.
+
+func TestProcess_StartAttrsRecorded(t *testing.T) {
+	ev := newTestEvent(t)
+	proc, err := ev.StartProcess("step", String("endpoint", "/v1/charge"))
+	if err != nil {
+		t.Fatalf("StartProcess: %v", err)
+	}
+	if err := proc.Finish(); err != nil {
+		t.Fatalf("Finish: %v", err)
+	}
+	if got, ok := lookupAttrValue(ev.Processes[0].Attrs, "endpoint"); !ok || got != "/v1/charge" {
+		t.Errorf("start-time attr missing: got %v (present=%v)", got, ok)
+	}
+}
+
+func TestTimer_StartAttrsRecorded(t *testing.T) {
+	ev := newTestEvent(t)
+	timer, err := ev.StartTimer("db.query", String("pool", "primary"))
+	if err != nil {
+		t.Fatalf("StartTimer: %v", err)
+	}
+	if err := timer.Stop(); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	if got, ok := lookupAttrValue(ev.Timers[0].Attrs, "pool"); !ok || got != "primary" {
+		t.Errorf("start-time attr missing: got %v (present=%v)", got, ok)
+	}
+}
+
+func TestGroup_StartAttrsRecorded(t *testing.T) {
+	ev := newTestEvent(t)
+	group, err := ev.StartGroup("checkout", String("tenant", "acme"))
+	if err != nil {
+		t.Fatalf("StartGroup: %v", err)
+	}
+	if err := group.Finish(); err != nil {
+		t.Fatalf("Finish: %v", err)
+	}
+	if got, ok := lookupAttrValue(ev.Groups[0].Attrs, "tenant"); !ok || got != "acme" {
+		t.Errorf("start-time attr missing: got %v (present=%v)", got, ok)
+	}
+}
+
+func TestTiming_StartAttrsMergedWithFinishAttrs(t *testing.T) {
+	ev := newTestEvent(t)
+
+	proc, _ := ev.StartProcess("step", String("origin", "start"), Int("status_code", 200))
+	_ = proc.Finish(String("origin", "finish"), String("result", "ok"), Int("status_code", 201))
+	p := ev.Processes[0]
+	if got, _ := lookupAttrValue(p.Attrs, "origin"); got != "finish" {
+		t.Errorf("process: expected finish attr to win, got %v", got)
+	}
+	if got, ok := lookupAttrValue(p.Attrs, "result"); !ok || got != "ok" {
+		t.Errorf("process: finish-only attr missing: got %v (present=%v)", got, ok)
+	}
+	if p.StatusCode != 201 {
+		t.Errorf("process: expected finish status_code 201 to win, got %d", p.StatusCode)
+	}
+
+	group, _ := ev.StartGroup("phase", Int("status_code", 200))
+	_ = group.Finish()
+	g := ev.Groups[0]
+	if g.StatusCode != 200 {
+		t.Errorf("group: start-time status_code should be honored, got %d", g.StatusCode)
+	}
+
+	timer, _ := ev.StartTimer("span", String("source", "start"))
+	_ = timer.Stop(String("source", "finish"))
+	tr := ev.Timers[0]
+	if got, _ := lookupAttrValue(tr.Attrs, "source"); got != "finish" {
+		t.Errorf("timer: expected finish attr to win, got %v", got)
+	}
+}
+
+func TestTiming_WithAliasesRecordAttrs(t *testing.T) {
+	ev := newTestEvent(t)
+	ctx := storeEvent(context.Background(), ev)
+	fn := func() error { return nil }
+
+	if err := WithProcess(ctx, "step", fn, String("kind", "process")); err != nil {
+		t.Fatalf("WithProcess: %v", err)
+	}
+	if got, ok := lookupAttrValue(ev.Processes[0].Attrs, "kind"); !ok || got != "process" {
+		t.Errorf("WithProcess: attr missing: got %v (present=%v)", got, ok)
+	}
+
+	if err := WithGroup(ctx, "phase", fn, String("kind", "group")); err != nil {
+		t.Fatalf("WithGroup: %v", err)
+	}
+	if got, ok := lookupAttrValue(ev.Groups[0].Attrs, "kind"); !ok || got != "group" {
+		t.Errorf("WithGroup: attr missing: got %v (present=%v)", got, ok)
+	}
+
+	if err := WithTimer(ctx, "span", fn, String("kind", "timer")); err != nil {
+		t.Fatalf("WithTimer: %v", err)
+	}
+	if got, ok := lookupAttrValue(ev.Timers[0].Attrs, "kind"); !ok || got != "timer" {
+		t.Errorf("WithTimer: attr missing: got %v (present=%v)", got, ok)
+	}
 }
 
 var errTest = &testError{msg: "test error"}

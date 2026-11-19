@@ -43,6 +43,9 @@ type ProcessHandle struct {
 	name      string
 	step      int
 	startedAt time.Time
+	// attrs are the attributes captured at StartProcess time. They are merged
+	// with the attrs supplied to Finish/FinishError when the step completes.
+	attrs []Attr
 }
 
 // Finish completes the process with the given attrs.
@@ -62,6 +65,7 @@ func (h *ProcessHandle) finishInternal(statusCode int, attrs []Attr) error {
 	now := time.Now()
 	startedMS := h.startedAt.Sub(h.event.StartedAt).Milliseconds()
 	endedMS := now.Sub(h.event.StartedAt).Milliseconds()
+	attrs = mergeHandleAttrs(h.attrs, attrs)
 
 	// If statusCode is 0, try to extract from attrs
 	if statusCode == 0 {
@@ -95,12 +99,16 @@ type TimerHandle struct {
 	event     *Event
 	name      string
 	startedAt time.Time
+	// attrs are the attributes captured at StartTimer time. They are merged
+	// with the attrs supplied to Stop when the timer completes.
+	attrs []Attr
 }
 
 // Stop completes the timer with the given attrs.
 func (h *TimerHandle) Stop(attrs ...Attr) error {
 	now := time.Now()
 	durationMS := now.Sub(h.startedAt).Milliseconds()
+	attrs = mergeHandleAttrs(h.attrs, attrs)
 
 	statusCode := extractStatusCode(attrs)
 	attrs = removeStatusCode(attrs)
@@ -128,6 +136,9 @@ type GroupHandle struct {
 	event     *Event
 	name      string
 	startedAt time.Time
+	// attrs are the attributes captured at StartGroup time. They are merged
+	// with the attrs supplied to Finish/FinishError when the phase completes.
+	attrs []Attr
 }
 
 // Finish completes the group with the given attrs.
@@ -144,6 +155,7 @@ func (h *GroupHandle) finishInternal(statusCode int, attrs []Attr) error {
 	now := time.Now()
 	startedMS := h.startedAt.Sub(h.event.StartedAt).Milliseconds()
 	endedMS := now.Sub(h.event.StartedAt).Milliseconds()
+	attrs = mergeHandleAttrs(h.attrs, attrs)
 
 	// If statusCode is 0, try to extract from attrs
 	if statusCode == 0 {
@@ -209,11 +221,13 @@ func Step(ctx context.Context, name string, fn func() error) error {
 // step is the shared implementation of Step and WithProcess. attrs are recorded
 // on the emitted process on both the success and error paths.
 func step(ctx context.Context, name string, fn func() error, attrs []Attr) error {
+// Any attrs are captured on the step when it starts.
+func Step(ctx context.Context, name string, fn func() error, attrs ...Attr) error {
 	ev := loadEvent(ctx)
 	if ev == nil {
 		return fn()
 	}
-	h, err := ev.StartProcess(name)
+	h, err := ev.StartProcess(name, attrs...)
 	if err != nil {
 		return err
 	}
@@ -233,11 +247,13 @@ func Phase(ctx context.Context, name string, fn func() error) error {
 
 // phase is the shared implementation of Phase and WithGroup.
 func phase(ctx context.Context, name string, fn func() error, attrs []Attr) error {
+// Any attrs are captured on the phase when it starts.
+func Phase(ctx context.Context, name string, fn func() error, attrs ...Attr) error {
 	ev := loadEvent(ctx)
 	if ev == nil {
 		return fn()
 	}
-	h, err := ev.StartGroup(name)
+	h, err := ev.StartGroup(name, attrs...)
 	if err != nil {
 		return err
 	}
@@ -257,11 +273,13 @@ func Span(ctx context.Context, name string, fn func() error) error {
 
 // span is the shared implementation of Span and WithTimer.
 func span(ctx context.Context, name string, fn func() error, attrs []Attr) error {
+// Any attrs are captured on the timer when it starts.
+func Span(ctx context.Context, name string, fn func() error, attrs ...Attr) error {
 	ev := loadEvent(ctx)
 	if ev == nil {
 		return fn()
 	}
-	h, err := ev.StartTimer(name)
+	h, err := ev.StartTimer(name, attrs...)
 	if err != nil {
 		return err
 	}
@@ -278,21 +296,54 @@ func span(ctx context.Context, name string, fn func() error, attrs []Attr) error
 // WithProcess is like Step but also records attrs on the emitted process.
 func WithProcess(ctx context.Context, name string, fn func() error, attrs ...Attr) error {
 	return step(ctx, name, fn, attrs)
+	return Step(ctx, name, fn, attrs...)
 }
 
 // WithGroup is like Phase but also records attrs on the emitted group.
 func WithGroup(ctx context.Context, name string, fn func() error, attrs ...Attr) error {
 	return phase(ctx, name, fn, attrs)
+	return Phase(ctx, name, fn, attrs...)
 }
 
 // WithTimer is like Span but also records attrs on the emitted timer.
 func WithTimer(ctx context.Context, name string, fn func() error, attrs ...Attr) error {
 	return span(ctx, name, fn, attrs)
+	return Span(ctx, name, fn, attrs...)
+}
+
+// mergeHandleAttrs combines attributes captured at Start* time with those
+// supplied at Finish/Stop time. When the same key is supplied at both stages,
+// the completion-time value wins: shadowed start attrs are dropped so both
+// lookupAttrValue (first match) and attrsToMap (last value) observe the same
+// result.
+func mergeHandleAttrs(start, finish []Attr) []Attr {
+	if len(start) == 0 {
+		return finish
+	}
+	if len(finish) == 0 {
+		return start
+	}
+	finishKeys := make(map[string]struct{}, len(finish))
+	for _, a := range finish {
+		finishKeys[a.Key] = struct{}{}
+	}
+	merged := make([]Attr, 0, len(start)+len(finish))
+	for _, a := range start {
+		if _, shadowed := finishKeys[a.Key]; shadowed {
+			continue
+		}
+		merged = append(merged, a)
+	}
+	merged = append(merged, finish...)
+	return merged
 }
 
 // extractStatusCode finds and returns the status_code value from attrs, or 0 if not found.
+// It scans from the end so the most recently supplied value wins when a key is
+// present more than once (e.g. a start-time default overridden at completion).
 func extractStatusCode(attrs []Attr) int {
-	for _, a := range attrs {
+	for i := len(attrs) - 1; i >= 0; i-- {
+		a := attrs[i]
 		if a.Key == "status_code" {
 			switch v := a.Value.(type) {
 			case int:
