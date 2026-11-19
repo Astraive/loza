@@ -14,11 +14,10 @@ import (
 type Factory func(t testing.TB) collectorevent.Sink
 
 type Options struct {
-	Name               string
-	Factory            Factory
-	LargePayloadBytes  int
-	Timeout            time.Duration
-	RequiresIdempotent bool
+	Name              string
+	Factory           Factory
+	LargePayloadBytes int
+	Timeout           time.Duration
 }
 
 func Run(t *testing.T, opts Options) {
