@@ -10,7 +10,7 @@ func firstExistingPath(paths ...string) string {
 }
 
 func EventSchemaPath(specRepoPath string) string {
-	return firstExistingPath(
+	return firstExisting(
 		filepath.Join(specRepoPath, "spec", "schemas", "json", "event.schema.json"),
 		filepath.Join(specRepoPath, "schema", "event.schema.json"),
 	)
