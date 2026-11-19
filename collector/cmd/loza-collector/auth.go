@@ -100,20 +100,20 @@ func (s *collectorState) authorizeMTLS(r *http.Request) bool {
 	hasCNAllowlist := len(cfg.mtlsAllowedCNs) > 0
 	hasDNSAllowlist := len(cfg.mtlsAllowedDNS) > 0
 	hasEmailAllowlist := len(cfg.mtlsAllowedEmails) > 0
-	hasAnyAllowlist := hasCNAllowlist || hasDNSAllowlist || hasEmailAllowlist
+	// Fail closed: mTLS authorization requires at least one explicit identity
+	// allowlist. Trusting any certificate with a non-empty CommonName would
+	// turn authentication into full admin authorization for every client the
+	// TLS handshake accepts.
+	if !hasCNAllowlist && !hasDNSAllowlist && !hasEmailAllowlist {
+		s.logAuthFailure(r, "mtls_no_identity_allowlist")
+		return false
+	}
 
 	for _, cert := range r.TLS.PeerCertificates {
 		if cert == nil {
 			continue
 		}
 		cn := cert.Subject.CommonName
-		// If no allowlists configured, accept any cert with non-empty CN (backward compat)
-		if !hasAnyAllowlist {
-			if cn != "" {
-				return true
-			}
-			continue
-		}
 		// Check CN against allowlist
 		if hasCNAllowlist && cn != "" {
 			for _, allowed := range cfg.mtlsAllowedCNs {
