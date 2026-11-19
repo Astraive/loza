@@ -76,6 +76,17 @@ func TestRunSourceOfTruthSyncAgainstLiveCollector(t *testing.T) {
 		_ = cmd.Process.Kill()
 		<-cmdDone
 	}()
+	_, stopCollector, err := startManagedProcess(collectorBin,
+		[]string{"run", "-c", "loza-collector.defaults.yaml", "--addr", fmt.Sprintf("127.0.0.1:%d", port), "--duckdb-path", duckdbPath},
+		func(cmd *exec.Cmd) {
+			cmd.Dir = collectorDir
+			cmd.Stdout = os.Stdout
+			cmd.Stderr = os.Stderr
+		})
+	if err != nil {
+		t.Fatalf("start live collector: %v", err)
+	}
+	defer stopCollector()
 
 	postCollectorEvent(t, baseURL, map[string]any{
 		"id":         "evt-pre",
