@@ -114,5 +114,49 @@ func TestGRPCAuthenticatePropagatesCollectorGrants(t *testing.T) {
 	store.keys[keyID].CollectorGrants[0].Permissions[PermEventsWrite] = false
 	if !ac.AuthorizesCollector("payments", "prod", PermEventsWrite) {
 		t.Fatal("gRPC auth context must not alias the stored collector grant")
+	"bytes"
+	"context"
+	"log/slog"
+	"strings"
+	"testing"
+
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
+)
+
+// TestGRPCAuthenticate_RejectedLocalDevKeyNotLogged verifies that rejecting a
+// local dev key does not write any of the raw credential (including the secret
+// component) to the logs. Only the rejection reason should be emitted, matching
+// the HTTP middleware path.
+func TestGRPCAuthenticate_RejectedLocalDevKeyNotLogged(t *testing.T) {
+	const localKey = "lz_local_dev_LEAKMEsecretmaterial"
+	// The raw key's first 20 chars are "lz_local_dev_LEAKMEs",
+	// which previously leaked the "LEAKMEs" secret fragment to logs.
+
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	previous := slog.Default()
+	slog.SetDefault(logger)
+	t.Cleanup(func() { slog.SetDefault(previous) })
+
+	ctx := metadata.NewIncomingContext(context.Background(), metadata.Pairs(
+		"authorization", "Bearer "+localKey,
+	))
+
+	_, err := grpcAuthenticate(ctx, &testKeyStore{}, nil, []byte("test-server-secret"), NewKeyRateLimiter(), false, nil)
+	if status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("error code = %v, want %v (err=%v)", status.Code(err), codes.PermissionDenied, err)
+	}
+
+	output := logs.String()
+	if !strings.Contains(output, "local dev key rejected") {
+		t.Fatalf("expected rejection reason in logs, got %q", output)
+	}
+	// No portion of the raw credential or its secret may be logged.
+	for _, leaked := range []string{localKey, "LEAKMEsecretmaterial", "LEAKMEs", "key="} {
+		if strings.Contains(output, leaked) {
+			t.Errorf("log output contains key material %q: %q", leaked, output)
+		}
 	}
 }
