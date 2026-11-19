@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"errors"
+	"net"
+	"net/http"
 	"testing"
 	"time"
 
@@ -15,6 +17,51 @@ import (
 type noopBatchProcessor struct{}
 
 func (noopBatchProcessor) ProcessBatch(context.Context, []*models.Event) error { return nil }
+
+// TestRunHTTPServerReportsListenError verifies that a listen failure is sent
+// to the caller over a channel instead of terminating the process. If the
+// server called log.Fatal on the error, this test binary would exit with 1.
+func TestRunHTTPServerReportsListenError(t *testing.T) {
+	occupied, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("reserve port: %v", err)
+	}
+	defer occupied.Close()
+
+	srv := &http.Server{Addr: occupied.Addr().String()}
+	errCh := make(chan error, 1)
+	go runHTTPServer(srv, errCh)
+
+	select {
+	case err := <-errCh:
+		if err == nil || errors.Is(err, http.ErrServerClosed) {
+			t.Fatalf("expected a listen error, got %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("listen error was not reported to the caller")
+	}
+}
+
+// TestRunHTTPServerIgnoresGracefulShutdown verifies that a normal Shutdown
+// does not report a spurious error that would otherwise trigger the failure
+// path in main.
+func TestRunHTTPServerIgnoresGracefulShutdown(t *testing.T) {
+	srv := &http.Server{Addr: "127.0.0.1:0"}
+	errCh := make(chan error, 1)
+	go runHTTPServer(srv, errCh)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := srv.Shutdown(ctx); err != nil {
+		t.Fatalf("shutdown: %v", err)
+	}
+
+	select {
+	case err := <-errCh:
+		t.Fatalf("unexpected error after graceful shutdown: %v", err)
+	case <-time.After(500 * time.Millisecond):
+	}
+}
 
 func TestStartCollectorSyncReturnsWaitableCompletion(t *testing.T) {
 	cfg, err := config.Default()
