@@ -7,8 +7,16 @@ from loza.core.http_client import CollectorClient
 from loza.core.logger import Logger
 from loza.cortex.client import CortexClient
 from loza.core.pipeline import DiskOfflineBuffer
+from loza.core.security import SecurityLimiter
 from loza.sinks.file import FileSink
 from loza.sinks.httpbatch import HTTPBatchSink
+
+# (config override, payload, rejected reason) for each of the three size limits.
+_LIMIT_CASES = [
+    ({"max_event_bytes": 5}, {"long": "value"}, "max_event_bytes"),
+    ({"max_attr_count": 1}, {"a": 1, "b": 2}, "max_attr_count"),
+    ({"max_field_bytes": 1}, {"a": "xx"}, "max_field_bytes"),
+]
 
 
 def _attr_leaf_count(bucket):
@@ -110,3 +118,18 @@ def test_max_attr_count_counts_nested_dotted_keys() -> None:
 
 def test_max_attr_count_counts_nested_dotted_keys_legacy_client() -> None:
     _assert_nested_dotted_attrs_respect_limit(ClientLogger)
+
+
+@pytest.mark.parametrize(("config_kwargs", "payload", "reason"), _LIMIT_CASES)
+def test_drop_oversized_events_false_keeps_events_over_any_limit(config_kwargs, payload, reason):
+    config = loza.SecurityConfig(drop_oversized_events=False, **config_kwargs)
+    decision = SecurityLimiter(config).check_payload(payload)
+    assert decision.allowed is True
+    assert decision.reason == reason
+
+
+@pytest.mark.parametrize(("config_kwargs", "payload", "reason"), _LIMIT_CASES)
+def test_drop_oversized_events_true_drops_events_over_any_limit(config_kwargs, payload, reason):
+    decision = SecurityLimiter(loza.SecurityConfig(**config_kwargs)).check_payload(payload)
+    assert decision.allowed is False
+    assert decision.reason == reason

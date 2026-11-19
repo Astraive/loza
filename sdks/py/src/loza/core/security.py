@@ -24,17 +24,18 @@ class SecurityLimiter:
     def check_payload(self, payload: dict[str, Any]) -> SecurityDecision:
         encoded = json.dumps(payload, separators=(",", ":"), default=str).encode("utf-8")
         attr_count = self._count_attrs(payload)
+        allow = not self.config.drop_oversized_events
         if len(encoded) > self.config.max_event_bytes:
             return SecurityDecision(
-                allowed=not self.config.drop_oversized_events,
+                allowed=allow,
                 reason="max_event_bytes",
                 event_bytes=len(encoded),
                 attr_count=attr_count,
             )
         if attr_count > self.config.max_attr_count:
-            return SecurityDecision(False, "max_attr_count", len(encoded), attr_count)
+            return SecurityDecision(allow, "max_attr_count", len(encoded), attr_count)
         if self._has_oversized_field(payload):
-            return SecurityDecision(False, "max_field_bytes", len(encoded), attr_count)
+            return SecurityDecision(allow, "max_field_bytes", len(encoded), attr_count)
         return SecurityDecision(True, event_bytes=len(encoded), attr_count=attr_count)
 
     def _count_attrs(self, value: Any) -> int:
