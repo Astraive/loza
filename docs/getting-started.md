@@ -48,6 +48,15 @@ sequenceDiagram
 
 ### Build from Source
 
+The collector imports generated protobuf Go code that is not committed. From a
+fresh clone, run the one-command bootstrap from the repository root first:
+
+```bash
+make bootstrap
+```
+
+Then build and run the collector:
+
 ```bash
 cd collector
 go build -o loza-collector ./cmd/loza-collector

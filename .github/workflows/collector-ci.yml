@@ -6,20 +6,40 @@ on:
     paths:
       - ".github/workflows/collector-ci.yml"
       - "collector/**"
+      - "cortex/**"
       - "spec/**"
       - "proto/**"
+      - "Makefile"
+      - "scripts/**"
   pull_request:
     branches: [main]
     paths:
       - ".github/workflows/collector-ci.yml"
       - "collector/**"
+      - "cortex/**"
       - "spec/**"
       - "proto/**"
+      - "Makefile"
+      - "scripts/**"
 
 permissions:
   contents: read
 
 jobs:
+  fresh-clone-bootstrap:
+    name: Verify clean-clone protobuf bootstrap
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: gen/go/go.mod
+
+      - name: Bootstrap with the documented one-command path
+        run: bash scripts/test-bootstrap.sh
+
   proto-sync:
     name: Check proto files are in sync
     runs-on: ubuntu-latest
