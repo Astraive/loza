@@ -44,6 +44,8 @@ describe('Core boundaries', () => {
     unnamed.name = '';
     assert.equal(extractError(unnamed).type, 'Error');
   });
+
+  it('returns default context values when run with an undefined event', () => {
     runWithEvent(undefined as never, () => {
       assert.equal(getEvent(), undefined);
       assert.equal(hasEvent(), false);
@@ -51,6 +53,7 @@ describe('Core boundaries', () => {
       assert.equal(requestIdFromContext(), '');
       assert.equal(traceIdFromContext(), '');
     });
+  });
 
   it('stores and restores async event context', () => {
     const event = makeEvent();
