@@ -37,6 +37,9 @@ func Run(ctx context.Context, cfg RunnerConfig) (Report, error) {
 	if cfg.Workers <= 0 {
 		return Report{}, fmt.Errorf("loadgen: workers must be greater than zero, got %d", cfg.Workers)
 	}
+	if cfg.BatchSize <= 0 {
+		return Report{}, fmt.Errorf("loadgen: batch size must be positive, got %d", cfg.BatchSize)
+	}
 
 	client := &http.Client{Timeout: 30 * time.Second}
 	var accepted atomic.Int64
