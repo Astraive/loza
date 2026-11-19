@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/astraive/loza/cli/internal/config"
 	"github.com/astraive/loza/cli/internal/output"
@@ -342,6 +343,97 @@ func TestRunCortexIngestRejectsBothFileAndURL(t *testing.T) {
 	}
 	if ingested.Load() != 0 {
 		t.Fatalf("no events should be ingested when both sources are given, got %d", ingested.Load())
+	}
+}
+
+func TestFetchEventsFromURLDecodesSuccess(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`[{"id":"evt_1"},{"id":"evt_2"}]`))
+	}))
+	defer srv.Close()
+
+	events, err := fetchEventsFromURL(context.Background(), srv.URL)
+	if err != nil {
+		t.Fatalf("fetch events: %v", err)
+	}
+	if len(events) != 2 || events[0]["id"] != "evt_1" || events[1]["id"] != "evt_2" {
+		t.Fatalf("unexpected events: %#v", events)
+	}
+}
+
+func TestFetchEventsFromURLRejectsNon2xx(t *testing.T) {
+	// A 500 response whose body still decodes as a JSON array must not be
+	// accepted as events; the non-2xx status has to be surfaced to the caller.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte(`[{"error":"upstream failure"}]`))
+	}))
+	defer srv.Close()
+
+	events, err := fetchEventsFromURL(context.Background(), srv.URL)
+	if err == nil {
+		t.Fatalf("expected error for 500 response, got events %#v", events)
+	}
+	if len(events) != 0 {
+		t.Fatalf("expected no events on error, got %#v", events)
+	}
+	if !strings.Contains(err.Error(), "500") {
+		t.Fatalf("expected status 500 in error, got %v", err)
+	}
+}
+
+func TestFetchEventsFromURLRejectsErrorPage(t *testing.T) {
+	// An HTML error page on a 404 must not be silently decoded (or dropped)
+	// as if it were a valid event stream.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`<html><body>not found</body></html>`))
+	}))
+	defer srv.Close()
+
+	events, err := fetchEventsFromURL(context.Background(), srv.URL)
+	if err == nil {
+		t.Fatalf("expected error for 404 response, got events %#v", events)
+	}
+	if !strings.Contains(err.Error(), "404") {
+		t.Fatalf("expected status 404 in error, got %v", err)
+	}
+}
+
+func TestFetchEventsFromURLTimesOut(t *testing.T) {
+	oldTimeout := fetchEventsTimeout
+	fetchEventsTimeout = 50 * time.Millisecond
+	defer func() { fetchEventsTimeout = oldTimeout }()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done()
+	}))
+	defer srv.Close()
+
+	start := time.Now()
+	_, err := fetchEventsFromURL(context.Background(), srv.URL)
+	if err == nil {
+		t.Fatal("expected timeout error, got nil")
+	}
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Fatalf("fetch did not time out promptly: %s", elapsed)
+	}
+}
+
+func TestRunCortexIngestSurfacesFetchStatus(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+		_, _ = w.Write([]byte(`{"error":"bad gateway"}`))
+	}))
+	defer srv.Close()
+
+	cfg := config.Config{Cortex: &config.CortexConfig{URL: "http://127.0.0.1:9312"}}
+	err := RunCortexIngest(context.Background(), cfg, []string{"--url", srv.URL})
+	if err == nil {
+		t.Fatal("expected ingest to fail with the fetch status")
+	}
+	if !strings.Contains(err.Error(), "502") {
+		t.Fatalf("expected status 502 in error, got %v", err)
 	}
 }
 

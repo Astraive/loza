@@ -110,7 +110,11 @@ func RunCortexIngest(ctx context.Context, cfg config.Config, args []string) erro
 	}
 
 	if url != "" {
-		events = fetchEventsFromURL(url)
+		fetched, err := fetchEventsFromURL(ctx, url)
+		if err != nil {
+			return err
+		}
+		events = fetched
 	}
 
 	if len(events) == 0 {
@@ -183,18 +187,31 @@ func ndjsonSkippedWarning(path string, badLines []int) string {
 		len(badLines), path, strings.Join(reported, ", "))
 }
 
-func fetchEventsFromURL(url string) []map[string]interface{} {
-	resp, err := http.Get(url)
+// fetchEventsTimeout bounds how long a remote event fetch may take. It is a
+// variable so tests can shorten it without waiting for the production value.
+var fetchEventsTimeout = 30 * time.Second
+
+func fetchEventsFromURL(ctx context.Context, url string) ([]map[string]interface{}, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return nil
+		return nil, fmt.Errorf("build events request for %s: %w", url, err)
+	}
+	client := &http.Client{Timeout: fetchEventsTimeout}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("fetch events from %s: %w", url, err)
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		return nil, fmt.Errorf("fetch events from %s: unexpected status %d", url, resp.StatusCode)
+	}
+
 	var events []map[string]interface{}
 	if err := json.NewDecoder(resp.Body).Decode(&events); err != nil {
-		return nil
+		return nil, fmt.Errorf("decode events from %s: %w", url, err)
 	}
-	return events
+	return events, nil
 }
 
 func RunCortexReconstruct(ctx context.Context, cfg config.Config, args []string) error {
