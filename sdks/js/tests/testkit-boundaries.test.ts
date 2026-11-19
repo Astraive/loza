@@ -11,6 +11,21 @@ import {
 } from '../src/testkit/helpers.ts';
 import { String, SensitiveString, _now } from '../src/core/event.ts';
 
+// Each golden-file check must use a fresh, unique directory. A path derived
+// only from process.pid can collide with a stale file left by an earlier run
+// (or with a parallel worker), which would make the first comparison fail
+// against unrelated golden content.
+function freshGoldenPath(): { dir: string; filePath: string } {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'loza-golden-'));
+  return { dir, filePath: path.join(dir, 'golden.json') };
+}
+
+function runGoldenFileChecks(filePath: string): void {
+  assert.equal(goldenTest(filePath, '{"event":"one"}'), true);
+  assert.equal(goldenTest(filePath, '{"event":"one"}'), true);
+  assert.equal(goldenTest(filePath, '{"event":"two"}'), false);
+}
+
 describe('Testkit boundaries', () => {
   it('creates test loggers and captures emitted events', async () => {
     const result = testLogger({ service: 'test-service' });
@@ -105,14 +120,31 @@ describe('Testkit boundaries', () => {
   });
 
   it('writes and compares golden files and reports conformance availability', () => {
-    const filePath = path.join(os.tmpdir(), `loza-golden-${process.pid}.json`);
+    const { dir, filePath } = freshGoldenPath();
     try {
-      assert.equal(goldenTest(filePath, '{"event":"one"}'), true);
-      assert.equal(goldenTest(filePath, '{"event":"one"}'), true);
-      assert.equal(goldenTest(filePath, '{"event":"two"}'), false);
+      runGoldenFileChecks(filePath);
       assert.deepEqual(conformanceSuite(), { name: 'loza-js-conformance', status: 'available' });
     } finally {
-      if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('golden checks ignore a stale PID-keyed temp file', () => {
+    // Reproduce the reported trigger: a stale file at the old deterministic,
+    // PID-keyed path holding unrelated golden content. Before the fix the
+    // boundary test compared against it and failed flakily.
+    const stalePath = path.join(os.tmpdir(), `loza-golden-${process.pid}.json`);
+    fs.writeFileSync(stalePath, '{"event":"unrelated"}\n');
+    try {
+      const { dir, filePath } = freshGoldenPath();
+      try {
+        assert.notEqual(filePath, stalePath);
+        runGoldenFileChecks(filePath);
+      } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+      }
+    } finally {
+      fs.rmSync(stalePath, { force: true });
     }
   });
   it('handles missing checkpoint collections and non-object nested paths', () => {
