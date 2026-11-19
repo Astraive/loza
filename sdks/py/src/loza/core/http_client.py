@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import base64
+import http.client
 import json
 import socket
 import time
+import urllib.request
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from ipaddress import ip_address
@@ -172,7 +174,7 @@ class CollectorClient:
         for attempt in range(self.retries + 1):
             try:
                 try:
-                    with _open_with_redirect_guard(request, self.timeout, self.endpoint) as response:
+                    with _open(request, timeout=self.timeout, endpoint=self.endpoint) as response:
                         status = getattr(response, "status", response.getcode())
                         headers_obj = getattr(response, "headers", None)
                         raw = response.read()
@@ -209,7 +211,7 @@ class CollectorClient:
         for path in ("/health", "/healthz"):
             req = Request(f"{self._base_url()}{path}", headers=self._auth_headers(), method="GET")
             try:
-                with urlopen(req, timeout=self.timeout) as resp:
+                with _open(req, timeout=self.timeout) as resp:
                     data = json.loads(resp.read())
                     if isinstance(data, dict) and data.get("status") == "ok":
                         return True
@@ -222,7 +224,7 @@ class CollectorClient:
         for path in ("/ready", "/readyz"):
             req = Request(f"{self._base_url()}{path}", headers=self._auth_headers(), method="GET")
             try:
-                with urlopen(req, timeout=self.timeout) as resp:
+                with _open(req, timeout=self.timeout) as resp:
                     data = json.loads(resp.read())
                     if isinstance(data, dict) and data.get("status") in ("ok", "ready"):
                         return True
@@ -233,13 +235,13 @@ class CollectorClient:
     def version(self) -> dict:
         """Fetch version info from the collector."""
         req = Request(f"{self._base_url()}/version", headers=self._auth_headers(), method="GET")
-        with urlopen(req, timeout=self.timeout) as resp:
+        with _open(req, timeout=self.timeout) as resp:
             return json.loads(resp.read())
 
     def status(self) -> dict:
         """Fetch operational status from the collector."""
         req = Request(f"{self._base_url()}/status", headers=self._auth_headers(), method="GET")
-        with urlopen(req, timeout=self.timeout) as resp:
+        with _open(req, timeout=self.timeout) as resp:
             return json.loads(resp.read())
 
     def tail_lines(
@@ -268,7 +270,7 @@ class CollectorClient:
             url += "?" + urlencode(params)
 
         request = Request(url, headers={"accept": "application/x-ndjson", **self._auth_headers()})
-        with urlopen(request, timeout=timeout) as response:
+        with _open(request, timeout=timeout) as response:
             for raw in response:
                 line = raw.decode("utf-8").strip()
                 if line:
@@ -295,14 +297,12 @@ def _validate_collector_endpoint(endpoint: str) -> None:
     host = parsed.hostname
     if host in {"localhost", "127.0.0.1", "::1"}:
         return
-    addresses: set[str] = set()
     try:
-        addresses = {item[4][0] for item in socket.getaddrinfo(host, parsed.port or _default_port(parsed.scheme))}
+        addresses = _resolve_collector_addresses(host, parsed.port or _default_port(parsed.scheme))
     except socket.gaierror:
         return
     for raw in addresses:
-        addr = ip_address(raw)
-        if addr.is_private or addr.is_loopback or addr.is_link_local or addr.is_multicast or addr.is_reserved:
+        if _is_non_public_address(raw):
             raise ValueError("collector endpoint resolves to a non-public address")
 
 
@@ -383,6 +383,124 @@ def _open_with_redirect_guard(request: Request, timeout: float, endpoint: str):
     return opener.open(request, timeout=timeout)
 
 
+def _is_non_public_address(raw: str) -> bool:
+    try:
+        addr = ip_address(raw)
+    except ValueError:
+        return False
+    return (
+        addr.is_private
+        or addr.is_loopback
+        or addr.is_link_local
+        or addr.is_multicast
+        or addr.is_reserved
+    )
+
+
+def _resolve_collector_addresses(host: str, port: int) -> list[str]:
+    return list({info[4][0] for info in socket.getaddrinfo(host, port)})
+
+
+class _PinnedHTTPConnection(http.client.HTTPConnection):
+    """HTTP connection whose socket is pinned to a pre-validated IP address."""
+
+    def __init__(self, *args, pinned_ip: str, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self._pinned_ip = pinned_ip
+
+    def connect(self) -> None:
+        self.sock = socket.create_connection((self._pinned_ip, self.port), self.timeout, self.source_address)
+        if self._tunnel_host:
+            self._tunnel()
+
+
+class _PinnedHTTPSConnection(http.client.HTTPSConnection):
+    """HTTPS connection pinned to a validated IP but verified against the original host."""
+
+    def __init__(self, *args, pinned_ip: str, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self._pinned_ip = pinned_ip
+
+    def connect(self) -> None:
+        self.sock = socket.create_connection((self._pinned_ip, self.port), self.timeout, self.source_address)
+        if self._tunnel_host:
+            self._tunnel()
+        server_hostname = self.host
+        try:
+            ip_address((server_hostname or "").strip("[]"))
+        except ValueError:
+            pass
+        else:
+            server_hostname = None
+        self.sock = self._context.wrap_socket(self.sock, server_hostname=server_hostname)
+
+
+class _PinnedHTTPHandler(urllib.request.HTTPHandler):
+    def __init__(self, pinned_ip: str) -> None:
+        super().__init__()
+        self._pinned_ip = pinned_ip
+
+    def http_open(self, req):
+        return self.do_open(
+            lambda host, port=None, **kwargs: _PinnedHTTPConnection(host, port, pinned_ip=self._pinned_ip, **kwargs),
+            req,
+        )
+
+
+class _PinnedHTTPSHandler(urllib.request.HTTPSHandler):
+    def __init__(self, pinned_ip: str) -> None:
+        super().__init__()
+        self._pinned_ip = pinned_ip
+
+    def https_open(self, req):
+        return self.do_open(
+            lambda host, port=None, **kwargs: _PinnedHTTPSConnection(host, port, pinned_ip=self._pinned_ip, **kwargs),
+            req,
+            context=self._context,
+        )
+
+
+def _pinned_urlopen(request: Request, pinned_ip: str, timeout: float, endpoint: str | None = None):
+    handler = (
+        _PinnedHTTPSHandler(pinned_ip)
+        if urlparse(request.full_url).scheme == "https"
+        else _PinnedHTTPHandler(pinned_ip)
+    )
+    handlers = [handler]
+    if endpoint:
+        handlers.append(_SameOriginRedirectHandler(endpoint))
+    opener = urllib.request.build_opener(*handlers)
+    return opener.open(request, timeout=timeout)
+
+
+def _open(request: Request, timeout: float = 5.0, endpoint: str | None = None):
+    """Open a collector request with connection-time SSRF validation.
+
+    The host is resolved and checked immediately before connecting, and the
+    socket is pinned to the validated IP so a second DNS answer cannot redirect
+    the connection to a private address (DNS rebinding). Hostnames that cannot
+    be resolved here fall back to urlopen, preserving offline/mocked callers and
+    surfacing any real resolution error through urlopen itself.
+    """
+    parsed = urlparse(request.full_url)
+    host = parsed.hostname
+    if not host:
+        raise ValueError("collector endpoint must include a host")
+    port = parsed.port or _default_port(parsed.scheme)
+    allow_private = _private_endpoint_allowed() or host in {"localhost", "127.0.0.1", "::1"}
+    try:
+        addresses = _resolve_collector_addresses(host, port)
+    except socket.gaierror:
+        if endpoint:
+            return _open_with_redirect_guard(request, timeout, endpoint)
+        return urlopen(request, timeout=timeout)
+    if not allow_private:
+        for raw in addresses:
+            if _is_non_public_address(raw):
+                raise ValueError("collector endpoint resolves to a non-public address")
+    return _pinned_urlopen(request, addresses[0], timeout, endpoint)
+
+
 def WrapHTTPClient(client=None):
     return client or InstrumentedHTTPClient()
 
@@ -420,7 +538,7 @@ def _collector_request(
     headers = {"content-type": "application/json"} if body else {}
     headers.update(client._auth_headers())
     req = Request(url, data=data, headers=headers, method=method)
-    with urlopen(req, timeout=client.timeout) as resp:
+    with _open(req, timeout=client.timeout) as resp:
         raw = resp.read()
         return json.loads(raw.decode("utf-8")) if raw else {}
 
