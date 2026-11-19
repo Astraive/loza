@@ -110,6 +110,44 @@ func TestSimilarityHelpers(t *testing.T) {
 	}
 }
 
+func TestSimilarityHelpersMatchExportedImplementations(t *testing.T) {
+	cosineCases := []struct {
+		name string
+		a, b []float64
+	}{
+		{"parallel", []float64{1, 2, 3}, []float64{1, 2, 3}},
+		{"orthogonal", []float64{1, 0}, []float64{0, 1}},
+		{"opposing", []float64{1, 0}, []float64{-1, 0}},
+		{"empty", nil, []float64{1}},
+	}
+	for _, tc := range cosineCases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := cosineSimilarity(tc.a, tc.b)
+			want := ComputeCosineSimilarity(tc.a, tc.b)
+			if got != want {
+				t.Fatalf("cosineSimilarity(%v, %v) = %v, ComputeCosineSimilarity = %v", tc.a, tc.b, got, want)
+			}
+			if got < 0 || got > 1 {
+				t.Fatalf("cosine similarity %v is outside [0, 1]", got)
+			}
+		})
+	}
+
+	jaccardCases := []struct {
+		a, b []string
+	}{
+		{[]string{"a", "b"}, []string{"a", "b"}},
+		{[]string{"a", "b"}, []string{"b", "c"}},
+		{nil, nil},
+		{[]string{"a"}, nil},
+	}
+	for _, tc := range jaccardCases {
+		if got, want := jaccardSimilarity(tc.a, tc.b), ComputeJaccardSimilarity(tc.a, tc.b); got != want {
+			t.Fatalf("jaccardSimilarity(%v, %v) = %v, ComputeJaccardSimilarity = %v", tc.a, tc.b, got, want)
+		}
+	}
+}
+
 func TestTopKAndScore(t *testing.T) {
 	store := &fakeSignatureStore{sigs: map[string]*models.IncidentSignature{}}
 	m := NewSignatureMatcher(store)

@@ -386,71 +386,11 @@ func (m *RustMatcher) TopK(query *models.IncidentSignature, candidates []*models
 }
 
 func cosineSimilarity(a, b []float64) float64 {
-	if len(a) == 0 || len(b) == 0 {
-		return 0
-	}
-
-	minLen := len(a)
-	if len(b) < minLen {
-		minLen = len(b)
-	}
-
-	dot := 0.0
-	aMag := 0.0
-	bMag := 0.0
-
-	for i := 0; i < minLen; i++ {
-		dot += a[i] * b[i]
-		aMag += a[i] * a[i]
-		bMag += b[i] * b[i]
-	}
-
-	if aMag == 0 || bMag == 0 {
-		return 0
-	}
-
-	sim := dot / (math.Sqrt(aMag) * math.Sqrt(bMag))
-	if sim < 0 {
-		return 0
-	}
-	if sim > 1 {
-		return 1
-	}
-	return sim
+	return ComputeCosineSimilarity(a, b)
 }
 
 func jaccardSimilarity(a, b []string) float64 {
-	if len(a) == 0 && len(b) == 0 {
-		return 0
-	}
-
-	setA := make(map[string]bool)
-	setB := make(map[string]bool)
-
-	for _, s := range a {
-		setA[s] = true
-	}
-	for _, s := range b {
-		setB[s] = true
-	}
-
-	intersectionCount := 0
-	union := make(map[string]struct{}, len(setA)+len(setB))
-	for k := range setA {
-		union[k] = struct{}{}
-	}
-	for k := range setB {
-		union[k] = struct{}{}
-		if setA[k] {
-			intersectionCount++
-		}
-	}
-
-	if len(union) == 0 {
-		return 0
-	}
-
-	return float64(intersectionCount) / float64(len(union))
+	return ComputeJaccardSimilarity(a, b)
 }
 
 func stringSlice(symptoms []models.SymptomType) []string {
@@ -762,7 +702,14 @@ func ComputeCosineSimilarity(a, b []float64) float64 {
 		return 0.0
 	}
 
-	return dotProduct / (math.Sqrt(aMag) * math.Sqrt(bMag))
+	sim := dotProduct / (math.Sqrt(aMag) * math.Sqrt(bMag))
+	if sim < 0 {
+		return 0.0
+	}
+	if sim > 1 {
+		return 1.0
+	}
+	return sim
 }
 
 func ComputeJaccardSimilarity(a, b []string) float64 {
