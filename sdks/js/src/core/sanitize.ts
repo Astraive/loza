@@ -20,9 +20,9 @@ export function sanitizeEvent(event: Event): Event {
   for (const key of clone.hashKeys) {
     if (key in clone.attrs) {
       const val = clone.attrs[key];
-      if (typeof val === 'string') {
-        clone.attrs[key] = createHash('sha256').update(val).digest('hex');
-      }
+      // Coerce non-strings (numbers, bigints, booleans, objects, etc.) before
+      // hashing so sensitive values are never emitted in cleartext.
+      clone.attrs[key] = createHash('sha256').update(String(val)).digest('hex');
     }
   }
 

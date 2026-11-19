@@ -95,7 +95,9 @@ describe('Core boundaries', () => {
     assert.match(sanitized.attrs.token, /^[a-f0-9]{64}$/);
     assert.equal('drop' in sanitized.attrs, false);
     assert.equal(sanitized.attrs.missing, '[REDACTED]');
-    assert.equal(sanitized.attrs.number, 123);
+    assert.match(sanitized.attrs.number, /^[a-f0-9]{64}$/);
+    assert.notEqual(sanitized.attrs.number, 123);
+    assert.equal(event.attrs.number, 123);
     assert.equal(event.attrs.secret, 'value');
     assert.equal(event.attrs.token, 'value');
   });
