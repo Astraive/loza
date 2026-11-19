@@ -250,7 +250,7 @@ func (ev *SignatureEvolver) mergeSignatures(existing, incoming *models.IncidentS
 		ServiceRoles:      existing.ServiceRoles,
 		Symptoms:          existing.Symptoms,
 		TemporalPattern:   existing.TemporalPattern,
-		Remediation:       existing.Remediation,
+		Remediation:       append([]string(nil), existing.Remediation...),
 		FeatureVector:     ev.mergeVectors(existing.FeatureVector, incoming.FeatureVector, alpha),
 		FeatureWeights:    existing.FeatureWeights,
 		OccurrenceCount:   existing.OccurrenceCount + 1,
