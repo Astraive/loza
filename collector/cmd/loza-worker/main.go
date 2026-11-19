@@ -274,13 +274,8 @@ func runWorker(cfg workerConfig) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	quit := make(chan os.Signal, 1)
-	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
-	defer signal.Stop(quit)
-	go func() {
-		<-quit
-		cancel()
-	}()
+	stopSignals, _ := watchSignals(ctx, cancel, syscall.SIGINT, syscall.SIGTERM)
+	defer stopSignals()
 
 	logJSON("info", "worker_start", map[string]any{
 		"eventbus_type":  busType,
@@ -312,6 +307,32 @@ func runWorker(cfg workerConfig) error {
 	}
 	logJSON("info", "worker_shutdown_complete", nil)
 	return nil
+}
+
+// watchSignals calls cancel when one of signals is delivered. The returned stop
+// function unregisters signal delivery and blocks until the watching goroutine
+// has exited. The goroutine also exits when ctx is canceled by another path or
+// when stop is called, so it cannot be leaked when shutdown happens without a
+// signal being delivered.
+func watchSignals(ctx context.Context, cancel context.CancelFunc, signals ...os.Signal) (stop func(), exited <-chan struct{}) {
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, signals...)
+	done := make(chan struct{})
+	exitedCh := make(chan struct{})
+	go func() {
+		defer close(exitedCh)
+		select {
+		case <-quit:
+			cancel()
+		case <-ctx.Done():
+		case <-done:
+		}
+	}()
+	return func() {
+		signal.Stop(quit)
+		close(done)
+		<-exitedCh
+	}, exitedCh
 }
 
 func (s *workerState) run(ctx context.Context, reader queueReader) error {

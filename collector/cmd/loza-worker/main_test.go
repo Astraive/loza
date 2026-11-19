@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -41,6 +42,45 @@ func (s *testSink) WriteEvent(context.Context, []byte, *collectorevent.Event) er
 
 func (s *testSink) Flush(context.Context) error { return nil }
 func (s *testSink) Close(context.Context) error { return nil }
+
+func TestWatchSignalsExitsWhenContextCanceledElsewhere(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	stop, exited := watchSignals(ctx, cancel, syscall.SIGINT)
+	defer stop()
+
+	// Simulate shutdown triggered by a path other than a delivered signal.
+	cancel()
+	select {
+	case <-exited:
+	case <-time.After(2 * time.Second):
+		t.Fatal("signal watcher leaked after context was canceled without a signal")
+	}
+}
+
+func TestWatchSignalsStopReleasesWatcher(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	stop, exited := watchSignals(ctx, cancel, syscall.SIGINT)
+
+	// The context is intentionally left uncanceled: only the done channel can
+	// release the watcher here. Without it stop() blocks forever.
+	stopped := make(chan struct{})
+	go func() {
+		stop()
+		close(stopped)
+	}()
+	select {
+	case <-stopped:
+	case <-time.After(2 * time.Second):
+		t.Fatal("stop() did not release the signal watcher")
+	}
+	select {
+	case <-exited:
+	default:
+		t.Fatal("watcher goroutine did not exit")
+	}
+}
 
 func TestHandleRecordCommitsWhenProcessingFails(t *testing.T) {
 	sink := &testSink{err: errors.New("primary failed")}
