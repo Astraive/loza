@@ -20,6 +20,10 @@ func RenderASCIIGraph(graph map[string]any) string {
 			if label == "" || label == "<nil>" {
 				label = id
 			}
+			// Labels can originate from external graph data. Strip terminal
+			// control bytes before they are written to the output, including
+			// on paths that print the label without a color wrapper.
+			label = stripControlBytes(label)
 			ntype := fmt.Sprintf("%v", m["type"])
 			switch ntype {
 			case "service":
@@ -60,6 +64,10 @@ func RenderASCIIGraph(graph map[string]any) string {
 						toLabel = l
 					}
 				}
+				// These labels are printed verbatim (not through Colorize),
+				// so they must be sanitized here as well.
+				fromLabel = stripControlBytes(fromLabel)
+				toLabel = stripControlBytes(toLabel)
 				result += fmt.Sprintf("  %s --%s--> %s\n", fromLabel, Dim(label), toLabel)
 			}
 		}
