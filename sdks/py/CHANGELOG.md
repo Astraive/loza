@@ -15,6 +15,10 @@
   re-baseline them and should configure `LOZA_PII_HASH_SECRET` to keep
   pseudonyms stable across processes and restarts. Existing call sites keep
   working because the key is an optional keyword argument.
+### Changed
+- `HTTPBatchSink` NDJSON mode now validates each event and rejects empty
+  batches, matching the JSON ingest path. Callers that relied on sending raw,
+  unvalidated lines or empty batches must now provide valid event JSON objects.
 
 ## [0.3.4] - 2026-08-26
 

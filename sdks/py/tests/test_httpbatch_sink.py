@@ -236,3 +236,60 @@ def test_httpbatch_sink_retries_malformed_response_body() -> None:
     finally:
         server.shutdown()
         server.server_close()
+_VALID_EVENT = (
+    '{"timestamp":"2025-01-01T00:00:00Z","schema_version":"v1","event_version":"v1",'
+    '"event_id":"evt_1","service":"checkout","event":"payment.completed","kind":"http"}'
+)
+
+
+def _ndjson_sink(monkeypatch: pytest.MonkeyPatch, sent: dict[str, object]) -> HTTPBatchSink:
+    import loza.sinks.httpbatch.httpbatch as httpbatch_module
+
+    class _Response:
+        status = 202
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self) -> bytes:
+            return b'{"status":"accepted","accepted":1}'
+
+        def getcode(self) -> int:
+            return 202
+
+    def _capture(req, **_kwargs):
+        sent["request"] = req
+        return _Response()
+
+    monkeypatch.setattr(httpbatch_module.urllib.request, "urlopen", _capture)
+    return HTTPBatchSink("http://localhost/events", ndjson=True, enable_compression=False)
+
+
+def test_ndjson_rejects_empty_batch(monkeypatch: pytest.MonkeyPatch) -> None:
+    sent: dict[str, object] = {}
+    sink = _ndjson_sink(monkeypatch, sent)
+    with pytest.raises(ValueError, match="at least one"):
+        sink.write_batch([])
+    assert sent == {}
+
+
+def test_ndjson_rejects_malformed_events(monkeypatch: pytest.MonkeyPatch) -> None:
+    sent: dict[str, object] = {}
+    sink = _ndjson_sink(monkeypatch, sent)
+    with pytest.raises(ValueError):
+        sink.write_batch(["not json"])
+    with pytest.raises(ValueError, match="objects"):
+        sink.write_batch(["[]"])
+    assert sent == {}
+
+
+def test_ndjson_sends_valid_events_as_raw_lines(monkeypatch: pytest.MonkeyPatch) -> None:
+    sent: dict[str, object] = {}
+    sink = _ndjson_sink(monkeypatch, sent)
+    sink.write_batch([_VALID_EVENT + "\n", _VALID_EVENT])
+    request = sent["request"]
+    assert request.headers.get("Content-type") == "application/x-ndjson"
+    assert request.data == ("\n".join([_VALID_EVENT, _VALID_EVENT])).encode("utf-8")
