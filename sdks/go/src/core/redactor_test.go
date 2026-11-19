@@ -286,5 +286,63 @@ func TestHashKeysWithEmptySecretUsesEphemeralKey(t *testing.T) {
 	want, _ := HashKeys("user.id").Redact("user.id", plaintext)
 	if got != want {
 		t.Fatalf("empty secret digest = %q, want ephemeral digest %q", got, want)
+func TestRedactPatternsSkipsInvalidPatternWithoutPanic(t *testing.T) {
+	attrs := []Attr{
+		String("secret_token", "value"),
+		String("user.id", "u_123"),
+	}
+
+	var redactor Redactor
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				t.Fatalf("RedactPatterns panicked on an invalid pattern: %v", r)
+			}
+		}()
+		redactor = RedactPatterns("(", `secret_`)
+	}()
+
+	out := applyRedactor(attrs, redactor)
+	if out[0].Value != redactedValue {
+		t.Fatalf("expected the valid pattern to keep redacting, got %v", out[0].Value)
+	}
+	if out[1].Key != "user.id" || out[1].Value != "u_123" {
+		t.Fatalf("expected non-matching attr unchanged, got %+v", out[1])
+	}
+}
+
+func TestRedactPatternsAllInvalidYieldsNoopRedactor(t *testing.T) {
+	var redactor Redactor
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				t.Fatalf("RedactPatterns panicked on an invalid pattern: %v", r)
+			}
+		}()
+		redactor = RedactPatterns("[", "(")
+	}()
+
+	out := applyRedactor([]Attr{String("user.id", "u_123")}, redactor)
+	if out[0].Value != "u_123" {
+		t.Fatalf("expected unchanged value with no valid patterns, got %v", out[0].Value)
+	}
+}
+
+func TestTryRedactPatternsReturnsErrorForInvalidPattern(t *testing.T) {
+	_, err := TryRedactPatterns("(")
+	if err == nil {
+		t.Fatal("expected an error for an invalid regex pattern")
+	}
+	if !strings.Contains(err.Error(), "(") {
+		t.Fatalf("expected error to identify the offending pattern, got %v", err)
+	}
+
+	redactor, err := TryRedactPatterns(`secret_`)
+	if err != nil {
+		t.Fatalf("unexpected error for a valid pattern: %v", err)
+	}
+	out := applyRedactor([]Attr{String("secret_token", "value")}, redactor)
+	if out[0].Value != redactedValue {
+		t.Fatalf("expected key to be redacted, got %v", out[0].Value)
 	}
 }

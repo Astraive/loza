@@ -4,7 +4,9 @@ import (
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
+	"errors"
 	"fmt"
+	"os"
 	"regexp"
 	"strings"
 )
@@ -226,12 +228,41 @@ func (r *patternRedactor) Redact(key string, _ any) (any, bool) {
 	return noRedaction, true
 }
 
-// RedactPatterns returns a Redactor that replaces values for keys matching
-// any of the given regex patterns (case-insensitive).
-func RedactPatterns(patterns ...string) Redactor {
+// compilePatterns compiles the given key patterns case-insensitively. Invalid
+// patterns are skipped and reported in the returned error so that callers can
+// surface bad configuration instead of panicking at setup time.
+func compilePatterns(patterns []string) ([]*regexp.Regexp, error) {
 	compiled := make([]*regexp.Regexp, 0, len(patterns))
+	var errs []error
 	for _, p := range patterns {
-		compiled = append(compiled, regexp.MustCompile(`(?i)`+p))
+		re, err := regexp.Compile(`(?i)` + p)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("loza: invalid redaction pattern %q: %w", p, err))
+			continue
+		}
+		compiled = append(compiled, re)
+	}
+	return compiled, errors.Join(errs...)
+}
+
+// TryRedactPatterns is like RedactPatterns but returns an error when any
+// pattern is invalid instead of warning and skipping it.
+func TryRedactPatterns(patterns ...string) (Redactor, error) {
+	compiled, err := compilePatterns(patterns)
+	if err != nil {
+		return nil, err
+	}
+	return &patternRedactor{patterns: compiled}, nil
+}
+
+// RedactPatterns returns a Redactor that replaces values for keys matching
+// any of the given regex patterns (case-insensitive). Invalid patterns are
+// reported to stderr and skipped so bad configuration cannot crash the
+// process. Use TryRedactPatterns to receive the error instead.
+func RedactPatterns(patterns ...string) Redactor {
+	compiled, err := compilePatterns(patterns)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[loza] %v; skipping invalid redaction pattern(s)\n", err)
 	}
 	return &patternRedactor{patterns: compiled}
 }
