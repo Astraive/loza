@@ -50,6 +50,13 @@ def validate_event_map(event: dict[str, object]) -> tuple[bool, list[str]]:
     for field in sorted(REQUIRED_EVENT_FIELDS):
         canonical = _FIELD_ALIASES.get(field, field)
         if field not in event and canonical not in event:
+    # The event ID is a single logical requirement, expressible as either its
+    # snake_case or camelCase alias. Accept either form and emit one
+    # alias-agnostic error when both are absent.
+    if "event_id" not in event and "eventId" not in event:
+        errors.append("missing required field: event_id (or eventId)")
+    for field in ("timestamp", "service", "event"):
+        if field not in event:
             errors.append(f"missing required field: {field}")
     if not errors:
         return True, []
