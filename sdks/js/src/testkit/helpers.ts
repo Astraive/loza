@@ -1,5 +1,6 @@
 import { Logger } from '../core/logger.ts';
 import { MemorySink } from '../sinks/standard-sinks.ts';
+import type { Params } from '../core/event.ts';
 import { resetUUIDGenerator, setUUIDGenerator } from '../core/uuidv7.ts';
 import { setClock as _setClock, resetClock } from '../core/event.ts';
 import fs from 'node:fs';
