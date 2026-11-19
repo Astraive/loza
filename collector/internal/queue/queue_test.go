@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"math/rand"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -257,6 +258,48 @@ func (s *countingSink) WriteBatch(ctx context.Context, events [][]byte) error {
 	defer s.mu.Unlock()
 	s.calls = append(s.calls, time.Now())
 	if s.fail {
+type recordingSink struct {
+	mu      sync.Mutex
+	fail    bool
+	writes  chan [][]byte
+	batches int
+}
+
+func newTestQueue(t *testing.T, cfg QueueConfig) (*Queue, *recordingSink) {
+	t.Helper()
+	sink := &recordingSink{writes: make(chan [][]byte, 8)}
+	cfg.Directory = t.TempDir()
+	cfg.Sink = sink
+	q, err := NewQueue(cfg)
+	if err != nil {
+		t.Fatalf("new queue: %v", err)
+	}
+	t.Cleanup(func() { _ = q.Close() })
+	return q, sink
+}
+
+func (s *recordingSink) setFail(fail bool) {
+	s.mu.Lock()
+	s.fail = fail
+	s.mu.Unlock()
+}
+
+func (s *recordingSink) WriteEvent(ctx context.Context, data []byte, key []byte) error {
+	return s.WriteBatch(ctx, [][]byte{data})
+}
+
+func (s *recordingSink) WriteBatch(ctx context.Context, events [][]byte) error {
+	s.mu.Lock()
+	s.batches++
+	fail := s.fail
+	s.mu.Unlock()
+	cp := make([][]byte, len(events))
+	copy(cp, events)
+	select {
+	case s.writes <- cp:
+	default:
+	}
+	if fail {
 		return errors.New("sink unavailable")
 	}
 	return nil
@@ -424,5 +467,197 @@ func TestQueueHonorsBackoffBeforeAutomaticRetry(t *testing.T) {
 	calls := sink.callTimes()
 	if gap := calls[1].Sub(calls[0]); gap < 200*time.Millisecond {
 		t.Fatalf("retry gap %v shorter than configured backoff %v", gap, backoff)
+func (s *recordingSink) Flush(context.Context) error { return nil }
+func (s *recordingSink) Close(context.Context) error { return nil }
+
+func awaitBatch(t *testing.T, sink *recordingSink) [][]byte {
+	t.Helper()
+	select {
+	case batch := <-sink.writes:
+		return batch
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for a sink batch")
+		return nil
+	}
+}
+
+func waitForCircuit(t *testing.T, q *Queue, want bool) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for q.State().CircuitOpen != want && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if q.State().CircuitOpen != want {
+		t.Fatalf("expected circuit open=%t, got %t", want, q.State().CircuitOpen)
+	}
+}
+
+// Regression: BatchTimeout was declared and defaulted but never read. A
+// partial batch must be flushed once its oldest event has waited that long,
+// without waiting for FlushInterval or a full BatchSize.
+func TestBatchTimeoutFlushesPartialBatch(t *testing.T) {
+	q, sink := newTestQueue(t, QueueConfig{
+		BatchSize:     100,
+		BatchTimeout:  40 * time.Millisecond,
+		FlushInterval: time.Hour,
+	})
+	if err := q.Enqueue(context.Background(), Event{ID: "evt-timeout", Payload: []byte("hello")}); err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+
+	batch := awaitBatch(t, sink)
+	if len(batch) != 1 || string(batch[0]) != "hello" {
+		t.Fatalf("unexpected batch: %q", batch)
+	}
+	if st := q.State(); st.Flushed != 1 {
+		t.Fatalf("expected 1 flushed event, got %d", st.Flushed)
+	}
+}
+
+func TestBatchSizeFlushStillWorks(t *testing.T) {
+	q, sink := newTestQueue(t, QueueConfig{
+		BatchSize:     3,
+		BatchTimeout:  time.Hour,
+		FlushInterval: time.Hour,
+	})
+	for i := 0; i < 3; i++ {
+		if err := q.Enqueue(context.Background(), Event{Payload: []byte("x")}); err != nil {
+			t.Fatalf("enqueue %d: %v", i, err)
+		}
+	}
+	if batch := awaitBatch(t, sink); len(batch) != 3 {
+		t.Fatalf("expected a batch of 3, got %d", len(batch))
+	}
+}
+
+func TestFlushIntervalFlushStillWorks(t *testing.T) {
+	q, sink := newTestQueue(t, QueueConfig{
+		BatchSize:     100,
+		BatchTimeout:  time.Hour,
+		FlushInterval: 40 * time.Millisecond,
+	})
+	if err := q.Enqueue(context.Background(), Event{Payload: []byte("interval")}); err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+	if batch := awaitBatch(t, sink); len(batch) != 1 || string(batch[0]) != "interval" {
+		t.Fatalf("unexpected batch: %q", batch)
+	}
+}
+
+// Regression: CircuitBreakerHalfOpen was declared but never read. After the
+// cooldown, a single trial request must be admitted; its outcome closes or
+// reopens the circuit.
+func TestCircuitBreakerHalfOpenClosesOnSuccess(t *testing.T) {
+	q, _ := newTestQueue(t, QueueConfig{
+		CircuitBreakerThreshold: 1,
+		CircuitBreakerTimeout:   time.Hour,
+		CircuitBreakerHalfOpen:  true,
+	})
+	q.recordFailure()
+	if !q.isCircuitOpen() {
+		t.Fatal("expected circuit to be open after failure")
+	}
+	q.circuitMu.Lock()
+	q.circuitOpenTime = time.Now().Add(-2 * time.Hour)
+	q.circuitMu.Unlock()
+
+	if q.isCircuitOpen() {
+		t.Fatal("expected one trial request to be admitted in half-open state")
+	}
+	if !q.halfOpenTrial {
+		t.Fatal("expected a half-open trial to be in flight")
+	}
+	if !q.isCircuitOpen() {
+		t.Fatal("expected further requests to be rejected while the trial is in flight")
+	}
+
+	q.recordSuccess()
+	if q.isCircuitOpen() {
+		t.Fatal("expected circuit to close after a successful trial")
+	}
+	if q.halfOpenTrial || q.State().CircuitOpen {
+		t.Fatal("expected half-open trial cleared and circuit state closed")
+	}
+}
+
+func TestCircuitBreakerHalfOpenReopensOnFailure(t *testing.T) {
+	q, _ := newTestQueue(t, QueueConfig{
+		CircuitBreakerThreshold: 1,
+		CircuitBreakerTimeout:   time.Hour,
+		CircuitBreakerHalfOpen:  true,
+	})
+	q.recordFailure()
+	q.circuitMu.Lock()
+	q.circuitOpenTime = time.Now().Add(-2 * time.Hour)
+	q.circuitMu.Unlock()
+
+	if q.isCircuitOpen() {
+		t.Fatal("expected one trial request to be admitted in half-open state")
+	}
+	q.recordFailure()
+	if !q.isCircuitOpen() {
+		t.Fatal("expected circuit to reopen after a failed trial")
+	}
+	if q.halfOpenTrial || !q.State().CircuitOpen {
+		t.Fatal("expected half-open trial cleared and circuit state open")
+	}
+}
+
+func TestCircuitBreakerWithoutHalfOpenStillAutoCloses(t *testing.T) {
+	q, _ := newTestQueue(t, QueueConfig{
+		CircuitBreakerThreshold: 1,
+		CircuitBreakerTimeout:   time.Hour,
+		CircuitBreakerHalfOpen:  false,
+	})
+	q.recordFailure()
+	if !q.isCircuitOpen() {
+		t.Fatal("expected circuit to be open after failure")
+	}
+	q.circuitMu.Lock()
+	q.circuitOpenTime = time.Now().Add(-2 * time.Hour)
+	q.circuitMu.Unlock()
+
+	if q.isCircuitOpen() {
+		t.Fatal("expected circuit to auto-close after timeout when half-open is disabled")
+	}
+	if q.halfOpenTrial || q.State().CircuitOpen {
+		t.Fatal("expected no trial and a closed circuit state")
+	}
+}
+
+// End-to-end check that both config fields are honored through the public
+// Enqueue path: a failed batch opens the circuit, the cooldown admits exactly
+// one half-open trial, and a successful trial closes the circuit again.
+func TestCircuitBreakerHalfOpenEndToEnd(t *testing.T) {
+	q, sink := newTestQueue(t, QueueConfig{
+		BatchSize:               100,
+		BatchTimeout:            60 * time.Millisecond,
+		FlushInterval:           time.Hour,
+		CircuitBreakerThreshold: 1,
+		CircuitBreakerTimeout:   10 * time.Millisecond,
+		CircuitBreakerHalfOpen:  true,
+	})
+
+	sink.setFail(true)
+	if err := q.Enqueue(context.Background(), Event{Payload: []byte("failing")}); err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+	awaitBatch(t, sink) // failing WriteBatch opens the circuit
+	waitForCircuit(t, q, true)
+
+	time.Sleep(30 * time.Millisecond) // let the cooldown elapse
+	sink.setFail(false)
+
+	if err := q.Enqueue(context.Background(), Event{Payload: []byte("trial")}); err != nil {
+		t.Fatalf("half-open trial enqueue was rejected: %v", err)
+	}
+	if err := q.Enqueue(context.Background(), Event{Payload: []byte("blocked")}); !errors.Is(err, ErrCircuitOpen) {
+		t.Fatalf("expected second enqueue to be rejected while trial in flight, got %v", err)
+	}
+
+	awaitBatch(t, sink) // successful trial closes the circuit
+	waitForCircuit(t, q, false)
+	if err := q.Enqueue(context.Background(), Event{Payload: []byte("recovered")}); err != nil {
+		t.Fatalf("enqueue after recovery was rejected: %v", err)
 	}
 }
