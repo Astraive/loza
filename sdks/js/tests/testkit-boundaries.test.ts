@@ -20,6 +20,24 @@ describe('Testkit boundaries', () => {
     assert.equal(captured.length, 1);
   });
 
+  it('honors the supported testLogger config fields and defaults the rest', async () => {
+    const configured = testLogger({ service: 'custom-service', environment: 'staging' });
+    assert.equal(configured.logger.getConfig().service, 'custom-service');
+    assert.equal(configured.logger.getConfig().environment, 'staging');
+    await configured.logger.info('configured');
+    assert.equal(configured.sink.getLength(), 1);
+    assertEvent(configured.sink.getEvents()[0], 'service', 'custom-service');
+    assertEvent(configured.sink.getEvents()[0], 'environment', 'staging');
+
+    const defaulted = testLogger();
+    assert.equal(defaulted.logger.getConfig().service, 'test');
+    assert.equal(defaulted.logger.getConfig().environment, 'test');
+
+    const partial = testLogger({ environment: 'ci' });
+    assert.equal(partial.logger.getConfig().service, 'test');
+    assert.equal(partial.logger.getConfig().environment, 'ci');
+  });
+
   it('tracks testkit events and supports assertions', async () => {
     clearEvents();
     const kit = testkit();
