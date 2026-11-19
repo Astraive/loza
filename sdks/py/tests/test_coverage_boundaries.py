@@ -548,8 +548,9 @@ def test_root_facade_and_lifecycle_surface() -> None:
         ctx = starter(loza.Params())
         loza.enrich(ctx, loza.String("field", "value"))
         loza.finish(ctx, "success")
-        assert loza.emit(ctx)
-        assert event_name
+        encoded = loza.emit(ctx)
+        assert encoded
+        assert json.loads(encoded)["event"] == event_name
     loza.enrich(parent, loza.String("a", 1))
     loza.append(parent, b=2)
     loza.set(parent, c=3)
