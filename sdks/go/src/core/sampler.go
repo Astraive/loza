@@ -283,11 +283,24 @@ func AnySampler(samplers ...Sampler) Sampler {
 	})
 }
 
-// AllSampler keeps an event only if all samplers keep it.
+// AllSampler keeps an event only if all non-nil samplers keep it.
+// Nil samplers are ignored when at least one non-nil sampler is present;
+// if every sampler is nil (or none are supplied), every event is dropped.
+// This matches AnySampler and NotSampler, which also drop on nil, so a
+// misconfigured pipeline cannot silently disable filtering.
 func AllSampler(samplers ...Sampler) Sampler {
+	active := make([]Sampler, 0, len(samplers))
+	for _, s := range samplers {
+		if s != nil {
+			active = append(active, s)
+		}
+	}
 	return samplerFunc(func(ev *Event) bool {
-		for _, s := range samplers {
-			if s != nil && !s.ShouldSample(ev) {
+		if len(active) == 0 {
+			return false
+		}
+		for _, s := range active {
+			if !s.ShouldSample(ev) {
 				return false
 			}
 		}
