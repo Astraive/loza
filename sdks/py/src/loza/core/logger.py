@@ -22,6 +22,7 @@ from .config import (
 from .duplicate_policy import apply_duplicate
 from .errors import EventClosedError, EventValidationError
 from .hashing import hash_sensitive_value
+from .hashing import secure_hash
 from .event import (
     EVENT_ACTIVE,
     EVENT_DELIVERY_FAILED,
@@ -819,6 +820,7 @@ class Logger:
         if value is None:
             return
         hashed = hash_sensitive_value(value)
+        hashed = secure_hash(value)
         Logger._set_path_direct(target, key, hashed)
 
     @staticmethod

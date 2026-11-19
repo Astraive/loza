@@ -151,7 +151,7 @@ path relative to the process working directory instead (for example
 |----------|-------------|
 | `DefaultRedactor()` | 14-key safety-net redactor. |
 | `RedactKeys(*keys)` | Replace values of specified keys with `[REDACTED]`. |
-| `HashKeys(*keys)` | Replace values with SHA-256 hashes. |
+| `HashKeys(*keys)` | Replace values with keyed HMAC-SHA256 hashes (see `LOZA_HASH_SECRET` in [SECURITY.md](SECURITY.md)). |
 | `DropKeys(*keys)` | Remove keys entirely from the event. |
 | `MaskKeys(*keys, prefix, suffix)` | Mask values, showing only prefix/suffix characters. |
 | `RedactPatterns(*patterns)` | Redact values matching regex patterns. |

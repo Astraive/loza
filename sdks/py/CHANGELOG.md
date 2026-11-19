@@ -19,6 +19,11 @@
 - `HTTPBatchSink` NDJSON mode now validates each event and rejects empty
   batches, matching the JSON ingest path. Callers that relied on sending raw,
   unvalidated lines or empty batches must now provide valid event JSON objects.
+- Value hashing (`HashKeys`, `HashString`/`hash_value` and `hash_value=True`
+  attributes) now uses keyed HMAC-SHA256 instead of unsalted SHA-256, so
+  low-entropy PII cannot be recovered with rainbow tables. Set
+  `LOZA_HASH_SECRET` to share a stable key across processes; without it a
+  random per-process key is used and hashes are not stable across restarts.
 
 ## [0.3.4] - 2026-08-26
 
