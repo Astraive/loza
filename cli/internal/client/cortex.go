@@ -40,7 +40,10 @@ func FetchCortexMetrics(baseURL string) ([]byte, error) {
 		return nil, err
 	}
 	defer resp.Body.Close()
-	body, _ := readResponseBody(resp.Body)
+	body, err := readResponseBody(resp.Body)
+	if err != nil {
+		return nil, err
+	}
 	if resp.StatusCode >= 300 {
 		return nil, fmt.Errorf("cortex returned %d: %s", resp.StatusCode, string(body))
 	}
@@ -64,7 +67,10 @@ func IngestCortexBatch(ctx context.Context, baseURL string, events []map[string]
 		return err
 	}
 	defer resp.Body.Close()
-	body, _ := readResponseBody(resp.Body)
+	body, err := readResponseBody(resp.Body)
+	if err != nil {
+		return err
+	}
 	if resp.StatusCode >= 300 {
 		return fmt.Errorf("cortex returned %d: %s", resp.StatusCode, string(body))
 	}
@@ -117,7 +123,10 @@ func getCortexJSON(ctx context.Context, baseURL, path string) ([]byte, error) {
 		return nil, err
 	}
 	defer resp.Body.Close()
-	body, _ := readResponseBody(resp.Body)
+	body, err := readResponseBody(resp.Body)
+	if err != nil {
+		return nil, err
+	}
 	if resp.StatusCode >= 300 {
 		return nil, fmt.Errorf("cortex returned %d: %s", resp.StatusCode, string(body))
 	}
@@ -176,7 +185,10 @@ func postCortexJSON(ctx context.Context, baseURL, path string, payload []byte) (
 		return nil, err
 	}
 	defer resp.Body.Close()
-	body, _ := readResponseBody(resp.Body)
+	body, err := readResponseBody(resp.Body)
+	if err != nil {
+		return nil, err
+	}
 	if resp.StatusCode >= 300 {
 		return nil, fmt.Errorf("cortex returned %d: %s", resp.StatusCode, string(body))
 	}

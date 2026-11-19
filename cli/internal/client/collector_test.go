@@ -11,6 +11,59 @@ import (
 	"testing"
 )
 
+func readResponseBodyOversizedServer(t *testing.T) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.Copy(w, strings.NewReader(strings.Repeat("x", maxCLIResponseBytes+1)))
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+func TestReadResponseBodyRejectsOversizedResponse(t *testing.T) {
+	_, err := readResponseBody(strings.NewReader(strings.Repeat("x", maxCLIResponseBytes+1)))
+	if err == nil {
+		t.Fatal("expected an error for a response larger than maxCLIResponseBytes")
+	}
+	if !strings.Contains(err.Error(), "response too large") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestReadResponseBodyAllowsResponseAtLimit(t *testing.T) {
+	want := strings.Repeat("x", maxCLIResponseBytes)
+	got, err := readResponseBody(strings.NewReader(want))
+	if err != nil {
+		t.Fatalf("unexpected error for a response at the limit: %v", err)
+	}
+	if len(got) != len(want) {
+		t.Fatalf("expected %d bytes, got %d", len(want), len(got))
+	}
+}
+
+func TestQueryReturnsErrorOnOversizedResponse(t *testing.T) {
+	srv := readResponseBodyOversizedServer(t)
+	body, err := Query(srv.URL, "duckdb", "select 1")
+	if err == nil {
+		t.Fatalf("expected an error for an oversized response, got %d bytes", len(body))
+	}
+	if !strings.Contains(err.Error(), "response too large") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestFetchSchemaReturnsErrorOnOversizedResponse(t *testing.T) {
+	srv := readResponseBodyOversizedServer(t)
+	body, err := FetchSchema(srv.URL)
+	if err == nil {
+		t.Fatalf("expected an error for an oversized response, got %d bytes", len(body))
+	}
+	if !strings.Contains(err.Error(), "response too large") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestPostIngestValidatesEnvelopeBeforeSending(t *testing.T) {
 	var hits atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
