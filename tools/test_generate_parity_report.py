@@ -6,6 +6,7 @@ report.  They reproduce MASS-0866 / issue #956: equivalent truthy spellings
 of a status were printed verbatim but silently excluded from the Coverage
 column because the membership check was case- and whitespace-sensitive.
 """
+"""Regression tests for tools/generate-parity-report.py."""
 
 from __future__ import annotations
 
@@ -75,3 +76,83 @@ def test_not_applicable_and_negative_statuses_are_not_counted() -> None:
         report = gpr.generate_report(_manifests_with_status(status), ["feature_a"])
         assert f"| feature_a | {cell} | -- | -- | -- |" in report, status
         assert "| Go | 0 | 1 | 0% |" in report, status
+import json
+import re
+import subprocess
+import sys
+import tempfile
+import unittest
+import unittest.mock
+from pathlib import Path
+
+
+MODULE_PATH = Path(__file__).with_name("generate-parity-report.py")
+SPEC = importlib.util.spec_from_file_location("generate_parity_report", MODULE_PATH)
+assert SPEC is not None and SPEC.loader is not None
+generate_parity_report = importlib.util.module_from_spec(SPEC)
+SPEC.loader.exec_module(generate_parity_report)
+
+
+def _write_manifest(repo_root: Path, sdk: str, content: str) -> Path:
+    path = repo_root / "sdks" / sdk / "docs" / "sdk-parity-manifest.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content, encoding="utf-8")
+    return path
+
+
+class ManifestLoadErrorTests(unittest.TestCase):
+    def test_malformed_manifest_raises_instead_of_looking_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            path = _write_manifest(root, "go", '{"features": [')
+            with self.assertRaisesRegex(
+                generate_parity_report.ManifestLoadError, re.escape(str(path))
+            ):
+                generate_parity_report.load_manifest(root, "go")
+
+    def test_missing_manifest_still_returns_none(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            self.assertIsNone(
+                generate_parity_report.load_manifest(Path(temporary_directory), "go")
+            )
+
+    def test_unreadable_manifest_raises_instead_of_looking_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            path = _write_manifest(root, "py", "{}")
+            with unittest.mock.patch("builtins.open", side_effect=PermissionError("denied")):
+                with self.assertRaisesRegex(
+                    generate_parity_report.ManifestLoadError, re.escape(str(path))
+                ):
+                    generate_parity_report.load_manifest(root, "py")
+
+    def test_main_surfaces_error_and_does_not_emit_report(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            path = _write_manifest(root, "go", "not json")
+            result = subprocess.run(
+                [sys.executable, str(MODULE_PATH), "--repo-root", str(root)],
+                capture_output=True,
+                text=True,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("ERROR", result.stderr)
+            self.assertIn(str(path), result.stderr)
+            self.assertNotIn("# SDK Parity Report", result.stdout)
+
+    def test_valid_manifest_still_generates_report(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            _write_manifest(root, "go", json.dumps({"features": ["logging"]}))
+            result = subprocess.run(
+                [sys.executable, str(MODULE_PATH), "--repo-root", str(root)],
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("# SDK Parity Report", result.stdout)
+            self.assertIn("logging", result.stdout)
+
+
+if __name__ == "__main__":
+    unittest.main()
