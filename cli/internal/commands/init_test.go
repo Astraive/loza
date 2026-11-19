@@ -76,3 +76,66 @@ func TestInitCommandWritesValidValidationMode(t *testing.T) {
 		})
 	}
 }
+
+func TestInitCommandRefusesToOverwriteExistingFile(t *testing.T) {
+	target := filepath.Join(t.TempDir(), ".loza-cli.yaml")
+	sentinel := "cortex:\n  api_key: super-secret-token\n"
+	if err := os.WriteFile(target, []byte(sentinel), 0o600); err != nil {
+		t.Fatalf("seed target: %v", err)
+	}
+
+	_, err := captureStdout(t, func() error {
+		return InitCommand(config.Config{}, []string{target})
+	})
+	if err == nil {
+		t.Fatalf("expected an error when target already exists")
+	}
+	if !strings.Contains(err.Error(), "--force") {
+		t.Fatalf("expected error to mention --force, got %v", err)
+	}
+
+	raw, readErr := os.ReadFile(target)
+	if readErr != nil {
+		t.Fatalf("read target: %v", readErr)
+	}
+	if string(raw) != sentinel {
+		t.Fatalf("target was modified without --force: got %q", string(raw))
+	}
+}
+
+func TestInitCommandForceOverwritesExistingFile(t *testing.T) {
+	target := filepath.Join(t.TempDir(), ".loza-cli.yaml")
+	if err := os.WriteFile(target, []byte("old contents\n"), 0o600); err != nil {
+		t.Fatalf("seed target: %v", err)
+	}
+
+	_, err := captureStdout(t, func() error {
+		return InitCommand(config.Config{CollectorURL: "http://127.0.0.1:9308"}, []string{"--force", target})
+	})
+	if err != nil {
+		t.Fatalf("init with --force: %v", err)
+	}
+
+	raw, readErr := os.ReadFile(target)
+	if readErr != nil {
+		t.Fatalf("read target: %v", readErr)
+	}
+	if !strings.Contains(string(raw), "collector_url: http://127.0.0.1:9308") {
+		t.Fatalf("target was not regenerated with --force: got %q", string(raw))
+	}
+}
+
+func TestInitCommandCreatesNewFile(t *testing.T) {
+	target := filepath.Join(t.TempDir(), ".loza-cli.yaml")
+
+	_, err := captureStdout(t, func() error {
+		return InitCommand(config.Config{CollectorURL: "http://127.0.0.1:9308"}, []string{target})
+	})
+	if err != nil {
+		t.Fatalf("init new target: %v", err)
+	}
+
+	if _, statErr := os.Stat(target); statErr != nil {
+		t.Fatalf("expected new target file: %v", statErr)
+	}
+}
