@@ -41,17 +41,13 @@ func TestSDKConfigurationIntegration(t *testing.T) {
 	})
 
 	t.Run("Configuration precedence: code > environment > defaults", func(t *testing.T) {
-		// Set environment variables
-		os.Setenv("LOZA_SERVICE_NAME", "env-service")
-		os.Setenv("LOZA_COLLECTOR_URL", "http://env-collector:9308")
-		os.Setenv("LOZA_BATCH_SIZE", "150")
-		defer func() {
-			os.Unsetenv("LOZA_SERVICE_NAME")
-			os.Unsetenv("LOZA_COLLECTOR_URL")
-			os.Unsetenv("LOZA_BATCH_SIZE")
-		}()
+		// Set environment values that deliberately conflict with the
+		// code-level config below so precedence is observable.
+		t.Setenv("LOZA_SERVICE_NAME", "env-service")
+		t.Setenv("LOZA_COLLECTOR_URL", "http://env-collector:9308")
+		t.Setenv("LOZA_BATCH_SIZE", "150")
 
-		// Code configuration should override environment
+		// Code configuration must win over the conflicting environment values.
 		cfg := Config{
 			CollectorURL: "http://code-collector:9308",
 			Service:      "code-service",
@@ -64,14 +60,46 @@ func TestSDKConfigurationIntegration(t *testing.T) {
 		}
 		defer func() { _ = logger.Shutdown(context.Background()) }()
 
-		// Verify code config took precedence
-		// (We can't directly inspect the logger's config, but we verified it was created successfully)
+		// Assert on the resulting logger config instead of only checking that
+		// construction succeeded. NewClient resolves code > env > defaults.
+		if got := logger.cfg.Service; got != "code-service" {
+			t.Errorf("Service = %q, want %q (code must override environment)", got, "code-service")
+		}
+		if got := logger.cfg.CollectorURL; got != "http://code-collector:9308" {
+			t.Errorf("CollectorURL = %q, want %q (code must override environment)", got, "http://code-collector:9308")
+		}
+		if got := logger.cfg.BatchSize; got != 250 {
+			t.Errorf("BatchSize = %d, want 250 (code must override environment)", got)
+		}
+	})
+
+	t.Run("Configuration precedence: environment > defaults", func(t *testing.T) {
+		// Leave collector and batch size unset in code so the environment
+		// values must win over the YAML defaults file. Service is supplied in
+		// code only because it is a required field.
+		t.Setenv("LOZA_COLLECTOR_URL", "http://env-collector:9308")
+		t.Setenv("LOZA_BATCH_SIZE", "150")
+
+		cfg := Config{Service: "test-service"}
+
+		logger, err := NewClient(cfg)
+		if err != nil {
+			t.Fatalf("NewClient() error = %v", err)
+		}
+		defer func() { _ = logger.Shutdown(context.Background()) }()
+
+		if got := logger.cfg.CollectorURL; got != "http://env-collector:9308" {
+			t.Errorf("CollectorURL = %q, want %q (environment must override defaults)", got, "http://env-collector:9308")
+		}
+		if got := logger.cfg.BatchSize; got != 150 {
+			t.Errorf("BatchSize = %d, want 150 (environment must override defaults)", got)
+		}
 	})
 
 	t.Run("Configuration validation on initialization", func(t *testing.T) {
 		// Note: NewClient loads defaults from loza-go.defaults.yaml which includes
 		// a default collector_url, so we need to test validation differently.
-		
+
 		// Test with invalid values that will fail validation
 		cfg := Config{
 			CollectorURL: "http://localhost:9308",
