@@ -81,6 +81,31 @@ security:
     const result = parseSimpleYAML('batch_size: 100 # default batch');
     assert.equal(result.batch_size, 100);
   });
+
+  it('preserves an interior # in an unquoted value', () => {
+    const result = parseSimpleYAML('api_key: ab#cd');
+    assert.equal(result.api_key, 'ab#cd');
+  });
+
+  it('preserves a # inside a double-quoted value', () => {
+    const result = parseSimpleYAML('api_key: "ab#cd"');
+    assert.equal(result.api_key, 'ab#cd');
+  });
+
+  it('preserves a # inside a single-quoted value', () => {
+    const result = parseSimpleYAML("api_key: 'ab#cd'");
+    assert.equal(result.api_key, 'ab#cd');
+  });
+
+  it('strips a real inline comment after a value containing #', () => {
+    const result = parseSimpleYAML('api_key: ab#cd # token for tests');
+    assert.equal(result.api_key, 'ab#cd');
+  });
+
+  it('preserves a # inside quotes and strips a following inline comment', () => {
+    const result = parseSimpleYAML('api_key: "ab#cd" # token for tests');
+    assert.equal(result.api_key, 'ab#cd');
+  });
 });
 
 describe('mergeFileConfig', () => {
