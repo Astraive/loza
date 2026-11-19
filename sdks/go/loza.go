@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/astraive/loza/sdks/go/src/core"
 	"github.com/astraive/loza/sdks/go/src/cortex"
@@ -891,7 +892,13 @@ func HTTPMethod(method string) Attr { return core.String("http.method", strings.
 func HTTPPath(path string) Attr     { return core.String("http.path", path) }
 func HTTPUserAgent(ua string) Attr {
 	if len(ua) > 512 {
-		ua = ua[:512]
+		// Back off to the last complete UTF-8 rune so a multi-byte rune
+		// straddling byte 512 is never cut in half.
+		end := 512
+		for end > 0 && !utf8.RuneStart(ua[end]) {
+			end--
+		}
+		ua = ua[:end]
 	}
 	return core.String("http.user_agent", ua)
 }
