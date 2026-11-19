@@ -367,14 +367,16 @@ class Logger:
 
     def shutdown(self, timeout: float = 30.0) -> None:
         if self._pipeline is not None:
+            # Pipeline.close() flushes and closes every sink itself; closing them
+            # again here would double-close non-idempotent sinks.
             self._pipeline.close(timeout=timeout)
             self._pipeline = None
         else:
             self.flush(timeout=timeout)
-        for sink in self._config.sinks:
-            close = getattr(sink, "close", None)
-            if callable(close):
-                close()
+            for sink in self._config.sinks:
+                close = getattr(sink, "close", None)
+                if callable(close):
+                    close()
 
     def drain(self, timeout: float = 30.0) -> list:
         """Drain the pipeline — stop accepting new events and flush pending."""
