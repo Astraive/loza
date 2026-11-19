@@ -8,9 +8,18 @@ LOZA Spec defines the shared contract between SDKs and collectors.
 
 ## Current Versions
 
-- **Schema Version**: `v0.0.1`
+- **Schema Version**: `v1`
+- **Event Version**: `v1`
 - **Ingest API Version**: `v1`
 - **Status**: Active, stable-v1 emitter contract
+
+The canonical schemas live in [`schemas/json/`](schemas/json/), and the
+canonical collector contract is [`openapi/collector.openapi.yaml`](openapi/collector.openapi.yaml).
+The `schema/` and `v1/` trees are deprecated compatibility mirrors/archives.
+The `releases/v1/` tree is a frozen, immutable snapshot that intentionally
+retains its legacy `$ref` paths and `X-LOZA-API-Key` header; it is explicitly
+excluded from the active contract checks in `scripts/check_spec_contract.py`.
+Do not use it for new integrations. See [`MIGRATION_GUIDE.md`](MIGRATION_GUIDE.md).
 
 ## Stable-v1 SDK Contract
 
@@ -76,7 +85,7 @@ spec/                          # ← Canonical sources
 loza schema validate --file event.json --schema-version v1
 
 # Validate from stdin
-echo '{"event_id":"...","event_type":"user.login",...}' | loza schema validate
+echo '{"schema_version":"v1","event_version":"v1","event_id":"...","timestamp":"...","service":"...","event":"user.login","kind":"event"}' | loza schema validate
 ```
 
 ### View Schema Versions
@@ -86,44 +95,53 @@ echo '{"event_id":"...","event_type":"user.login",...}' | loza schema validate
 loza schema list
 
 # Show differences between versions
-loza schema diff --from v0.0.1 --to v0.0.1
+loza schema diff --from v1 --to v1
 ```
 
 ## Schema Overview
 
 ### Required Fields (v1)
 
-All LOZA events must include:
+All LOZA events must validate against [`schemas/json/event.schema.json`](schemas/json/event.schema.json),
+which requires:
 
-- `event_id` (string, UUID): Unique event identifier
-- `event_type` (string): Event type in dot notation (e.g., `user.login`)
+- `schema_version` (string, enum: `v1`): Schema version
+- `event_version` (string, enum: `v1`): Event version
+- `event_id` (string, non-empty): Unique event identifier
 - `timestamp` (string, ISO 8601): Event timestamp
-- `service` (object): Service identity with `name` and `version`
-- `deployment` (object): Deployment context with `environment`
+- `service` (string or object): Service identity; objects require `name`
+- `event` (string, non-empty): Event name in dot notation (e.g., `user.login`)
+- `kind` (string, enum): Event kind such as `event`, `http`, `job`, `queue`, `cli`, `cron`
+
+The legacy `event_type` field is an alias for `event` and is rejected in strict
+mode. `deployment`, `data`, and other optional fields are not required.
 
 ### Example Event
 
 ```json
 {
+  "schema_version": "v1",
+  "event_version": "v1",
   "event_id": "01934a5e-8f2c-7b3d-9e4f-5a6b7c8d9e0f",
-  "event_type": "user.login",
   "timestamp": "2024-01-15T10:30:00.123Z",
   "service": {
     "name": "auth-service",
     "version": "2.1.0"
   },
+  "event": "user.login",
+  "kind": "event",
+  "level": "info",
+  "outcome": "success",
   "deployment": {
     "environment": "production",
     "region": "us-east-1"
-  },
-  "data": {
-    "login_method": "password",
-    "success": true
   }
 }
 ```
 
-See [v1/examples/](v1/examples/) for complete examples.
+See [`examples/events/`](examples/events/) and
+[`examples/golden/valid/`](examples/golden/valid/) for complete canonical
+examples.
 
 ## Compatibility Promise
 
@@ -141,19 +159,23 @@ The specification generates authoritative contracts for both Loza and Cortex:
 ### Loza Contract
 ```json
 {
-  "spec_version": "0.0.2",
-  "event_version": "0.0.2",
+  "product_version": "0.3.4",
+  "spec_version": "v1",
   "api_version": "v1",
-  "kinds": ["event"],
-  "levels": ["debug", "info", "warn", "error"],
+  "event_version": "v1",
+  "schemas": {
+    "event": "spec/schemas/json/event.schema.json",
+    "event_strict": "spec/schemas/json/event.strict.schema.json",
+    ...
+  },
+  "enums": {
+    "kinds": ["event", "http", "job", "queue", "cli", "cron", "log", "checkpoint", "agent", "ai"],
+    "levels": ["debug", "info", "notice", "warn", "error", "fatal"]
+  },
   "limits": {
     "max_event_size_bytes": 65536,
-    "max_batch_events": 100,
-    "max_batch_size_bytes": 10485760
-  },
-  "schema_paths": {
-    "event": "spec/schemas/json/event.schema.json",
-    ...
+    "max_batch_events": 1000,
+    "max_batch_size_bytes": 1048576
   },
   "validation_modes": {
     "strict": { ... },
@@ -167,7 +189,7 @@ Generated at: `generated/contract/loza-contract.json`
 ### Cortex Contract
 ```json
 {
-  "spec_version": "0.0.2",
+  "spec_version": "v1",
   "api_version": "v1",
   "kinds": ["event", "metric", "log", ...],
   "provenance_types": ["loza", "collector", "otlp", "jsonl", "manual", "replay"],
@@ -223,8 +245,8 @@ See [MIGRATION_GUIDE.md](MIGRATION_GUIDE.md) for detailed integration steps.
 LOZA schemas follow [Semantic Versioning](https://semver.org/):
 
 - **MAJOR** (v1 → v2): Breaking changes (field removal, type changes)
-- **MINOR** (v0.0.1): Backward-compatible additions (new optional fields)
-- **PATCH** (v0.0.1 → v1.0.1): Documentation updates
+- **MINOR** (v1.1.0): Backward-compatible additions (new optional fields)
+- **PATCH** (v1.0.1 → v1.0.2): Documentation and non-breaking fixes
 
 See [CHANGELOG.md](CHANGELOG.md) for version history.
 
@@ -253,7 +275,7 @@ python scripts/check_conformance.py
 loza schema validate-schema --file v1/event.schema.json
 
 # Check backward compatibility
-loza schema check-compatibility --base v0.0.1 --target v0.0.1
+loza schema check-compatibility --base v1 --target v1
 ```
 
 ## License

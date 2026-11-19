@@ -4,6 +4,11 @@
 
 LOZA uses scoped ingest API keys with RBAC+ABAC for authentication and authorization. The collector (data plane) validates keys and enforces permissions. Key management (create/revoke/rotate) lives in the control plane (cortex/API).
 
+The canonical wire mechanism is the `Authorization: Bearer <key>` header for
+both HTTP and gRPC. It is the only auth header documented by the OpenAPI
+collector contract and the SDK conformance contract; the legacy
+`X-LOZA-API-Key` header is not part of the contract.
+
 ## Key Format
 
 ```
@@ -12,7 +17,7 @@ lz_{kind}_{env}_{key_id}_{secret}
 
 | Component | Values | Example |
 |-----------|--------|---------|
-| Prefix | `lx` | `lx` |
+| Prefix | `lz_` | `lz_` |
 | Kind | `pub`, `sec`, `local` | `sec` |
 | Env | `live`, `test`, `dev` | `live` |
 | Key ID | Single segment, no underscores | `k2M9aQp` |

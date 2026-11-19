@@ -19,7 +19,7 @@ from referencing import Registry, Resource
 from referencing.jsonschema import DRAFT202012
 
 
-_SCHEMA_DIR = Path(__file__).resolve().parents[1] / "schema"
+_SCHEMA_DIR = Path(__file__).resolve().parents[1] / "schemas" / "json"
 
 
 def _load_json(path: Path) -> object:
@@ -272,6 +272,23 @@ def main() -> int:
     loose_validator, strict_validator = _build_event_validators(
         manifest_dir, manifest, schema_store
     )
+    strict_schema = (manifest_dir / str(manifest["strict_schema"])).resolve()
+    loose_schema = (manifest_dir / str(manifest["loose_schema"])).resolve()
+    event_schema = (spec_root / "schemas" / "json" / "event.schema.json").resolve()
+    ingest_schema = (spec_root / "schemas" / "json" / "ingest.schema.json").resolve()
+    collector_schema = (spec_root / "schemas" / "json" / "collector-response.schema.json").resolve()
+
+    schema_paths = (strict_schema, loose_schema, event_schema, ingest_schema, collector_schema)
+    for schema_path in schema_paths:
+        if not schema_path.exists():
+            raise FileNotFoundError(f"schema path must exist: {schema_path}")
+
+    # Use the published strict schema instead of synthesizing a second,
+    # conflicting definition from the canonical event schema at runtime.
+    schema_store = _build_schema_store()
+
+    loose_validator = _build_validator(loose_schema, store=schema_store)
+    strict_validator = _build_validator(strict_schema, store=schema_store)
     ingest_validator = _build_validator(ingest_schema, store=schema_store)
     collector_validator = _build_validator(collector_schema, store=schema_store)
 

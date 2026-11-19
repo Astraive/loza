@@ -433,5 +433,6 @@
       "type": "object",
       "additionalProperties": true
     }
-  }
+  },
+  "additionalProperties": true
 }
