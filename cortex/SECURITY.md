@@ -12,9 +12,9 @@
 - **Verify**: `grep -n "SetReadLimit" internal/api/websocket.go`
 
 ## WebSocket Role Enforcement (websocket.go)
-- **What**: `ingest_event` and `ingest_batch` actions require writer role via `wsHasWriterRole()`
-- **Why**: Defense-in-depth -- HTTP middleware is the primary gate, but WebSocket actions bypass it
-- **Verify**: `grep -n "wsHasWriterRole" internal/api/websocket.go`
+- **What**: `ingest_event` (the only write action on the WebSocket endpoint) requires writer role via `hasWriterRole()`
+- **Why**: Defense-in-depth -- HTTP middleware is the primary gate, but WebSocket actions bypass it. Batch ingestion is served over HTTP, not WebSocket.
+- **Verify**: `grep -n "hasWriterRole" internal/api/websocket.go`
 
 ## GraphQL Query Depth Limit (graphql_server.go)
 - **What**: Queries exceeding 10 nesting levels are rejected with `query_too_deep`

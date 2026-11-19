@@ -67,8 +67,9 @@ func (s *Server) WebSocketHandler() http.Handler {
 }
 
 func (s *Server) executeWebSocketAction(ctx context.Context, req transportcontracts.WebSocketRequest) (any, error) {
-	// Write operations require writer role (defense-in-depth; HTTP middleware is primary gate)
-	if req.Action == "ingest_event" || req.Action == "ingest_batch" {
+	// Write operations require writer role (defense-in-depth; HTTP middleware is primary gate).
+	// Batch ingestion is served by the HTTP endpoint, not by this WebSocket dispatcher.
+	if req.Action == "ingest_event" {
 		if !hasWriterRole(ctx) {
 			return nil, fmt.Errorf("writer role required for ingest operations")
 		}
