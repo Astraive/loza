@@ -159,6 +159,9 @@ func runLoadTest(name string, concurrency int, duration time.Duration, reqFunc f
 	<-done
 
 	// Calculate stats
+	// MinLatency has no sentinel value: leave it at the zero value until a
+	// positive duration is observed. Using time.Hour as a sentinel would leak
+	// into reports whenever every measurement is zero or at least one hour.
 	tr := &TestResult{
 		Name:        name,
 		Concurrency: concurrency,
@@ -167,9 +170,9 @@ func runLoadTest(name string, concurrency int, duration time.Duration, reqFunc f
 		// reported drop rather than a silent one.
 		DroppedReqs: atomic.LoadInt64(&totalReqs) - int64(len(collected)),
 		StatusCodes: make(map[int]int64),
-		MinLatency:  time.Hour,
 	}
 
+	var minLatencySet bool
 	latencies := make([]time.Duration, 0, len(collected))
 	for _, r := range collected {
 		tr.TotalReqs++
@@ -188,8 +191,9 @@ func runLoadTest(name string, concurrency int, duration time.Duration, reqFunc f
 		if r.Duration > tr.MaxLatency {
 			tr.MaxLatency = r.Duration
 		}
-		if r.Duration < tr.MinLatency && r.Duration > 0 {
+		if r.Duration > 0 && (!minLatencySet || r.Duration < tr.MinLatency) {
 			tr.MinLatency = r.Duration
+			minLatencySet = true
 		}
 	}
 

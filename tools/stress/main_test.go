@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync/atomic"
+	"net/http"
 	"testing"
 	"time"
 )
@@ -157,5 +158,48 @@ func TestRunLoadTestNoDroppedResults(t *testing.T) {
 	}
 	if tr.SuccessReqs != got {
 		t.Fatalf("SuccessReqs = %d, want %d", tr.SuccessReqs, got)
+// When every measured duration is at or above the old one-hour sentinel, the
+// reported minimum must be the real minimum, never the sentinel itself.
+func TestMinLatencyNotReportedAsSentinel(t *testing.T) {
+	const slow = 2 * time.Hour
+	tr := runLoadTest("slow", 1, 20*time.Millisecond, func() Result {
+		return Result{StatusCode: http.StatusOK, Duration: slow}
+	})
+	if tr.TotalReqs == 0 {
+		t.Fatal("no requests were collected")
+	}
+	if tr.MinLatency != slow {
+		t.Fatalf("MinLatency = %v, want %v (sentinel must not be reported as a real value)", tr.MinLatency, slow)
+	}
+}
+
+// With no positive durations there is no positive minimum to report; the
+// value must stay at zero rather than leaking the one-hour sentinel.
+func TestMinLatencyZeroWhenNoPositiveDuration(t *testing.T) {
+	tr := runLoadTest("zero", 1, 20*time.Millisecond, func() Result {
+		return Result{StatusCode: http.StatusOK, Duration: 0}
+	})
+	if tr.TotalReqs == 0 {
+		t.Fatal("no requests were collected")
+	}
+	if tr.MinLatency != 0 {
+		t.Fatalf("MinLatency = %v, want 0 when all durations are zero", tr.MinLatency)
+	}
+}
+
+// The smallest positive duration is tracked even when other samples exceed
+// the sentinel, preserving the intended "ignore zero durations" behavior.
+func TestMinLatencyTracksSmallestPositiveDuration(t *testing.T) {
+	const small = 3 * time.Millisecond
+	calls := 0
+	tr := runLoadTest("mixed", 1, 20*time.Millisecond, func() Result {
+		calls++
+		if calls%2 == 0 {
+			return Result{StatusCode: http.StatusOK, Duration: small}
+		}
+		return Result{StatusCode: http.StatusOK, Duration: time.Hour + time.Second}
+	})
+	if tr.MinLatency != small {
+		t.Fatalf("MinLatency = %v, want %v", tr.MinLatency, small)
 	}
 }
