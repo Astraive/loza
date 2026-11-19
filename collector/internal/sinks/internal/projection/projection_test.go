@@ -1,6 +1,9 @@
 package projection
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestExtractPathSupportsArrayIndices(t *testing.T) {
 	doc, err := DecodeObject([]byte(`{"checkpoints":[{"name":"start"},{"name":"end"}]}`))
@@ -19,6 +22,7 @@ func TestValidatePathRejectsMalformedPaths(t *testing.T) {
 		"",
 		"user..id",
 		"user.",
+		"a[0].",
 		"user[abc]",
 		"user[]",
 		"user]",
@@ -27,6 +31,24 @@ func TestValidatePathRejectsMalformedPaths(t *testing.T) {
 		if err := ValidatePath(tc); err == nil {
 			t.Fatalf("expected invalid path error for %q", tc)
 		}
+	}
+}
+
+func TestValidatePathRejectsTrailingDotAfterIndex(t *testing.T) {
+	err := ValidatePath("a[0].")
+	if err == nil {
+		t.Fatal("expected invalid path error for trailing dot after array index")
+	}
+	if !strings.Contains(err.Error(), "trailing dot") {
+		t.Fatalf("expected trailing dot error, got: %v", err)
+	}
+
+	doc, dErr := DecodeObject([]byte(`{"a":[{"b":"value"}]}`))
+	if dErr != nil {
+		t.Fatalf("decode failed: %v", dErr)
+	}
+	if _, ok := ExtractPath(doc, "a[0]."); ok {
+		t.Fatal("expected ExtractPath to reject trailing dot after array index")
 	}
 }
 
