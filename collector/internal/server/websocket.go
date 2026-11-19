@@ -61,25 +61,6 @@ func NewWebSocketUpgrader(allowedOrigins []string) websocket.Upgrader {
 	}
 }
 
-var websocketUpgrader = websocket.Upgrader{
-	ReadBufferSize:  16 * 1024,
-	WriteBufferSize: 16 * 1024,
-	Subprotocols:    []string{auth.WebSocketTailProtocol},
-	CheckOrigin: func(r *http.Request) bool {
-		origin := r.Header.Get("Origin")
-		if origin == "" {
-			return true // Non-browser clients (no Origin header)
-		}
-		// Allow localhost for development (exact host match, not suffix)
-		if origin == "http://localhost" || strings.HasPrefix(origin, "http://localhost:") ||
-			origin == "http://127.0.0.1" || strings.HasPrefix(origin, "http://127.0.0.1:") ||
-			origin == "http://[::1]" || strings.HasPrefix(origin, "http://[::1]:") {
-			return true
-		}
-		return false
-	},
-}
-
 func ParseTailFilters(r *http.Request) (TailFilters, error) {
 	filters := TailFilters{Limit: 1000}
 	q := r.URL.Query()
