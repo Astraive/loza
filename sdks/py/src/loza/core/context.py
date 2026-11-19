@@ -4,7 +4,9 @@ from .event import EventContext
 
 
 def FromContext(ctx: object) -> tuple[EventContext | None, bool]:
-    return (ctx, isinstance(ctx, EventContext))
+    if isinstance(ctx, EventContext):
+        return (ctx, True)
+    return (None, False)
 
 
 def HasEvent(ctx: object) -> bool:
