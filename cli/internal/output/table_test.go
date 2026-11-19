@@ -39,6 +39,28 @@ func captureStdout(t *testing.T, run func()) string {
 	return string(out)
 }
 
+var ansiEscapeRE = regexp.MustCompile(`\x1b\[[0-9;]*m`)
+
+func captureKeyValue(t *testing.T, pairs map[string]string) string {
+	t.Helper()
+	old := os.Stdout
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe: %v", err)
+	}
+	os.Stdout = w
+	defer func() { os.Stdout = old }()
+
+	PrintKeyValue(pairs)
+
+	_ = w.Close()
+	out, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatalf("read stdout: %v", err)
+	}
+	return string(out)
+}
+
 func tableLines(t *testing.T, out string, wantCount int) []string {
 	t.Helper()
 	lines := strings.Split(strings.TrimSuffix(out, "\n"), "\n")
@@ -233,4 +255,61 @@ func TestPrintTableShorterRowsUnchanged(t *testing.T) {
 	if got := strings.TrimRight(lines[2], " "); got != "alpha  up" {
 		t.Errorf("row: got %q, want %q", got, "alpha  up")
 	}
+}
+
+func assertValuesAligned(t *testing.T, pairs map[string]string, maxLen int) {
+	t.Helper()
+	out := captureKeyValue(t, pairs)
+	lines := strings.Split(strings.TrimSuffix(out, "\n"), "\n")
+	if len(lines) != len(pairs) {
+		t.Fatalf("expected %d lines, got %d: %q", len(pairs), len(lines), out)
+	}
+
+	// Values must begin at the same visible column regardless of key length:
+	// two leading spaces + maxLen-wide key column + two separating spaces.
+	valueStart := 2 + maxLen + 2
+	seen := make(map[string]bool, len(pairs))
+	for _, line := range lines {
+		plain := ansiEscapeRE.ReplaceAllString(line, "")
+		if len(plain) <= valueStart {
+			t.Fatalf("value column missing (want index %d): %q", valueStart, plain)
+		}
+		seen[plain[valueStart:]] = true
+	}
+	if len(seen) != len(pairs) {
+		t.Fatalf("expected %d distinct values, got %v", len(pairs), seen)
+	}
+}
+
+// Regression test: ANSI escape codes in Dim(k) must not be counted by the
+// %-*s width, otherwise values stop lining up when color is enabled.
+func TestPrintKeyValueAlignsValuesWithColor(t *testing.T) {
+	oldNoColor := NoColor
+	NoColor = false
+	defer func() { NoColor = oldNoColor }()
+
+	pairs := map[string]string{
+		"id":                 "v1",
+		"a much longer name": "v2",
+	}
+	maxLen := len("a much longer name")
+
+	out := captureKeyValue(t, pairs)
+	if !strings.Contains(out, ColorDim) {
+		t.Fatalf("expected dim color codes with color enabled, got %q", out)
+	}
+
+	assertValuesAligned(t, pairs, maxLen)
+}
+
+func TestPrintKeyValueAlignsValuesWithoutColor(t *testing.T) {
+	oldNoColor := NoColor
+	NoColor = true
+	defer func() { NoColor = oldNoColor }()
+
+	pairs := map[string]string{
+		"id":                 "v1",
+		"a much longer name": "v2",
+	}
+	assertValuesAligned(t, pairs, len("a much longer name"))
 }

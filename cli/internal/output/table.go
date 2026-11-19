@@ -62,6 +62,8 @@ func PrintKeyValue(pairs map[string]string) {
 	}
 	sort.Strings(keys)
 	for _, k := range keys {
+		// Pad the plain key first: Dim(k) contains ANSI escape bytes that
+		// %-*s would otherwise count toward the width, breaking alignment.
 		fmt.Printf("  %s  %s\n", Dim(fmt.Sprintf("%-*s", maxLen, k)), pairs[k])
 	}
 }
