@@ -14,7 +14,6 @@ capabilities use an explicitly empty password (`lz_pub_...:`).
 
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass, field
 from urllib.parse import parse_qs, quote, unquote_to_bytes, urlparse
 
@@ -210,27 +209,3 @@ def parse(raw: str) -> LozaDSN:
         username=username,
         password=password,
     )
-
-
-def resolve_endpoint(path: str = "", default: str = "") -> str:
-    """Resolve an endpoint from LOZA_COLLECTOR_URL env var with a fallback.
-
-    Accepts both loza:// DSN and plain http(s) URLs. If LOZA_COLLECTOR_URL
-    is a loza:// DSN, it is resolved to an HTTP(S) URL first.
-
-    Args:
-        path: Suffix appended to the base URL (e.g. "/events").
-        default: Fallback value when LOZA_COLLECTOR_URL is not set.
-
-    Returns:
-        The resolved endpoint URL.
-    """
-    base = os.getenv("LOZA_COLLECTOR_URL", "").strip()
-    if base:
-        if base.startswith("loza://"):
-            try:
-                base = parse(base).base_url
-            except Exception:
-                pass  # Use raw value; caller will handle the invalid URL
-        return base.rstrip("/") + path
-    return default
