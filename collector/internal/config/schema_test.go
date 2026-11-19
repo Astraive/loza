@@ -96,6 +96,29 @@ func TestLoadFileRejectsUnknownFieldsAndAcceptsVersion(t *testing.T) {
 	assert.Equal(t, "kingest", cfg.Auth.Keys[0].KeyID)
 }
 
+func TestLoadRejectsUnknownFields(t *testing.T) {
+	// A misspelled security setting must not be silently ignored.
+	data := []byte("version: \"1.0\"\ncollector:\n  unkown: true\n")
+	cfg := Default()
+	err := Load(data, &cfg)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unkown")
+	assert.Contains(t, err.Error(), "not found")
+
+	// A valid document still loads.
+	cfg = Default()
+	require.NoError(t, Load([]byte("version: \"1.0\"\n"), &cfg))
+	assert.Equal(t, "1.0", cfg.Version)
+}
+
+func TestLoadRejectsMultipleDocuments(t *testing.T) {
+	data := []byte("version: \"1.0\"\n---\nversion: \"2.0\"\n")
+	cfg := Default()
+	err := Load(data, &cfg)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "single YAML document")
+}
+
 func TestServerConfigTLS(t *testing.T) {
 	yaml := `
 collector:

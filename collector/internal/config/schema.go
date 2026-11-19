@@ -578,8 +578,29 @@ func Default() Config {
 	return cfg
 }
 
+// loadStrict parses exactly one YAML config document into cfg, rejecting
+// unknown fields so that misspelled (e.g. security-related) settings are
+// never silently dropped.
+func loadStrict(data []byte, cfg *Config) error {
+	dec := yaml.NewDecoder(bytes.NewReader(data))
+	dec.KnownFields(true)
+	if err := dec.Decode(cfg); err != nil {
+		return err
+	}
+	var extra Config
+	if err := dec.Decode(&extra); err != io.EOF {
+		if err == nil {
+			return fmt.Errorf("config must contain a single YAML document")
+		}
+		return err
+	}
+	return nil
+}
+
+// Load strictly parses one YAML config document into cfg. It mirrors LoadFile
+// so that both entry points reject unknown fields and multiple documents.
 func Load(data []byte, cfg *Config) error {
-	return yaml.Unmarshal(data, cfg)
+	return loadStrict(data, cfg)
 }
 
 // LoadFile reads and strictly parses one YAML config document into cfg.
@@ -588,16 +609,7 @@ func LoadFile(cfg *Config, path string) error {
 	if err != nil {
 		return fmt.Errorf("read config file %s: %w", path, err)
 	}
-	dec := yaml.NewDecoder(bytes.NewReader(raw))
-	dec.KnownFields(true)
-	if err := dec.Decode(cfg); err != nil {
-		return fmt.Errorf("parse config file %s: %w", path, err)
-	}
-	var extra Config
-	if err := dec.Decode(&extra); err != io.EOF {
-		if err == nil {
-			return fmt.Errorf("parse config file %s: config file must contain a single YAML document", path)
-		}
+	if err := loadStrict(raw, cfg); err != nil {
 		return fmt.Errorf("parse config file %s: %w", path, err)
 	}
 	return nil
