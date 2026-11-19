@@ -14,7 +14,7 @@
  *   logger.info("started");
  */
 
-import { reset, Logger, fromRequest } from './core/logger.ts';
+import { reset, Logger } from './core/logger.ts';
 import type { Config } from './config/config.ts';
 import type { Event, Params, Attr } from './core/event.ts';
 import type { ProcessHandle, TimerHandle, GroupHandle } from './core/timing.ts';
