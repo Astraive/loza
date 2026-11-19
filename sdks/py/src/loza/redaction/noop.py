@@ -1,10 +1,7 @@
-"""No-op redactor - passes events through unchanged."""
+"""Compatibility re-export of the canonical identity redactor factory."""
 
 from __future__ import annotations
 
-from typing import Any
+from ..core.redactor import noop_redactor
 
-
-def noop_redactor() -> Any:
-    """Return a redactor that performs no transformation."""
-    return lambda payload: payload
+__all__ = ["noop_redactor"]
