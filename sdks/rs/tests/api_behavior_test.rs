@@ -5,6 +5,33 @@ use loza::{
 };
 
 #[test]
+fn disabled_config_has_no_emitting_sinks() {
+    let cfg = Config::disabled();
+
+    assert!(
+        !cfg
+            .sinks
+            .iter()
+            .any(|s| matches!(s, SinkConfig::Stdout | SinkConfig::Stderr)),
+        "a disabled config must not write events to stdout/stderr, got {:?}",
+        cfg.sinks
+    );
+    assert!(
+        cfg.sinks.iter().all(|s| matches!(s, SinkConfig::Noop)),
+        "a disabled config should only install no-op sinks, got {:?}",
+        cfg.sinks
+    );
+
+    // The logger built from a disabled config must not expose any terminal sink.
+    let logger = New(Config::disabled());
+    let names = logger.sink_names();
+    assert!(
+        !names.iter().any(|n| n == "Stdout" || n == "Stderr"),
+        "a disabled logger must not emit to terminal sinks, got {names:?}"
+    );
+}
+
+#[test]
 fn collector_sink_matches_local_collector_default() {
     match CollectorSink() {
         SinkConfig::HttpBatch { endpoint, .. } => {
