@@ -368,6 +368,9 @@ func queryAllEvents(ctx context.Context, db *sql.DB, query string, args ...inter
 		}
 		events = append(events, event)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
 	return events, nil
 }
 
@@ -449,6 +452,9 @@ func (s *DuckDBEventStore) CountByOutcome(ctx context.Context, service string, f
 		}
 		result[outcome] = count
 	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
 	return result, nil
 }
 
@@ -466,6 +472,9 @@ func (s *DuckDBEventStore) CountByEventName(ctx context.Context, service string,
 			return nil, err
 		}
 		result[eventName] = count
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
 	}
 	return result, nil
 }
@@ -503,6 +512,9 @@ func (s *DuckDBEventStore) DistinctServices(ctx context.Context) ([]string, erro
 		}
 		services = append(services, svc)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
 	return services, nil
 }
 
@@ -519,6 +531,9 @@ func (s *DuckDBEventStore) DistinctEventNames(ctx context.Context) ([]string, er
 			return nil, err
 		}
 		names = append(names, name)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
 	}
 	return names, nil
 }
@@ -610,6 +625,9 @@ func (s *DuckDBEventStore) ListLifecycleSummaries(ctx context.Context, filter *L
 		}
 		summaries = append(summaries, &s)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, err
+	}
 	return summaries, total, nil
 }
 
@@ -649,6 +667,9 @@ func (s *DuckDBTopologyStore) GetHistory(ctx context.Context, service string) ([
 			return nil, err
 		}
 		aliases = append(aliases, &a)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
 	}
 	return aliases, nil
 }
@@ -710,6 +731,9 @@ func (s *DuckDBGraphStore) ListNodes(ctx context.Context, nodeType string, limit
 		}
 		nodes = append(nodes, &node)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
 	return nodes, nil
 }
 
@@ -747,6 +771,9 @@ func (s *DuckDBGraphStore) GetEdges(ctx context.Context, nodeID string, edgeType
 			log.Warn().Err(err).Msg("failed to unmarshal edge attributes")
 		}
 		edges = append(edges, &edge)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
 	}
 	return edges, nil
 }
@@ -858,6 +885,9 @@ func (s *DuckDBGraphStore) Traverse(ctx context.Context, startNodeID string, opt
 			CreatedAt:  createdAt,
 		})
 	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
 
 	return &models.GraphView{Nodes: resultNodes, Edges: resultEdges}, nil
 }
@@ -920,6 +950,9 @@ func (s *DuckDBIncidentStore) List(ctx context.Context, limit, offset int) ([]*m
 			log.Warn().Err(err).Msg("failed to unmarshal incident affected services")
 		}
 		incidents = append(incidents, &inc)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
 	}
 	return incidents, nil
 }
@@ -1012,6 +1045,9 @@ func (s *DuckDBSignatureStore) List(ctx context.Context, limit int) ([]*models.I
 		}
 		sigs = append(sigs, &sig)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
 	return sigs, nil
 }
 
@@ -1048,6 +1084,9 @@ func (s *DuckDBSignatureStore) FindByBehavioralHash(ctx context.Context, hash st
 			log.Warn().Err(err).Msg("failed to unmarshal signature feature weights")
 		}
 		sigs = append(sigs, &sig)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
 	}
 	return sigs, nil
 }
@@ -1125,6 +1164,9 @@ func (s *DuckDBSignatureStore) FindSimilar(ctx context.Context, sig *models.Inci
 				ResolutionTime: candidate.AvgResolutionTime,
 			})
 		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
 	}
 
 	if len(results) > limit {
@@ -1247,6 +1289,9 @@ func (s *DuckDBSignatureStore) findSimilarSQL(ctx context.Context, sig *models.I
 		}
 		results = append(results, &candidate)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
 	return results, nil
 }
 
@@ -1295,6 +1340,9 @@ func (s *DuckDBRemediationStore) ListByIncident(ctx context.Context, incidentID 
 		}
 		remediations = append(remediations, &rem)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
 	return remediations, nil
 }
 
@@ -1330,6 +1378,9 @@ func (s *DuckDBRemediationStore) ListBySignature(ctx context.Context, signatureI
 		}
 		stats = append(stats, &s)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
 	return stats, nil
 }
 
@@ -1359,6 +1410,9 @@ func (s *DuckDBFeedbackStore) GetByRemediation(ctx context.Context, remediationI
 			return nil, err
 		}
 		feedbacks = append(feedbacks, &fb)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
 	}
 	return feedbacks, nil
 }
