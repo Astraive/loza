@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -14,6 +15,8 @@ import (
 	"github.com/astraive/loza/collector/internal/auth"
 	lozav1 "github.com/astraive/loza/gen/go/loza/core"
 	"github.com/gorilla/websocket"
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
@@ -170,6 +173,47 @@ func TestHTTPServerIngestAuthFailsClosedWithEmptyConfiguredSecret(t *testing.T) 
 			}
 		})
 	}
+}
+
+// errReader simulates a failed body read (e.g. the scanner/reader errors
+// described in MASS-0215) so the ingest parse-error path can be exercised.
+type errReader struct{ err error }
+
+func (e errReader) Read(_ []byte) (int, error) { return 0, e.err }
+func (e errReader) Close() error               { return nil }
+
+func TestHTTPServerIngestDoesNotLeakInternalError(t *testing.T) {
+	cfg := HTTPConfig{
+		IngestPath:   "/ingest",
+		MaxBodyBytes: 1024,
+		AuthEnabled:  false,
+	}
+	srv := NewHTTPServer(cfg, &mockState{ready: true, healthy: true})
+
+	// Capture the server-side log to confirm the internal error is logged
+	// instead of being returned to the unauthenticated caller.
+	originalLogger := log.Logger
+	var logs bytes.Buffer
+	log.Logger = zerolog.New(&logs)
+	t.Cleanup(func() { log.Logger = originalLogger })
+
+	const internalDetail = "reader failure: internal detail"
+	req := httptest.NewRequest(http.MethodPost, "/ingest", nil)
+	req.Body = errReader{err: errors.New(internalDetail)}
+	req.ContentLength = -1 // unknown length, so the size pre-check is skipped
+	rec := httptest.NewRecorder()
+
+	srv.handleIngest(rec, req)
+
+	res := rec.Result()
+	defer res.Body.Close()
+	body, err := io.ReadAll(res.Body)
+	require.NoError(t, err)
+
+	assert.Equal(t, http.StatusBadRequest, res.StatusCode)
+	assert.Equal(t, "Bad Request\n", string(body))
+	assert.NotContains(t, string(body), internalDetail)
+	assert.Contains(t, logs.String(), internalDetail, "internal error should be logged server-side")
 }
 
 func TestHTTPServerHealthReady(t *testing.T) {
