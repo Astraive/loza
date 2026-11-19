@@ -689,9 +689,18 @@ pub fn Map(key: impl Into<String>, value: serde_json::Map<String, Value>) -> Att
 pub fn Enum<E: Into<String>>(
     key: impl Into<String>,
     value: impl Into<String>,
-    _allowed: Vec<E>,
+    allowed: Vec<E>,
 ) -> Attr {
-    Attr::new(key.into(), Value::String(value.into()))
+    let key = key.into();
+    let value = value.into();
+    if !allowed.is_empty() {
+        let allowed: Vec<String> = allowed.into_iter().map(Into::into).collect();
+        assert!(
+            allowed.iter().any(|candidate| candidate == &value),
+            "enum value {value:?} for {key:?} is not one of {allowed:?}"
+        );
+    }
+    Attr::new(key, Value::String(value))
 }
 
 pub fn ID(key: impl Into<String>, value: impl Into<String>) -> Attr {
