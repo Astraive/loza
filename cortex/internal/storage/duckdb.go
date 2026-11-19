@@ -1212,9 +1212,6 @@ func computeSimilarity(a, b *models.IncidentSignature) float64 {
 
 	intersection := 0
 	unionKeys := make(map[string]struct{}, len(aSymptoms)+len(bSymptoms))
-	for k := range bSymptoms {
-		bSymptoms[k] = true
-	}
 	for k := range aSymptoms {
 		unionKeys[k] = struct{}{}
 	}
