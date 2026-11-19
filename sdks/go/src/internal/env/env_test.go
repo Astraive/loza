@@ -26,9 +26,9 @@ func TestGetBoolParsesValueAndFallsBack(t *testing.T) {
 		t.Fatal("GetBool false = true")
 	}
 	for _, tc := range []struct {
-		name string
+		name  string
 		value string
-		def  bool
+		def   bool
 	}{
 		{name: "missing", def: true},
 		{name: "empty", value: "", def: true},
@@ -52,9 +52,9 @@ func TestGetIntParsesValueAndFallsBack(t *testing.T) {
 		t.Fatalf("GetInt configured = %d, want 42", got)
 	}
 	for _, tc := range []struct {
-		name string
+		name  string
 		value string
-		def  int
+		def   int
 	}{
 		{name: "missing", def: 7},
 		{name: "empty", value: "", def: 8},
@@ -68,6 +68,29 @@ func TestGetIntParsesValueAndFallsBack(t *testing.T) {
 			}
 			if got := GetInt("LOZA_ENV_INT_CASE", tc.def); got != tc.def {
 				t.Fatalf("GetInt fallback = %d, want %d", got, tc.def)
+			}
+		})
+	}
+}
+
+// TestMalformedValuesFallBackToDefault documents the contract now stated on
+// GetBool and GetInt: a set but unparseable value is treated like an unset one
+// and silently yields def. A typo in configuration is therefore masked, which
+// callers must account for when they need to detect misconfiguration.
+func TestMalformedValuesFallBackToDefault(t *testing.T) {
+	for _, value := range []string{"ture", "yes", "2"} {
+		t.Run("bool/"+value, func(t *testing.T) {
+			t.Setenv("LOZA_ENV_BOOL_MALFORMED", value)
+			if got := GetBool("LOZA_ENV_BOOL_MALFORMED", true); !got {
+				t.Fatalf("GetBool(%q, true) = %v, want true", value, got)
+			}
+		})
+	}
+	for _, value := range []string{"4a2", "3.14", "not-int"} {
+		t.Run("int/"+value, func(t *testing.T) {
+			t.Setenv("LOZA_ENV_INT_MALFORMED", value)
+			if got := GetInt("LOZA_ENV_INT_MALFORMED", 7); got != 7 {
+				t.Fatalf("GetInt(%q, 7) = %d, want 7", value, got)
 			}
 		})
 	}
