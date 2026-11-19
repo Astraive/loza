@@ -71,6 +71,11 @@ func NewGRPCServer(cfg *config.Config, stor storage.Storage, redactCfg redaction
 	}
 }
 
+// RegisterServer registers the Cortex service implementation on the supplied
+// gRPC server. Serving is intentionally handled externally by the server
+// bootstrap in cmd/server: that code owns the listener, calls Server.Serve,
+// applies TLS options, and performs graceful shutdown. This package does not
+// create a listener or start a serve loop on its own.
 func (s *GRPCServer) RegisterServer(server *grpc.Server) {
 	lozav1.RegisterCortexServiceServer(server, s)
 }
@@ -458,11 +463,6 @@ func (s *GRPCServer) StreamEvents(req *lozav1.StreamEventsRequest, stream lozav1
 			return nil
 		}
 	}
-}
-
-func (s *GRPCServer) StartGRPC(addr string, server *grpc.Server) error {
-	log.Info().Str("addr", addr).Msg("Starting Cortex gRPC server")
-	return nil
 }
 
 // modelToProtoEvent converts a models.Event to a proto Event for streaming.
