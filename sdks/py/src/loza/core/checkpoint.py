@@ -16,3 +16,6 @@ class Checkpoint:
         result["name"] = self.name
         result["at_ms"] = self.at_ms
         return result
+        # Reserved checkpoint fields must win over user attrs so that arbitrary
+        # metadata can never impersonate or replace the real name/timestamp.
+        return {**self.attrs, "name": self.name, "at_ms": self.at_ms}

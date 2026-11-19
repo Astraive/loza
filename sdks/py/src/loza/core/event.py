@@ -126,6 +126,11 @@ class EventContext:
         checkpoint: dict[str, object] = dict(attrs)
         checkpoint["name"] = name
         checkpoint["at_ms"] = self.duration_ms()
+        checkpoint = {
+            **attrs,
+            "name": name,
+            "at_ms": self.duration_ms(),
+        }
         self.checkpoints.append(checkpoint)
         if callable(self._checkpoint_writer):
             self._checkpoint_writer(self, dict(checkpoint))
