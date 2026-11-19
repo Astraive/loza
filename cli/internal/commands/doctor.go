@@ -39,13 +39,13 @@ func DoctorCommand(ctx context.Context, cfg config.Config, args []string) error 
 			return err
 		}},
 		{"collector health", func() error {
-			return client.CheckHealth(cfg.CollectorURL)
+			return client.CheckHealthContext(ctx, cfg.CollectorURL)
 		}},
 		{"collector ready", func() error {
-			return client.CheckReady(cfg.CollectorURL)
+			return client.CheckReadyContext(ctx, cfg.CollectorURL)
 		}},
 		{"collector status", func() error {
-			_, err := client.FetchStatus(cfg.CollectorURL)
+			_, err := client.FetchStatusContext(ctx, cfg.CollectorURL)
 			return err
 		}},
 		{"test event accepted", func() error {
@@ -68,7 +68,7 @@ func DoctorCommand(ctx context.Context, cfg config.Config, args []string) error 
 			if err != nil {
 				return err
 			}
-			return client.PostIngest(cfg.CollectorURL, "application/json", raw)
+			return client.PostIngestContext(ctx, cfg.CollectorURL, "application/json", raw)
 		}},
 		{"duckdb", func() error {
 			db, err := sql.Open("duckdb", cfg.DuckDBPath)
@@ -101,7 +101,7 @@ func DoctorCommand(ctx context.Context, cfg config.Config, args []string) error 
 			}{
 				name: "cortex health",
 				fn: func() error {
-					return client.CheckCortexHealth(getCortexURL(cfg))
+					return client.CheckCortexHealthContext(ctx, getCortexURL(cfg))
 				},
 			},
 			struct {
@@ -110,7 +110,7 @@ func DoctorCommand(ctx context.Context, cfg config.Config, args []string) error 
 			}{
 				name: "cortex ready",
 				fn: func() error {
-					return client.CheckCortexReady(getCortexURL(cfg))
+					return client.CheckCortexReadyContext(ctx, getCortexURL(cfg))
 				},
 			},
 		)
@@ -123,7 +123,7 @@ func DoctorCommand(ctx context.Context, cfg config.Config, args []string) error 
 		}{
 			name: "metrics",
 			fn: func() error {
-				_, err := client.FetchMetrics(cfg.CollectorURL)
+				_, err := client.FetchMetricsContext(ctx, cfg.CollectorURL)
 				return err
 			},
 		})
@@ -134,7 +134,7 @@ func DoctorCommand(ctx context.Context, cfg config.Config, args []string) error 
 			}{
 				name: "cortex metrics",
 				fn: func() error {
-					_, err := client.FetchCortexMetrics(getCortexURL(cfg))
+					_, err := client.FetchCortexMetricsContext(ctx, getCortexURL(cfg))
 					return err
 				},
 			})
@@ -143,6 +143,9 @@ func DoctorCommand(ctx context.Context, cfg config.Config, args []string) error 
 
 	allPassed := true
 	for _, check := range checks {
+		if err := ctx.Err(); err != nil {
+			return fmt.Errorf("doctor canceled: %w", err)
+		}
 		if err := check.fn(); err != nil {
 			fmt.Printf("  FAIL  %s: %v\n", check.name, err)
 			allPassed = false

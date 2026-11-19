@@ -41,26 +41,41 @@ func RunLoadgenCommand(ctx context.Context, collectorRepoPath string, args []str
 
 // CheckHealth checks the collector health endpoint.
 func CheckHealth(baseURL string) error {
-	if err := expectStatus(strings.TrimRight(baseURL, "/")+"/health", http.StatusOK); err == nil {
+	return CheckHealthContext(context.Background(), baseURL)
+}
+
+// CheckHealthContext checks the collector health endpoint, honoring ctx.
+func CheckHealthContext(ctx context.Context, baseURL string) error {
+	if err := expectStatusContext(ctx, strings.TrimRight(baseURL, "/")+"/health", http.StatusOK); err == nil {
 		return nil
 	}
-	return expectStatus(strings.TrimRight(baseURL, "/")+"/healthz", http.StatusOK)
+	return expectStatusContext(ctx, strings.TrimRight(baseURL, "/")+"/healthz", http.StatusOK)
 }
 
 // CheckReady checks the collector ready endpoint.
 func CheckReady(baseURL string) error {
-	if err := expectStatus(strings.TrimRight(baseURL, "/")+"/ready", http.StatusOK); err == nil {
+	return CheckReadyContext(context.Background(), baseURL)
+}
+
+// CheckReadyContext checks the collector ready endpoint, honoring ctx.
+func CheckReadyContext(ctx context.Context, baseURL string) error {
+	if err := expectStatusContext(ctx, strings.TrimRight(baseURL, "/")+"/ready", http.StatusOK); err == nil {
 		return nil
 	}
-	return expectStatus(strings.TrimRight(baseURL, "/")+"/readyz", http.StatusOK)
+	return expectStatusContext(ctx, strings.TrimRight(baseURL, "/")+"/readyz", http.StatusOK)
 }
 
 // PostIngest posts event data to the collector ingest endpoint.
 func PostIngest(baseURL, contentType string, payload []byte) error {
+	return PostIngestContext(context.Background(), baseURL, contentType, payload)
+}
+
+// PostIngestContext posts event data to the collector ingest endpoint, honoring ctx.
+func PostIngestContext(ctx context.Context, baseURL, contentType string, payload []byte) error {
 	if err := validateIngestPayload(contentType, payload); err != nil {
 		return err
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), defaultTimeout)
+	ctx, cancel := context.WithTimeout(ctx, defaultTimeout)
 	defer cancel()
 	var lastErr error
 	for attempt := 0; attempt < 3; attempt++ {
@@ -75,7 +90,9 @@ func PostIngest(baseURL, contentType string, payload []byte) error {
 		if err != nil {
 			lastErr = err
 			if attempt < 2 {
-				time.Sleep(backoffDelay(attempt, ""))
+				if sleepErr := sleepContext(ctx, backoffDelay(attempt, "")); sleepErr != nil {
+					return sleepErr
+				}
 				continue
 			}
 			return err
@@ -86,7 +103,9 @@ func PostIngest(baseURL, contentType string, payload []byte) error {
 		if readErr != nil {
 			lastErr = readErr
 			if attempt < 2 {
-				time.Sleep(backoffDelay(attempt, ""))
+				if sleepErr := sleepContext(ctx, backoffDelay(attempt, "")); sleepErr != nil {
+					return sleepErr
+				}
 				continue
 			}
 			return readErr
@@ -99,7 +118,9 @@ func PostIngest(baseURL, contentType string, payload []byte) error {
 		case "retryable":
 			lastErr = fmt.Errorf("collector reported retryable response: %s", reason)
 			if attempt < 2 {
-				time.Sleep(backoffDelay(attempt, resp.Header.Get("Retry-After")))
+				if sleepErr := sleepContext(ctx, backoffDelay(attempt, resp.Header.Get("Retry-After"))); sleepErr != nil {
+					return sleepErr
+				}
 				continue
 			}
 			return lastErr
@@ -115,7 +136,12 @@ func PostIngest(baseURL, contentType string, payload []byte) error {
 
 // FetchStatus fetches the collector status endpoint.
 func FetchStatus(baseURL string) ([]byte, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), defaultTimeout)
+	return FetchStatusContext(context.Background(), baseURL)
+}
+
+// FetchStatusContext fetches the collector status endpoint, honoring ctx.
+func FetchStatusContext(ctx context.Context, baseURL string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(ctx, defaultTimeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(baseURL, "/")+"/status", nil)
 	if err != nil {
@@ -136,7 +162,12 @@ func FetchStatus(baseURL string) ([]byte, error) {
 
 // FetchMetrics fetches Prometheus metrics from the collector.
 func FetchMetrics(baseURL string) ([]byte, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), defaultTimeout)
+	return FetchMetricsContext(context.Background(), baseURL)
+}
+
+// FetchMetricsContext fetches Prometheus metrics from the collector, honoring ctx.
+func FetchMetricsContext(ctx context.Context, baseURL string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(ctx, defaultTimeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(baseURL, "/")+"/metrics", nil)
 	if err != nil {
@@ -406,7 +437,11 @@ func WatchStream(ctx context.Context, baseURL string, filters map[string]string)
 }
 
 func expectStatus(url string, want int) error {
-	ctx, cancel := context.WithTimeout(context.Background(), defaultTimeout)
+	return expectStatusContext(context.Background(), url, want)
+}
+
+func expectStatusContext(ctx context.Context, url string, want int) error {
+	ctx, cancel := context.WithTimeout(ctx, defaultTimeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
@@ -426,6 +461,21 @@ func expectStatus(url string, want int) error {
 
 func clientWithTimeout(timeout time.Duration) *http.Client {
 	return &http.Client{Timeout: timeout}
+}
+
+// sleepContext waits for d while remaining responsive to ctx cancellation.
+func sleepContext(ctx context.Context, d time.Duration) error {
+	if d <= 0 {
+		return ctx.Err()
+	}
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 func getJSON(baseURL, path string) ([]byte, error) {
