@@ -121,4 +121,12 @@ var (
 			Help: "Number of times the collector bridge had to wait because the live tail buffer was full",
 		},
 	)
+
+	EventBusDroppedEvents = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "cortex_eventbus_dropped_events_total",
+			Help: "Total number of events dropped because a subscriber buffer was full",
+		},
+		[]string{"subscription"},
+	)
 )

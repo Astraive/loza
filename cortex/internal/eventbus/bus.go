@@ -3,7 +3,9 @@ package eventbus
 import (
 	"sync"
 
+	"github.com/astraive/loza/cortex/internal/metrics"
 	"github.com/astraive/loza/cortex/internal/models"
+	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 )
 
@@ -27,6 +29,9 @@ func subscriptionKey(filter string) string {
 	}
 	return incidentKeyPrefix + filter
 }
+// dropLog samples drop warnings so a slow subscriber cannot flood the logs;
+// every drop is still counted in metrics.EventBusDroppedEvents.
+var dropLog = log.Logger.Sample(&zerolog.BasicSampler{N: 100})
 
 // EventBus provides in-memory pub/sub for events.
 // Used by the processor to publish ingested events and by
@@ -95,11 +100,16 @@ func (b *EventBus) Publish(event *models.Event) {
 	// same subscription to be delivered the event twice.
 	for _, ch := range b.subscribers[wildcardKey] {
 		deliver(ch, event)
+	// Send to wildcard subscribers
+	for _, ch := range b.subscribers[""] {
+		b.deliver(ch, event, "wildcard", "")
 	}
 
 	if event.IncidentID != "" {
 		for _, ch := range b.subscribers[incidentKeyPrefix+event.IncidentID] {
 			deliver(ch, event)
+		for _, ch := range b.subscribers[event.IncidentID] {
+			b.deliver(ch, event, "incident", event.IncidentID)
 		}
 	}
 
@@ -116,6 +126,25 @@ func deliver(ch chan *models.Event, event *models.Event) {
 	select {
 	case ch <- event:
 	default:
+		for _, ch := range b.subscribers[event.Service] {
+			b.deliver(ch, event, "service", event.Service)
+		}
+	}
+}
+
+// deliver performs the non-blocking send to a subscriber. A full buffer is no
+// longer a silent failure: it increments a counter and emits a sampled warning
+// so operators can detect and attribute lost events.
+func (b *EventBus) deliver(ch chan *models.Event, event *models.Event, subscription, filter string) {
+	select {
+	case ch <- event:
+	default:
+		metrics.EventBusDroppedEvents.WithLabelValues(subscription).Inc()
+		dropLog.Warn().
+			Str("subscription", subscription).
+			Str("filter", filter).
+			Str("event_id", event.ID).
+			Msg("EventBus: subscriber buffer full, dropping event")
 	}
 }
 
