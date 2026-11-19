@@ -21,16 +21,25 @@ def normalize_status(status: str) -> str:
     return str(status).strip().lower()
 
 
+class ManifestLoadError(RuntimeError):
+    """Raised when a manifest exists but cannot be read or parsed."""
+
+
 def load_manifest(repo_root: Path, sdk: str) -> dict | None:
-    """Load the parity manifest for a given SDK."""
+    """Load the parity manifest for a given SDK.
+
+    Returns None only when the manifest is absent. If the file exists but is
+    malformed or unreadable, raises ManifestLoadError naming the file so a
+    broken manifest is never mistaken for a missing SDK.
+    """
     manifest_path = repo_root / "sdks" / sdk / "docs" / "sdk-parity-manifest.json"
     if not manifest_path.exists():
         return None
     try:
         with open(manifest_path) as f:
             return json.load(f)
-    except (json.JSONDecodeError, OSError):
-        return None
+    except (json.JSONDecodeError, OSError) as exc:
+        raise ManifestLoadError(f"could not load parity manifest {manifest_path}: {exc}") from exc
 
 
 def collect_features(manifests: dict[str, dict | None]) -> list[str]:
@@ -154,7 +163,11 @@ def main():
 
     manifests = {}
     for sdk in SDKS:
-        manifests[sdk] = load_manifest(repo_root, sdk)
+        try:
+            manifests[sdk] = load_manifest(repo_root, sdk)
+        except ManifestLoadError as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            raise SystemExit(1) from exc
 
     # Check if any manifests were found
     found = sum(1 for m in manifests.values() if m is not None)
