@@ -116,8 +116,27 @@ func (w *responseWriter) readFrom(r io.Reader) (int64, error) {
 			w.wroteHeader = true
 		}
 		return n, err
+	rf, ok := w.ResponseWriter.(io.ReaderFrom)
+	if !ok {
+		// Unreachable in production: newResponseWriter only returns a
+		// responseWriter*ReaderFrom wrapper when the underlying ResponseWriter
+		// implements io.ReaderFrom, so this assertion always succeeds for the
+		// wrapped value exposed to callers. The fallback exists solely for direct
+		// internal callers that construct a responseWriter around a plain writer.
+		return io.Copy(w, r)
 	}
-	return io.Copy(w, r)
+
+	cr := &countingReader{r: r}
+	n, err := rf.ReadFrom(cr)
+	w.bytes += int(cr.n)
+	if !w.wroteHeader {
+		w.wroteHeader = true
+	}
+	if n > cr.n {
+		// Defensive: prefer underlying returned byte count when larger.
+		w.bytes += int(n - cr.n)
+	}
+	return n, err
 }
 
 type responseWriterFlusher struct{ *responseWriter }

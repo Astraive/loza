@@ -162,5 +162,35 @@ func TestResponseWriterReadFromFallsBackToSourceCountWhenWriterReportsZero(t *te
 	}
 	if base.bytes != 10 {
 		t.Fatalf("response bytes = %d, want 10 (fallback to source count)", base.bytes)
+// TestReadFromFallbackReachability pins down the contract documented on
+// responseWriter.readFrom: the io.Copy fallback is unreachable in production
+// because newResponseWriter only exposes ReadFrom for underlying writers that
+// implement io.ReaderFrom. It remains available only to direct internal calls.
+func TestReadFromFallbackReachability(t *testing.T) {
+	const payload = "fallback"
+
+	// Production path: a plain ResponseWriter never yields an io.ReaderFrom
+	// wrapper, so the fallback branch cannot be reached through the public value.
+	plain := newBaseTestWriter()
+	wrapped, _ := newResponseWriter(plain)
+	if _, ok := wrapped.(io.ReaderFrom); ok {
+		t.Fatal("newResponseWriter exposed io.ReaderFrom for a plain ResponseWriter")
+	}
+
+	// Direct internal call: the documented fallback copies via Write and keeps
+	// byte accounting and header state correct.
+	direct := &responseWriter{ResponseWriter: newBaseTestWriter(), statusCode: http.StatusOK}
+	n, err := direct.readFrom(strings.NewReader(payload))
+	if err != nil {
+		t.Fatalf("fallback readFrom error = %v", err)
+	}
+	if n != int64(len(payload)) {
+		t.Fatalf("fallback readFrom n = %d, want %d", n, len(payload))
+	}
+	if direct.bytes != len(payload) {
+		t.Fatalf("fallback readFrom bytes = %d, want %d", direct.bytes, len(payload))
+	}
+	if !direct.wroteHeader {
+		t.Fatal("fallback readFrom did not mark the header as written")
 	}
 }
