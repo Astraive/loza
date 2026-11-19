@@ -38,5 +38,6 @@ func readFileBytes(path string) ([]byte, error) {
 }
 
 func writeFileBytes(path string, data []byte) error {
-	return os.WriteFile(path, data, 0o644)
+	// Export output may contain sensitive data; keep it owner-only.
+	return os.WriteFile(path, data, 0o600)
 }
