@@ -6,6 +6,8 @@ pub fn middleware_name() -> &'static str {
 pub mod axum_impl {
     use crate::{Logger, Params};
     use axum::extract::{MatchedPath, Request};
+    use crate::{EventContext, LozaError, Logger, Params};
+    use axum::extract::Request;
     use axum::middleware::Next;
     use axum::response::Response;
     use std::sync::Arc;
@@ -55,6 +57,24 @@ pub mod axum_impl {
         }
     }
 
+    /// Finish and emit a started event, surfacing the first failure to the caller.
+    ///
+    /// Both operations are attempted even if finishing fails, matching the previous
+    /// behaviour. Keeping this in a helper makes the error path directly testable;
+    /// the middleware cannot fail the HTTP response for a telemetry error, so it
+    /// logs the returned error as a warning instead of discarding it.
+    pub fn finish_and_emit(
+        logger: &Logger,
+        ctx: &mut EventContext,
+        outcome: &str,
+    ) -> Result<(), LozaError> {
+        let finish_result = logger.finish(ctx, outcome);
+        let emit_result = logger.emit(ctx);
+        finish_result?;
+        emit_result?;
+        Ok(())
+    }
+
     pub async fn loza_middleware(
         logger: Arc<Logger>,
         service_name: String,
@@ -99,6 +119,11 @@ pub mod axum_impl {
         append_response_attrs(&logger, &mut ctx, status, elapsed as i64);
         let _ = logger.finish(&mut ctx, outcome);
         let _ = logger.emit(&ctx);
+        crate::Append(&mut ctx, crate::Int("status_code", status as i64));
+        crate::Append(&mut ctx, crate::Int("duration_ms", elapsed as i64));
+        if let Err(err) = finish_and_emit(&logger, &mut ctx, outcome) {
+            tracing::warn!(error = %err, "loza-axum: failed to record http.request event");
+        }
 
         res
     }
@@ -150,6 +175,37 @@ pub mod axum_impl {
                 ctx.attrs.get("duration_ms").and_then(|v| v.as_i64()),
                 Some(5),
                 "duration_ms must be appended via the configured logger"
+        use crate::Config;
+
+        fn test_logger() -> Logger {
+            Logger::new(Config::test("axum-middleware"))
+        }
+
+        #[test]
+        fn finish_and_emit_surfaces_finish_failure() {
+            let logger = test_logger();
+            let mut ctx = logger.start_event(Params::new("http.request").with_kind("http"));
+            // Finish once so the helper's finish attempt fails.
+            assert!(logger.finish(&mut ctx, "success").is_ok());
+
+            let err = finish_and_emit(&logger, &mut ctx, "success").unwrap_err();
+            assert!(
+                matches!(err, LozaError::EventAlreadyFinished { .. }),
+                "expected the finish failure to be surfaced, got {err}"
+            );
+        }
+
+        #[test]
+        fn finish_and_emit_surfaces_emit_failure() {
+            let logger = test_logger();
+            let mut ctx = logger.start_event(Params::new("http.request").with_kind("http"));
+            // A pending error makes emit fail validation while finish still succeeds.
+            ctx.note_error("injected emit failure");
+
+            let err = finish_and_emit(&logger, &mut ctx, "success").unwrap_err();
+            assert!(
+                matches!(err, LozaError::Validation(_)),
+                "expected the emit failure to be surfaced, got {err}"
             );
         }
     }
