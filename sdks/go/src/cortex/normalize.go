@@ -1,6 +1,7 @@
 package cortex
 
 import (
+	"math"
 	"strings"
 	"time"
 )
@@ -12,7 +13,7 @@ func NormalizeIncidentContext(ctx *IncidentContext) {
 	}
 	ctx.IncidentID = strings.TrimSpace(ctx.IncidentID)
 	ctx.Timestamp = normalizeTimestamp(ctx.Timestamp)
-	if ctx.Confidence < 0 {
+	if math.IsNaN(ctx.Confidence) || ctx.Confidence < 0 {
 		ctx.Confidence = 0
 	}
 	if ctx.Confidence > 1 {
