@@ -41,7 +41,18 @@ class Subcheck:
     id: str
     description: str
     passed: bool = False
+    skipped: bool = False
     detail: str = ""
+
+    def skip(self, reason: str = "SKIPPED") -> None:
+        """Mark this check as skipped (a prerequisite, e.g. a fixture, is unavailable).
+
+        A skipped check is not a conformance failure: neither the subcheck nor
+        its parent category should be reported as FAIL because of it.
+        """
+        self.skipped = True
+        self.passed = False
+        self.detail = reason
 
 
 @dataclass
@@ -55,12 +66,18 @@ class MainCheck:
         return sum(1 for s in self.subchecks if s.passed)
 
     @property
+    def skipped(self) -> int:
+        return sum(1 for s in self.subchecks if s.skipped)
+
+    @property
     def total(self) -> int:
         return len(self.subchecks)
 
     @property
     def all_passed(self) -> bool:
-        return self.passed == self.total
+        # Skipped subchecks did not run because a prerequisite was unavailable;
+        # they are not conformance failures and must not fail the category.
+        return all(s.passed or s.skipped for s in self.subchecks)
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -90,7 +107,12 @@ def _check(cat_id: str, num: int, desc: str, fn) -> Subcheck:
     sc = Subcheck(id=f"{cat_id}.{num:02d}", description=desc)
     try:
         fn(sc)
-        if sc.detail == "":
+        if sc.skipped:
+            # An explicit skip is not a pass and, crucially, not a failure.
+            sc.passed = False
+            if not sc.detail:
+                sc.detail = "SKIPPED"
+        elif sc.detail == "":
             sc.passed = True
             sc.detail = "OK"
     except AssertionError as e:
@@ -445,7 +467,7 @@ def check_wire_format() -> MainCheck:
     def c09(sc):
         resp_data = _load_fixture_response("accepted_clean")
         if resp_data is None:
-            sc.detail = "fixture not found"
+            sc.skip("fixture not found")
             return
         resp = spec_contract.parse_collector_response(resp_data)
         assert resp.status == "accepted", f"expected accepted, got {resp.status}"
@@ -454,7 +476,7 @@ def check_wire_format() -> MainCheck:
     def c10(sc):
         resp_data = _load_fixture_response("partial_invalid")
         if resp_data is None:
-            sc.detail = "fixture not found"
+            sc.skip("fixture not found")
             return
         resp = spec_contract.parse_collector_response(resp_data)
         assert resp.status == "partial", f"expected partial, got {resp.status}"
@@ -475,7 +497,7 @@ def check_wire_format() -> MainCheck:
         # Check validation modes via the contract
         modes = LOZA_CONTRACT.get("validation_modes", {})
         if not modes:
-            sc.detail = "validation_modes not in contract"
+            sc.skip("validation_modes not in contract")
             return
         for mode in ("off", "warn", "enforce", "quarantine"):
             assert mode in modes, f"validation mode {mode} missing from contract"
@@ -678,7 +700,7 @@ def check_delivery() -> MainCheck:
     def c05(sc):
         resp_data = _load_fixture_response("accepted_clean")
         if resp_data is None:
-            sc.detail = "fixture not found"
+            sc.skip("fixture not found")
             return
         resp = spec_contract.parse_collector_response(resp_data)
         assert resp.status == "accepted", f"expected accepted, got {resp.status}"
@@ -687,7 +709,7 @@ def check_delivery() -> MainCheck:
     def c06(sc):
         resp_data = _load_fixture_response("retryable_rate_limited")
         if resp_data is None:
-            sc.detail = "fixture not found"
+            sc.skip("fixture not found")
             return
         resp = spec_contract.parse_collector_response(resp_data)
         assert resp.status in ("rejected", "partial"), f"expected rejected/partial, got {resp.status}"
@@ -863,7 +885,7 @@ def check_collector() -> MainCheck:
     def c01(sc):
         resp_data = _load_fixture_response("accepted_clean")
         if resp_data is None:
-            sc.detail = "fixture not found"
+            sc.skip("fixture not found")
             return
         resp = spec_contract.parse_collector_response(resp_data)
         assert resp.request_id.startswith("ing_"), f"expected ing_ prefix, got {resp.request_id}"
@@ -872,7 +894,7 @@ def check_collector() -> MainCheck:
     def c02(sc):
         resp_data = _load_fixture_response("accepted_duplicate")
         if resp_data is None:
-            sc.detail = "fixture not found"
+            sc.skip("fixture not found")
             return
         resp = spec_contract.parse_collector_response(resp_data)
         assert resp.status == "accepted", f"expected accepted, got {resp.status}"
@@ -880,7 +902,7 @@ def check_collector() -> MainCheck:
     def c03(sc):
         resp_data = _load_fixture_response("partial_invalid")
         if resp_data is None:
-            sc.detail = "fixture not found"
+            sc.skip("fixture not found")
             return
         resp = spec_contract.parse_collector_response(resp_data)
         assert resp.status == "partial", f"expected partial, got {resp.status}"
@@ -888,7 +910,7 @@ def check_collector() -> MainCheck:
     def c04(sc):
         resp_data = _load_fixture_response("retryable_rate_limited")
         if resp_data is None:
-            sc.detail = "fixture not found"
+            sc.skip("fixture not found")
             return
         resp = spec_contract.parse_collector_response(resp_data)
         assert resp.status in ("rejected", "partial"), f"expected rejected/partial, got {resp.status}"
@@ -896,7 +918,7 @@ def check_collector() -> MainCheck:
     def c05(sc):
         fixture = LOZA_SPEC_ROOT / "fixtures" / "ingest" / "single_event_json.json"
         if not fixture.exists():
-            sc.detail = f"fixture not found: {fixture}"
+            sc.skip(f"fixture not found: {fixture}")
             return
         data = json.loads(fixture.read_text())
         body = data.get("body", data)
@@ -908,7 +930,7 @@ def check_collector() -> MainCheck:
     def c06(sc):
         fixture = LOZA_SPEC_ROOT / "fixtures" / "ingest" / "wrapped_batch_json.json"
         if not fixture.exists():
-            sc.detail = f"fixture not found: {fixture}"
+            sc.skip(f"fixture not found: {fixture}")
             return
         data = json.loads(fixture.read_text())
         body = data.get("body", data)
@@ -1351,10 +1373,11 @@ def print_report(results: list[MainCheck], verbose: bool = False) -> None:
 
     for mc in results:
         status = "PASS" if mc.all_passed else "FAIL"
-        print(f"[{mc.id}] {mc.name} -- {mc.passed}/{mc.total} passed  [{status}]")
-        if verbose or not mc.all_passed:
+        skip_note = f" ({mc.skipped} skipped)" if mc.skipped else ""
+        print(f"[{mc.id}] {mc.name} -- {mc.passed}/{mc.total} passed{skip_note}  [{status}]")
+        if verbose or not mc.all_passed or mc.skipped:
             for sc in mc.subchecks:
-                marker = "PASS" if sc.passed else "FAIL"
+                marker = "SKIP" if sc.skipped else ("PASS" if sc.passed else "FAIL")
                 print(f"  {sc.id}  {marker}  {sc.description}")
                 if not sc.passed or verbose:
                     print(f"         {sc.detail}")
@@ -1373,6 +1396,7 @@ def print_report(results: list[MainCheck], verbose: bool = False) -> None:
 def print_json_report(results: list[MainCheck]) -> None:
     report = {
         "total_passed": sum(mc.passed for mc in results),
+        "total_skipped": sum(mc.skipped for mc in results),
         "total_checks": sum(mc.total for mc in results),
         "categories_passed": sum(1 for mc in results if mc.all_passed),
         "categories_total": len(results),
@@ -1383,6 +1407,7 @@ def print_json_report(results: list[MainCheck]) -> None:
             "id": mc.id,
             "name": mc.name,
             "passed": mc.passed,
+            "skipped": mc.skipped,
             "total": mc.total,
             "all_passed": mc.all_passed,
             "subchecks": [asdict(sc) for sc in mc.subchecks],
