@@ -470,7 +470,12 @@ impl Config {
     }
 
     pub fn disabled() -> Self {
-        Self::base()
+        let mut cfg = Self::base();
+        // A disabled config must not emit events anywhere. The base preset uses
+        // a Stdout sink, so override it with an explicit no-op (matching the
+        // other SDKs' Disabled() presets).
+        cfg.sinks = vec![SinkConfig::Noop];
+        cfg
     }
 
     pub fn from_env() -> Self {
