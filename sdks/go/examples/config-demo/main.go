@@ -132,8 +132,6 @@ func main() {
 		fmt.Printf("  Error creating logger: %v\n", err)
 		return
 	}
-	defer logger.Shutdown(context.Background())
-
 	logger.Info("Configuration demo completed successfully")
 	fmt.Println("  ✓ Logger created and event emitted")
 	fmt.Println()
@@ -146,6 +144,9 @@ func main() {
 		fmt.Println("  ✓ Flush completed successfully")
 	}
 
+	// Shutdown is called exactly once: it flushes and closes every sink, and
+	// sinks such as FileSink are not idempotent, so a second call (e.g. via
+	// defer) would try to close an already-closed file. Do not add a defer.
 	if err := logger.Shutdown(context.Background()); err != nil {
 		fmt.Printf("  Error shutting down: %v\n", err)
 	} else {

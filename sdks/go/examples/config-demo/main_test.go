@@ -91,5 +91,45 @@ func TestRunEnvExampleSuccessPrintsValues(t *testing.T) {
 	got := out.String()
 	if !strings.Contains(got, "Service:") {
 		t.Errorf("successful example did not print configuration values:\n%s", got)
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"testing"
+)
+
+// TestMainShutsDownLoggerExactlyOnce guards against re-introducing a second
+// Logger.Shutdown call in the config demo. Shutdown is not idempotent: it
+// flushes and closes every sink on each call, and fileSink.Close closes the
+// underlying file again, yielding "file already closed". The demo must call
+// Shutdown exactly once (the explicit call prints its result), so deferring a
+// second call alongside the explicit one is a correctness bug.
+func TestMainShutsDownLoggerExactlyOnce(t *testing.T) {
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "main.go", nil, 0)
+	if err != nil {
+		t.Fatalf("parse main.go: %v", err)
+	}
+
+	count := 0
+	ast.Inspect(file, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok || sel.Sel.Name != "Shutdown" {
+			return true
+		}
+		ident, ok := sel.X.(*ast.Ident)
+		if !ok || ident.Name != "logger" {
+			return true
+		}
+		count++
+		return true
+	})
+
+	if count != 1 {
+		t.Fatalf("logger.Shutdown called %d times in main.go; want exactly 1 "+
+			"(defer + explicit double-shutdown is a bug)", count)
 	}
 }
