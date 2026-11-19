@@ -38,15 +38,37 @@ class FakeMessage:
         return self._error
 
 
+class FakeKafkaError:
+    _TRANSPORT = -195
+    _INVALID_ARG = -186
+
+    def __init__(self, code):
+        self._code = code
+
+    def code(self):
+        return self._code
+
+
+class FakeKafkaException(Exception):
+    def __init__(self, error):
+        super().__init__(str(error))
+        self.error = error
+
+
 class FakeProducer:
-    def __init__(self, _config, fail_first=0):
+    def __init__(self, _config, fail_first=0, error_on_attempt=None, error=None):
+        self.config = dict(_config)
         self.calls = []
         self.fail_first = fail_first
+        self.error_on_attempt = error_on_attempt
+        self.error = error
         self.produce_attempts = 0
         self.flush_calls = []
 
     def produce(self, topic, value=None, key=None, headers=None, on_delivery=None):
         self.produce_attempts += 1
+        if self.produce_attempts == self.error_on_attempt:
+            raise self.error
         if self.produce_attempts <= self.fail_first:
             raise RuntimeError("transient-produce-error")
         self.calls.append({"topic": topic, "value": value, "key": key, "headers": headers})
@@ -104,6 +126,111 @@ class TestKafkaAdapter(unittest.TestCase):
         self.assertEqual(len(producer.calls), 1)
         self.assertEqual(producer.calls[0]["topic"], "events")
         self.assertEqual(sleeps, [0.01])
+
+    def test_permanent_key_error_fails_fast_without_retry(self):
+        producer = FakeProducer(
+            {},
+            error_on_attempt=1,
+            error=TypeError("key must be bytes-like"),
+        )
+        consumer = FakeConsumer({})
+        sleeps = []
+        adapter = KafkaAdapter(
+            KafkaConfig(brokers="localhost:9092", topic="events", group_id="g1", dlq_topic="events.dlq"),
+            retry_policy=RetryPolicy(max_attempts=3, base_delay_seconds=0.01, max_delay_seconds=0.1, jitter_ratio=0.0),
+            producer_cls=lambda _cfg: producer,
+            consumer_cls=lambda _cfg: consumer,
+            sleep_fn=sleeps.append,
+            random_fn=lambda: 0.0,
+        )
+
+        with self.assertRaisesRegex(TypeError, "key must be bytes-like"):
+            adapter.produce({"event_id": "evt-1"}, key=123)
+
+        self.assertEqual(producer.produce_attempts, 1)
+        self.assertEqual(producer.calls, [])
+        self.assertEqual(sleeps, [])
+
+    def test_permanent_header_error_fails_fast_without_retry(self):
+        producer = FakeProducer(
+            {},
+            error_on_attempt=1,
+            error=ValueError("header values must be strings"),
+        )
+        consumer = FakeConsumer({})
+        adapter = KafkaAdapter(
+            KafkaConfig(brokers="localhost:9092", topic="events", group_id="g1", dlq_topic="events.dlq"),
+            producer_cls=lambda _cfg: producer,
+            consumer_cls=lambda _cfg: consumer,
+        )
+
+        with self.assertRaisesRegex(ValueError, "header values must be strings"):
+            adapter.produce({"event_id": "evt-1"}, headers={"x": 123})
+
+        self.assertEqual(producer.produce_attempts, 1)
+        self.assertEqual(producer.calls, [])
+
+    def test_only_transient_kafka_errors_are_retried(self):
+        transient = FakeProducer(
+            {},
+            error_on_attempt=1,
+            error=FakeKafkaException(FakeKafkaError(FakeKafkaError._TRANSPORT)),
+        )
+        sleeps = []
+        adapter = KafkaAdapter(
+            KafkaConfig(brokers="localhost:9092", topic="events", group_id="g1", dlq_topic="events.dlq"),
+            retry_policy=RetryPolicy(max_attempts=3, base_delay_seconds=0.01, max_delay_seconds=0.1, jitter_ratio=0.0),
+            producer_cls=lambda _cfg: transient,
+            consumer_cls=lambda _cfg: FakeConsumer({}),
+            kafka_error_cls=FakeKafkaError,
+            sleep_fn=sleeps.append,
+            random_fn=lambda: 0.0,
+        )
+        adapter.produce({"event_id": "evt-1"})
+        self.assertEqual(transient.produce_attempts, 2)
+        self.assertEqual(len(transient.calls), 1)
+
+        permanent = FakeProducer(
+            {},
+            error_on_attempt=1,
+            error=FakeKafkaException(FakeKafkaError(FakeKafkaError._INVALID_ARG)),
+        )
+        permanent_adapter = KafkaAdapter(
+            KafkaConfig(brokers="localhost:9092", topic="events", group_id="g1", dlq_topic="events.dlq"),
+            producer_cls=lambda _cfg: permanent,
+            consumer_cls=lambda _cfg: FakeConsumer({}),
+            kafka_error_cls=FakeKafkaError,
+        )
+        with self.assertRaises(FakeKafkaException):
+            permanent_adapter.produce({"event_id": "evt-2"})
+        self.assertEqual(permanent.produce_attempts, 1)
+
+    def test_producer_enables_idempotence_and_allows_override(self):
+        configs = []
+
+        def make_producer(cfg):
+            configs.append(cfg)
+            return FakeProducer(cfg)
+
+        KafkaAdapter(
+            KafkaConfig(brokers="localhost:9092", topic="events", group_id="g1", dlq_topic="events.dlq"),
+            producer_cls=make_producer,
+            consumer_cls=lambda _cfg: FakeConsumer({}),
+        )
+        self.assertIs(configs[0]["enable.idempotence"], True)
+
+        KafkaAdapter(
+            KafkaConfig(
+                brokers="localhost:9092",
+                topic="events",
+                group_id="g1",
+                dlq_topic="events.dlq",
+                extra_producer_config={"enable.idempotence": False},
+            ),
+            producer_cls=make_producer,
+            consumer_cls=lambda _cfg: FakeConsumer({}),
+        )
+        self.assertIs(configs[1]["enable.idempotence"], False)
 
     def test_consume_ack_and_dlq_payload(self):
         valid_message = FakeMessage(json.dumps({"event_id": "evt-ok"}).encode("utf-8"), topic="events", offset=10)
