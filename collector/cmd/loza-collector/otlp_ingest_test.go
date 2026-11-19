@@ -170,4 +170,55 @@ func TestHandleOTLPLogsIngestFailureDoesNotReflectInternalDetails(t *testing.T) 
 	if !strings.Contains(logs.String(), "collector_otlp_ingest_failed") {
 		t.Fatalf("expected server-side log event collector_otlp_ingest_failed, got logs: %s", logs.String())
 	}
+// TestHandleOTLPLogsIngestMetrics verifies that OTLP ingest traffic is included
+// in the same ingest request counters as the JSON ingest handler.
+func TestHandleOTLPLogsIngestMetrics(t *testing.T) {
+	const otlpBody = `{"resourceLogs":[{"resource":{"attributes":[{"key":"service.name","value":{"stringValue":"checkout"}}]},"scopeLogs":[{"logRecords":[{"severityText":"INFO","body":{"stringValue":"payment.completed"}}]}]}]}`
+
+	t.Run("accepted request increments requestsTotal", func(t *testing.T) {
+		sink := &fakeSink{}
+		state := &collectorState{
+			cfg:         testCollectorConfig(),
+			ingestSink:  sink,
+			rateLimiter: rate.NewLimiter(rate.Limit(1000), 1000),
+		}
+		state.ready.Store(true)
+
+		req := httptest.NewRequest(http.MethodPost, "/otlp/logs", strings.NewReader(otlpBody))
+		rec := httptest.NewRecorder()
+		state.handleOTLPLogs(rec, req)
+
+		if rec.Code != http.StatusAccepted {
+			t.Fatalf("expected 202, got %d body=%s", rec.Code, rec.Body.String())
+		}
+		if got := state.metrics.requestsTotal.Load(); got != 1 {
+			t.Fatalf("requestsTotal = %d, want 1", got)
+		}
+		if got := state.metrics.requestsAuthErr.Load(); got != 0 {
+			t.Fatalf("requestsAuthErr = %d, want 0", got)
+		}
+	})
+
+	t.Run("auth failure increments requestsTotal and requestsAuthErr", func(t *testing.T) {
+		cfg := testCollectorConfig()
+		cfg.authEnabled = true
+		cfg.identityMode = "api_key"
+		cfg.apiKeyHeader = "X-API-Key"
+		cfg.apiKey = "expected-secret"
+		state := &collectorState{cfg: cfg}
+
+		req := httptest.NewRequest(http.MethodPost, "/otlp/logs", strings.NewReader(otlpBody))
+		rec := httptest.NewRecorder()
+		state.handleOTLPLogs(rec, req)
+
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("expected 401, got %d body=%s", rec.Code, rec.Body.String())
+		}
+		if got := state.metrics.requestsTotal.Load(); got != 1 {
+			t.Fatalf("requestsTotal = %d, want 1", got)
+		}
+		if got := state.metrics.requestsAuthErr.Load(); got != 1 {
+			t.Fatalf("requestsAuthErr = %d, want 1", got)
+		}
+	})
 }

@@ -16,7 +16,9 @@ import (
 // codes and messages so internal implementation and infrastructure details
 // (for example "dedupe unavailable: ...") are never reflected back to them.
 func (s *collectorState) handleOTLPLogs(w http.ResponseWriter, r *http.Request) {
+	s.metrics.requestsTotal.Add(1)
 	if !s.isAuthorized(r) {
+		s.metrics.requestsAuthErr.Add(1)
 		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "auth_failed"})
 		return
 	}
