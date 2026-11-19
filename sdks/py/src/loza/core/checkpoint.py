@@ -11,4 +11,8 @@ class Checkpoint:
     attrs: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
-        return {"name": self.name, "at_ms": self.at_ms, **self.attrs}
+        # Reserved fields remain authoritative even if attrs carries the same keys.
+        result: dict[str, Any] = dict(self.attrs)
+        result["name"] = self.name
+        result["at_ms"] = self.at_ms
+        return result

@@ -110,11 +110,11 @@ class EventContext:
         max_cp = getattr(self, "_max_checkpoints", 32)
         if len(self.checkpoints) >= max_cp:
             return
-        checkpoint = {
-            "name": name,
-            "at_ms": self.duration_ms(),
-            **attrs,
-        }
+        # Reserved fields must remain authoritative: merge caller attrs first,
+        # then assign name/at_ms so they cannot be silently overwritten.
+        checkpoint: dict[str, object] = dict(attrs)
+        checkpoint["name"] = name
+        checkpoint["at_ms"] = self.duration_ms()
         self.checkpoints.append(checkpoint)
         if callable(self._checkpoint_writer):
             self._checkpoint_writer(self, dict(checkpoint))
