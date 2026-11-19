@@ -1,6 +1,14 @@
 package core
 
-import "strings"
+import (
+	"errors"
+	"fmt"
+	"strings"
+)
+
+// ErrDotKeyLengthMismatch is returned by ExpandDotKeys when the parallel
+// keys, kinds and values slices do not have the same length.
+var ErrDotKeyLengthMismatch = errors.New("core: dot-key input slices must have equal length")
 
 // DotNode is an intermediate tree node used to merge dot-key attrs
 // (e.g. "user.id", "user.name") into nested JSON objects.
@@ -31,10 +39,23 @@ type LeafValue struct {
 // Returns two slices:
 //   - plain: attrs whose keys have no dot (or dot expansion is disabled)
 //   - groups: map[topKey]*DotNode for merged nested objects
+// The three input slices must have equal length because they are indexed in
+// parallel; a mismatch returns ErrDotKeyLengthMismatch instead of panicking.
+//
+// Returns five slices:
+//   - plainKeys/plainKinds/plainValues: attrs whose keys have no dot
+//   - groupKeys/groupRoots: top-level keys mapped to merged nested objects
 func ExpandDotKeys(keys []string, kinds []uint8, values []any) (
 	plainKeys []string, plainKinds []uint8, plainValues []any,
-	groupKeys []string, groupRoots []*DotNode,
+	groupKeys []string, groupRoots []*DotNode, err error,
 ) {
+	if len(keys) != len(kinds) || len(keys) != len(values) {
+		return nil, nil, nil, nil, nil, fmt.Errorf(
+			"%w: keys=%d kinds=%d values=%d",
+			ErrDotKeyLengthMismatch, len(keys), len(kinds), len(values),
+		)
+	}
+
 	// Temporary map: top-level key → root DotNode
 	roots := make(map[string]*DotNode)
 	var rootOrder []string // preserve insertion order

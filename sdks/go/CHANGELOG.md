@@ -2,6 +2,15 @@
 
 All notable changes to the LOZA Go SDK are documented in this file.
 
+## [Unreleased]
+
+### Changed
+
+- **Migration note:** `core.ExpandDotKeys` now returns an additional trailing `error`
+  and validates that `keys`, `kinds` and `values` have equal length. Callers must
+  update from five return values to six and handle the new error (mismatched inputs
+  return `core.ErrDotKeyLengthMismatch` instead of panicking with an index-out-of-range).
+
 ## [0.3.4] - 2026-08-26
 
 ### Changed
