@@ -64,6 +64,13 @@ func main() {
 		log.Info().Str("config", *configPath).Msg("Loaded configuration")
 	}
 
+	// Build the shared TLS config once, before any listener starts. An invalid
+	// TLS setup must fail startup instead of silently serving plaintext.
+	tlsCfg, err := config.BuildTLSConfig(cfg.TLS)
+	if err != nil {
+		log.Fatal().Err(err).Msg("Invalid TLS configuration")
+	}
+
 	stor, err := storage.NewStorage(cfg)
 	if err != nil {
 		log.Fatal().Err(err).Msg("Failed to initialize storage")
@@ -100,6 +107,7 @@ func main() {
 		Handler:      cortexServer.Router(),
 		ReadTimeout:  cfg.Server.ReadTimeout,
 		WriteTimeout: cfg.Server.WriteTimeout,
+		TLSConfig:    tlsCfg,
 	}
 
 	listenErr := make(chan error, 1)
@@ -134,7 +142,15 @@ func main() {
 // it must never call log.Fatal, which would exit the process and skip main's
 // deferred cleanup.
 func runHTTPServer(httpSrv *http.Server, errCh chan<- error) {
-	if err := httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+	var err error
+	if httpSrv.TLSConfig != nil {
+		// The certificate chain is preloaded into TLSConfig.BuildTLSConfig, so
+		// empty file names make ServeTLS use those in-memory certificates.
+		err = httpSrv.ListenAndServeTLS("", "")
+	} else {
+		err = httpSrv.ListenAndServe()
+	}
+	if err != nil && !errors.Is(err, http.ErrServerClosed) {
 		errCh <- err
 	}
 }
@@ -165,13 +181,15 @@ func startGRPCServer(cfg *config.Config, stor storage.Storage) <-chan *grpc.Serv
 		log.Info().Str("addr", grpcAddr).Msg("Starting gRPC server")
 
 		var opts []grpc.ServerOption
-		if cfg.TLS.Enabled {
-			creds, err := credentials.NewServerTLSFromFile(cfg.TLS.CertFile, cfg.TLS.KeyFile)
-			if err != nil {
-				log.Error().Err(err).Msg("Failed to load TLS certs")
-				return
-			}
-			opts = append(opts, grpc.Creds(creds))
+		grpcTLSCfg, err := config.BuildTLSConfig(cfg.TLS)
+		if err != nil {
+			log.Error().Err(err).Msg("Invalid TLS configuration for gRPC")
+			return
+		}
+		if grpcTLSCfg != nil {
+			// credentials.NewTLS uses the same TLS config as the HTTP listener,
+			// so min_version and mutual TLS are enforced on gRPC too.
+			opts = append(opts, grpc.Creds(credentials.NewTLS(grpcTLSCfg)))
 		}
 
 		listener, err := net.Listen("tcp", grpcAddr)
