@@ -36,4 +36,7 @@ def get_env_bool(key: str, default: bool = False) -> bool:
 
 def get_env_int(key: str, default: int = 0) -> int:
     val = get_env(key)
-    return int(val) if val.isdigit() else default
+    try:
+        return int(val)
+    except ValueError:
+        return default
