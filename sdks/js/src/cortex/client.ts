@@ -69,7 +69,7 @@ export function normalizeIncidentContext(ctx: any): void {
 export function normalizeGraphView(gv: any): void {
   if (!gv) return;
   for (const node of gv.nodes || []) {
-    if (typeof node.id === 'string') node.id = node.id.trim();
+    if (node && typeof node.id === 'string') node.id = node.id.trim();
   }
 }
 
@@ -104,11 +104,11 @@ export function validateIncidentContext(ctx: any): void {
 export function validateGraphView(gv: any): void {
   if (!gv) throw new Error('cortex: graph view is nil');
   for (let i = 0; i < (gv.nodes || []).length; i++) {
-    if (!gv.nodes[i].id) throw new Error(`cortex: node ${i} missing 'id'`);
+    if (!gv.nodes[i] || !gv.nodes[i].id) throw new Error(`cortex: node ${i} missing 'id'`);
   }
   for (let i = 0; i < (gv.edges || []).length; i++) {
     const edge = gv.edges[i];
-    if (!edge.source && !edge.from_node_id) {
+    if (!edge || (!edge.source && !edge.from_node_id)) {
       throw new Error(`cortex: edge ${i} missing 'source' or 'from_node_id'`);
     }
     if (!edge.target && !edge.to_node_id) {
