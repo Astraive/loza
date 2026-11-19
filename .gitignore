@@ -27,6 +27,8 @@ skills-lock.json
 
 *.local
 *.local.*
+# Committed dev config used by the Docker examples and quickstart.
+!collector/configs/loza.local.yaml
 
 .loza/
 **/.loza/

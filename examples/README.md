@@ -13,7 +13,8 @@ Cross-component examples for the LOZA monorepo.
 Each quickstart example requires a running collector:
 
 ```bash
-cd collector && go run ./cmd/loza-collector run -c configs/loza.local.yaml
+cd collector && LOZA_STORAGE_ENCRYPTION_KEY=dev-only-not-for-production \
+  go run ./cmd/loza-collector run -c configs/loza.local.yaml
 ```
 
 Then run the example for your SDK:

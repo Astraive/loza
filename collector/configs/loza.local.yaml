@@ -1,0 +1,81 @@
+# loza.local.yaml — self-contained configuration for local Docker examples,
+# the deploy demo compose files, and the quickstart `docker run` snippet.
+#
+# It intentionally disables API-key auth so the plain `curl` examples work,
+# and uses a relative DuckDB path so no host directories need to exist.
+# Set LOZA_STORAGE_ENCRYPTION_KEY in the environment before starting the
+# collector (the compose files and quickstart below provide a dev-only value).
+
+version: "1.0"
+
+collector:
+  addr: ":9308"
+  read_header_timeout: "5s"
+  shutdown_timeout: "10s"
+  max_body_bytes: 10485760
+  max_events_per_request: 5000
+
+auth:
+  enabled: false
+  header: "X-API-Key"
+  server_secret: ""
+  cache_ttl: "5m"
+  negative_cache_ttl: "30s"
+  keys: []
+  grants: []
+  tokens: []
+
+rate_limit:
+  enabled: true
+  rps: 1000
+  burst: 1000
+
+routes:
+  ingest: "/events"
+  health: "/health"
+  ready: "/readyz"
+  metrics: "/metrics"
+
+storage:
+  primary: "duckdb"
+  encryption_key_env: "LOZA_STORAGE_ENCRYPTION_KEY"
+
+duckdb:
+  path: "loza.db"
+  driver: "duckdb"
+  table: "events"
+  raw_column: "raw"
+  store_raw: true
+  checkpoint_on_shutdown: true
+  max_open_conns: 1
+  max_idle_conns: 1
+  batch_size: 0
+  flush_interval: "0s"
+  writer_loop: false
+  export:
+    enabled: false
+    format: "parquet"
+    interval: "1h"
+    path: "exports"
+  schema:
+    event_id: "event_id"
+    event_name: "event"
+    service: "service"
+    status_code: "http.status"
+    duration_ms: "duration_ms"
+    timestamp: "timestamp"
+  column_types:
+    status_code: "INTEGER"
+    http.status: "INTEGER"
+    duration_ms: "DOUBLE"
+    timestamp: "TIMESTAMP"
+
+reliability:
+  mode: "direct"
+
+metrics:
+  prometheus: true
+
+logging:
+  level: "info"
+  format: "json"

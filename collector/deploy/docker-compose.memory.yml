@@ -5,7 +5,7 @@ services:
     build:
       context: ../..
       dockerfile: collector/deploy/Dockerfile.collector
-    command: ["./loza-collector", "run", "-c", "/app/build/loza-collector.yaml"]
+    command: ["./loza-collector", "run", "-c", "/app/configs/loza.local.yaml"]
     ports:
       - "9308:9308"
     volumes:
@@ -13,18 +13,19 @@ services:
     environment:
       LOZA_EVENTBUS: memory
       COLLECTOR_RELIABILITY_MODE: direct
+      LOZA_STORAGE_ENCRYPTION_KEY: dev-only-not-for-production
 
   sample-app:
     image: curlimages/curl:8.12.1
     depends_on:
       - collector
     volumes:
-      - ../build:/payload
+      - ../deploy:/payload
     entrypoint:
       - /bin/sh
       - -c
       - |
         sleep 3
-        curl -sS -X POST http://collector:9308/ingest \
+        curl -sS -X POST http://collector:9308/events \
           --data-binary @/payload/sample-events.ndjson \
           -H "Content-Type: application/x-ndjson"

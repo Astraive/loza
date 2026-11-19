@@ -19,7 +19,7 @@ services:
     build:
       context: ../..
       dockerfile: collector/deploy/Dockerfile.collector
-    command: ["./loza-collector", "run", "-c", "/app/build/loza-collector.yaml"]
+    command: ["./loza-collector", "run", "-c", "/app/collector/configs/loza.local.yaml"]
     ports:
       - "9308:9308"
     volumes:
@@ -31,6 +31,7 @@ services:
       LOZA_EVENTBUS_NATS_URL: nats://nats:4222
       LOZA_EVENTBUS_NATS_STREAM: LOZA
       COLLECTOR_RELIABILITY_MODE: queue
+      LOZA_STORAGE_ENCRYPTION_KEY: dev-only-not-for-production
     depends_on:
       nats:
         condition: service_healthy
@@ -39,7 +40,7 @@ services:
     build:
       context: ../..
       dockerfile: collector/deploy/Dockerfile.collector
-    command: ["./loza-worker", "run", "-c", "/app/build/loza-collector.yaml"]
+    command: ["./loza-worker", "run", "-c", "/app/collector/configs/loza.local.yaml"]
     volumes:
       - ../../:/app
     environment:
@@ -49,6 +50,7 @@ services:
       LOZA_EVENTBUS_NATS_URL: nats://nats:4222
       LOZA_EVENTBUS_NATS_STREAM: LOZA
       COLLECTOR_RELIABILITY_MODE: queue
+      LOZA_STORAGE_ENCRYPTION_KEY: dev-only-not-for-production
     depends_on:
       nats:
         condition: service_healthy
@@ -58,13 +60,13 @@ services:
     depends_on:
       - collector
     volumes:
-      - ../build:/payload
+      - ../deploy:/payload
     entrypoint:
       - /bin/sh
       - -c
       - |
         sleep 5
-        curl -sS -X POST http://collector:9308/ingest \
+        curl -sS -X POST http://collector:9308/events \
           --data-binary @/payload/sample-events.ndjson \
           -H "Content-Type: application/x-ndjson"
 

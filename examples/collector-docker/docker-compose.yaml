@@ -4,6 +4,8 @@ services:
       context: ../../collector
       dockerfile: Dockerfile
     command: ["./loza-collector", "run", "-c", "/app/configs/loza.local.yaml"]
+    environment:
+      LOZA_STORAGE_ENCRYPTION_KEY: dev-only-not-for-production
     ports:
       - "9308:9308"
     volumes:
