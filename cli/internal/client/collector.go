@@ -242,7 +242,6 @@ func QueryLQL(baseURL, source string, parameters map[string]any, limit int) ([]b
 	return readResponseBody(resp.Body)
 }
 
-
 // TailStream opens an HTTP stream to the collector for tailing events.
 func TailStream(ctx context.Context, baseURL string) (io.ReadCloser, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(baseURL, "/")+"/tail", nil)
@@ -441,7 +440,10 @@ func getJSON(baseURL, path string) ([]byte, error) {
 		return nil, err
 	}
 	defer resp.Body.Close()
-	body, _ := readResponseBody(resp.Body)
+	body, err := readResponseBody(resp.Body)
+	if err != nil {
+		return nil, err
+	}
 	if resp.StatusCode >= 300 {
 		return nil, fmt.Errorf("collector returned %d: %s", resp.StatusCode, string(body))
 	}
@@ -463,7 +465,10 @@ func postJSON(ctx context.Context, baseURL, path string, payload []byte) ([]byte
 		return nil, err
 	}
 	defer resp.Body.Close()
-	body, _ := readResponseBody(resp.Body)
+	body, err := readResponseBody(resp.Body)
+	if err != nil {
+		return nil, err
+	}
 	if resp.StatusCode >= 300 {
 		return nil, fmt.Errorf("collector returned %d: %s", resp.StatusCode, string(body))
 	}
@@ -490,7 +495,10 @@ func deleteJSON(ctx context.Context, baseURL, path, reason string) ([]byte, erro
 		return nil, err
 	}
 	defer resp.Body.Close()
-	body, _ := readResponseBody(resp.Body)
+	body, err := readResponseBody(resp.Body)
+	if err != nil {
+		return nil, err
+	}
 	if resp.StatusCode >= 300 {
 		return nil, fmt.Errorf("collector returned %d: %s", resp.StatusCode, string(body))
 	}
@@ -510,7 +518,14 @@ func validateIngestPayload(contentType string, payload []byte) error {
 }
 
 func readResponseBody(body io.Reader) ([]byte, error) {
-	return io.ReadAll(io.LimitReader(body, maxCLIResponseBytes+1))
+	data, err := io.ReadAll(io.LimitReader(body, maxCLIResponseBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > maxCLIResponseBytes {
+		return nil, fmt.Errorf("response too large: exceeds %d bytes", maxCLIResponseBytes)
+	}
+	return data, nil
 }
 
 func validateIngestEnvelopeShape(envelope map[string]any) error {
