@@ -75,3 +75,4 @@ mod tests {
         );
     }
 }
+pub use tower::{capture_request_with_config, MiddlewareConfig, MiddlewareResult};

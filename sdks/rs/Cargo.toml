@@ -25,6 +25,7 @@ futures-util = { version = "0.3", optional = true }
 actix-web = { version = "4", optional = true }
 axum = { version = "0.7", optional = true }
 tower = { version = "0.4", optional = true }
+http = { version = "1", optional = true }
 hyper = { version = "1", optional = true }
 tracing = { version = "0.1", optional = true }
 
@@ -35,3 +36,5 @@ tokio = { version = "1", features = ["macros", "rt"] }
 default = []
 actix = ["dep:actix-web", "dep:futures-util"]
 axum = ["dep:axum", "dep:tower", "dep:hyper", "dep:tracing"]
+axum = ["dep:axum", "dep:hyper", "tower"]
+tower = ["dep:tower", "dep:http", "dep:futures-util"]
