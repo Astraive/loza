@@ -52,6 +52,13 @@ func main() {
 	loza.Enrich(ctx, loza.String("payment.provider", "stripe"))
 	loza.Finish(ctx, "success", loza.Int("status_code", 200))
 
+	// Emit explicitly before waiting: the httpbatch sink only receives the
+	// event when Emit runs, so deferring it until main returns would leave the
+	// buffer empty for the whole sleep and prevent the interval flush below.
+	if err := loza.Emit(ctx); err != nil {
+		log.Fatal(err)
+	}
+
 	time.Sleep(500 * time.Millisecond)
 
 	if err := deliverAndShutdown(ctx, loza.Emit, loza.Shutdown); err != nil {
