@@ -1116,10 +1116,20 @@ func validateFileConfig(fc fileConfig) error {
 	if fc.Limits.MaxStringLength < 0 {
 		return errors.New("limits.max_string_length must be >= 0")
 	}
-	switch strings.ToLower(strings.TrimSpace(fc.Identity.Mode)) {
+	identityMode := strings.ToLower(strings.TrimSpace(fc.Identity.Mode))
+	switch identityMode {
 	case "", "payload", "api_key", "jwt", "mtls":
 	default:
 		return errors.New("identity.mode must be payload, api_key, jwt, or mtls")
+	}
+	// mTLS authorization must be scoped to explicit identities. Without at
+	// least one allowlist every trusted client certificate would be granted
+	// admin access, so require one at configuration time (fail closed).
+	if identityMode == "mtls" &&
+		len(fc.Identity.MTLSAllowedCNs) == 0 &&
+		len(fc.Identity.MTLSAllowedDNS) == 0 &&
+		len(fc.Identity.MTLSAllowedEmails) == 0 {
+		return errors.New("at least one of identity.mtls_allowed_cns, identity.mtls_allowed_dns, or identity.mtls_allowed_emails must be configured when identity.mode is mtls")
 	}
 	switch strings.ToLower(strings.TrimSpace(fc.Privacy.Mode)) {
 	case "", "off", "warn", "enforce":
