@@ -231,7 +231,7 @@ pub fn extract_causality_pattern(graph: &IncidentGraph) -> Vec<String> {
 }
 
 /// Graph isomorphism check (simplified - just node/edge counts)
-pub fn graph_相似度(a: &IncidentGraph, b: &IncidentGraph) -> f64 {
+pub fn graph_similarity(a: &IncidentGraph, b: &IncidentGraph) -> f64 {
     let a_nodes = a.nodes().len();
     let b_nodes = b.nodes().len();
     let a_edges = a.edges().len();
@@ -241,11 +241,7 @@ pub fn graph_相似度(a: &IncidentGraph, b: &IncidentGraph) -> f64 {
         return 1.0;
     }
 
-    let node_sim = if a_nodes == 0 && b_nodes == 0 {
-        1.0
-    } else {
-        a_nodes.min(b_nodes) as f64 / a_nodes.max(b_nodes).max(1) as f64
-    };
+    let node_sim = a_nodes.min(b_nodes) as f64 / a_nodes.max(b_nodes).max(1) as f64;
     let edge_sim = if a_edges == 0 && b_edges == 0 {
         1.0
     } else {
@@ -253,6 +249,14 @@ pub fn graph_相似度(a: &IncidentGraph, b: &IncidentGraph) -> f64 {
     };
 
     0.6 * node_sim + 0.4 * edge_sim
+}
+
+/// Deprecated alias for [`graph_similarity`].
+///
+/// Migration: replace `graph_相似度` with the ASCII identifier `graph_similarity`.
+#[deprecated(note = "use graph_similarity instead")]
+pub fn graph_相似度(a: &IncidentGraph, b: &IncidentGraph) -> f64 {
+    graph_similarity(a, b)
 }
 
 #[cfg(test)]
@@ -326,7 +330,48 @@ mod tests {
         graph2.add_node("p".to_string(), NodeType::Deploy);
         graph2.add_node("q".to_string(), NodeType::Metric);
 
-        let sim = graph_相似度(&graph1, &graph2);
+        let sim = graph_similarity(&graph1, &graph2);
         assert!(sim > 0.9);
+    }
+
+    #[test]
+    fn test_graph_similarity_both_empty_is_identical() {
+        // The early return must stay: two empty graphs are considered identical
+        // (1.0), not the 0.4 that the min/max formula would otherwise produce.
+        let empty_a = IncidentGraph::new();
+        let empty_b = IncidentGraph::new();
+        assert_eq!(graph_similarity(&empty_a, &empty_b), 1.0);
+    }
+
+    #[test]
+    fn test_graph_similarity_one_graph_empty() {
+        // With a_nodes == 0 and b_nodes > 0 the removed branch never applied;
+        // node similarity must come from the min/max expression (0.0), while
+        // edge similarity stays 1.0 because neither graph has edges.
+        let empty = IncidentGraph::new();
+
+        let mut populated = IncidentGraph::new();
+        populated.add_node("a".to_string(), NodeType::Service);
+        populated.add_node("b".to_string(), NodeType::Metric);
+
+        let sim = graph_similarity(&empty, &populated);
+        assert!((sim - 0.4).abs() < 1e-9, "expected 0.4, got {sim}");
+
+        let sim_reversed = graph_similarity(&populated, &empty);
+        assert!((sim_reversed - 0.4).abs() < 1e-9, "expected 0.4, got {sim_reversed}");
+    }
+
+    #[test]
+    fn test_deprecated_alias_forwards_to_graph_similarity() {
+        // Backwards compatibility: the old non-ASCII name still resolves to
+        // the same result, so no public API is broken without a migration path.
+        #[allow(deprecated)]
+        fn legacy(a: &IncidentGraph, b: &IncidentGraph) -> f64 {
+            graph_相似度(a, b)
+        }
+
+        let mut graph = IncidentGraph::new();
+        graph.add_node("a".to_string(), NodeType::Deploy);
+        assert_eq!(legacy(&graph, &graph), graph_similarity(&graph, &graph));
     }
 }
