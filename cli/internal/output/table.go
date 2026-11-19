@@ -2,6 +2,7 @@ package output
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 )
 
@@ -46,12 +47,15 @@ func PrintTable(headers []string, rows [][]string) {
 
 func PrintKeyValue(pairs map[string]string) {
 	maxLen := 0
+	keys := make([]string, 0, len(pairs))
 	for k := range pairs {
+		keys = append(keys, k)
 		if len(k) > maxLen {
 			maxLen = len(k)
 		}
 	}
-	for k, v := range pairs {
-		fmt.Printf("  %s  %s\n", Dim(fmt.Sprintf("%-*s", maxLen, k)), v)
+	sort.Strings(keys)
+	for _, k := range keys {
+		fmt.Printf("  %s  %s\n", Dim(fmt.Sprintf("%-*s", maxLen, k)), pairs[k])
 	}
 }

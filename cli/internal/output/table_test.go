@@ -39,13 +39,6 @@ func captureStdout(t *testing.T, run func()) string {
 	return string(out)
 }
 
-func setNoColor(t *testing.T, value bool) {
-	t.Helper()
-	old := NoColor
-	NoColor = value
-	t.Cleanup(func() { NoColor = old })
-}
-
 func tableLines(t *testing.T, out string, wantCount int) []string {
 	t.Helper()
 	lines := strings.Split(strings.TrimSuffix(out, "\n"), "\n")
@@ -143,5 +136,39 @@ func TestPrintKeyValueAlignmentWithColor(t *testing.T) {
 		if !seen {
 			t.Errorf("missing aligned line %q; got %q", line, lines)
 		}
+	}
+}
+
+func TestPrintKeyValueOrdersKeysDeterministically(t *testing.T) {
+	pairs := map[string]string{
+		"zeta":   "last",
+		"alpha":  "first",
+		"middle": "second",
+		"beta":   "fourth",
+	}
+
+	first := captureStdout(t, func() { PrintKeyValue(pairs) })
+
+	// Go randomizes map iteration order, so repeated calls must still produce
+	// byte-identical output. This reproduces the nondeterminism before the fix.
+	for i := 0; i < 25; i++ {
+		got := captureStdout(t, func() { PrintKeyValue(pairs) })
+		if got != first {
+			t.Fatalf("PrintKeyValue output is not deterministic:\nfirst: %q\ngot:   %q", first, got)
+		}
+	}
+
+	// Keys must be emitted in lexicographic order.
+	wantOrder := []string{"alpha", "beta", "middle", "zeta"}
+	previous := -1
+	for _, key := range wantOrder {
+		index := strings.Index(first, key)
+		if index == -1 {
+			t.Fatalf("key %q missing from output: %q", key, first)
+		}
+		if index <= previous {
+			t.Fatalf("keys not emitted in sorted order: %q", first)
+		}
+		previous = index
 	}
 }
