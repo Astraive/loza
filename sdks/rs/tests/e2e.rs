@@ -187,14 +187,34 @@ fn test_sampling_in_pipeline() {
 
 #[test]
 fn test_finish_twice_error_handling() {
+    use loza::LozaError;
+
     let logger = New(Config::test("finish_test"));
 
     let mut ctx = logger.start_event(Params::new("finish_event"));
 
-    let _ = logger.finish(&mut ctx, "success");
+    // The first finish establishes the terminal outcome.
+    assert!(
+        logger.finish(&mut ctx, "success").is_ok(),
+        "first finish should succeed"
+    );
 
-    // Calling finish again may error or be a no-op
-    let _ = logger.finish(&mut ctx, "error");
+    // A second finish must be rejected instead of silently no-op'ing.
+    let second = logger.finish(&mut ctx, "error");
+    assert!(
+        matches!(
+            second,
+            Err(LozaError::EventAlreadyFinished { ref event_id })
+                if event_id == &ctx.event_id
+        ),
+        "second finish should fail with EventAlreadyFinished, got {second:?}"
+    );
+
+    // The rejected second finish must not corrupt the recorded outcome.
+    let payload = logger.emit(&ctx).unwrap();
+    let event: Value = serde_json::from_str(&payload).unwrap();
+    assert_eq!(event["outcome"], "success");
+    assert!(event.get("error").is_none());
 }
 
 #[test]
