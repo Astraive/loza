@@ -203,6 +203,12 @@ func Measure(name string, fn func()) Attr {
 
 // Step runs fn as a named process step on the event in ctx.
 func Step(ctx context.Context, name string, fn func() error) error {
+	return step(ctx, name, fn, nil)
+}
+
+// step is the shared implementation of Step and WithProcess. attrs are recorded
+// on the emitted process on both the success and error paths.
+func step(ctx context.Context, name string, fn func() error, attrs []Attr) error {
 	ev := loadEvent(ctx)
 	if ev == nil {
 		return fn()
@@ -211,15 +217,22 @@ func Step(ctx context.Context, name string, fn func() error) error {
 	if err != nil {
 		return err
 	}
+	// Copy so appending the error message cannot mutate a caller-owned slice.
+	attrs = append([]Attr(nil), attrs...)
 	if err := fn(); err != nil {
-		_ = h.FinishError(err, 1)
+		_ = h.FinishError(err, 1, attrs...)
 		return err
 	}
-	return h.Finish()
+	return h.Finish(attrs...)
 }
 
 // Phase runs fn as a named group phase on the event in ctx.
 func Phase(ctx context.Context, name string, fn func() error) error {
+	return phase(ctx, name, fn, nil)
+}
+
+// phase is the shared implementation of Phase and WithGroup.
+func phase(ctx context.Context, name string, fn func() error, attrs []Attr) error {
 	ev := loadEvent(ctx)
 	if ev == nil {
 		return fn()
@@ -228,15 +241,22 @@ func Phase(ctx context.Context, name string, fn func() error) error {
 	if err != nil {
 		return err
 	}
+	attrs = append([]Attr(nil), attrs...)
 	if err := fn(); err != nil {
-		_ = FinishGroupError(h, err, 1)
+		// Preserve both main's status code (1) and the PR's attr forwarding.
+		_ = FinishGroupError(h, err, 1, attrs...)
 		return err
 	}
-	return h.Finish()
+	return h.Finish(attrs...)
 }
 
 // Span runs fn as a named timer span on the event in ctx.
 func Span(ctx context.Context, name string, fn func() error) error {
+	return span(ctx, name, fn, nil)
+}
+
+// span is the shared implementation of Span and WithTimer.
+func span(ctx context.Context, name string, fn func() error, attrs []Attr) error {
 	ev := loadEvent(ctx)
 	if ev == nil {
 		return fn()
@@ -246,25 +266,28 @@ func Span(ctx context.Context, name string, fn func() error) error {
 		return err
 	}
 	if err := fn(); err != nil {
-		_ = h.Stop(Err(err))
+		errAttrs := make([]Attr, 0, len(attrs)+1)
+		errAttrs = append(errAttrs, attrs...)
+		errAttrs = append(errAttrs, Err(err))
+		_ = h.Stop(errAttrs...)
 		return err
 	}
-	return h.Stop()
+	return h.Stop(attrs...)
 }
 
-// WithProcess is an alias for Step — runs fn as a named process step.
+// WithProcess is like Step but also records attrs on the emitted process.
 func WithProcess(ctx context.Context, name string, fn func() error, attrs ...Attr) error {
-	return Step(ctx, name, fn)
+	return step(ctx, name, fn, attrs)
 }
 
-// WithGroup is an alias for Phase — runs fn as a named group phase.
+// WithGroup is like Phase but also records attrs on the emitted group.
 func WithGroup(ctx context.Context, name string, fn func() error, attrs ...Attr) error {
-	return Phase(ctx, name, fn)
+	return phase(ctx, name, fn, attrs)
 }
 
-// WithTimer is an alias for Span — runs fn as a named timer span.
+// WithTimer is like Span but also records attrs on the emitted timer.
 func WithTimer(ctx context.Context, name string, fn func() error, attrs ...Attr) error {
-	return Span(ctx, name, fn)
+	return span(ctx, name, fn, attrs)
 }
 
 // extractStatusCode finds and returns the status_code value from attrs, or 0 if not found.
