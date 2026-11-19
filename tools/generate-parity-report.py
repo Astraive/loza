@@ -10,6 +10,16 @@ from pathlib import Path
 SDKS = ["go", "py", "rs", "js"]
 SDK_LABELS = {"go": "Go", "py": "Python", "rs": "Rust", "js": "JavaScript"}
 
+# Statuses are compared after normalization so equivalent spellings (e.g.
+# "YES", " Yes ", "true") are treated consistently with "yes"/"Y"/"true".
+SUPPORTED_STATUSES = frozenset({"y", "yes", "true", "supported", "complete", "done"})
+NOT_APPLICABLE_STATUSES = frozenset({"n/a", "na"})
+
+
+def normalize_status(status: str) -> str:
+    """Normalize a status string for case- and whitespace-insensitive comparison."""
+    return str(status).strip().lower()
+
 
 def load_manifest(repo_root: Path, sdk: str) -> dict | None:
     """Load the parity manifest for a given SDK."""
@@ -84,7 +94,7 @@ def generate_report(manifests: dict[str, dict | None], features: list[str]) -> s
     lines = [
         "# SDK Parity Report",
         "",
-        f"Generated from parity manifests across {len(SDKs)} SDKs.",
+        f"Generated from parity manifests across {len(SDKS)} SDKs.",
         "",
         "## Feature Matrix",
         "",
@@ -106,10 +116,11 @@ def generate_report(manifests: dict[str, dict | None], features: list[str]) -> s
         row = f"| {feature} |"
         for sdk in SDKS:
             status = feature_supported(manifests[sdk], feature)
-            if status in ("Y", "yes", "true", "supported", "complete"):
+            normalized = normalize_status(status)
+            if normalized in SUPPORTED_STATUSES:
                 row += " Y |"
                 counts[sdk] += 1
-            elif status in ("N/A", "na", "n/a"):
+            elif normalized in NOT_APPLICABLE_STATUSES:
                 row += " -- |"
             else:
                 row += f" {status} |"
