@@ -731,9 +731,21 @@ func (s *httpBatchSink) send(ctx context.Context, payload []byte) error {
 		_, _ = io.Copy(io.Discard, resp.Body)
 		resp.Body.Close()
 	}()
+	raw, readErr := readSinkResponse(resp.Body)
+	if readErr != nil {
+		return readErr
+	}
 	if resp.StatusCode >= 300 {
-		bodyBytes, _ := readSinkResponse(resp.Body)
-		return fmt.Errorf("httpbatch: unexpected status %d: %s", resp.StatusCode, truncateErrorBody(string(bodyBytes)))
+		return fmt.Errorf("httpbatch: unexpected status %d: %s", resp.StatusCode, truncateErrorBody(string(raw)))
+	}
+	// A successful HTTP status can still carry collector-level failures in the
+	// response body (for example a 207 with rejected/invalid acks). Treat those
+	// the same way collectorSink does so rejected events are not silently lost.
+	if retryable, message := collectorResponseHasRetryableError(raw); retryable {
+		return fmt.Errorf("httpbatch: collector reported retryable error: %s", message)
+	}
+	if failed, message := collectorResponseHasPermanentBatchFailure(raw); failed {
+		return fmt.Errorf("httpbatch: collector reported batch failure: %s", message)
 	}
 	return nil
 }

@@ -413,3 +413,110 @@ func TestHTTPBatchSinkRetainsFailedBatchAheadOfNewEvents(t *testing.T) {
 		t.Fatalf("request bodies = %q, failed batch was not retried first", bodies)
 	}
 }
+
+func TestHTTPBatchSink_SurfacesCollectorResponseFailures(t *testing.T) {
+	tests := []struct {
+		name       string
+		statusCode int
+		body       string
+		wantErr    string
+	}{
+		{
+			name:       "multi-status with invalid ack",
+			statusCode: http.StatusMultiStatus,
+			body:       `{"status":"partial","accepted":1,"invalid":1,"acks":[{"status":"accepted","reason":"accepted"},{"status":"invalid","reason":"schema_invalid","message":"schema validation failed"}]}`,
+			wantErr:    "schema validation failed",
+		},
+		{
+			name:       "ok status with rejected ack",
+			statusCode: http.StatusOK,
+			body:       `{"status":"rejected","rejected":1,"acks":[{"status":"rejected","reason":"policy","message":"event rejected by collector"}]}`,
+			wantErr:    "event rejected by collector",
+		},
+		{
+			name:       "ok status with retryable error",
+			statusCode: http.StatusOK,
+			body:       `{"errors":[{"code":"rate_limited","message":"slow down","retryable":true}]}`,
+			wantErr:    "slow down",
+		},
+		{
+			name:       "accepted response",
+			statusCode: http.StatusOK,
+			body:       `{"status":"accepted","accepted":1}`,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(tc.statusCode)
+				_, _ = w.Write([]byte(tc.body))
+			}))
+			defer srv.Close()
+
+			sink, err := HTTPBatchSink(HTTPBatchSinkConfig{
+				Endpoint:      srv.URL,
+				Insecure:      true,
+				BatchSize:     1,
+				FlushInterval: time.Hour,
+			})
+			if err != nil {
+				t.Fatalf("HTTPBatchSink() error = %v", err)
+			}
+			defer sink.Close(context.Background())
+
+			err = sink.WriteEvent(context.Background(), []byte(`{"event":"test"}`), nil)
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Fatalf("WriteEvent() error = %v, want nil", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("WriteEvent() error = nil, want error containing %q", tc.wantErr)
+			}
+			if !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("WriteEvent() error = %q, want containing %q", err.Error(), tc.wantErr)
+			}
+		})
+	}
+}
+
+func TestHTTPBatchSink_OnErrorReceivesCollectorResponseFailure(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusMultiStatus)
+		_, _ = w.Write([]byte(`{"status":"partial","invalid":1,"acks":[{"status":"invalid","reason":"schema_invalid","message":"schema validation failed"}]}`))
+	}))
+	defer srv.Close()
+
+	errCh := make(chan error, 1)
+	sink, err := HTTPBatchSink(HTTPBatchSinkConfig{
+		Endpoint:      srv.URL,
+		Insecure:      true,
+		BatchSize:     10,
+		FlushInterval: 20 * time.Millisecond,
+		OnError: func(err error) {
+			select {
+			case errCh <- err:
+			default:
+			}
+		},
+	})
+	if err != nil {
+		t.Fatalf("HTTPBatchSink() error = %v", err)
+	}
+	defer sink.Close(context.Background())
+
+	if err := sink.WriteEvent(context.Background(), []byte(`{"event":"test"}`), nil); err != nil {
+		t.Fatalf("WriteEvent() error = %v", err)
+	}
+
+	select {
+	case got := <-errCh:
+		if !strings.Contains(got.Error(), "schema validation failed") {
+			t.Fatalf("OnError error = %q, want containing %q", got.Error(), "schema validation failed")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("OnError was not called for the rejected batch")
+	}
+}
