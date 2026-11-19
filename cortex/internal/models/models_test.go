@@ -55,6 +55,29 @@ func TestNodeAndEdgeValidate(t *testing.T) {
 	}
 }
 
+func TestOutcomeCategory(t *testing.T) {
+	tests := []struct {
+		code     int
+		expected string
+	}{
+		{code: 100, expected: "pending"}, // informational: must not be "failed"
+		{code: 199, expected: "pending"},
+		{code: 200, expected: "success"},
+		{code: 299, expected: "success"},
+		{code: 300, expected: "partial"},
+		{code: 399, expected: "partial"},
+		{code: 400, expected: "failed"},
+		{code: 500, expected: "failed"},
+		{code: 599, expected: "failed"},
+	}
+
+	for _, tt := range tests {
+		if got := OutcomeCategory(tt.code); got != tt.expected {
+			t.Errorf("OutcomeCategory(%d) = %q, want %q", tt.code, got, tt.expected)
+		}
+	}
+}
+
 func TestIncidentAndFeedbackValidate(t *testing.T) {
 	incident := &Incident{ID: "inc-1", Status: "active", Severity: "high"}
 	if err := incident.Validate(); err != nil {
