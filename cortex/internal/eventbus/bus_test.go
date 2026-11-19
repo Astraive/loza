@@ -198,4 +198,80 @@ func TestPublishWithBufferCapacityDoesNotCountDrops(t *testing.T) {
 
 	require.Len(t, ch, 1)
 	require.Equal(t, baseline, droppedCount("wildcard"))
+import "testing"
+
+// TestUnsubscribeRemovesEmptyFilterKey verifies that removing the last channel
+// for a filter deletes the map key instead of leaving an empty slice behind.
+func TestUnsubscribeRemovesEmptyFilterKey(t *testing.T) {
+	bus := New()
+
+	ch := bus.Subscribe("incident-1")
+	if _, ok := bus.subscribers["incident-1"]; !ok {
+		t.Fatal("expected filter key to exist after Subscribe")
+	}
+
+	bus.Unsubscribe("incident-1", ch)
+
+	if _, ok := bus.subscribers["incident-1"]; ok {
+		t.Fatal("expected filter key to be removed after last Unsubscribe")
+	}
+	if got := bus.SubscriberCount(); got != 0 {
+		t.Fatalf("SubscriberCount() = %d, want 0", got)
+	}
+}
+
+// TestUnsubscribeKeepsFilterKeyWithRemainingSubscribers verifies that a filter
+// key is retained while other subscribers for that filter are still present.
+func TestUnsubscribeKeepsFilterKeyWithRemainingSubscribers(t *testing.T) {
+	bus := New()
+
+	first := bus.Subscribe("incident-1")
+	second := bus.Subscribe("incident-1")
+
+	bus.Unsubscribe("incident-1", first)
+
+	subs, ok := bus.subscribers["incident-1"]
+	if !ok {
+		t.Fatal("expected filter key to remain while subscribers exist")
+	}
+	if len(subs) != 1 {
+		t.Fatalf("len(subscribers[incident-1]) = %d, want 1", len(subs))
+	}
+	if subs[0] != second {
+		t.Fatal("expected remaining subscriber to be the second channel")
+	}
+	if got := bus.SubscriberCount(); got != 1 {
+		t.Fatalf("SubscriberCount() = %d, want 1", got)
+	}
+
+	bus.Unsubscribe("incident-1", second)
+	if _, ok := bus.subscribers["incident-1"]; ok {
+		t.Fatal("expected filter key to be removed after last Unsubscribe")
+	}
+}
+
+// TestUnsubscribeOnlyRemovesEmptiedFilterKey verifies that removing one filter
+// does not affect keys for other filters that still have subscribers.
+func TestUnsubscribeOnlyRemovesEmptiedFilterKey(t *testing.T) {
+	bus := New()
+
+	incidentCh := bus.Subscribe("incident-1")
+	wildcardCh := bus.Subscribe("")
+
+	bus.Unsubscribe("incident-1", incidentCh)
+
+	if _, ok := bus.subscribers["incident-1"]; ok {
+		t.Fatal("expected emptied filter key to be removed")
+	}
+	if _, ok := bus.subscribers[""]; !ok {
+		t.Fatal("expected wildcard filter key to remain")
+	}
+	if got := bus.SubscriberCount(); got != 1 {
+		t.Fatalf("SubscriberCount() = %d, want 1", got)
+	}
+
+	bus.Unsubscribe("", wildcardCh)
+	if len(bus.subscribers) != 0 {
+		t.Fatalf("len(subscribers) = %d, want 0", len(bus.subscribers))
+	}
 }
