@@ -3,11 +3,18 @@ package cortex
 import (
 	"fmt"
 	"math"
+	"strings"
 )
 
-func edgeHasKey(edge map[string]any, key string) bool {
-	_, ok := edge[key]
-	return ok
+// validIdentifier reports whether m[key] holds a usable identifier: a string
+// value that is neither empty nor whitespace-only.
+func validIdentifier(m map[string]any, key string) bool {
+	value, ok := m[key]
+	if !ok {
+		return false
+	}
+	s, ok := value.(string)
+	return ok && strings.TrimSpace(s) != ""
 }
 
 // ValidateIncidentContext checks that an IncidentContext has required fields.
@@ -33,13 +40,13 @@ func ValidateGraphView(gv *GraphView) error {
 		return fmt.Errorf("cortex: graph view is nil")
 	}
 	for i, node := range gv.Nodes {
-		if _, ok := node["id"]; !ok {
-			return fmt.Errorf("cortex: node %d missing 'id'", i)
+		if !validIdentifier(node, "id") {
+			return fmt.Errorf("cortex: node %d missing or invalid 'id'", i)
 		}
 	}
 	for i, edge := range gv.Edges {
-		hasSource := edgeHasKey(edge, "source") || edgeHasKey(edge, "from_node_id")
-		hasTarget := edgeHasKey(edge, "target") || edgeHasKey(edge, "to_node_id")
+		hasSource := validIdentifier(edge, "source") || validIdentifier(edge, "from_node_id")
+		hasTarget := validIdentifier(edge, "target") || validIdentifier(edge, "to_node_id")
 		if !hasSource {
 			return fmt.Errorf("cortex: edge %d missing 'source' or 'from_node_id'", i)
 		}
