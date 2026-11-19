@@ -922,3 +922,76 @@ func TestBenchCommandRejectsNonPositiveNumericFlags(t *testing.T) {
 		})
 	}
 }
+
+func TestEventStringField(t *testing.T) {
+	tests := []struct {
+		name     string
+		ev       map[string]any
+		key      string
+		fallback string
+		want     string
+	}{
+		{name: "missing key", ev: map[string]any{}, key: "level", fallback: "unknown", want: "unknown"},
+		{name: "explicit null", ev: map[string]any{"level": nil}, key: "level", fallback: "unknown", want: "unknown"},
+		{name: "string value", ev: map[string]any{"level": "warn"}, key: "level", fallback: "unknown", want: "warn"},
+		{name: "empty string is preserved", ev: map[string]any{"event": ""}, key: "event", fallback: "-", want: ""},
+		{name: "non-string value is preserved", ev: map[string]any{"level": float64(3)}, key: "level", fallback: "unknown", want: "3"},
+		{name: "missing text field", ev: map[string]any{}, key: "service", fallback: "", want: ""},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := eventStringField(tc.ev, tc.key, tc.fallback); got != tc.want {
+				t.Fatalf("eventStringField() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestStreamLinesMissingFieldsDoNotRenderNil(t *testing.T) {
+	input := strings.Join([]string{
+		`{"event":"checkout.completed"}`,
+		`{"level":null,"timestamp":null,"service":null,"event":null}`,
+		`{"level":"error","timestamp":"2026-01-01T00:00:00Z","service":"checkout","event":"payment.failed"}`,
+	}, "\n")
+
+	out, err := captureStdout(t, func() error {
+		streamLines(context.Background(), strings.NewReader(input))
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("streamLines: %v", err)
+	}
+	if strings.Contains(out, "<nil>") {
+		t.Fatalf("missing fields rendered as <nil>: %s", out)
+	}
+	if !strings.Contains(out, "unknown") {
+		t.Fatalf("missing level should render a placeholder, got %s", out)
+	}
+	if !strings.Contains(out, "checkout.completed") || !strings.Contains(out, "payment.failed") {
+		t.Fatalf("expected both events in output, got %s", out)
+	}
+}
+
+func TestWatchCommandMissingFieldsDoNotRenderNil(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/tail" {
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+		_, _ = w.Write([]byte(`{"event":"watch.event"}` + "\n"))
+	}))
+	defer srv.Close()
+
+	cfg := config.Config{CollectorURL: srv.URL}
+	out, err := captureStdout(t, func() error {
+		return WatchCommand(context.Background(), cfg, nil)
+	})
+	if err != nil {
+		t.Fatalf("watch: %v", err)
+	}
+	if strings.Contains(out, "<nil>") {
+		t.Fatalf("missing fields rendered as <nil>: %s", out)
+	}
+	if !strings.Contains(out, "unknown") || !strings.Contains(out, "watch.event") {
+		t.Fatalf("expected sanitized event output, got %s", out)
+	}
+}

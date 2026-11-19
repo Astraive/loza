@@ -13,6 +13,21 @@ import (
 var validIdentifier = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*$`)
 var validEventID = regexp.MustCompile(`^[a-zA-Z0-9_:-]+$`)
 
+// eventStringField returns the string value of key in a decoded event, or
+// fallback when the key is absent or holds JSON null. Formatting a missing key
+// directly would render the literal "<nil>" in streamed output. Present
+// non-string values keep their previous formatting so no information is lost.
+func eventStringField(ev map[string]any, key, fallback string) string {
+	v, ok := ev[key]
+	if !ok || v == nil {
+		return fallback
+	}
+	if s, ok := v.(string); ok {
+		return s
+	}
+	return fmt.Sprint(v)
+}
+
 // isValidIdentifier checks if a string is a safe SQL identifier (letters, digits, underscores; must start with letter or underscore).
 func isValidIdentifier(s string) bool {
 	return validIdentifier.MatchString(s)

@@ -58,10 +58,10 @@ func streamLines(ctx context.Context, body io.Reader) error {
 			}
 			var ev map[string]any
 			if json.Unmarshal([]byte(line), &ev) == nil {
-				level := fmt.Sprintf("%v", ev["level"])
-				ts := fmt.Sprintf("%v", ev["timestamp"])
-				svc := fmt.Sprintf("%v", ev["service"])
-				evt := fmt.Sprintf("%v", ev["event"])
+				level := eventStringField(ev, "level", "unknown")
+				ts := eventStringField(ev, "timestamp", "")
+				svc := eventStringField(ev, "service", "")
+				evt := eventStringField(ev, "event", "")
 				switch level {
 				case "error":
 					fmt.Printf("%s %s %s %s", output.Dim(ts), output.Error(level), output.Bold(svc), evt)
