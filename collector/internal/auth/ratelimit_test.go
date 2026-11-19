@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"runtime"
 	"testing"
 	"time"
 
@@ -9,6 +10,7 @@ import (
 
 func TestAllowEvents_AtomicBatchCheck(t *testing.T) {
 	rl := NewKeyRateLimiter()
+	defer rl.Close()
 
 	// With epm=600, burst = 600/10+1 = 61
 	// First batch of 10 should succeed
@@ -46,6 +48,7 @@ func TestAllowEvents_BatchLargerThanQuota(t *testing.T) {
 
 func TestAllowEvents_NoPartialConsumption(t *testing.T) {
 	rl := NewKeyRateLimiter()
+	defer rl.Close()
 
 	// With epm=60, rate=1/sec, burst=60
 	// Drain the burst
@@ -69,6 +72,7 @@ func TestAllowEvents_NoPartialConsumption(t *testing.T) {
 
 func TestAllowEvents_ZeroCountDefaultsToOne(t *testing.T) {
 	rl := NewKeyRateLimiter()
+	defer rl.Close()
 
 	if !rl.AllowEvents("key-zero", 60, 0) {
 		t.Fatal("zero count should default to 1 and succeed")
@@ -77,6 +81,7 @@ func TestAllowEvents_ZeroCountDefaultsToOne(t *testing.T) {
 
 func TestAllowEvents_NegativeEPMReturnsTrue(t *testing.T) {
 	rl := NewKeyRateLimiter()
+	defer rl.Close()
 
 	// Negative or zero EPM means no limit
 	if !rl.AllowEvents("key-neg", -1, 1000) {
@@ -89,6 +94,7 @@ func TestAllowEvents_NegativeEPMReturnsTrue(t *testing.T) {
 
 func TestAllowRequest_BasicFlow(t *testing.T) {
 	rl := NewKeyRateLimiter()
+	defer rl.Close()
 
 	// rpm=60 means 1/sec, burst=7
 	if !rl.AllowRequest("req-key", 60) {
@@ -101,6 +107,7 @@ func TestAllowRequest_BasicFlow(t *testing.T) {
 
 func TestAllowRequest_NegativeRPMReturnsTrue(t *testing.T) {
 	rl := NewKeyRateLimiter()
+	defer rl.Close()
 
 	if !rl.AllowRequest("req-neg", -1) {
 		t.Fatal("negative RPM should always return true")
@@ -145,6 +152,7 @@ func TestCleanup_EvictsOldEntries(t *testing.T) {
 
 func TestAllowEvents_DifferentKeysIndependent(t *testing.T) {
 	rl := NewKeyRateLimiter()
+	defer rl.Close()
 
 	// Drain key-a
 	for i := 0; i < 7; i++ {
@@ -234,4 +242,33 @@ func TestLimitChange_RebuildsWithConfiguredRate(t *testing.T) {
 	if got := rl.eventLimiters["rate-key"].Limit(); got != wantEvt {
 		t.Fatalf("event limiter rate = %v, want %v after epm change", got, wantEvt)
 	}
+// TestKeyRateLimiterClose_StopsBackgroundCleanup is a regression test for the
+// leaked cleanup goroutine/ticker: NewKeyRateLimiter starts a cleanupLoop that
+// runs a 10-minute ticker until Close is called. Close must signal the loop to
+// stop, actually terminate the goroutine, and be safe to call more than once.
+func TestKeyRateLimiterClose_StopsBackgroundCleanup(t *testing.T) {
+	before := runtime.NumGoroutine()
+
+	rl := NewKeyRateLimiter()
+
+	// Close must signal the cleanup loop via stopCh.
+	rl.Close()
+	select {
+	case <-rl.stopCh:
+		// expected: the cleanup loop has been signaled to exit
+	default:
+		t.Fatal("Close did not signal the cleanup loop to stop")
+	}
+
+	// The cleanup goroutine must actually exit after Close.
+	deadline := time.Now().Add(2 * time.Second)
+	for runtime.NumGoroutine() > before && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if after := runtime.NumGoroutine(); after > before {
+		t.Fatalf("cleanup goroutine leaked: goroutines before=%d after=%d", before, after)
+	}
+
+	// Close is idempotent and must not panic on a second call.
+	rl.Close()
 }
