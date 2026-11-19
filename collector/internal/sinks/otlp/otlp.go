@@ -176,6 +176,14 @@ const (
 	defaultRetryMaxElapsedTime  = time.Minute
 )
 
+// newExporterFn and newResourceFn point at the real constructors. They are
+// variables so tests can deterministically exercise the exporter/resource
+// construction error paths without depending on network or environment state.
+var (
+	newExporterFn = newExporter
+	newResourceFn = resource.New
+)
+
 // New creates an OTLP log sink backed by the OpenTelemetry Logs SDK.
 func New(ctx context.Context, cfg Config) (collectorevent.Sink, error) {
 	resolved, err := resolveConfig(cfg)
@@ -186,13 +194,22 @@ func New(ctx context.Context, cfg Config) (collectorevent.Sink, error) {
 		ctx = context.Background()
 	}
 
-	exporter, err := newExporter(ctx, resolved)
+	exporter, err := newExporterFn(ctx, resolved)
 	if err != nil {
 		return nil, fmt.Errorf("otlp: create exporter: %w", err)
 	}
 
 	res, err := newResource(ctx, resolved)
+	res, err := newResourceFn(ctx,
+		resource.WithAttributes(mapToAttributes(resolved.ResourceAttributes)...),
+		resource.WithAttributes(semconv.ServiceName(resolved.Logger)),
+		resource.WithTelemetrySDK(),
+	)
 	if err != nil {
+		// The exporter owns a gRPC connection/background goroutines. If the
+		// resource could not be created, shut it down so a failed New call does
+		// not leak those resources.
+		_ = exporter.Shutdown(ctx)
 		return nil, fmt.Errorf("otlp: create resource: %w", err)
 	}
 
