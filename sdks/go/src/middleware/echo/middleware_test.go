@@ -100,3 +100,64 @@ func TestMiddlewareRecoversPanicAndUsesConfiguredEvent(t *testing.T) {
 		t.Fatalf("panicErr = %q", got)
 	}
 }
+
+// failingSink simulates a broken delivery path for a single event name while
+// still accepting other events (such as the log line emitted on failure).
+type failingSink struct {
+	failEvent string
+}
+
+func (s *failingSink) Name() string { return "failing" }
+
+func (s *failingSink) WriteEvent(_ context.Context, _ []byte, ev *loza.Event) error {
+	if ev.Event == s.failEvent {
+		return errors.New("sink write failed")
+	}
+	return nil
+}
+
+func (s *failingSink) Flush(context.Context) error { return nil }
+func (s *failingSink) Close(context.Context) error { return nil }
+
+// TestMiddlewareLogsEmitFailures verifies that an Emit delivery failure is
+// surfaced through the package logger instead of being silently discarded.
+func TestMiddlewareLogsEmitFailures(t *testing.T) {
+	failing := &failingSink{failEvent: "http.request"}
+	recorder, store := loza.MemorySink()
+	cfg := loza.Test().WithSink(failing).WithSink(recorder)
+	if err := loza.Configure(cfg); err != nil {
+		t.Fatalf("configure: %v", err)
+	}
+	t.Cleanup(func() { _ = loza.Shutdown(context.Background()) })
+
+	e := echopkg.New()
+	e.Use(Middleware())
+	e.GET("/ok", func(c echopkg.Context) error { return c.String(http.StatusOK, "ok") })
+
+	req := httptest.NewRequest(http.MethodGet, "/ok", nil)
+	rr := httptest.NewRecorder()
+	e.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rr.Code, http.StatusOK)
+	}
+	if err := loza.Flush(context.Background()); err != nil {
+		t.Fatalf("Flush: %v", err)
+	}
+
+	var logEvent *loza.Event
+	for _, ev := range store.Events() {
+		if ev.Event == "http.request.emit" {
+			logEvent = ev
+			break
+		}
+	}
+	if logEvent == nil {
+		t.Fatalf("emit failure was not logged; events = %+v", store.Events())
+	}
+	if logEvent.Message != "echo middleware: failed to emit event" {
+		t.Fatalf("log message = %q", logEvent.Message)
+	}
+	if logEvent.Error == nil || logEvent.Error.Message != "sink write failed" {
+		t.Fatalf("log error = %+v", logEvent.Error)
+	}
+}
