@@ -100,4 +100,104 @@ func TestExpandDotKeysNonConflicting(t *testing.T) {
 	}
 	assertLeaf(t, lookupDotNode(roots[0], "id"), 2, 42)
 	assertLeaf(t, lookupDotNode(roots[0], "name"), 3, "alice")
+import (
+	"errors"
+	"strings"
+	"testing"
+)
+
+func TestExpandDotKeysRejectsMismatchedSliceLengths(t *testing.T) {
+	cases := []struct {
+		name   string
+		keys   []string
+		kinds  []uint8
+		values []any
+	}{
+		{
+			name:   "shorter kinds",
+			keys:   []string{"user.id", "plain"},
+			kinds:  []uint8{1},
+			values: []any{"u1", "v"},
+		},
+		{
+			name:   "shorter values",
+			keys:   []string{"user.id", "plain"},
+			kinds:  []uint8{1, 2},
+			values: []any{"u1"},
+		},
+		{
+			name:   "longer kinds",
+			keys:   []string{"plain"},
+			kinds:  []uint8{1, 2},
+			values: []any{"v"},
+		},
+		{
+			name:   "longer values",
+			keys:   []string{"user.id"},
+			kinds:  []uint8{1},
+			values: []any{"u1", "extra"},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			plainKeys, plainKinds, plainValues, groupKeys, groupRoots, err :=
+				ExpandDotKeys(tc.keys, tc.kinds, tc.values)
+
+			if !errors.Is(err, ErrDotKeyLengthMismatch) {
+				t.Fatalf("expected ErrDotKeyLengthMismatch, got %v", err)
+			}
+			if err == nil || !strings.Contains(err.Error(), "keys=") {
+				t.Fatalf("error should report the observed lengths, got %v", err)
+			}
+			if plainKeys != nil || plainKinds != nil || plainValues != nil ||
+				groupKeys != nil || groupRoots != nil {
+				t.Fatalf("expected no partial results on mismatch, got %v %v %v %v %v",
+					plainKeys, plainKinds, plainValues, groupKeys, groupRoots)
+			}
+		})
+	}
+}
+
+func TestExpandDotKeysWithEqualLengths(t *testing.T) {
+	keys := []string{"plain", "user.id", "user.profile.name"}
+	kinds := []uint8{1, 2, 3}
+	values := []any{"p", "u1", "Ada"}
+
+	plainKeys, plainKinds, plainValues, groupKeys, groupRoots, err :=
+		ExpandDotKeys(keys, kinds, values)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(plainKeys) != 1 || plainKeys[0] != "plain" ||
+		len(plainKinds) != 1 || plainKinds[0] != 1 ||
+		len(plainValues) != 1 || plainValues[0] != "p" {
+		t.Fatalf("unexpected plain attrs: %v %v %v", plainKeys, plainKinds, plainValues)
+	}
+
+	if len(groupKeys) != 1 || groupKeys[0] != "user" || len(groupRoots) != 1 {
+		t.Fatalf("unexpected groups: %v %v", groupKeys, groupRoots)
+	}
+	root := groupRoots[0]
+	id := root.Children["id"]
+	if id == nil || id.Value == nil || id.Value.Kind != 2 || id.Value.Value != "u1" {
+		t.Fatalf("unexpected user.id leaf: %#v", id)
+	}
+	profile := root.Children["profile"]
+	if profile == nil || profile.Children["name"] == nil ||
+		profile.Children["name"].Value.Value != "Ada" {
+		t.Fatalf("unexpected user.profile.name leaf: %#v", profile)
+	}
+}
+
+func TestExpandDotKeysEmptyInputs(t *testing.T) {
+	plainKeys, plainKinds, plainValues, groupKeys, groupRoots, err :=
+		ExpandDotKeys(nil, nil, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(plainKeys)+len(plainKinds)+len(plainValues)+len(groupKeys)+len(groupRoots) != 0 {
+		t.Fatal("expected empty results for empty inputs")
+	}
 }
