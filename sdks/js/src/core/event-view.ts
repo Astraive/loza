@@ -5,6 +5,38 @@ import type { ErrorInfo } from './errors.ts';
 import type { EventState } from './event.ts';
 import type { Level } from './level.ts';
 
+/**
+ * Produce a deeply frozen, structurally independent copy of a JSON-like value.
+ *
+ * The view is documented as immutable, but freezing only the outer container
+ * leaves nested objects/arrays (and the `error` object) mutable, and freezing
+ * in place would also freeze the source event's shared nested values. Cloning
+ * as we freeze gives the view a true snapshot without mutating the event.
+ * Cyclic references are handled via the `seen` map.
+ */
+function freezeClone<T>(value: T, seen: WeakMap<object, any> = new WeakMap()): T {
+  if (value === null || typeof value !== 'object') return value;
+  if (seen.has(value as object)) return seen.get(value as object) as T;
+  // Preserve Date values instead of degrading them to plain objects.
+  if (value instanceof Date) return Object.freeze(new Date(value.getTime())) as T;
+
+  if (Array.isArray(value)) {
+    const copy: any[] = [];
+    seen.set(value as object, copy);
+    for (const item of value as unknown as any[]) {
+      copy.push(freezeClone(item, seen));
+    }
+    return Object.freeze(copy) as T;
+  }
+
+  const copy: Record<string, any> = {};
+  seen.set(value as object, copy);
+  for (const [key, item] of Object.entries(value as Record<string, any>)) {
+    copy[key] = freezeClone(item, seen);
+  }
+  return Object.freeze(copy) as T;
+}
+
 /** Immutable read-only view of an Event, passed to Schema.encode(). */
 export class EventView {
   readonly schemaVersion: string;
@@ -40,7 +72,7 @@ export class EventView {
   readonly processes: ReadonlyArray<ProcessEntry>;
   readonly groups: ReadonlyArray<GroupEntry>;
   readonly timers: ReadonlyArray<TimerEntry>;
-  readonly error: ErrorInfo | null;
+  readonly error: Readonly<ErrorInfo> | null;
   readonly state: EventState;
   readonly sensitiveKeys: ReadonlySet<string>;
   readonly hashKeys: ReadonlySet<string>;
@@ -74,12 +106,12 @@ export class EventView {
     this.durationMs = event.durationMs;
     this.startedAt = event.startedAt;
     this.finishedAt = event.finishedAt;
-    this.attrs = Object.freeze({ ...event.attrs });
-    this.checkpoints = Object.freeze([...event.checkpoints]);
-    this.processes = Object.freeze([...(event.processes || [])]);
-    this.groups = Object.freeze([...(event.groups || [])]);
-    this.timers = Object.freeze([...(event.timers || [])]);
-    this.error = event.error ? { ...event.error } : null;
+    this.attrs = freezeClone(event.attrs ?? {});
+    this.checkpoints = freezeClone(event.checkpoints ?? []);
+    this.processes = freezeClone(event.processes ?? []);
+    this.groups = freezeClone(event.groups ?? []);
+    this.timers = freezeClone(event.timers ?? []);
+    this.error = event.error ? freezeClone(event.error) : null;
     this.state = event.state;
     this.sensitiveKeys = new Set(event.sensitiveKeys);
     this.hashKeys = new Set(event.hashKeys);
