@@ -204,6 +204,60 @@ func (r *stubClickHouseRows) Scan(dest ...any) error {
 			*d = b
 		default:
 			return fmt.Errorf("Scan column %d: unexpected destination %T", i, dest[i])
+	"errors"
+	"reflect"
+	"testing"
+
+	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
+	"github.com/stretchr/testify/require"
+)
+
+// fakeColumnType is a minimal driver.ColumnType for exercising the
+// reflection-based ClickHouse scan path.
+type fakeColumnType struct {
+	name     string
+	scanType reflect.Type
+}
+
+func (f fakeColumnType) Name() string             { return f.name }
+func (f fakeColumnType) Nullable() bool           { return false }
+func (f fakeColumnType) ScanType() reflect.Type   { return f.scanType }
+func (f fakeColumnType) DatabaseTypeName() string { return "String" }
+
+type fakeClickHouseRows struct {
+	columns []string
+	types   []driver.ColumnType
+	data    [][]any
+	pos     int
+	rowErr  error
+	scanErr error
+	closed  bool
+}
+
+func (f *fakeClickHouseRows) Columns() []string                { return f.columns }
+func (f *fakeClickHouseRows) ColumnTypes() []driver.ColumnType { return f.types }
+
+func (f *fakeClickHouseRows) Next() bool {
+	if f.pos < len(f.data) {
+		f.pos++
+		return true
+	}
+	return false
+}
+
+func (f *fakeClickHouseRows) Scan(dest ...any) error {
+	if f.scanErr != nil {
+		return f.scanErr
+	}
+	row := f.data[f.pos-1]
+	for i := range dest {
+		pointer := reflect.ValueOf(dest[i])
+		if pointer.Kind() != reflect.Ptr || pointer.IsNil() {
+			continue
+		}
+		value := reflect.ValueOf(row[i])
+		if value.IsValid() && value.Type().AssignableTo(pointer.Elem().Type()) {
+			pointer.Elem().Set(value)
 		}
 	}
 	return nil
@@ -273,6 +327,86 @@ func TestCollectRowsNormalizesValues(t *testing.T) {
 			*(dest[1].(*any)) = data[pos][1]
 			return nil
 		},
+func (f *fakeClickHouseRows) Err() error   { return f.rowErr }
+func (f *fakeClickHouseRows) Close() error { f.closed = true; return nil }
+
+func clickHouseFixture(rowErr error) *fakeClickHouseRows {
+	return &fakeClickHouseRows{
+		columns: []string{"id", "payload"},
+		types: []driver.ColumnType{
+			fakeColumnType{name: "id", scanType: reflect.TypeOf(int64(0))},
+			fakeColumnType{name: "payload", scanType: reflect.TypeOf([]byte(nil))},
+		},
+		data: [][]any{
+			{int64(1), []byte("alpha")},
+			{int64(2), []byte("beta")},
+			{int64(3), []byte("gamma")},
+		},
+		rowErr: rowErr,
+	}
+}
+
+// The ClickHouse path now goes through collectRows, so byte values are
+// normalized to strings exactly like the SQL/Postgres path (the divergence
+// that caused finding 1).
+func TestQueryClickHouseRowsNormalizesBytesLikeSQLPath(t *testing.T) {
+	rows := clickHouseFixture(nil)
+
+	got, err := QueryClickHouseRows(rows, 0)
+	require.NoError(t, err)
+	require.Equal(t, []string{"id", "payload"}, got.Columns)
+	require.Len(t, got.Rows, 3)
+	require.Equal(t, int64(1), got.Rows[0][0])
+	require.Equal(t, "alpha", got.Rows[0][1])
+	require.IsType(t, "", got.Rows[0][1])
+	require.Equal(t, "gamma", got.Rows[2][1])
+	require.True(t, rows.closed, "rows must be closed through the shared path")
+}
+
+// The reported defect is duplicated limit/error/close handling. Verify the
+// ClickHouse path inherits the same limit semantics as collectRows.
+func TestQueryClickHouseRowsHonorsSharedLimit(t *testing.T) {
+	rows := clickHouseFixture(nil)
+
+	got, err := QueryClickHouseRows(rows, 2)
+	require.NoError(t, err)
+	require.Len(t, got.Rows, 2)
+	require.Equal(t, "beta", got.Rows[1][1])
+	require.True(t, rows.closed)
+}
+
+func TestQueryClickHouseRowsPropagatesIteratedError(t *testing.T) {
+	wantErr := errors.New("iteration failed")
+	rows := clickHouseFixture(wantErr)
+
+	got, err := QueryClickHouseRows(rows, 0)
+	require.ErrorIs(t, err, wantErr)
+	require.Empty(t, got.Rows)
+	require.True(t, rows.closed)
+}
+
+func TestQueryClickHouseRowsPropagatesScanError(t *testing.T) {
+	wantErr := errors.New("scan failed")
+	rows := clickHouseFixture(nil)
+	rows.scanErr = wantErr
+
+	got, err := QueryClickHouseRows(rows, 0)
+	require.ErrorIs(t, err, wantErr)
+	require.Empty(t, got.Rows)
+	require.True(t, rows.closed)
+}
+
+// Guard the shared normalization applied to every backend directly.
+func TestCollectRowsNormalizesBytes(t *testing.T) {
+	calls := 0
+	scanner := func() ([]any, error) {
+		calls++
+		return []any{[]byte("value")}, nil
+	}
+	got, err := collectRows(
+		[]string{"col"},
+		func() bool { return calls < 1 },
+		scanner,
 		func() error { return nil },
 		func() {},
 		0,
@@ -316,4 +450,7 @@ func TestValidateQuery(t *testing.T) {
 			}
 		})
 	}
+	require.NoError(t, err)
+	require.Equal(t, "value", got.Rows[0][0])
+	require.IsType(t, "", got.Rows[0][0])
 }

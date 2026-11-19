@@ -55,19 +55,25 @@ func normalizeResultValue(value any) any {
 }
 
 func collectRows(columns []string, next func() bool, scan func(...any) error, rowErr func() error, close func(), limit int) (Result, error) {
+// rowScanner allocates scan destinations for one row, scans into them, and
+// returns the backend-neutral values. Each backend decides how its
+// destinations are typed; collectRows owns iteration, normalization, limits
+// and error handling so every backend behaves identically.
+type rowScanner func() ([]any, error)
+
+func collectRows(columns []string, next func() bool, scan rowScanner, rowErr func() error, close func(), limit int) (Result, error) {
 	defer close()
 	result := Result{Columns: append([]string(nil), columns...), Rows: make([][]any, 0)}
 	for next() {
-		values := make([]any, len(columns))
-		pointers := make([]any, len(columns))
-		for i := range values {
-			pointers[i] = &values[i]
-		}
-		if err := scan(pointers...); err != nil {
+		values, err := scan()
+		if err != nil {
 			return Result{}, err
 		}
 		for i, value := range values {
 			values[i] = normalizeResultValue(value)
+			if raw, ok := value.([]byte); ok {
+				values[i] = string(raw)
+			}
 		}
 		result.Rows = append(result.Rows, values)
 		if limit > 0 && len(result.Rows) >= limit {
@@ -80,13 +86,29 @@ func collectRows(columns []string, next func() bool, scan func(...any) error, ro
 	return result, nil
 }
 
+// scanIntoInterfaces scans each column into a *any destination, matching the
+// behavior of database/sql and pgx.
+func scanIntoInterfaces(scan func(...any) error, length int) rowScanner {
+	return func() ([]any, error) {
+		values := make([]any, length)
+		pointers := make([]any, length)
+		for i := range values {
+			pointers[i] = &values[i]
+		}
+		if err := scan(pointers...); err != nil {
+			return nil, err
+		}
+		return values, nil
+	}
+}
+
 func QuerySQLRows(rows *sql.Rows, limit int) (Result, error) {
 	columns, err := rows.Columns()
 	if err != nil {
 		_ = rows.Close()
 		return Result{}, err
 	}
-	return collectRows(columns, rows.Next, rows.Scan, rows.Err, func() { _ = rows.Close() }, limit)
+	return collectRows(columns, rows.Next, scanIntoInterfaces(rows.Scan, len(columns)), rows.Err, func() { _ = rows.Close() }, limit)
 }
 
 func QueryPostgresRows(rows pgx.Rows, limit int) (Result, error) {
@@ -95,7 +117,7 @@ func QueryPostgresRows(rows pgx.Rows, limit int) (Result, error) {
 	for _, field := range columns {
 		names = append(names, field.Name)
 	}
-	return collectRows(names, rows.Next, rows.Scan, rows.Err, rows.Close, limit)
+	return collectRows(names, rows.Next, scanIntoInterfaces(rows.Scan, len(names)), rows.Err, rows.Close, limit)
 }
 
 type clickHouseRows interface {
@@ -107,12 +129,10 @@ type clickHouseRows interface {
 	Close() error
 }
 
-func QueryClickHouseRows(rows clickHouseRows, limit int) (Result, error) {
-	defer func() { _ = rows.Close() }()
-	columns := rows.Columns()
-	types := rows.ColumnTypes()
-	result := Result{Columns: append([]string(nil), columns...), Rows: make([][]any, 0)}
-	for rows.Next() {
+// scanClickHouseRows uses the column scan types to build the typed
+// destinations ClickHouse requires, then unwraps them into plain values.
+func scanClickHouseRows(rows clickHouseRows, columns []string, types []driver.ColumnType) rowScanner {
+	return func() ([]any, error) {
 		pointers := make([]any, len(columns))
 		for i := range columns {
 			scanType := reflect.TypeOf("")
@@ -122,7 +142,7 @@ func QueryClickHouseRows(rows clickHouseRows, limit int) (Result, error) {
 			pointers[i] = reflect.New(scanType).Interface()
 		}
 		if err := rows.Scan(pointers...); err != nil {
-			return Result{}, err
+			return nil, err
 		}
 		values := make([]any, len(pointers))
 		for i, pointer := range pointers {
@@ -142,15 +162,14 @@ func QueryClickHouseRows(rows clickHouseRows, limit int) (Result, error) {
 			}
 			values[i] = normalizeResultValue(concrete.Interface())
 		}
-		result.Rows = append(result.Rows, values)
-		if limit > 0 && len(result.Rows) >= limit {
-			break
-		}
+		return values, nil
 	}
-	if err := rows.Err(); err != nil {
-		return Result{}, err
-	}
-	return result, nil
+}
+
+func QueryClickHouseRows(rows clickHouseRows, limit int) (Result, error) {
+	columns := rows.Columns()
+	types := rows.ColumnTypes()
+	return collectRows(columns, rows.Next, scanClickHouseRows(rows, columns, types), rows.Err, func() { _ = rows.Close() }, limit)
 }
 
 type SQL struct {
