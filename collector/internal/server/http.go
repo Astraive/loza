@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"github.com/rs/zerolog/log"
 	"golang.org/x/time/rate"
 )
 
@@ -142,7 +143,8 @@ func (s *HTTPServer) handleIngest(w http.ResponseWriter, r *http.Request) {
 		}
 		// Any other read error (for example a truncated body) is a bad
 		// request, not a payload-size violation.
-		http.Error(w, "Bad Request: "+err.Error(), http.StatusBadRequest)
+		log.Error().Err(err).Msg("invalid ingest payload")
+		http.Error(w, "Bad Request", http.StatusBadRequest)
 		return
 	}
 
