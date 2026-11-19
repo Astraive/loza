@@ -34,3 +34,21 @@ func TestNetHTTPHelperBoundaries(t *testing.T) {
 		t.Fatal("valid attribute key was rejected")
 	}
 }
+
+func TestSelectedHeaderAttrsCapturesAllValues(t *testing.T) {
+	req := &http.Request{Header: http.Header{}}
+	req.Header.Add("X-Forwarded-For", " 203.0.113.1 ")
+	req.Header.Add("X-Forwarded-For", "198.51.100.2")
+	req.Header.Add("X-Forwarded-For", "   ")
+
+	attrs := selectedHeaderAttrs(req, []string{"X-Forwarded-For"})
+	if len(attrs) != 1 {
+		t.Fatalf("expected 1 header attr, got %d: %#v", len(attrs), attrs)
+	}
+	if attrs[0].Key != "http.header.x-forwarded-for" {
+		t.Fatalf("unexpected attr key: %q", attrs[0].Key)
+	}
+	if got, want := attrs[0].Value, "203.0.113.1, 198.51.100.2"; got != want {
+		t.Fatalf("header attr value = %q, want %q (all non-empty values must be preserved)", got, want)
+	}
+}
