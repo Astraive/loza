@@ -312,6 +312,13 @@ func startGRPCServer(cfg *config.Config, stor storage.Storage, tlsCfg *tls.Confi
 // A nil channel means gRPC is disabled and is a no-op.
 func shutdownGRPCServer(ready <-chan *grpc.Server) {
 	if ready == nil {
+	// Enforce the same auth, role and rate-limit policy as the HTTP API on
+	// every gRPC RPC, including streams.
+	opts = append(opts, grpcserver.ServerOptions(cfg)...)
+
+	listener, err := net.Listen("tcp", grpcAddr)
+	if err != nil {
+		log.Error().Err(err).Msg("Failed to create listener")
 		return
 	}
 

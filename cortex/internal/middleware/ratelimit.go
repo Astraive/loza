@@ -123,6 +123,21 @@ func (rl *RateLimiter) cleanup() {
 	}
 }
 
+// Allow reports whether a request identified by apiKey and client IP is
+// within both the per-API-key and per-IP limits. The HTTP middleware and the
+// gRPC interceptors share this method so both transports rate-limit equally.
+func (rl *RateLimiter) Allow(apiKey, ip string) bool {
+	if apiKey != "" {
+		if !rl.getAPIKeyLimiter(apiKey).Allow() {
+			return false
+		}
+	}
+	if !rl.getIPLimiter(ip).Allow() {
+		return false
+	}
+	return true
+}
+
 func (rl *RateLimiter) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Rate limit by API key first
@@ -130,19 +145,9 @@ func (rl *RateLimiter) Middleware(next http.Handler) http.Handler {
 		if apiKey == "" {
 			apiKey = r.Header.Get("Authorization")
 		}
-		if apiKey != "" {
-			limiter := rl.getAPIKeyLimiter(apiKey)
-			if !limiter.Allow() {
-				w.Header().Set("Retry-After", "1")
-				http.Error(w, `{"error":"rate limit exceeded","retry_after":1}`, http.StatusTooManyRequests)
-				return
-			}
-		}
 
 		// Rate limit by IP — use trusted proxy headers when applicable
-		ip := rl.extractClientIP(r)
-		ipLimiter := rl.getIPLimiter(ip)
-		if !ipLimiter.Allow() {
+		if !rl.Allow(apiKey, rl.extractClientIP(r)) {
 			w.Header().Set("Retry-After", "1")
 			http.Error(w, `{"error":"rate limit exceeded","retry_after":1}`, http.StatusTooManyRequests)
 			return

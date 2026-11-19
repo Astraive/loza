@@ -172,8 +172,8 @@ The API server exposes four transport protocols:
 | Protocol | Endpoint | Use Case |
 |---|---|---|
 | HTTP REST | `/*` | CRUD operations, reconstruction, graph queries |
-| gRPC | `:9309` | Collector push, high-throughput ingestion |
+| gRPC | `:9313` | Collector push, high-throughput ingestion |
 | WebSocket | `/ws` | Live event streaming, real-time incident feed |
 | GraphQL | `/graphql` | Flexible queries, dashboard integration |
 
-All protocols share the same backend services (processor, reconstructor, matcher, learner). Authentication and rate limiting are applied at the HTTP middleware layer.
+All protocols share the same backend services (processor, reconstructor, matcher, learner). Authentication and rate limiting are applied by the HTTP middleware and by equivalent gRPC unary/stream interceptors, both backed by the same `Auth` component and rate limiter.
