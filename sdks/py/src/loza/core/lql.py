@@ -159,3 +159,20 @@ def query_sql(
     if not isinstance(data, dict):
         raise LQLCompilationError("lql response has an invalid result envelope")
     return QueryResult(columns=data.get("columns", []), rows=data.get("rows", []))
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            raw = resp.read(8 * 1024 * 1024 + 1)
+            if len(raw) > 8 * 1024 * 1024:
+                raise LQLCompilationError("sql response exceeds the configured size limit", status=resp.status)
+            data = json.loads(raw.decode("utf-8"))
+    except urllib.error.HTTPError as error:
+        raise _decode_query_error(error) from error
+    except (OSError, ValueError) as error:
+        raise LQLCompilationError("sql query transport or response decoding failed") from error
+    if not isinstance(data, dict):
+        raise LQLCompilationError("sql response has an invalid result envelope")
+    columns = data.get("columns", [])
+    rows = data.get("rows", [])
+    if not isinstance(columns, list) or not isinstance(rows, list):
+        raise LQLCompilationError("sql response has an invalid result envelope")
+    return QueryResult(columns=columns, rows=rows)
