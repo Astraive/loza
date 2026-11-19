@@ -503,3 +503,35 @@ def test_flask_middleware_factory_still_accepts_service_only() -> None:
     assert instance.app is None
     assert instance.service == "checkout"
     assert instance.config == {}
+def test_flask_middleware_malformed_status_defaults_to_500() -> None:
+    from loza.middleware.flask import Middleware as FlaskMiddleware
+
+    # A whitespace-only status makes split() return [], and a non-numeric status
+    # makes int() fail. Neither may escape capture_start_response into the app.
+    for malformed_status in ("   ", "not-a-number"):
+        captured = []
+
+        def app(_environ, start_response, _status=malformed_status):
+            start_response(_status, [])
+            return iter([b"ok"])
+
+        def start_response(status, response_headers, exc_info=None):
+            captured.append(status)
+
+        sink = loza.MemorySink()
+        loza.Configure(loza.Test("checkout").with_sink(sink))
+        middleware = FlaskMiddleware(app, service="checkout")
+
+        response = middleware(
+            {"REQUEST_METHOD": "GET", "PATH_INFO": "/bad-status"},
+            start_response,
+        )
+
+        assert list(response) == [b"ok"]
+        assert captured == [malformed_status]
+
+        assert len(sink.events) == 1
+        payload = json.loads(sink.events[0])
+        # status_code is a canonical field and is stripped from the payload;
+        # an "error" outcome confirms the parse fell back to 500.
+        assert payload["outcome"] == "error"
