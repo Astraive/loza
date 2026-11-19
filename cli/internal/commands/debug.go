@@ -158,6 +158,8 @@ func debugCortex(ctx context.Context, cfg config.Config) error {
 				}
 			}
 		}
+	} else {
+		fmt.Printf("  %s: %v\n", output.Warning("Key Metrics unavailable"), err)
 	}
 
 	fmt.Println()
