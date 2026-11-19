@@ -31,6 +31,9 @@ describe('CollectorClient boundaries', () => {
     assert.throws(() => new CollectorClient({ url: 'http://example.com', apiKey: 'secret-key', authHeader: 'Authorization' }), /require HTTPS/);
     assert.doesNotThrow(() => new CollectorClient({ url: 'http://127.0.0.1:9308', apiKey: 'secret-key' }));
     assert.doesNotThrow(() => new CollectorClient({ url: 'https://example.com', apiKey: 'secret-key' }));
+    // URL.hostname keeps IPv6 brackets, so IPv6 loopback must still be allowed.
+    assert.doesNotThrow(() => new CollectorClient({ url: 'http://[::1]:3000', username: 'u', password: 'p' }));
+    assert.throws(() => new CollectorClient({ url: 'http://[::2]:3000', username: 'u', password: 'p' }), /require HTTPS/);
     let requests = 0;
     const { server, url } = await startCollector((req, res) => {
       requests++;

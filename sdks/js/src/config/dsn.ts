@@ -37,8 +37,15 @@ export interface LozaDSN {
 const USERINFO_RESERVED = /[:\s]/;
 const PASSWORD_RESERVED = /[/:?#\[\]@!$&'()*+,;=]/;
 
-function isLocalhost(host: string): boolean {
-  return host === 'localhost' || host === '127.0.0.1' || host === '::1';
+/**
+ * True for hosts allowed to use plaintext HTTP with Basic credentials.
+ *
+ * `URL.hostname` keeps the brackets around IPv6 literals (e.g. `[::1]`), so
+ * normalize them before comparing against the loopback addresses.
+ */
+export function isLocalhost(host: string): boolean {
+  const normalized = host.replace(/^\[|\]$/g, '');
+  return normalized === 'localhost' || normalized === '127.0.0.1' || normalized === '::1';
 }
 
 export function isPublicDSNUsername(username: string): boolean {

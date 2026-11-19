@@ -336,6 +336,8 @@ describe('Sink boundaries', () => {
     assert.doesNotThrow(() => new HTTPBatchSink({ endpoint: 'http://localhost/events', apiKey: 'secret-key' }));
     assert.doesNotThrow(() => new HTTPBatchSink({ endpoint: 'https://example.com/events', apiKey: 'secret-key' }));
     assert.doesNotThrow(() => new HTTPBatchSink({ endpoint: 'http://localhost/events', username: 'user', password: 'secret' }));
+    assert.doesNotThrow(() => new HTTPBatchSink({ endpoint: 'http://[::1]:3000/events', username: 'user', password: 'secret' }));
+    assert.throws(() => new HTTPBatchSink({ endpoint: 'http://[::2]:3000/events', username: 'user', password: 'secret' }), /require HTTPS/);
     assert.doesNotThrow(() => new HTTPBatchSink({ endpoint: 'https://example.com/events', username: 'lz_pub_capability' }));
     assert.ok(collectorSink({ endpoint: 'http://localhost/events' }) instanceof CollectorSink);
     assert.ok(httpBatchSink({ endpoint: 'http://localhost/events' }) instanceof HTTPBatchSink);
