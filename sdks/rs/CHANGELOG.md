@@ -11,6 +11,14 @@ All notable changes to the LOZA Rust SDK are documented in this file.
   `checkpoint_with_attrs`, `start_process`, `start_timer`, `start_group`, and
   the matching `Logger` helpers are now no-ops once an event is emitting,
   emitted, or failed. Public signatures are unchanged.
+### Changed
+
+- Sensitive-value hashing (`HashKeys` redaction and the `Hash`/`EmailHash`/`IPHash`
+  attribute helpers) now uses keyed HMAC-SHA256 instead of unsalted SHA-256.
+  Plain SHA-256 digests of low-entropy values were reversible with rainbow
+  tables and did not provide real redaction. Set `LOZA_HASH_SECRET` to a stable
+  secret shared by all producers when hashes must remain comparable across
+  processes or restarts; when it is unset, a random per-process key is used.
 
 ## [0.3.4] - 2026-08-26
 

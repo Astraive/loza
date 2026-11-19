@@ -1,5 +1,3 @@
-use sha2::{Digest, Sha256};
-
 // Safety-net keys for obviously sensitive fields. The collector owns the real
 // PII policy (email, phone, SSN, IP, regex, tenant-specific rules, etc.).
 pub const DEFAULT_KEYS: &[&str] = &[
@@ -79,17 +77,6 @@ mod tests {
         // Segment matching must not devolve into a loose substring match.
         assert!(!matches_key("tokenizer_mode", DEFAULT_KEYS));
     }
-}
-
-pub fn sha256_hex(value: &str) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(value.as_bytes());
-    let digest = hasher.finalize();
-    let mut out = String::with_capacity(digest.len() * 2);
-    for byte in digest {
-        out.push_str(&format!("{byte:02x}"));
-    }
-    out
 }
 
 pub fn hash_input(value: &serde_json::Value) -> String {

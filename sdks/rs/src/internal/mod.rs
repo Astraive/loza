@@ -1,6 +1,7 @@
 pub mod clock;
 pub mod core;
 pub mod env;
+pub(crate) mod hashing;
 pub mod jsonenc;
 pub mod pool;
 pub mod queue;

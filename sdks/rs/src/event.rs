@@ -768,14 +768,11 @@ fn redact_in_map(map: &mut Map<String, Value>, key: &str) {
 }
 
 fn hash_in_map(map: &mut Map<String, Value>, key: &str) {
-    use sha2::{Digest, Sha256};
     if let Some(parts) = parse_dotted_key(key) {
         hash_nested(map, &parts);
     } else if let Some(val) = map.get_mut(key) {
         if let Some(s) = val.as_str() {
-            let mut hasher = Sha256::new();
-            hasher.update(s.as_bytes());
-            *val = Value::String(format!("{:x}", hasher.finalize()));
+            *val = Value::String(crate::internal::hashing::secure_hash(s));
         }
     }
 }
@@ -799,13 +796,10 @@ fn redact_nested(map: &mut Map<String, Value>, parts: &[String]) {
 }
 
 fn hash_nested(map: &mut Map<String, Value>, parts: &[String]) {
-    use sha2::{Digest, Sha256};
     if parts.len() == 1 {
         if let Some(val) = map.get_mut(&parts[0]) {
             if let Some(s) = val.as_str() {
-                let mut hasher = Sha256::new();
-                hasher.update(s.as_bytes());
-                *val = Value::String(format!("{:x}", hasher.finalize()));
+                *val = Value::String(crate::internal::hashing::secure_hash(s));
             }
         }
     } else if let Some(Value::Object(child)) = map.get_mut(&parts[0]) {
