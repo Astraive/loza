@@ -102,7 +102,9 @@ func FromRawMap(raw map[string]any, defaultProvenance string) (*models.Event, er
 	if attrsRaw, ok := raw["attrs"].(map[string]any); ok {
 		event.Attrs = attrsRaw
 	} else {
-		// Fallback: extract top-level attrs from remaining fields after removing reserved
+		// No explicit attrs were provided. Unrecognized top-level keys are not
+		// promoted here: the reserved-key switch below keeps them in event.Raw.
+		// Initialize an empty map so Attrs is always usable by callers.
 		event.Attrs = make(map[string]any)
 	}
 
