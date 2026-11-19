@@ -679,6 +679,28 @@ func assertRowCount(t *testing.T, db *sql.DB, want int) {
 	}
 }
 
+func TestRetrySleepSmallBackoff(t *testing.T) {
+	// A 1ns backoff used to panic because base/2 == 0 was passed to
+	// rand.Int63n. Small backoffs must return the base without a panic.
+	for _, base := range []time.Duration{0, 1, 2, 3} {
+		got := retrySleep(base)
+		switch {
+		case base <= 0:
+			if got != 0 {
+				t.Fatalf("retrySleep(%s) = %s, want 0", base, got)
+			}
+		case base < 2:
+			if got != base {
+				t.Fatalf("retrySleep(%s) = %s, want %s", base, got, base)
+			}
+		default:
+			if got < base || got >= base+base/2 {
+				t.Fatalf("retrySleep(%s) = %s, want [base, base+base/2)", base, got)
+			}
+		}
+	}
+}
+
 func TestIsRetryableError(t *testing.T) {
 	cases := []struct {
 		err  error
