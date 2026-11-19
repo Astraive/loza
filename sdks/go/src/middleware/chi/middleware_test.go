@@ -4,6 +4,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/astraive/loza/sdks/go"
@@ -77,6 +78,36 @@ func TestMiddlewareUsesFallbackRouteExtractorWhenChiPatternUnavailable(t *testin
 	if !ok || route != "/fallback" {
 		t.Fatalf("expected fallback route extractor to be used, got %v", route)
 	}
+}
+
+func TestMiddlewareReportsSetError(t *testing.T) {
+	store := configureMemoryStore(t)
+
+	r := chipkg.NewRouter()
+	r.Use(Middleware(Config{}))
+	r.Get("/users/{id}", func(w http.ResponseWriter, req *http.Request) {
+		// Emit the active event early so the middleware's subsequent loza.Set
+		// fails with an EventClosedError instead of succeeding silently.
+		if err := loza.Emit(req.Context()); err != nil {
+			t.Errorf("emit: %v", err)
+		}
+		_, _ = io.WriteString(w, "ok")
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/users/123", nil)
+	rr := httptest.NewRecorder()
+	r.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rr.Code)
+	}
+
+	for _, ev := range store.Events() {
+		if ev.Error != nil && strings.Contains(ev.Message, "set route") {
+			return
+		}
+	}
+	t.Fatalf("expected an error log reporting the discarded loza.Set failure, got %d events", store.Len())
 }
 
 func configureMemoryStore(t *testing.T) *loza.MemorySinkStore {
