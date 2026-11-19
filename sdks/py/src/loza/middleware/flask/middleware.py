@@ -73,6 +73,7 @@ class Middleware:
         def stream_response() -> Iterable[bytes]:
             nonlocal response_bytes
             finalized = False
+            aborted = False
             try:
                 for chunk in response:
                     if isinstance(chunk, bytes):
@@ -93,12 +94,29 @@ class Middleware:
                 FinishError(ctx, exc, Bool("panic", True))
                 finalized = True
                 raise
+            except GeneratorExit:
+                # The consumer closed the iterator early (e.g. a client
+                # disconnect). A truncated response is not a success.
+                aborted = True
+                raise
+            except BaseException as exc:
+                # KeyboardInterrupt/SystemExit/etc. bypass `except Exception`;
+                # record them instead of letting the fallback call Finish as
+                # if the stream had completed normally.
+                FinishError(ctx, exc, Bool("panic", True))
+                finalized = True
+                raise
             finally:
                 try:
                     if not finalized:
+                        # "cancelled" is the canonical outcome for a response
+                        # whose consumer went away before it finished.
+                        outcome = "cancelled" if aborted else ("error" if status_code >= 500 else "success")
                         Finish(
                             ctx,
                             "error" if status_code >= 500 else "success",
+                            outcome,
+                            Int("status_code", status_code),
                             Int("response_bytes", response_bytes),
                             Int("duration_ms", int((time.perf_counter() - started) * 1000)),
                         )
