@@ -53,9 +53,13 @@ func (c *Client) WithAuthHeader(header string) *Client {
 	return c
 }
 
-// WithHTTPClient sets a custom http.Client.
+// WithHTTPClient sets a custom http.Client. A nil client is ignored so the
+// default client (and its configured timeout) remains in use, preventing a
+// nil-pointer dereference on every request path.
 func (c *Client) WithHTTPClient(hc *http.Client) *Client {
-	c.httpClient = hc
+	if hc != nil {
+		c.httpClient = hc
+	}
 	return c
 }
 

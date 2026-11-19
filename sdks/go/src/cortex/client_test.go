@@ -269,6 +269,25 @@ func TestClientMetrics(t *testing.T) {
 	}
 }
 
+func TestWithHTTPClientNilKeepsDefault(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	c := NewClient(srv.URL).WithHTTPClient(nil)
+	if c == nil {
+		t.Fatal("WithHTTPClient(nil) returned nil client")
+	}
+	if c.httpClient == nil {
+		t.Fatal("WithHTTPClient(nil) left the client with a nil http.Client")
+	}
+	// A nil http.Client would panic on Do; the default client must stay usable.
+	if !c.Health(context.Background()) {
+		t.Fatal("expected health=true after WithHTTPClient(nil)")
+	}
+}
+
 func TestClientHealthWithJSONBody(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
