@@ -367,7 +367,7 @@ describe('Sink boundaries', () => {
       multi.flush(),
       multi.close(),
       drain(sink),
-    ]).then(() => {
+    ]).then(async () => {
       assert.equal(writes, 1);
       assert.equal(flushes, 2);
       assert.equal(closes, 1);
@@ -376,7 +376,7 @@ describe('Sink boundaries', () => {
       assert.equal(queueSize(sink), 2);
       assert.equal(queueSize({ getLength: () => 3 }), 3);
       assert.equal(queueSize({}), 0);
-      assert.deepEqual(health(sink), { name: 'custom', status: 'healthy' });
+      assert.deepEqual(await health(sink), { name: 'custom', status: 'healthy' });
     });
   });
 
@@ -425,5 +425,18 @@ describe('Sink boundaries', () => {
     } finally {
       await closeServer(server);
     }
+  it('reports health from the sink health method instead of always healthy', async () => {
+    const sinkWithHealth = (name: string, healthFn?: () => boolean | Promise<boolean>) => ({
+      name: () => name,
+      write: () => {},
+      flush: () => {},
+      close: () => {},
+      ...(healthFn ? { health: healthFn } : {}),
+    });
+
+    assert.deepEqual(await health(sinkWithHealth('healthy', () => true)), { name: 'healthy', status: 'healthy' });
+    assert.deepEqual(await health(sinkWithHealth('unhealthy', () => false)), { name: 'unhealthy', status: 'unhealthy' });
+    assert.deepEqual(await health(sinkWithHealth('async-unhealthy', async () => false)), { name: 'async-unhealthy', status: 'unhealthy' });
+    assert.deepEqual(await health(sinkWithHealth('no-health')), { name: 'no-health', status: 'healthy' });
   });
 });
