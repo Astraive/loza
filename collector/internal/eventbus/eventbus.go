@@ -7,6 +7,8 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
+	"io"
 	"time"
 
 	collectorevent "github.com/astraive/loza/collector/internal/event"
@@ -57,21 +59,26 @@ type DeadLetterPublisher interface {
 // SinkAdapter wraps a Bus as an event.Sink for use with the collector's processor.
 // This allows the processor to write events through the eventbus.
 type SinkAdapter struct {
-	bus   Bus
-	topic string
+	bus      Bus
+	topic    string
+	idReader io.Reader
 }
 
 // NewSinkAdapter creates a new Bus-to-Sink adapter.
 func NewSinkAdapter(bus Bus, topic string) *SinkAdapter {
-	return &SinkAdapter{bus: bus, topic: topic}
+	return &SinkAdapter{bus: bus, topic: topic, idReader: rand.Reader}
 }
 
 func (s *SinkAdapter) Name() string { return "eventbus" }
 
 // WriteEvent publishes a single event through the bus.
 func (s *SinkAdapter) WriteEvent(ctx context.Context, encoded []byte, ev *collectorevent.Event) error {
+	id, err := generateID(s.idReader)
+	if err != nil {
+		return err
+	}
 	env := Envelope{
-		ID:        generateID(),
+		ID:        id,
 		Timestamp: time.Now(),
 		Body:      encoded,
 		Headers:   make(map[string]string),
@@ -89,8 +96,12 @@ func (s *SinkAdapter) Close(ctx context.Context) error { return s.bus.Close(ctx)
 func (s *SinkAdapter) WriteBatch(ctx context.Context, events [][]byte) error {
 	envs := make([]Envelope, len(events))
 	for i, body := range events {
+		id, err := generateID(s.idReader)
+		if err != nil {
+			return err
+		}
 		envs[i] = Envelope{
-			ID:        generateID(),
+			ID:        id,
 			Timestamp: time.Now(),
 			Body:      body,
 			Headers:   make(map[string]string),
@@ -111,8 +122,13 @@ func UnmarshalEnvelope(data []byte) (Envelope, error) {
 	return env, err
 }
 
-func generateID() string {
+// generateID returns a random 16-byte hex ID sourced from r. An RNG failure is
+// returned to the caller so callers never fall back to a predictable, constant
+// ID when the source cannot supply entropy.
+func generateID(r io.Reader) (string, error) {
 	b := make([]byte, 16)
-	_, _ = rand.Read(b)
-	return hex.EncodeToString(b)
+	if _, err := io.ReadFull(r, b); err != nil {
+		return "", fmt.Errorf("generate event id: %w", err)
+	}
+	return hex.EncodeToString(b), nil
 }
