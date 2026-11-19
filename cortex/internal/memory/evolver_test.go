@@ -405,5 +405,76 @@ func TestEvolveMergesBehavioralMatch(t *testing.T) {
 	}
 	if len(store.saved) != 1 {
 		t.Fatalf("expected exactly one Save call, got %d", len(store.saved))
+	"reflect"
+	"testing"
+
+	"github.com/astraive/loza/cortex/internal/models"
+)
+
+// TestMergeSignaturesRemediationDoesNotAlias verifies that the merged
+// signature owns its remediation slice. The previous implementation assigned
+// existing.Remediation directly, so appending new entries into spare capacity
+// wrote into the existing signature's backing array and the two signatures
+// aliased each other.
+func TestMergeSignaturesRemediationDoesNotAlias(t *testing.T) {
+	ev := &SignatureEvolver{cfg: DefaultConfig()}
+
+	// Give the existing remediation slice spare capacity so the buggy append
+	// writes into shared backing memory instead of allocating a fresh array.
+	existingRemediation := make([]string, 1, 3)
+	existingRemediation[0] = "restart pod"
+	existing := &models.IncidentSignature{
+		SignatureID: "sig-existing",
+		Remediation: existingRemediation,
+	}
+	incoming := &models.IncidentSignature{
+		SignatureID: "sig-incoming",
+		Remediation: []string{"clear cache"},
+	}
+
+	merged := ev.mergeSignatures(existing, incoming)
+
+	want := []string{"restart pod", "clear cache"}
+	if !reflect.DeepEqual(merged.Remediation, want) {
+		t.Fatalf("merged remediation = %v, want %v", merged.Remediation, want)
+	}
+
+	if !reflect.DeepEqual(existing.Remediation, []string{"restart pod"}) {
+		t.Fatalf("existing remediation mutated by merge: %v", existing.Remediation)
+	}
+
+	// A later append to the existing signature must not corrupt the merged
+	// signature (the concrete failure described in the finding).
+	existing.Remediation = append(existing.Remediation, "OVERWRITE")
+	if !reflect.DeepEqual(merged.Remediation, want) {
+		t.Fatalf("merged remediation corrupted by append to existing: %v, want %v", merged.Remediation, want)
+	}
+
+	// A later append to the merged signature must not corrupt the existing one.
+	merged.Remediation = append(merged.Remediation, "scale replicas")
+	if !reflect.DeepEqual(existing.Remediation, []string{"restart pod", "OVERWRITE"}) {
+		t.Fatalf("existing remediation corrupted by append to merged: %v", existing.Remediation)
+	}
+}
+
+// TestMergeSignaturesRemediationDeduplicates ensures the copy still feeds the
+// de-duplication logic and does not introduce duplicate entries.
+func TestMergeSignaturesRemediationDeduplicates(t *testing.T) {
+	ev := &SignatureEvolver{cfg: DefaultConfig()}
+
+	existing := &models.IncidentSignature{
+		SignatureID: "sig-existing",
+		Remediation: []string{"restart pod", "clear cache"},
+	}
+	incoming := &models.IncidentSignature{
+		SignatureID: "sig-incoming",
+		Remediation: []string{"clear cache", "scale replicas"},
+	}
+
+	merged := ev.mergeSignatures(existing, incoming)
+
+	want := []string{"restart pod", "clear cache", "scale replicas"}
+	if !reflect.DeepEqual(merged.Remediation, want) {
+		t.Fatalf("merged remediation = %v, want %v", merged.Remediation, want)
 	}
 }
