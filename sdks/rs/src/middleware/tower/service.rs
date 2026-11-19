@@ -1,20 +1,17 @@
-use crate::{EventContext, Logger, Params};
+use crate::{EventContext, Logger, LozaError, Params};
 
-/// Finish a request event, mapping any `finish` failure into the caller's
-/// error type so it is never silently discarded.
+/// Finish a request event, propagating the real [`LozaError`] from `finish`.
 fn finish_request(
     logger: &Logger,
     ctx: &mut EventContext,
     status_code: u16,
-) -> Result<(), serde_json::Error> {
+) -> Result<(), LozaError> {
     let outcome = if status_code >= 500 {
         "error"
     } else {
         "success"
     };
-    logger
-        .finish(ctx, outcome)
-        .map_err(|err| serde_json::Error::io(std::io::Error::other(err.to_string())))
+    logger.finish(ctx, outcome)
 }
 
 #[derive(Clone, Debug)]
@@ -40,12 +37,26 @@ pub struct MiddlewareResult {
     pub encoded: String,
 }
 
+/// Captures an HTTP request as a wide event and returns its encoded payload.
+///
+/// # Errors
+///
+/// Returns [`LozaError`] when the event cannot be finished or emitted — most
+/// commonly [`LozaError::Transport`] when delivery to a configured sink fails.
+///
+/// # Migration note
+///
+/// This function no longer returns `serde_json::Error`: no JSON (de)serialization
+/// occurs here, and that type only masked the real [`LozaError`] failure mode.
+/// Callers that matched on the old error type should match on [`LozaError`]
+/// variants instead; callers using `?` into `Box<dyn Error>`, `.unwrap()`, or
+/// `.map()` need no change.
 pub fn capture_request(
     logger: &Logger,
     method: &str,
     path: &str,
     status_code: u16,
-) -> Result<MiddlewareResult, serde_json::Error> {
+) -> Result<MiddlewareResult, LozaError> {
     let mut params = Params::new(format!("{method} {path}")).with_kind("http");
     params.method = Some(method.to_string());
     params.path = Some(path.to_string());
@@ -53,9 +64,7 @@ pub fn capture_request(
     let mut ctx = logger.start_event(params);
     finish_request(logger, &mut ctx, status_code)?;
     let event_id = ctx.event_id.clone();
-    let encoded = logger
-        .emit(&ctx)
-        .map_err(|err| serde_json::Error::io(std::io::Error::other(err.to_string())))?;
+    let encoded = logger.emit(&ctx)?;
     Ok(MiddlewareResult { event_id, encoded })
 }
 
