@@ -93,7 +93,7 @@ pub mod similarity {
             if ts.len() < 2 {
                 return ts.iter().map(|&t| t as f64).collect();
             }
-            let min = ts[0];
+            let min = ts.iter().min().copied().unwrap_or(ts[0]);
             let max = ts.iter().max().copied().unwrap_or(ts[0]);
             let range = (max - min).max(1) as f64;
             ts.iter().map(|&t| (t - min) as f64 / range).collect()
@@ -218,6 +218,22 @@ mod tests {
 
         assert!((similarity::jaccard(&a, &b) - 1.0).abs() < 1e-6);
         assert!((similarity::jaccard(&a, &c) - 0.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_temporal_uses_true_min_for_unsorted_sequences() {
+        // Both sequences share the same relative shape (peak, trough, rise),
+        // but the first element is not the minimum. Normalization must use the
+        // true min/max; using ts[0] as the min yields negative normalized
+        // values and collapses similarity to 0.0.
+        let a = [100, 10, 50];
+        let b = [90, 20, 40];
+
+        let sim = similarity::temporal(&a, &b);
+        assert!(
+            sim > 0.9,
+            "expected high temporal similarity for matching shapes, got {sim}"
+        );
     }
 
     #[test]
