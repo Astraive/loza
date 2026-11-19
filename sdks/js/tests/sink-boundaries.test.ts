@@ -347,4 +347,51 @@ describe('Sink boundaries', () => {
       assert.deepEqual(health(sink), { name: 'custom', status: 'healthy' });
     });
   });
+
+  it('kafkaSink forwards configuration and routes by topic', async () => {
+    // Credentials must reach HTTPBatchSink instead of being silently dropped.
+    // With only `endpoint` forwarded (the old behavior) this would not throw.
+    assert.throws(
+      () => kafkaSink({ endpoint: 'http://example.com/events', username: 'user', password: 'secret' }),
+      /require HTTPS/
+    );
+
+    // Unsupported keys must be rejected, not silently ignored.
+    assert.throws(
+      () => kafkaSink({ endpoint: 'http://localhost/events', mystery: true }),
+      /unsupported key\(s\): mystery/
+    );
+
+    // `topic` must be mapped to the collector's `service` routing metadata,
+    // and other options (e.g. `enableCompression`) must be forwarded.
+    const received = Promise.withResolvers<{
+      source?: { service?: string };
+      events?: Array<{ event?: string }>;
+    }>();
+    const { server, endpoint } = await listenServer((req, res) => {
+      let data = '';
+      req.on('data', chunk => { data += chunk.toString(); });
+      req.on('end', () => {
+        res.statusCode = 200;
+        res.setHeader('content-type', 'application/json');
+        res.end(acceptedResponse);
+        try { received.resolve(JSON.parse(data)); } catch (error) { received.reject(error); }
+      });
+    });
+    try {
+      const sink = kafkaSink({
+        endpoint,
+        topic: 'orders-topic',
+        enableCompression: false,
+      });
+      await sink.write('{"event":"kafka-route"}');
+      await sink.flush();
+      const envelope = await received.promise;
+      assert.equal(envelope.source?.service, 'orders-topic');
+      assert.equal(envelope.events?.[0]?.event, 'kafka-route');
+      await sink.close();
+    } finally {
+      await closeServer(server);
+    }
+  });
 });
