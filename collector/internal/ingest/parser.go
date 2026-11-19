@@ -93,19 +93,31 @@ func ParseEvents(r *http.Request, maxBodyBytes int64) ([][]byte, error) {
 		}
 		// If object parsing failed, fall back to NDJSON handling.
 		if bytes.Contains(payload, []byte{'\n'}) {
-			ndjson := ParseNDJSON(payload)
+			ndjson, err := ParseNDJSON(payload)
+			if err != nil {
+				return nil, err
+			}
 			if len(ndjson) > 1 {
 				return ndjson, nil
 			}
 		}
 		return nil, fmt.Errorf("invalid JSON object payload")
 	default:
-		return ParseNDJSON(payload), nil
+		return ParseNDJSON(payload)
 	}
 }
 
-func ParseNDJSON(payload []byte) [][]byte {
-	scanner := bufio.NewScanner(bytes.NewReader(payload))
+// ParseNDJSON splits newline-delimited JSON payloads into individual events.
+// It returns an error if scanning fails (for example, a token exceeds the
+// scanner buffer or the underlying read fails), so callers can distinguish a
+// complete parse from a truncated one. Beware: this signature changed from
+// [][]byte to ([][]byte, error); update any direct callers accordingly.
+func ParseNDJSON(payload []byte) ([][]byte, error) {
+	return parseNDJSONReader(bytes.NewReader(payload))
+}
+
+func parseNDJSONReader(r io.Reader) ([][]byte, error) {
+	scanner := bufio.NewScanner(r)
 	buffer := make([]byte, 0, 1024*1024)
 	scanner.Buffer(buffer, math.MaxInt32)
 
@@ -119,5 +131,8 @@ func ParseNDJSON(payload []byte) [][]byte {
 		copy(copyLine, line)
 		out = append(out, copyLine)
 	}
-	return out
+	if err := scanner.Err(); err != nil {
+		return nil, fmt.Errorf("ingest: read ndjson: %w", err)
+	}
+	return out, nil
 }
