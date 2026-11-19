@@ -172,3 +172,65 @@ func TestPrintKeyValueOrdersKeysDeterministically(t *testing.T) {
 		previous = index
 	}
 }
+
+// Regression test for MASS-0059: a row cell with an index beyond the header
+// count used to be dropped from the width pass and the render pass, while the
+// "  " separator was still emitted for it, leaving a stray separator with no
+// cell. All cells must now be printed, with widths sized to the longest row.
+func TestPrintTableIncludesCellsBeyondHeaders(t *testing.T) {
+	oldNoColor := NoColor
+	NoColor = true
+	defer func() { NoColor = oldNoColor }()
+
+	out := captureStdout(t, func() {
+		PrintTable(
+			[]string{"H1", "H2"},
+			[][]string{
+				{"a", "b", "extra"},
+				{"x", "y", "longer"},
+			},
+		)
+	})
+
+	lines := strings.Split(strings.TrimSuffix(out, "\n"), "\n")
+	if len(lines) != 4 {
+		t.Fatalf("expected 4 lines (header, separator, 2 rows), got %d: %q", len(lines), out)
+	}
+
+	// Column 3 has no header, but its cells must still be rendered. Its width
+	// is taken from the longest value ("longer" -> 6), and no stray trailing
+	// separator is left after the last cell.
+	wantRows := []string{
+		"a   b   extra",
+		"x   y   longer",
+	}
+	for i, want := range wantRows {
+		got := strings.TrimRight(lines[2+i], " ")
+		if got != want {
+			t.Errorf("row %d: got %q, want %q", i, got, want)
+		}
+	}
+}
+
+// Rows that are shorter than the header count must keep the existing behavior
+// (only the cells present are printed).
+func TestPrintTableShorterRowsUnchanged(t *testing.T) {
+	oldNoColor := NoColor
+	NoColor = true
+	defer func() { NoColor = oldNoColor }()
+
+	out := captureStdout(t, func() {
+		PrintTable(
+			[]string{"NAME", "STATUS"},
+			[][]string{{"alpha", "up"}},
+		)
+	})
+
+	lines := strings.Split(strings.TrimSuffix(out, "\n"), "\n")
+	if len(lines) != 3 {
+		t.Fatalf("expected 3 lines (header, separator, 1 row), got %d: %q", len(lines), out)
+	}
+	if got := strings.TrimRight(lines[2], " "); got != "alpha  up" {
+		t.Errorf("row: got %q, want %q", got, "alpha  up")
+	}
+}
