@@ -54,6 +54,11 @@ Demonstrates the Add method for array fields:
 - Creating arrays on-the-fly
 - Multiple array fields
 
+### 5. State Observability
+
+Prints the full state progression of an event as it moves through its lifecycle:
+- created → active → active → finished → emitted
+
 ## Key Concepts
 
 ### State Transitions
@@ -121,6 +126,14 @@ Tags: [priority express-shipping]
 
 State after Add operations: active
 Final state: emitted
+
+Example 5: State Observability
+State progression:
+  1. created
+  2. active
+  3. active
+  4. finished
+  5. emitted
 ```
 
 ## Related Documentation

@@ -58,6 +58,14 @@ func main() {
 
 	// Example 4: Array field operations with Add
 	runExample("Example 4: Array Field Operations", arrayOperations)
+	fmt.Println("Example 4: Array Field Operations")
+	arrayOperations()
+	fmt.Println()
+
+	// Example 5: State observability / progression
+	fmt.Println("Example 5: State Observability")
+	demonstrateStateObservability()
+	fmt.Println()
 }
 
 func happyPath() error {
