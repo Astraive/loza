@@ -29,6 +29,11 @@ func retrySleep(base time.Duration) time.Duration {
 	if base <= 0 {
 		return 0
 	}
+	// base/2 is zero for a 1ns backoff; rand.Int63n(0) panics and there is
+	// no meaningful jitter range at that scale, so return the base directly.
+	if base < 2 {
+		return base
+	}
 	return base + time.Duration(rand.Int63n(int64(base/2)))
 }
 
