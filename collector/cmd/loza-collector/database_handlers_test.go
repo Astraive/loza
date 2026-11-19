@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -51,6 +52,66 @@ func TestDatabaseConnectionsMetadataIsSanitized(t *testing.T) {
 	body := recorder.Body.String()
 	if body == "" || containsSecretField(body) {
 		t.Fatalf("metadata response leaked secret fields: %s", body)
+	}
+}
+
+func TestDatabaseConnectionsIncludesLegacyQueryConnectionWithNamedConnections(t *testing.T) {
+	named := &fakeDatabaseConnection{info: database.Metadata{Name: "analytics", Backend: "postgres"}}
+	legacy := &fakeDatabaseConnection{info: database.Metadata{Name: "primary", Backend: "duckdb"}}
+	state := &collectorState{
+		cfg:                 collectorConfig{authEnabled: false},
+		databaseConnections: map[string]database.Connection{"analytics": named},
+		databaseMetadata:    map[string]database.Metadata{"analytics": named.Metadata()},
+		queryConnection:     legacy,
+	}
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/collectors/acme/database/connections", nil)
+	request = request.WithContext(publichttp.WithAuthorizedCollector(request.Context(), "acme", "prod"))
+	state.HandleDatabaseConnections(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("metadata status = %d", recorder.Code)
+	}
+	var payload struct {
+		Connections []databaseConnectionResponse `json:"connections"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode connections: %v (body=%s)", err, recorder.Body.String())
+	}
+	names := make(map[string]int, len(payload.Connections))
+	for _, entry := range payload.Connections {
+		names[entry.Name]++
+	}
+	if names["analytics"] != 1 {
+		t.Fatalf("named connection missing or duplicated: %s", recorder.Body.String())
+	}
+	if names["primary"] != 1 {
+		t.Fatalf("legacy queryConnection hidden when named connection exists: %s", recorder.Body.String())
+	}
+}
+
+func TestDatabaseConnectionsDoesNotDuplicateNamedStorageConnection(t *testing.T) {
+	storage := &fakeDatabaseConnection{info: database.Metadata{Name: "analytics", Backend: "postgres"}}
+	state := &collectorState{
+		cfg:                 collectorConfig{authEnabled: false, storageConnection: "analytics"},
+		databaseConnections: map[string]database.Connection{"analytics": storage},
+		databaseMetadata:    map[string]database.Metadata{"analytics": storage.Metadata()},
+		queryConnection:     storage, // storage.connection points at the named connection
+	}
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/collectors/acme/database/connections", nil)
+	request = request.WithContext(publichttp.WithAuthorizedCollector(request.Context(), "acme", "prod"))
+	state.HandleDatabaseConnections(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("metadata status = %d", recorder.Code)
+	}
+	var payload struct {
+		Connections []databaseConnectionResponse `json:"connections"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode connections: %v (body=%s)", err, recorder.Body.String())
+	}
+	if len(payload.Connections) != 1 || payload.Connections[0].Name != "analytics" {
+		t.Fatalf("storage connection duplicated or renamed: %s", recorder.Body.String())
 	}
 }
 

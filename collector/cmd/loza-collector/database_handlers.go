@@ -77,13 +77,30 @@ func (s *collectorState) HandleDatabaseConnections(w http.ResponseWriter, r *htt
 		cancel()
 		result = append(result, entry)
 	}
-	if len(result) == 0 && s.queryConnection != nil {
+	if s.queryConnection != nil && !s.queryConnectionAlreadyListed() {
 		info := s.queryConnection.Metadata()
 		info.Name = "primary"
 		info.Primary = true
 		result = append(result, databaseConnectionResponse{Metadata: info, Health: "healthy"})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"connections": result})
+}
+
+// queryConnectionAlreadyListed reports whether the legacy query connection is
+// already represented by one of the named connections in databaseMetadata.
+// When storage.connection points at a named connection, queryConnection is that
+// same connection, so it must not be appended a second time as "primary".
+func (s *collectorState) queryConnectionAlreadyListed() bool {
+	if s.queryConnection == nil {
+		return false
+	}
+	name := s.queryConnection.Metadata().Name
+	for _, info := range s.databaseMetadata {
+		if info.Name == name {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *collectorState) HandleDatabaseConnectionTest(w http.ResponseWriter, r *http.Request) {
