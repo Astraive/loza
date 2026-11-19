@@ -296,6 +296,28 @@ def test_metrics_render_all_series_and_escaping() -> None:
     assert metric.RenderPrometheus(metrics) == rendered
 
 
+def test_byte_batcher_emits_oversized_single_event_alone() -> None:
+    batcher = pipeline.ByteBatcher(max_batch_bytes=3)
+
+    # A single event whose UTF-8 size already exceeds the bound is emitted
+    # immediately as its own batch rather than buffered and emitted whole.
+    oversized = "x" * 8
+    assert batcher.push(oversized) == [oversized]
+    assert batcher.pending == 0
+    assert batcher.drain() == []
+
+    # The bound is measured in UTF-8 bytes, not Python characters.
+    multibyte = "é" * 2  # 4 UTF-8 bytes > 3
+    assert batcher.push(multibyte) == [multibyte]
+
+    # Pending events are flushed first (in order) and the oversized event is
+    # still emitted alone on the following flush.
+    assert batcher.push("a") is None
+    assert batcher.push("b") is None
+    assert batcher.push("x" * 8) == ["a", "b"]
+    assert batcher.drain() == ["x" * 8]
+
+
 def test_pipeline_batches_buffers_retries_and_shutdown(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     assert pipeline._safe_buffer_path(tmp_path / "buffer") == tmp_path / "buffer"
     with pytest.raises(ValueError):
