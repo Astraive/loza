@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 )
@@ -568,6 +569,94 @@ func TestCloseMethod(t *testing.T) {
 	// Close should work without error
 	if err := logger.Close(); err != nil {
 		t.Errorf("Close() error = %v", err)
+	}
+}
+
+func TestParseSimpleYAML_InvalidInteger(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+		key     string
+	}{
+		{"batch_size", "batch_size: 20a0\n", "batch_size"},
+		{"max_buffer_size", "max_buffer_size: 5000x\n", "max_buffer_size"},
+		{"max_retries", "max_retries: three\n", "max_retries"},
+		{"empty", "batch_size: \n", "batch_size"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var fc FileConfig
+			err := parseSimpleYAML(tt.content, &fc)
+			if err == nil {
+				t.Fatalf("parseSimpleYAML(%q) error = nil, want an error", tt.content)
+			}
+			if !strings.Contains(err.Error(), tt.key) {
+				t.Errorf("error %q does not mention key %q", err, tt.key)
+			}
+		})
+	}
+}
+
+func TestParseSimpleYAML_InvalidDuration(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+		key     string
+	}{
+		{"flush_interval", "flush_interval: 10sek\n", "flush_interval"},
+		{"max_backoff", "max_backoff: sixty\n", "max_backoff"},
+		{"timeout", "timeout: 10sek\n", "timeout"},
+		{"connection_timeout", "connection_timeout: 5 sek\n", "connection_timeout"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var fc FileConfig
+			err := parseSimpleYAML(tt.content, &fc)
+			if err == nil {
+				t.Fatalf("parseSimpleYAML(%q) error = nil, want an error", tt.content)
+			}
+			if !strings.Contains(err.Error(), tt.key) {
+				t.Errorf("error %q does not mention key %q", err, tt.key)
+			}
+		})
+	}
+}
+
+func TestParseSimpleYAML_EmptyDurationAllowed(t *testing.T) {
+	var fc FileConfig
+	if err := parseSimpleYAML("timeout: \n", &fc); err != nil {
+		t.Fatalf("parseSimpleYAML() error = %v, want nil for empty duration", err)
+	}
+	if fc.Timeout != "" {
+		t.Errorf("Timeout = %q, want empty", fc.Timeout)
+	}
+}
+
+func TestLoadFromFile_InvalidValue(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+		key     string
+	}{
+		{"numeric_typo", "batch_size: 20a0\n", "batch_size"},
+		{"duration_typo", "timeout: 10sek\n", "timeout"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "loza.yaml")
+			if err := os.WriteFile(path, []byte(tt.content), 0o644); err != nil {
+				t.Fatalf("WriteFile() error = %v", err)
+			}
+
+			_, err := LoadFromFile(path)
+			if err == nil {
+				t.Fatal("LoadFromFile() error = nil, want an error for malformed value")
+			}
+			if !strings.Contains(err.Error(), tt.key) {
+				t.Errorf("error %q does not mention key %q", err, tt.key)
+			}
+		})
 	}
 }
 

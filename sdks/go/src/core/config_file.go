@@ -233,6 +233,8 @@ func parseYAML(data []byte, fc *FileConfig) error {
 
 // parseSimpleYAML parses a simple flat YAML file (key: value pairs only).
 // This handles the loza.yaml format without requiring an external YAML library.
+// It returns a descriptive error for malformed numeric and duration values so
+// typos are not silently swallowed as zero values.
 func parseSimpleYAML(content string, fc *FileConfig) error {
 	lines := splitLines(content)
 	for _, line := range lines {
@@ -259,24 +261,42 @@ func parseSimpleYAML(content string, fc *FileConfig) error {
 		case "tenant_id":
 			fc.TenantID = value
 		case "batch_size":
-			if n, err := parseInt(value); err == nil {
-				fc.BatchSize = n
+			n, err := parseInt(value)
+			if err != nil {
+				return invalidConfigValue(key, value)
 			}
+			fc.BatchSize = n
 		case "flush_interval":
+			if err := validateDuration(key, value); err != nil {
+				return err
+			}
 			fc.FlushInterval = value
 		case "max_buffer_size":
-			if n, err := parseInt(value); err == nil {
-				fc.MaxBufferSize = n
+			n, err := parseInt(value)
+			if err != nil {
+				return invalidConfigValue(key, value)
 			}
+			fc.MaxBufferSize = n
 		case "max_retries":
-			if n, err := parseInt(value); err == nil {
-				fc.MaxRetries = n
+			n, err := parseInt(value)
+			if err != nil {
+				return invalidConfigValue(key, value)
 			}
+			fc.MaxRetries = n
 		case "max_backoff":
+			if err := validateDuration(key, value); err != nil {
+				return err
+			}
 			fc.MaxBackoff = value
 		case "timeout":
+			if err := validateDuration(key, value); err != nil {
+				return err
+			}
 			fc.Timeout = value
 		case "connection_timeout":
+			if err := validateDuration(key, value); err != nil {
+				return err
+			}
 			fc.ConnectionTimeout = value
 		case "enable_compression":
 			b := value == "true" || value == "yes" || value == "1"
@@ -376,4 +396,23 @@ func parseInt(s string) (int, error) {
 		n = n*10 + digit
 	}
 	return n, nil
+}
+
+// invalidConfigValue builds a descriptive error for a malformed config value,
+// including the key and offending value so typos are actionable to the user.
+func invalidConfigValue(key, value string) error {
+	return fmt.Errorf("invalid value for %q: %q", key, value)
+}
+
+// validateDuration verifies that a duration-typed config value can be parsed
+// by time.ParseDuration. An empty value is allowed so a field may be left unset;
+// mergeFileConfig already treats an empty string as "not configured".
+func validateDuration(key, value string) error {
+	if value == "" {
+		return nil
+	}
+	if _, err := time.ParseDuration(value); err != nil {
+		return fmt.Errorf("invalid duration for %q: %q", key, value)
+	}
+	return nil
 }
