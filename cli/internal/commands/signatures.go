@@ -43,8 +43,10 @@ func SignaturesCommand(ctx context.Context, cfg config.Config, args []string) er
 
 	sigs, ok := dataObj["signatures"].([]any)
 	if !ok {
+	sigs, err := parseSignaturesResponse(data)
+	if err != nil {
 		fmt.Println(string(data))
-		return nil
+		return err
 	}
 
 	rows := [][]string{}
@@ -61,4 +63,23 @@ func SignaturesCommand(ctx context.Context, cfg config.Config, args []string) er
 	output.PrintSection("Incident Signatures")
 	output.PrintTable([]string{"ID", "Pattern", "Count", "Last Seen"}, rows)
 	return nil
+}
+
+// parseSignaturesResponse extracts the signatures array from a signatures
+// API response, returning a descriptive error instead of panicking when the
+// response is malformed or has an unexpected shape.
+func parseSignaturesResponse(data []byte) ([]any, error) {
+	var result map[string]any
+	if err := json.Unmarshal(data, &result); err != nil {
+		return nil, fmt.Errorf("decode signatures response: %w", err)
+	}
+	payload, ok := result["data"].(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("signatures response: missing or invalid 'data' object")
+	}
+	sigs, ok := payload["signatures"].([]any)
+	if !ok {
+		return nil, fmt.Errorf("signatures response: missing or invalid 'signatures' array")
+	}
+	return sigs, nil
 }

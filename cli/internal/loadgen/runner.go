@@ -39,6 +39,26 @@ func Run(ctx context.Context, cfg RunnerConfig) (Report, error) {
 	}
 	if cfg.BatchSize <= 0 {
 		return Report{}, fmt.Errorf("loadgen: batch size must be positive, got %d", cfg.BatchSize)
+// Validate checks numeric inputs before a run is started. Running with these
+// values would otherwise cause panics (for example dividing by zero workers)
+// or nonsensical results.
+func (cfg RunnerConfig) Validate() error {
+	switch {
+	case cfg.Workers < 1:
+		return fmt.Errorf("workers must be at least 1")
+	case cfg.Events < 1:
+		return fmt.Errorf("events must be at least 1")
+	case cfg.BatchSize < 1:
+		return fmt.Errorf("batch size must be at least 1")
+	case cfg.BodySize < 0:
+		return fmt.Errorf("body size must not be negative")
+	}
+	return nil
+}
+
+func Run(ctx context.Context, cfg RunnerConfig) (Report, error) {
+	if err := cfg.Validate(); err != nil {
+		return Report{}, err
 	}
 
 	client := &http.Client{Timeout: 30 * time.Second}
