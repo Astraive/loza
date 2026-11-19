@@ -209,7 +209,12 @@ func (s *collectorState) queryEncryptedTailHistory(
 		}
 		raw, err := duckdbsink.DecryptRaw(encrypted, s.config().storageEncryptionKey)
 		if err != nil {
-			return nil, fmt.Errorf("decrypt tail history: %w", err)
+			// One corrupt row or a row encrypted with a stale key must not make
+			// the whole tail history unavailable. Log and skip it.
+			logJSON("warn", "tail_history_decrypt_failed", map[string]any{
+				"error": err.Error(),
+			})
+			continue
 		}
 		if !rawMatchesTailCursor(raw, filters) || !rawMatchesTailFilters(raw, filters) {
 			continue

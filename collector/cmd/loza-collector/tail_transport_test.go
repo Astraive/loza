@@ -265,6 +265,74 @@ func TestQueryTailHistoryReportsAmbiguousTimestampColumn(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "ambiguous timestamp column") {
 		t.Fatalf("error = %q, want it to mention ambiguous timestamp column", err.Error())
+func TestQueryTailHistorySkipsUndecryptableRows(t *testing.T) {
+	db, err := sql.Open("duckdb", filepath.Join(t.TempDir(), "tail.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(`CREATE TABLE events (raw VARCHAR, timestamp TIMESTAMP)`); err != nil {
+		t.Fatal(err)
+	}
+
+	key := "tail-history-encryption-key"
+	sinkCfg := func(encryptKey string) duckdbsink.Config {
+		return duckdbsink.Config{
+			DB:         db,
+			Table:      "events",
+			Schema:     map[string]string{"timestamp": "timestamp"},
+			StoreRaw:   true,
+			RawColumn:  "raw",
+			EncryptRaw: true,
+			EncryptKey: encryptKey,
+		}
+	}
+	sink, err := duckdbsink.New(sinkCfg(key))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sink.Close(context.Background())
+	staleSink, err := duckdbsink.New(sinkCfg("stale-encryption-key"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer staleSink.Close(context.Background())
+
+	first := []byte(`{"event_id":"evt-first","timestamp":"2026-08-24T04:00:01Z","collector":"local","service":"checkout"}`)
+	second := []byte(`{"event_id":"evt-second","timestamp":"2026-08-24T04:00:03Z","collector":"local","service":"checkout"}`)
+	for _, raw := range [][]byte{first, second} {
+		if err := sink.WriteEvent(context.Background(), raw, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Valid ciphertext under a stale key fails authentication with the current key.
+	stale := []byte(`{"event_id":"evt-stale","timestamp":"2026-08-24T04:00:04Z","collector":"local","service":"checkout"}`)
+	if err := staleSink.WriteEvent(context.Background(), stale, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	// The encryption prefix with an invalid payload is a corrupt row.
+	corrupt := "enc:not-valid-base64!!!"
+	if _, err := db.Exec(`INSERT INTO events (raw, timestamp) VALUES (?, ?)`, corrupt, time.Date(2026, 8, 24, 4, 0, 2, 0, time.UTC)); err != nil {
+		t.Fatal(err)
+	}
+
+	state := &collectorState{
+		cfg: collectorConfig{
+			duckDBTable:          "events",
+			duckDBRawColumn:      "raw",
+			duckDBSchema:         map[string]string{"timestamp": "timestamp"},
+			storageEncryptionKey: key,
+		},
+		queryDB: db,
+	}
+	rows, err := state.queryTailHistory(context.Background(), serverruntime.TailFilters{Limit: 10})
+	if err != nil {
+		t.Fatalf("query encrypted tail history: %v", err)
+	}
+	if len(rows) != 2 || string(rows[0]) != string(first) || string(rows[1]) != string(second) {
+		t.Fatalf("encrypted tail history = %q, want [%q %q]", rows, first, second)
 	}
 func waitForTailSubscriberCount(t *testing.T, s *collectorState, want int) {
 	t.Helper()
