@@ -32,6 +32,7 @@ from .event import (
     Attr,
     EventContext,
     Params,
+    sanitize_event,
 )
 from .pipeline import MemoryOfflineBuffer, Pipeline
 from .redactor import default_redactor
@@ -822,6 +823,8 @@ class Logger:
     def _redact_at_path(target: dict[str, Any], key: str) -> None:
         if Logger._get_path(target, key) is not None:
             Logger._set_path_direct(target, key, "[REDACTED]")
+        """Create a sanitized copy by delegating to the standalone sanitize_event."""
+        return sanitize_event(ctx)
 
     @staticmethod
     def _get_path(target: dict[str, Any], key: str) -> Any:
@@ -834,21 +837,6 @@ class Logger:
                 return None
             current = current[part]
         return current
-
-    @staticmethod
-    def _set_path_direct(target: dict[str, Any], key: str, value: Any) -> None:
-        if "." not in key:
-            target[key] = value
-            return
-        parts = key.split(".")
-        current = target
-        for part in parts[:-1]:
-            child = current.get(part)
-            if not isinstance(child, dict):
-                child = {}
-                current[part] = child
-            current = child
-        current[parts[-1]] = value
 
     @staticmethod
     def _set_path(target: dict[str, Any], key: str, value: Any, policy: str = LastWins) -> None:
