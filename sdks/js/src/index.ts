@@ -134,7 +134,7 @@ export { loadFileConfig, parseSimpleYAML } from './config/config-file.ts';
 export type { YamlRecord } from './config/config-file.ts';
 
 // --- Context ---
-export { getEvent, hasEvent, eventId, requestIdFromContext, traceIdFromContext, runWithEvent, getEvent as FromContext, hasEvent as HasEvent, requestIdFromContext as RequestIDFromContext, traceIdFromContext as TraceIDFromContext } from './core/context.ts';
+export { getEvent, hasEvent, eventId, requestIdFromContext, traceIdFromContext, runWithEvent, withoutEvent, getEvent as FromContext, hasEvent as HasEvent, requestIdFromContext as RequestIDFromContext, traceIdFromContext as TraceIDFromContext } from './core/context.ts';
 
 // --- Sink ---
 export type { Sink } from './sinks/sink.ts';

@@ -1,5 +1,6 @@
 import { Logger } from '../core/logger.ts';
 import { String as AttrString, Int as AttrInt } from '../core/event.ts';
+import { runWithEvent } from '../core/context.ts';
 
 export interface ExpressMiddlewareOptions {
   service?: string;
@@ -39,7 +40,13 @@ export function lozaMiddleware(opts: ExpressMiddlewareOptions = {}) {
         loza.emit(ctx).catch(() => {});
       }
     };
+    // Scope downstream request handling to this event with run(). The context
+    // is restored when next() and its async children complete, so it cannot
+    // bleed into unrelated work or a later request.
+    runWithEvent(ctx, () => next());
 
+    // Install the response hooks before invoking downstream code. A handler
+    // that calls res.end() synchronously inside next() must be intercepted.
     const originalEnd = res.end;
     res.end = function (...args: any[]) {
       const durationMs = Date.now() - startedAt;
@@ -59,6 +66,10 @@ export function lozaMiddleware(opts: ExpressMiddlewareOptions = {}) {
       settle(() => loza.finishError(ctx, err));
     });
 
-    next();
+    // Scope downstream request handling to this event with run(). The context
+    // is restored when next() and its async children complete, so it cannot
+    // bleed into unrelated work or a later request. This runs only after the
+    // res.end / error hooks above are in place.
+    runWithEvent(ctx, () => next());
   };
 }

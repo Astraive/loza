@@ -8,6 +8,7 @@ import { Event, String, Int } from '../src/core/event.ts';
 import { MemorySink } from '../src/sinks/standard-sinks.ts';
 import { sampleNone } from '../src/sampling/sampler.ts';
 import { redact } from '../src/redaction/redactor.ts';
+import { runWithEvent } from '../src/core/context.ts';
 
 class FullSink {
   events: string[] = [];
@@ -56,7 +57,7 @@ describe('Logger boundaries', () => {
     const encoded = await logger.emit(ctx);
     assert.ok(encoded);
     assert.equal(sink.events.length, 1);
-    assert.equal(logger.currentEvent(), ctx);
+    assert.equal(runWithEvent(ctx, () => logger.currentEvent()), ctx);
     await logger.flush();
     await logger.drain();
     logger.pause();

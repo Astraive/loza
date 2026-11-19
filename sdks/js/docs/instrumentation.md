@@ -1491,7 +1491,7 @@ runWithEvent(ctx, () => {
 });
 ```
 
-> **Note:** Context uses Node.js `AsyncLocalStorage`. It works automatically within async chains but requires `runWithEvent` for synchronous boundaries.
+> **Note:** Context uses Node.js `AsyncLocalStorage.run()` via `runWithEvent`. It is available only inside the callback (and its async children) and is restored automatically when that work completes. `startEvent` does not install an ambient context, so wrap work in `runWithEvent` (or use `runEvent`) to expose the event through `getEvent()`. `withoutEvent(fn)` runs a callback with no event context. Context is deliberately scoped rather than installed with `enterWith`, which would leak across requests in long-lived processes.
 
 ---
 

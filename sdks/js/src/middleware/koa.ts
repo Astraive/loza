@@ -1,5 +1,6 @@
 import { Logger } from '../core/logger.ts';
 import { String as AttrString, Int as AttrInt } from '../core/event.ts';
+import { runWithEvent } from '../core/context.ts';
 
 export interface KoaMiddlewareOptions {
   service?: string;
@@ -27,7 +28,8 @@ export function lozaKoaMiddleware(opts: KoaMiddlewareOptions = {}) {
     );
 
     try {
-      await next();
+      // Scope downstream handling with run(); context is restored afterwards.
+      await runWithEvent(ev, () => next());
       const durationMs = Date.now() - startedAt;
       const outcome = ctx.status >= 500 ? 'error' : 'success';
       loza.finish(ev, outcome,

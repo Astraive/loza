@@ -4,6 +4,7 @@ import * as facade from '../src/loza.ts';
 import { test as testConfig } from '../src/config/config.ts';
 import { MemorySink } from '../src/sinks/standard-sinks.ts';
 import { String, Int } from '../src/core/event.ts';
+import { runWithEvent } from '../src/core/context.ts';
 
 afterEach(() => {
   facade.reset();
@@ -36,7 +37,7 @@ describe('Loza facade boundaries', () => {
     facade.stopTimer(timerAlias);
     facade.finish(event, 'success');
     assert.ok(await facade.emit(event));
-    assert.equal(facade.currentEvent(), event);
+    assert.equal(runWithEvent(event, () => facade.currentEvent()), event);
     assert.equal(facade.queueSize(), 0);
     assert.equal(await facade.health(), true);
     await facade.flush();

@@ -9,7 +9,7 @@ import type { Config, ConfigOptions } from '../config/config.ts';
 import type { Sink } from '../sinks/sink.ts';
 import { HTTPBatchSink } from '../sinks/standard-sinks.ts';
 import { encodeJSON } from '../jsonenc/encoder.ts';
-import { storeEvent, getEvent, runWithEvent } from './context.ts';
+import { getEvent, runWithEvent } from './context.ts';
 import { LevelDebug, LevelInfo, LevelNotice, LevelWarn, LevelError, LevelFatal, parseLevel } from './level.ts';
 import type { Level } from './level.ts';
 import { sanitizeEvent } from './sanitize.ts';
@@ -65,7 +65,11 @@ export class Logger {
 
   // --- Event lifecycle ---
 
-  /** Start a new event and store it in async context. */
+  /**
+   * Create a new event. The event is returned, not installed into async
+   * context: use `runWithEvent` (or `runEvent`) to scope it to a unit of work.
+   * This avoids the cross-request context bleed caused by `enterWith`.
+   */
   startEvent(params: Params): Event {
     const ev = new Event(params, this.cfg.service, this.cfg.environment);
     if (!ev.service && this.cfg.service) ev.service = this.cfg.service;
@@ -76,7 +80,6 @@ export class Logger {
     // Custom attrs are applied by the Event constructor via applyAttr,
     // which tracks sensitive/hash/drop keys. See event.ts:500-504.
 
-    storeEvent(ev);
     return ev;
   }
 
@@ -228,7 +231,9 @@ export class Logger {
   async runEvent(params: Params, fn: (ctx: Event) => void | Promise<void>, finishAttrs: Attr[] = []): Promise<string | null> {
     const ctx = this.startEvent(params);
     try {
-      await fn(ctx);
+      // Scope the event to the callback with run(); the context is restored
+      // automatically once the work (and its async children) completes.
+      await runWithEvent(ctx, () => fn(ctx));
       if (!ctx.getEventState().startsWith('finished')) {
         ctx.finish('success', ...finishAttrs);
       }
@@ -241,7 +246,8 @@ export class Logger {
   /** Run fn with existing event, auto finish/emit. */
   async run(ctx: Event, fn: (ctx: Event) => void | Promise<void>, finishAttrs: Attr[] = []): Promise<string | null> {
     try {
-      await fn(ctx);
+      // Scope the event to the callback so downstream work sees it in context.
+      await runWithEvent(ctx, () => fn(ctx));
       if (!ctx.getEventState().startsWith('finished')) {
         ctx.finish('success', ...finishAttrs);
       }
@@ -477,7 +483,9 @@ export function fromRequest(req: any, logger?: Logger): Event {
 export async function run(ctx: Event, fn: () => void | Promise<void>, ...finishAttrs: Attr[]): Promise<string | null> {
   const l = getDefault();
   try {
-    await fn();
+    // Scope the callback so downstream work sees ctx via getEvent(), and the
+    // context is restored automatically when fn (and its async children) end.
+    await runWithEvent(ctx, () => fn());
     if (!ctx.getEventState().startsWith('finished')) {
       l.finish(ctx, 'success', ...finishAttrs);
     }
