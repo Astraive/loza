@@ -32,6 +32,58 @@ func TestParseTailFilters(t *testing.T) {
 	}
 }
 
+func TestTailWebSocketUpgraderUsesConfiguredOrigins(t *testing.T) {
+	const consoleOrigin = "https://console.example.test"
+
+	tests := []struct {
+		name        string
+		cfg         serverruntime.HTTPConfig
+		origin      string
+		wantAllowed bool
+	}{
+		{
+			name:        "production rejects empty origin",
+			cfg:         serverruntime.HTTPConfig{AllowedOrigins: []string{consoleOrigin}},
+			origin:      "",
+			wantAllowed: false,
+		},
+		{
+			name:        "production rejects localhost",
+			cfg:         serverruntime.HTTPConfig{AllowedOrigins: []string{consoleOrigin}},
+			origin:      "http://localhost:3000",
+			wantAllowed: false,
+		},
+		{
+			name:        "production allows configured origin",
+			cfg:         serverruntime.HTTPConfig{AllowedOrigins: []string{consoleOrigin}},
+			origin:      consoleOrigin,
+			wantAllowed: true,
+		},
+		{
+			name: "development allows localhost",
+			cfg: serverruntime.HTTPConfig{
+				AllowedOrigins:           []string{consoleOrigin},
+				DevAllowLocalhostOrigins: true,
+			},
+			origin:      "http://localhost:5173",
+			wantAllowed: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			upgrader := tailWebSocketUpgrader(tt.cfg)
+			req := httptest.NewRequest("GET", "http://collector.example/tail", nil)
+			if tt.origin != "" {
+				req.Header.Set("Origin", tt.origin)
+			}
+			if got := upgrader.CheckOrigin(req); got != tt.wantAllowed {
+				t.Fatalf("tail upgrader CheckOrigin(origin=%q) = %v, want %v", tt.origin, got, tt.wantAllowed)
+			}
+		})
+	}
+}
+
 func TestRawMatchesTailFilters(t *testing.T) {
 	raw := []byte(`{"id":"evt-1","service":"checkout","kind":"log","trace_id":"tr-1","incident_id":"inc-1"}`)
 	if !rawMatchesTailFilters(raw, serverruntime.TailFilters{Service: "checkout", Kind: "log", TraceID: "tr-1", IncidentID: "inc-1"}) {

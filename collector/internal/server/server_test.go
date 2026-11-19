@@ -621,9 +621,10 @@ func TestTailWebSocketBrowserContract(t *testing.T) {
 	}
 	credential := "lz_sec_live_ksec1_testsecret"
 	handler := NewTailWebSocketHandler(HTTPConfig{
-		AuthEnabled: true,
-		AuthHeader:  "X-API-Key",
-		AuthValue:   credential,
+		AuthEnabled:              true,
+		AuthHeader:               "X-API-Key",
+		AuthValue:                credential,
+		DevAllowLocalhostOrigins: true,
 	}, state)
 	srv := httptest.NewServer(handler)
 	defer srv.Close()

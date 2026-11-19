@@ -64,6 +64,9 @@ type HTTPConfig struct {
 	MaxHeaderBytes    int64         `yaml:"max_header_bytes"`
 	IdleTimeout       time.Duration `yaml:"idle_timeout"`
 	TLS               TLSConfig     `yaml:"tls"`
+	// DevAllowLocalhostOrigins permits loopback origins and Origin-less requests
+	// on the tail WebSocket. Development only; keep false in production.
+	DevAllowLocalhostOrigins bool `yaml:"dev_allow_localhost_origins"`
 }
 
 type GRPCConfig struct {

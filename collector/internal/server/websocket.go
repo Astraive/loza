@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -33,31 +34,47 @@ type TailState interface {
 }
 
 // NewWebSocketUpgrader creates a websocket upgrader with origin allowlist checking.
-// If allowedOrigins is empty, only localhost and non-browser clients are permitted.
-func NewWebSocketUpgrader(allowedOrigins []string) websocket.Upgrader {
+// Origins in allowedOrigins are always accepted. Localhost/loopback origins and
+// requests with no Origin header are development-only affordances: they are
+// accepted only when allowLocalhost is true and are rejected in production.
+func NewWebSocketUpgrader(allowedOrigins []string, allowLocalhost bool) websocket.Upgrader {
 	return websocket.Upgrader{
 		ReadBufferSize:  16 * 1024,
 		WriteBufferSize: 16 * 1024,
 		Subprotocols:    []string{auth.WebSocketTailProtocol},
 		CheckOrigin: func(r *http.Request) bool {
 			origin := r.Header.Get("Origin")
-			if origin == "" {
-				return true // Non-browser clients (no Origin header)
-			}
-			// Check configured allowlist
+			// Explicitly configured origins are always allowed, including a
+			// localhost origin when it is intentionally listed.
 			for _, allowed := range allowedOrigins {
 				if origin == allowed {
 					return true
 				}
 			}
-			// Allow localhost for development (exact host match, not suffix)
-			if origin == "http://localhost" || strings.HasPrefix(origin, "http://localhost:") ||
-				origin == "http://127.0.0.1" || strings.HasPrefix(origin, "http://127.0.0.1:") ||
-				origin == "http://[::1]" || strings.HasPrefix(origin, "http://[::1]:") {
-				return true
+			if !allowLocalhost {
+				// Production: reject Origin-less and unlisted origins, including
+				// loopback origins that were previously allowed unconditionally.
+				return false
 			}
-			return false
+			// Development: allow Origin-less non-browser clients and loopback origins.
+			return origin == "" || isLocalhostOrigin(origin)
 		},
+	}
+}
+
+// isLocalhostOrigin reports whether origin is an http:// loopback origin with
+// an exact host match (and an optional numeric port). Lookalike hosts such as
+// http://localhost.evil.example are not accepted.
+func isLocalhostOrigin(origin string) bool {
+	u, err := url.Parse(origin)
+	if err != nil || !strings.EqualFold(u.Scheme, "http") || u.User != nil {
+		return false
+	}
+	switch u.Hostname() {
+	case "localhost", "127.0.0.1", "::1":
+		return true
+	default:
+		return false
 	}
 }
 
@@ -92,7 +109,7 @@ func ParseTailFilters(r *http.Request) (TailFilters, error) {
 }
 
 func NewTailWebSocketHandler(cfg HTTPConfig, state TailState) http.Handler {
-	upgrader := NewWebSocketUpgrader(cfg.AllowedOrigins)
+	upgrader := NewWebSocketUpgrader(cfg.AllowedOrigins, cfg.DevAllowLocalhostOrigins)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		auth.PrepareWebSocketRequest(r)
 		if cfg.AuthEnabled {
