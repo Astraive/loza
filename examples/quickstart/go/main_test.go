@@ -61,5 +61,57 @@ func TestRunAuditExampleLogsWhenAliasSucceeds(t *testing.T) {
 	got := strings.Join(sink.events, "")
 	if !strings.Contains(got, "audit trail started") {
 		t.Errorf("audit trail was not logged; got:\n%s", got)
+// TestInvalidConfigYieldsNilLogger documents the trigger for MASS-0372:
+// a config validation failure makes loza.New return a nil logger alongside
+// the error, so any subsequent method call on it would dereference nil.
+func TestInvalidConfigYieldsNilLogger(t *testing.T) {
+	logger, err := loza.New(loza.ApplyConfig(loza.Config{},
+		loza.WithService("checkout-api"),
+		loza.WithBatchSize(-1), // negative batch size always fails validation
+	))
+	if err == nil {
+		t.Fatal("expected a config validation error, got nil")
+	}
+	if logger != nil {
+		t.Fatalf("expected a nil logger on validation failure, got %v", logger)
+	}
+}
+
+// TestNewCustomLoggerReturnsErrorOnInvalidConfig is the regression test for
+// MASS-0372. Before the fix the example discarded the error and called
+// logger.Info on the nil logger, panicking. The helper must instead return the
+// error without panicking.
+func TestNewCustomLoggerReturnsErrorOnInvalidConfig(t *testing.T) {
+	var err error
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				t.Fatalf("newCustomLogger panicked on invalid config (nil dereference): %v", r)
+			}
+		}()
+		err = newCustomLogger(
+			loza.WithService("checkout-api"),
+			loza.WithBatchSize(-1),
+		)
+	}()
+
+	if err == nil {
+		t.Fatal("expected an error from an invalid config, got nil")
+	}
+	if !strings.Contains(err.Error(), "create custom logger") {
+		t.Fatalf("expected a contextual error message, got %q", err.Error())
+	}
+}
+
+// TestNewCustomLoggerSucceedsWithValidConfig guards against over-correcting:
+// a valid config must still produce a usable logger and log the readiness msg.
+func TestNewCustomLoggerSucceedsWithValidConfig(t *testing.T) {
+	err := newCustomLogger(
+		loza.WithService("checkout-api"),
+		loza.WithCollectorEndpoint("http://localhost:9308"),
+		loza.WithSink(loza.NewMockSink()),
+	)
+	if err != nil {
+		t.Fatalf("expected valid config to succeed, got %v", err)
 	}
 }

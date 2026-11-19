@@ -32,6 +32,7 @@ func main() {
 		loza.WithCollectorEndpoint("http://localhost:9308"),
 	)); err != nil {
 		fmt.Printf("configure error: %v\n", err)
+		fmt.Printf("configure default logger: %v\n", err)
 		return
 	}
 	defer loza.Shutdown(ctx)
@@ -64,4 +65,31 @@ func main() {
 		fmt.Printf("audit alias error: %v\n", err)
 		return
 	}
+	if err := newCustomLogger(
+		loza.WithService("checkout-api"),
+		loza.WithCollectorEndpoint("http://localhost:9308"),
+	); err != nil {
+		fmt.Printf("%v\n", err)
+		return
+	}
+
+	// Alias — same config, different service name
+	audit, err := loza.Alias("audit-service")
+	if err != nil {
+		fmt.Printf("create audit alias: %v\n", err)
+		return
+	}
+	audit.Info("audit trail started")
+}
+
+// newCustomLogger builds a custom logger from options and logs a readiness
+// message. A configuration validation error is returned to the caller instead
+// of leaving a nil logger to be dereferenced by Info.
+func newCustomLogger(options ...loza.ConfigOption) error {
+	logger, err := loza.New(loza.ApplyConfig(loza.Config{}, options...))
+	if err != nil {
+		return fmt.Errorf("create custom logger: %w", err)
+	}
+	logger.Info("custom instance ready")
+	return nil
 }
