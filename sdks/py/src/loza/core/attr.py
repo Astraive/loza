@@ -90,7 +90,14 @@ def _set_nested(target: dict[str, object], key: str, value: object) -> None:
     parts = key.split(".")
     current = target
     for part in parts[:-1]:
-        current = current.setdefault(part, {})  # type: ignore[arg-type]
+        child = current.get(part)
+        if not isinstance(child, dict):
+            # An earlier attr stored a scalar at this intermediate key. Replace
+            # it with a dict so nested keys can be set instead of crashing on
+            # item assignment (e.g. Group("g", Int("a", 1), Int("a.b", 2))).
+            child = {}
+            current[part] = child
+        current = child
     current[parts[-1]] = value
 
 
