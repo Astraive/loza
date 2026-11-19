@@ -595,7 +595,8 @@ func (e *Event) Checkpoint(name string, attrs ...Attr) error {
 }
 
 // StartProcess begins a named process step and returns a handle to finish it later.
-// The step number is auto-incremented per event (1-indexed).
+// The step number is auto-incremented per event (1-indexed). Attrs supplied here
+// are recorded on the step and merged with any attrs passed to Finish/FinishError.
 func (e *Event) StartProcess(name string, attrs ...Attr) (*ProcessHandle, error) {
 	e.mu.Lock()
 	if err := e.ensureMutableLocked(); err != nil {
@@ -612,10 +613,13 @@ func (e *Event) StartProcess(name string, attrs ...Attr) (*ProcessHandle, error)
 		name:      name,
 		step:      step,
 		startedAt: time.Now(),
+		attrs:     append([]Attr(nil), attrs...),
 	}, nil
 }
 
 // StartTimer begins a named timer and returns a handle to stop it later.
+// Attrs supplied here are recorded on the timer and merged with any attrs
+// passed to Stop.
 func (e *Event) StartTimer(name string, attrs ...Attr) (*TimerHandle, error) {
 	e.mu.Lock()
 	if err := e.ensureMutableLocked(); err != nil {
@@ -629,10 +633,13 @@ func (e *Event) StartTimer(name string, attrs ...Attr) (*TimerHandle, error) {
 		event:     e,
 		name:      name,
 		startedAt: time.Now(),
+		attrs:     append([]Attr(nil), attrs...),
 	}, nil
 }
 
 // StartGroup begins a named group phase and returns a handle to finish it later.
+// Attrs supplied here are recorded on the phase and merged with any attrs
+// passed to Finish/FinishError.
 func (e *Event) StartGroup(name string, attrs ...Attr) (*GroupHandle, error) {
 	e.mu.Lock()
 	if err := e.ensureMutableLocked(); err != nil {
@@ -646,6 +653,7 @@ func (e *Event) StartGroup(name string, attrs ...Attr) (*GroupHandle, error) {
 		event:     e,
 		name:      name,
 		startedAt: time.Now(),
+		attrs:     append([]Attr(nil), attrs...),
 	}, nil
 }
 
