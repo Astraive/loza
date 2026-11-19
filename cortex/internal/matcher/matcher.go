@@ -124,6 +124,7 @@ type SignatureMatcher struct {
 	cacheTTL       time.Duration
 	cacheSize      int
 	cacheMu        sync.RWMutex
+	cacheLoadMu    sync.Mutex
 	cacheLoadedAt  time.Time
 	cache          []*models.IncidentSignature
 }
@@ -528,8 +529,24 @@ func (m *SignatureMatcher) UpdateSignature(ctx context.Context, signatureID stri
 }
 
 func (m *SignatureMatcher) loadCandidates(ctx context.Context) ([]*models.IncidentSignature, error) {
-	now := time.Now()
+	m.cacheMu.RLock()
+	if len(m.cache) > 0 && time.Since(m.cacheLoadedAt) < m.cacheTTL {
+		cached := append([]*models.IncidentSignature(nil), m.cache...)
+		m.cacheMu.RUnlock()
+		metrics.MatcherCacheRequests.WithLabelValues("hit").Inc()
+		return cached, nil
+	}
+	m.cacheMu.RUnlock()
 
+	// Serialize refreshes of a cold or expired cache. Without this guard every
+	// concurrent caller on a miss issues its own List and overwrites the cache,
+	// multiplying the load on the signature store.
+	m.cacheLoadMu.Lock()
+	defer m.cacheLoadMu.Unlock()
+
+	// Re-check after taking the refresh lock: a caller that refreshed while we
+	// waited has already repopulated the cache, so reuse that result.
+	now := time.Now()
 	m.cacheMu.RLock()
 	if len(m.cache) > 0 && now.Sub(m.cacheLoadedAt) < m.cacheTTL {
 		cached := append([]*models.IncidentSignature(nil), m.cache...)
