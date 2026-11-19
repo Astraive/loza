@@ -5,6 +5,7 @@ import io
 import json
 import socket
 import urllib.error
+import urllib.parse
 from typing import Any
 
 import pytest
@@ -72,6 +73,22 @@ def test_dsn_normalization_selects_tls_and_default_ports(dsn: str, endpoint: str
     parsed = _parse_dsn(dsn)
     assert parsed["endpoint"] == endpoint
     assert parsed["collector"] == "events"
+
+
+@pytest.mark.parametrize(
+    ("dsn", "endpoint"),
+    [
+        ("loza://[::1]/collector?tls=true", "https://[::1]:9308"),
+        ("loza://[2001:db8::1]/collector", "https://[2001:db8::1]:443"),
+        ("loza://[2001:db8::1]:9308/collector?tls=false", "http://[2001:db8::1]:9308"),
+    ],
+)
+def test_dsn_ipv6_host_is_bracketed_in_endpoint(dsn: str, endpoint: str) -> None:
+    parsed = _parse_dsn(dsn)
+    assert parsed["endpoint"] == endpoint
+    split = urllib.parse.urlsplit(parsed["endpoint"])
+    assert split.hostname and ":" in split.hostname
+    assert split.port is not None
 
 
 def test_dsn_normalization_decodes_credentials_and_query_options() -> None:
