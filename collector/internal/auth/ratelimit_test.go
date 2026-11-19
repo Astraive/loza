@@ -22,12 +22,34 @@ func TestAllowEvents_AtomicBatchCheck(t *testing.T) {
 	}
 }
 
+func TestAllowEvents_LargeBatchUnderQuota(t *testing.T) {
+	rl := NewKeyRateLimiter()
+	defer rl.Close()
+
+	// epm=600: a single request with 200 events is well under the per-minute
+	// quota but larger than the old burst of epm/10+1 = 61. ReserveN used to
+	// reject it outright, so the batch could never succeed.
+	if !rl.AllowEvents("large-batch", 600, 200) {
+		t.Fatal("batch of 200 should be allowed when under the per-minute quota")
+	}
+}
+
+func TestAllowEvents_BatchLargerThanQuota(t *testing.T) {
+	rl := NewKeyRateLimiter()
+	defer rl.Close()
+
+	// A batch bigger than the whole per-minute budget still must be rejected.
+	if rl.AllowEvents("oversized-batch", 60, 61) {
+		t.Fatal("batch larger than the per-minute quota should be rejected")
+	}
+}
+
 func TestAllowEvents_NoPartialConsumption(t *testing.T) {
 	rl := NewKeyRateLimiter()
 
-	// With epm=60, rate=1/sec, burst=7
+	// With epm=60, rate=1/sec, burst=60
 	// Drain the burst
-	for i := 0; i < 7; i++ {
+	for i := 0; i < 60; i++ {
 		if !rl.AllowEvents("key-partial", 60, 1) {
 			t.Fatalf("single event %d should be allowed", i)
 		}
