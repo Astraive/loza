@@ -191,10 +191,22 @@ func selectedHeaderAttrs(r *http.Request, headers []string) []loza.Attr {
 		if name == "" {
 			continue
 		}
-		value := strings.TrimSpace(r.Header.Get(name))
-		if value == "" {
+		// Header values may legitimately repeat (e.g. X-Forwarded-For). Capture
+		// every value rather than only the first returned by Header.Get.
+		rawValues := r.Header.Values(name)
+		if len(rawValues) == 0 {
 			continue
 		}
+		values := make([]string, 0, len(rawValues))
+		for _, v := range rawValues {
+			if trimmed := strings.TrimSpace(v); trimmed != "" {
+				values = append(values, trimmed)
+			}
+		}
+		if len(values) == 0 {
+			continue
+		}
+		value := strings.Join(values, ", ")
 		// normalize header name to attr key
 		key := strings.ToLower(strings.ReplaceAll(name, "_", "-"))
 		// validate key (allow lowercase letters, numbers, dot, hyphen)
