@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
+	"os"
 	"strings"
 	"testing"
 
@@ -135,6 +137,55 @@ func TestDemoFunctionsSucceedOnHappyPath(t *testing.T) {
 	for name, fn := range fns {
 		if err := fn(); err != nil {
 			t.Errorf("%s: unexpected error: %v", name, err)
+// captureStdout runs fn with os.Stdout redirected to a pipe and returns
+// everything fn wrote to stdout. loza.Dev() builds its stdout sink while fn
+// runs, so SDK output is captured along with the example's fmt output.
+func captureStdout(t *testing.T, fn func()) string {
+	t.Helper()
+
+	old := os.Stdout
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe: %v", err)
+	}
+	os.Stdout = w
+
+	out := make(chan string, 1)
+	go func() {
+		var buf bytes.Buffer
+		_, _ = io.Copy(&buf, r)
+		out <- buf.String()
+	}()
+
+	fn()
+
+	os.Stdout = old
+	if err := w.Close(); err != nil {
+		t.Fatalf("close pipe writer: %v", err)
+	}
+	return <-out
+}
+
+// TestMainDemonstratesStateObservability guards against the state-machine
+// example's demonstrateStateObservability helper becoming unreachable again.
+// main() must actually invoke it and print the state-progression output.
+func TestMainDemonstratesStateObservability(t *testing.T) {
+	// main() reconfigures the global SDK default; restore a fresh preset after.
+	defer func() { _ = loza.Reset() }()
+
+	output := captureStdout(t, main)
+
+	for _, want := range []string{
+		"Example 5: State Observability",
+		"State progression:",
+		"1. created",
+		"2. active",
+		"3. active",
+		"4. finished",
+		"5. emitted",
+	} {
+		if !strings.Contains(output, want) {
+			t.Errorf("main() output missing %q", want)
 		}
 	}
 }
