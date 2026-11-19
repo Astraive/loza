@@ -98,10 +98,18 @@ func runEventWithStarter(ctx context.Context, params Params, fn EventFunc, start
 			return
 		}
 
+		var finishErr error
 		if err != nil {
-			_ = Default().FinishError(evCtx, err, finishAttrs...)
+			finishErr = Default().FinishError(evCtx, err, finishAttrs...)
 		} else {
-			_ = Default().Finish(evCtx, "success", finishAttrs...)
+			finishErr = Default().Finish(evCtx, "success", finishAttrs...)
+		}
+		if finishErr != nil {
+			if err == nil {
+				err = finishErr
+			} else {
+				err = fmt.Errorf("%w; finish failed: %v", err, finishErr)
+			}
 		}
 
 		if emitErr := Default().Emit(evCtx); emitErr != nil {
