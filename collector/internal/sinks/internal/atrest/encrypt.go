@@ -17,6 +17,11 @@ const Prefix = "enc:"
 
 var errEmptyKey = errors.New("atrest: encryption key must not be empty")
 
+// ErrMissingPrefix indicates that data passed to DecryptBytes lacked the
+// encryption prefix while a decryption key was configured. Returning such data
+// verbatim would let an unauthenticated value be treated as trusted plaintext.
+var ErrMissingPrefix = errors.New("atrest: data is missing encryption prefix")
+
 func EncryptString(plain []byte, key string) (string, error) {
 	if strings.TrimSpace(key) == "" {
 		return "", errEmptyKey
@@ -44,7 +49,13 @@ func EncryptBytes(plain []byte, key string) ([]byte, error) {
 func DecryptBytes(data []byte, key string) ([]byte, error) {
 	raw := strings.TrimSpace(string(data))
 	if !strings.HasPrefix(raw, Prefix) {
-		// Plaintext (written with encryption disabled) needs no key.
+		// Plaintext (written with encryption disabled) needs no key. When a
+		// key is configured, unprefixed data must not be trusted as plaintext:
+		// anything written to the store could otherwise inject a value that
+		// bypasses decryption and authentication entirely.
+		if strings.TrimSpace(key) != "" {
+			return nil, ErrMissingPrefix
+		}
 		return append([]byte(nil), data...), nil
 	}
 	if strings.TrimSpace(key) == "" {

@@ -80,3 +80,39 @@ func TestDecryptBytesPlaintextWithEmptyKeyPassesThrough(t *testing.T) {
 		t.Fatalf("DecryptBytes pass-through mismatch: got %q, want %q", got, plain)
 	}
 }
+
+func TestDecryptBytesRejectsUnprefixedDataWithKey(t *testing.T) {
+	// Regression (MASS-0235): with a key configured, data lacking the "enc:"
+	// prefix was returned verbatim and treated as trusted plaintext. That lets
+	// anyone with write access to the store inject arbitrary plaintext that
+	// bypasses decryption and authentication.
+	injected := []byte(`{"event_id":"attacker-controlled"}`)
+	got, err := DecryptBytes(injected, "a-storage-encryption-key")
+	if err == nil {
+		t.Fatalf("expected error for unprefixed data with key, got plaintext %q", got)
+	}
+	if !errors.Is(err, ErrMissingPrefix) {
+		t.Fatalf("expected ErrMissingPrefix, got %v", err)
+	}
+	if got != nil {
+		t.Fatalf("expected no plaintext on error, got %q", got)
+	}
+}
+
+func TestDecryptBytesRejectsUnprefixedWhitespacePaddedDataWithKey(t *testing.T) {
+	// Trimming whitespace must not turn injected data into an accepted value.
+	injected := []byte("  plaintext-without-prefix  ")
+	if _, err := DecryptBytes(injected, "a-storage-encryption-key"); !errors.Is(err, ErrMissingPrefix) {
+		t.Fatalf("expected ErrMissingPrefix, got %v", err)
+	}
+}
+
+func TestDecryptBytesWrongKeyFails(t *testing.T) {
+	enc, err := EncryptString([]byte("secret"), "right-key")
+	if err != nil {
+		t.Fatalf("EncryptString: %v", err)
+	}
+	if _, err := DecryptBytes([]byte(enc), "wrong-key"); err == nil {
+		t.Fatal("expected authentication failure with wrong key")
+	}
+}
