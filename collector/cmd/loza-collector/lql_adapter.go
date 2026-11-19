@@ -263,43 +263,60 @@ func (c *lqlStdioCompiler) requestLocked(ctx context.Context, method string, par
 	if err != nil {
 		return lqlRPCResponse{}, err
 	}
+	// Capture the reader for this request so a goroutine left over from a
+	// timed-out request cannot consume replies from a restarted process.
+	stdout := c.stdout
 	if _, err := c.stdin.Write(append(line, '\n')); err != nil {
 		return lqlRPCResponse{}, err
 	}
-	// Bind the reader to this process before spawning the goroutine. killLocked
-	// and startLocked replace c.stdout on a restart, so a goroutine that reads
-	// the field itself can race with them or consume the next process's reply
-	// after this request has timed out.
-	reader := c.stdout
-	result := make(chan lqlRPCResponse, 1)
-	errorsCh := make(chan error, 1)
+	type readResult struct {
+		response lqlRPCResponse
+		err      error
+	}
+	result := make(chan readResult, 1)
 	go func() {
-		responseLine, readErr := reader.ReadBytes('\n')
-		if readErr != nil {
-			errorsCh <- readErr
+		var mismatchID int64
+		sawMismatch := false
+		for {
+			responseLine, readErr := stdout.ReadBytes('\n')
+			if readErr != nil {
+				// If every candidate reply was drained as a mismatch, surface
+				// the id mismatch so callers can tell a stale reply from a
+				// genuine read failure instead of only seeing the EOF/error.
+				if sawMismatch {
+					result <- readResult{err: fmt.Errorf("lql response id mismatch: got %d, want %d: %w", mismatchID, id, readErr)}
+				} else {
+					result <- readResult{err: readErr}
+				}
+				return
+			}
+			var response lqlRPCResponse
+			if err := json.Unmarshal(responseLine, &response); err != nil {
+				result <- readResult{err: err}
+				return
+			}
+			// A compiler that omits the id leaves it at zero; accept those
+			// replies for legacy compatibility. Drain stale, duplicated, or
+			// out-of-order replies instead of accepting the first line as the
+			// answer to this request. This also discards any reply left in
+			// flight across a restart, so only a reply correlated to this
+			// request (or one with no id at all) can satisfy it.
+			if response.ID != 0 && response.ID != id {
+				sawMismatch = true
+				mismatchID = response.ID
+				continue
+			}
+			result <- readResult{response: response}
 			return
 		}
-		var response lqlRPCResponse
-		if err := json.Unmarshal(responseLine, &response); err != nil {
-			errorsCh <- err
-			return
-		}
-		// A compiler that omits the id leaves it at zero; accept those replies,
-		// but never let a mismatched id from a stale response satisfy a request.
-		if response.ID != 0 && response.ID != id {
-			errorsCh <- fmt.Errorf("lql response id mismatch: got %d, want %d", response.ID, id)
-			return
-		}
-		errorsCh <- nil
-		result <- response
 	}()
 	select {
 	case <-ctx.Done():
 		return lqlRPCResponse{}, ctx.Err()
-	case err := <-errorsCh:
-		if err != nil {
-			return lqlRPCResponse{}, err
+	case read := <-result:
+		if read.err != nil {
+			return lqlRPCResponse{}, read.err
 		}
-		return <-result, nil
+		return read.response, nil
 	}
 }

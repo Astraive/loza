@@ -2,8 +2,10 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"go/ast"
 	"go/parser"
@@ -277,5 +279,79 @@ func TestRequestLockedBindsReaderBeforeTimeout(t *testing.T) {
 			close(oldSource.gate)
 			t.Fatalf("attempt %d: reader goroutine did not start", attempt)
 		}
+	}
+}
+
+// lqlRecordingWriter captures the request frame without requiring the external
+// lql binary, so reply correlation can be tested in isolation.
+type lqlRecordingWriter struct {
+	buf *bytes.Buffer
+}
+
+func (w lqlRecordingWriter) Write(p []byte) (int, error) { return w.buf.Write(p) }
+func (lqlRecordingWriter) Close() error                  { return nil }
+
+func newFramedTestCompiler(replies []string, nextID int64) (*lqlStdioCompiler, *bytes.Buffer) {
+	written := &bytes.Buffer{}
+	framed := ""
+	if len(replies) > 0 {
+		framed = strings.Join(replies, "\n") + "\n"
+	}
+	compiler := &lqlStdioCompiler{
+		stdin:  lqlRecordingWriter{buf: written},
+		stdout: bufio.NewReader(strings.NewReader(framed)),
+		nextID: nextID,
+	}
+	return compiler, written
+}
+
+// A stale reply (from a previous request or older process) that arrives before
+// the matching reply must not be returned as the current response.
+func TestLQLRequestLockedCorrelatesReplyByID(t *testing.T) {
+	compiler, written := newFramedTestCompiler([]string{
+		`{"id":1,"result":{"marker":"stale-from-old-process"}}`,
+		`{"id":41,"result":{"marker":"stale-previous-request"}}`,
+		`{"id":42,"result":{"marker":"correct"}}`,
+	}, 41)
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	response, err := compiler.requestLocked(ctx, "compile", map[string]any{"query": "from events"})
+	if err != nil {
+		t.Fatalf("requestLocked: %v", err)
+	}
+	var body struct {
+		Marker string `json:"marker"`
+	}
+	if err := json.Unmarshal(response.Result, &body); err != nil {
+		t.Fatalf("unmarshal result: %v", err)
+	}
+	if body.Marker != "correct" {
+		t.Fatalf("got reply marker %q, want %q; reply was not correlated by id", body.Marker, "correct")
+	}
+
+	var sent struct {
+		ID int64 `json:"id"`
+	}
+	if err := json.Unmarshal(written.Bytes(), &sent); err != nil {
+		t.Fatalf("unmarshal request: %v", err)
+	}
+	if sent.ID != 42 {
+		t.Fatalf("request id = %d, want 42", sent.ID)
+	}
+}
+
+// When the only available reply carries a different id, the request must fail
+// rather than silently accepting that reply as its own.
+func TestLQLRequestLockedRejectsMismatchedReply(t *testing.T) {
+	compiler, _ := newFramedTestCompiler([]string{
+		`{"id":7,"result":{"marker":"stale"}}`,
+	}, 41)
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	response, err := compiler.requestLocked(ctx, "compile", map[string]any{})
+	if err == nil {
+		t.Fatalf("expected mismatched-id reply to be rejected, got response %+v", response)
 	}
 }
