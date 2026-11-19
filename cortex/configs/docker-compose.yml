@@ -42,6 +42,9 @@ services:
       # deployments inherit the secure "require" default from the bundled config.
       CORTEX_POSTGRES_SSL_MODE: disable
       CORTEX_AUTH_ENABLED: "true"
+      # Comma-separated name:key:role triples. No field (including the key)
+      # may contain ':' and all fields must be non-empty; malformed entries
+      # are rejected at startup.
       CORTEX_API_KEYS: ${CORTEX_API_KEYS:?Set CORTEX_API_KEYS as name:key:role}
       CORTEX_LOG_LEVEL: info
     depends_on:

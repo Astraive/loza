@@ -305,6 +305,7 @@ func Load(configPath string) (*Config, error) {
 	}
 	if err := applyEnvOverrides(cfg); err != nil {
 		return nil, err
+		return nil, fmt.Errorf("invalid configuration: %w", err)
 	}
 	if err := cfg.Validate(); err != nil {
 		return nil, fmt.Errorf("invalid configuration: %w", err)
@@ -331,6 +332,7 @@ func LoadDefault() (*Config, error) {
 
 	if err := applyEnvOverrides(cfg); err != nil {
 		return nil, err
+		return nil, fmt.Errorf("invalid configuration: %w", err)
 	}
 	if err := cfg.Validate(); err != nil {
 		return nil, fmt.Errorf("invalid configuration: %w", err)
@@ -393,6 +395,10 @@ func applyEnvOverrides(cfg *Config) error {
 		return nil
 	}
 
+// It returns an error when an environment value is malformed (for example a
+// CORTEX_API_KEYS entry that is not a valid name:key:role triple), so callers
+// that load configuration can reject it instead of silently misparsing it.
+func applyEnvOverrides(cfg *Config) error {
 	// Server overrides
 	if v := os.Getenv("CORTEX_SERVER_HOST"); v != "" {
 		cfg.Server.Host = v
@@ -443,10 +449,15 @@ func applyEnvOverrides(cfg *Config) error {
 	if v := os.Getenv("CORTEX_HMAC_SECRET"); v != "" {
 		cfg.Authentication.HMACSecret = v
 	}
-	// CORTEX_API_KEYS: comma-separated list of name:key:role triples
-	// e.g. "my-service:sk_abc123:writer,read-only:sk_def456:reader"
+	// CORTEX_API_KEYS: comma-separated list of name:key:role triples,
+	// e.g. "my-service:sk_abc123:writer,read-only:sk_def456:reader".
+	// Every field must be non-empty and must not contain ':' (the delimiter).
+	// Malformed entries are reported instead of being silently dropped.
+	var apiKeysErr error
 	if v := os.Getenv("CORTEX_API_KEYS"); v != "" {
-		cfg.Authentication.APIKeys = parseAPIKeys(v)
+		var keys []APIKey
+		keys, apiKeysErr = parseAPIKeys(v)
+		cfg.Authentication.APIKeys = keys
 	}
 
 	// Matcher overrides
@@ -585,30 +596,44 @@ func parseEnvBool(v string) (bool, error) {
 	default:
 		return false, fmt.Errorf("invalid boolean %q", v)
 	}
+
+	return apiKeysErr
 }
 
 // parseAPIKeys parses a comma-separated list of name:key:role triples.
 // Example: "my-service:sk_abc123:writer,read-only:sk_def456:reader"
-func parseAPIKeys(raw string) []APIKey {
+//
+// Each entry must have exactly three non-empty, colon-separated fields. Since
+// ':' is the field delimiter, no field (in particular the key) may contain a
+// colon: an entry with extra colons is rejected with an error rather than
+// being silently misparsed into the wrong role or dropped entirely. Empty
+// entries (e.g. a trailing comma) are ignored.
+func parseAPIKeys(raw string) ([]APIKey, error) {
 	var keys []APIKey
-	for _, entry := range strings.Split(raw, ",") {
+	var errs []string
+	for i, entry := range strings.Split(raw, ",") {
 		entry = strings.TrimSpace(entry)
 		if entry == "" {
 			continue
 		}
-		parts := strings.SplitN(entry, ":", 3)
+		parts := strings.Split(entry, ":")
 		if len(parts) != 3 {
+			errs = append(errs, fmt.Sprintf("entry %d %q: expected name:key:role (exactly 3 colon-separated fields), got %d; fields must not contain ':'", i+1, entry, len(parts)))
 			continue
 		}
 		name := strings.TrimSpace(parts[0])
 		key := strings.TrimSpace(parts[1])
 		role := strings.TrimSpace(parts[2])
 		if name == "" || key == "" || role == "" {
+			errs = append(errs, fmt.Sprintf("entry %d %q: name, key, and role must all be non-empty", i+1, entry))
 			continue
 		}
 		keys = append(keys, APIKey{Name: name, Key: key, Role: role})
 	}
-	return keys
+	if len(errs) > 0 {
+		return keys, fmt.Errorf("CORTEX_API_KEYS: %s", strings.Join(errs, "; "))
+	}
+	return keys, nil
 }
 
 // isLocalPostgresHost reports whether a PostgreSQL host refers to the local
@@ -807,6 +832,11 @@ func Default() (*Config, error) {
 		return nil, fmt.Errorf("invalid configuration: %w", err)
 	}
 	return cfg, nil
+	// Default is a legacy helper that cannot surface errors. Production
+	// startup must use Load or LoadDefault so malformed overrides (such as an
+	// invalid CORTEX_API_KEYS entry) are rejected rather than ignored.
+	_ = applyEnvOverrides(cfg)
+	return cfg
 }
 
 const bundledDefaultFilename = "loza-cortex.defaults.yaml"
