@@ -25,6 +25,18 @@ func NewResolver(store storage.TopologyStore) *Resolver {
 	return &Resolver{topologyStore: store}
 }
 
+// aliasID builds a deterministic, unique ID for a service alias. The validity
+// window is part of the identity: two aliases with the same from/to/validFrom
+// but different validTo values are distinct records and must not share an ID
+// (id is the primary key in the topology stores). A nil validTo is encoded
+// explicitly so an open-ended alias cannot collide with a bounded one.
+func aliasID(from, to string, validFrom time.Time, validTo *time.Time) string {
+	if validTo != nil {
+		return fmt.Sprintf("%s->%s-%d-%d", from, to, validFrom.Unix(), validTo.Unix())
+	}
+	return fmt.Sprintf("%s->%s-%d-open", from, to, validFrom.Unix())
+}
+
 // RegisterCallback adds a callback that fires when a new alias is registered.
 func (r *Resolver) RegisterCallback(cb AliasCallback) {
 	r.mu.Lock()
@@ -66,7 +78,7 @@ func (r *Resolver) RegisterAlias(ctx context.Context, from string, to string, va
 	}
 
 	alias := &models.ServiceAlias{
-		ID:        fmt.Sprintf("%s->%s-%d", from, to, validFrom.Unix()),
+		ID:        aliasID(from, to, validFrom, validTo),
 		Alias:     from,
 		Canonical: to,
 		ValidFrom: validFrom,
