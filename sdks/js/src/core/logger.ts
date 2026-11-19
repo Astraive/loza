@@ -71,12 +71,8 @@ export class Logger {
     if (!ev.environment && this.cfg.environment) ev.environment = this.cfg.environment;
     if (this.cfg.alias) ev.set('loza.alias', this.cfg.alias);
 
-    // Apply custom attrs
-    if (params.custom) {
-      for (const attr of params.custom) {
-        ev.attrs[attr.key] = attr.value;
-      }
-    }
+    // Custom attrs are applied by the Event constructor via applyAttr,
+    // which tracks sensitive/hash/drop keys. See event.ts:500-504.
 
     storeEvent(ev);
     return ev;
