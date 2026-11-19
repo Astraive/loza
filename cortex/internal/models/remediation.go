@@ -8,6 +8,11 @@ import (
 // OutcomeCategory derives the category from an HTTP-style outcome code.
 func OutcomeCategory(code int) string {
 	switch {
+	case code >= 100 && code < 200:
+		// Informational codes are interim rather than failures: the outcome
+		// is not final yet, so classify them as pending. This keeps the
+		// categories aligned with IsValidOutcomeCode, which accepts 100-599.
+		return "pending"
 	case code >= 200 && code < 300:
 		return "success"
 	case code >= 300 && code < 400:
