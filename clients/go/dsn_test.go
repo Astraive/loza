@@ -53,7 +53,7 @@ func TestParseLozaDSNResolvesDefaultsAndOverrides(t *testing.T) {
 		},
 		{
 			name: "public key with empty password",
-			dsn: "loza://lz_pub_key:@example.com/demo?tls=false&transport=grpc&env=prod&service=api",
+			dsn: "loza://lz_pub_key:@example.com/demo?tls=false&transport=http&env=prod&service=api",
 			baseURL: "http://example.com:80",
 			username: "lz_pub_key", env: "prod", service: "api",
 		},
@@ -65,7 +65,7 @@ func TestParseLozaDSNResolvesDefaultsAndOverrides(t *testing.T) {
 		},
 		{
 			name: "explicit tls port and IPv6",
-			dsn: "loza://user:secret@[::1]:9443/demo?tls=true&transport=otlp",
+			dsn: "loza://user:secret@[::1]:9443/demo?tls=true&transport=http",
 			baseURL: "https://[::1]:9443",
 			username: "user", password: "secret", env: "default",
 		},
@@ -197,15 +197,32 @@ func TestErrorHelpers(t *testing.T) {
 	}
 }
 
-func TestParseLozaDSNAcceptsAllTransportValues(t *testing.T) {
-	for _, transport := range []string{"", "http", "otlp", "grpc"} {
-		t.Run(transport, func(t *testing.T) {
+func TestParseLozaDSNTransportSupport(t *testing.T) {
+	// This client speaks only HTTP, so those DSN values that describe the real
+	// transport (empty or "http") must still resolve to a usable HTTP endpoint.
+	for _, transport := range []string{"", "http"} {
+		t.Run("accept_"+transport, func(t *testing.T) {
 			dsn := "loza://example.com/demo"
 			if transport != "" {
 				dsn += "?transport=" + transport
 			}
-			if _, err := parseLozaDSN(dsn); err != nil {
+			got, err := parseLozaDSN(dsn)
+			if err != nil {
 				t.Fatal(err)
+			}
+			if got.BaseURL != "https://example.com:443" {
+				t.Fatalf("parseLozaDSN(%q).BaseURL = %q", dsn, got.BaseURL)
+			}
+		})
+	}
+
+	// Values the client cannot honor must be rejected rather than silently
+	// discarded, so callers are not led to believe they change behavior.
+	for _, transport := range []string{"otlp", "grpc"} {
+		t.Run("reject_"+transport, func(t *testing.T) {
+			dsn := "loza://example.com/demo?transport=" + transport
+			if _, err := parseLozaDSN(dsn); err == nil {
+				t.Fatalf("parseLozaDSN(%q) unexpectedly succeeded; only the http transport is supported", dsn)
 			}
 		})
 	}
