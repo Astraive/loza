@@ -66,7 +66,11 @@ func (s errSink) Flush(context.Context) error { return nil }
 func (s errSink) Close(context.Context) error { return nil }
 
 func testCollectorConfig() collectorConfig {
-	cfg := runtimeConfigFromFile(defaultFileConfig())
+	fc, err := defaultFileConfig()
+	if err != nil {
+		panic(err)
+	}
+	cfg := runtimeConfigFromFile(fc)
 	cfg.authEnabled = false
 	cfg.retryMaxAttempts = 1
 	cfg.retryInitialBackoff = time.Millisecond

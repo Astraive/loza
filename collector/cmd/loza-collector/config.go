@@ -25,7 +25,7 @@ var (
 
 type fileConfig = collectorconfig.Config
 
-func defaultFileConfig() fileConfig { return collectorconfig.Default() }
+func defaultFileConfig() (fileConfig, error) { return collectorconfig.LoadDefaults() }
 
 // loadFileConfig overlays path on top of fc. When cfgFileExplicit is true the
 // user supplied -c, so the file is mandatory: any stat, read, or parse failure
@@ -62,7 +62,10 @@ func loadCollectorConfigFromArgs(args []string) (collectorConfig, error) {
 	set := map[string]bool{}
 	fs.Visit(func(f *flag.Flag) { set[f.Name] = true })
 
-	fc := defaultFileConfig()
+	fc, err := defaultFileConfig()
+	if err != nil {
+		return collectorConfig{}, err
+	}
 	if err := loadFileConfig(&fc, *cfgFile, set["c"]); err != nil {
 		return collectorConfig{}, err
 	}
@@ -153,7 +156,10 @@ func loadPrintableConfig(args []string) (fileConfig, error) {
 	set := map[string]bool{}
 	fs.Visit(func(f *flag.Flag) { set[f.Name] = true })
 
-	fc := defaultFileConfig()
+	fc, err := defaultFileConfig()
+	if err != nil {
+		return fileConfig{}, err
+	}
 	if err := loadFileConfig(&fc, cfgFile, set["c"]); err != nil {
 		return fileConfig{}, err
 	}

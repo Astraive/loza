@@ -28,9 +28,25 @@ func TestMain(m *testing.M) {
 }
 
 func validFileConfig() fileConfig {
-	cfg := defaultFileConfig()
+	cfg, err := defaultFileConfig()
+	if err != nil {
+		panic(err)
+	}
 	cfg.Storage.EncryptionKey = "test-storage-encryption-key"
 	return cfg
+}
+
+func TestLoadCollectorConfigFromArgsReportsBrokenDefaults(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "missing-defaults.yaml")
+	t.Setenv("LOZA_COLLECTOR_DEFAULTS", missing)
+
+	_, err := loadCollectorConfigFromArgs(nil)
+	if err == nil {
+		t.Fatal("expected an error for a missing bundled defaults file")
+	}
+	if !strings.Contains(err.Error(), "collector defaults") {
+		t.Fatalf("expected a descriptive defaults error, got: %v", err)
+	}
 }
 
 func TestValidateNamedDatabaseConnections(t *testing.T) {
