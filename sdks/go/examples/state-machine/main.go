@@ -35,6 +35,14 @@ func runExample(name string, fn func() error) {
 		fmt.Printf("   Error: %v\n", err)
 	}
 	fmt.Println()
+// activeEvent returns the canonical event stored in ctx. It never reports ok
+// with a nil event, so callers only dereference the result when ok is true.
+// This guards the missing-event case (for example, a context that never went
+// through StartEvent) that previously caused a nil-pointer panic at call sites
+// which discarded the boolean returned by loza.FromContext.
+func activeEvent(ctx context.Context) (*loza.Event, bool) {
+	ev, ok := loza.FromContext(ctx)
+	return ev, ok && ev != nil
 }
 
 func main() {
@@ -71,6 +79,11 @@ func happyPath() error {
 // context (for example, one holding a closed event) and observe propagation.
 func happyPathWithContext(ctx context.Context) error {
 	ev, _ := loza.FromContext(ctx)
+	ev, ok := activeEvent(ctx)
+	if !ok {
+		fmt.Println("no active event in context; skipping demo")
+		return
+	}
 	fmt.Printf("1. Initial state: %s\n", ev.State())
 
 	// Enrich transitions to active
@@ -112,7 +125,11 @@ func errorHandling() error {
 		Event: "payment.process",
 	})
 
-	ev, _ := loza.FromContext(ctx)
+	ev, ok := activeEvent(ctx)
+	if !ok {
+		fmt.Println("no active event in context; skipping demo")
+		return
+	}
 	fmt.Printf("1. Initial state: %s\n", ev.State())
 
 	if err := loza.Enrich(ctx,
@@ -146,7 +163,11 @@ func invalidTransitions() error {
 		Event: "test.invalid",
 	})
 
-	ev, _ := loza.FromContext(ctx)
+	ev, ok := activeEvent(ctx)
+	if !ok {
+		fmt.Println("no active event in context; skipping demo")
+		return
+	}
 
 	// Complete the lifecycle
 	if err := loza.Enrich(ctx, loza.String("key", "value")); err != nil {
@@ -201,7 +222,11 @@ func arrayOperations() error {
 		Event: "shopping.cart",
 	})
 
-	ev, _ := loza.FromContext(ctx)
+	ev, ok := activeEvent(ctx)
+	if !ok {
+		fmt.Println("no active event in context; skipping demo")
+		return
+	}
 	fmt.Printf("Initial state: %s\n", ev.State())
 
 	// Add items to cart using Add method
@@ -257,7 +282,11 @@ func demonstrateStateObservability() error {
 		Event: "state.tracking",
 	})
 
-	ev, _ := loza.FromContext(ctx)
+	ev, ok := activeEvent(ctx)
+	if !ok {
+		fmt.Println("no active event in context; skipping demo")
+		return
+	}
 
 	states := []string{}
 	states = append(states, string(ev.State()))
