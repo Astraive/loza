@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math/rand"
 	"os"
 	"path/filepath"
@@ -134,20 +135,60 @@ type Result struct {
 	Err        error
 }
 
+// appendWriter is the minimal file surface used by the DLQ and quarantine
+// writers. It is an interface so tests can inject a writer that simulates a
+// short write together with an error.
+type appendWriter interface {
+	Write([]byte) (int, error)
+	Close() error
+}
+
 type Processor struct {
 	cfg            Config
 	primarySink    collectorevent.Sink
 	secondarySinks []NamedSink
 	fallbackSink   *NamedSink
 	rng            *rand.Rand
-	dlqFile        *os.File
+	dlqFile        appendWriter
 	dlqMu          sync.Mutex
-	quarantineFile *os.File
+	quarantineFile appendWriter
 	quarantineMu   sync.Mutex
 	dedupeMu       sync.Mutex
 	dedupeSeenAt   map[string]time.Time
 	redisClient    *redis.Client
 	dedupePrefix   string
+}
+
+// appendAll writes the whole buffer to an O_APPEND file, retrying failures.
+//
+// Because the file is opened with O_APPEND, every successful Write appends to
+// the end of the file. If a Write reports a partial byte count n together
+// with an error, those n bytes are already persisted. Re-writing the entire
+// buffer from the start (the previous behaviour) duplicates that prefix and
+// corrupts the JSONL record. Each attempt therefore writes only the suffix
+// that has not been persisted yet. mu serializes concurrent writers, and
+// maxAttempts bounds the retries.
+func appendAll(f appendWriter, mu *sync.Mutex, data []byte) error {
+	const maxAttempts = 3
+	written := 0
+	var lastErr error
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		if attempt > 0 {
+			time.Sleep(10 * time.Millisecond * time.Duration(attempt+1))
+		}
+		mu.Lock()
+		n, err := f.Write(data[written:])
+		mu.Unlock()
+		written += n
+		if written >= len(data) {
+			return nil
+		}
+		lastErr = err
+	}
+	if lastErr == nil {
+		lastErr = io.ErrShortWrite
+	}
+	return lastErr
 }
 
 func New(cfg Config, primary collectorevent.Sink, secondary []NamedSink, fallback *NamedSink, rng *rand.Rand) (*Processor, error) {
@@ -407,33 +448,14 @@ func (p *Processor) writeQuarantine(raw []byte, err error) {
 		return
 	}
 
-	// Copy data under the lock, then release before sleeping on retry.
+	// Build the newline-terminated JSONL record that gets appended.
 	data := make([]byte, len(b)+1)
 	copy(data, b)
 	data[len(b)] = '\n'
 
-	p.quarantineMu.Lock()
-	_, writeErr := p.quarantineFile.Write(data)
-	p.quarantineMu.Unlock()
-
-	if writeErr == nil {
-		return
+	if err := appendAll(p.quarantineFile, &p.quarantineMu, data); err != nil {
+		fmt.Fprintf(os.Stderr, "[FATAL] quarantine write failed after 3 attempts: %v, event: %s\n", err, string(raw))
 	}
-
-	// Retry without holding the lock so concurrent writers are not blocked.
-	const maxRetries = 3
-	var lastWriteErr error
-	for attempt := 1; attempt < maxRetries; attempt++ {
-		time.Sleep(10 * time.Millisecond * time.Duration(attempt+1))
-		p.quarantineMu.Lock()
-		_, lastWriteErr = p.quarantineFile.Write(data)
-		p.quarantineMu.Unlock()
-		if lastWriteErr == nil {
-			return
-		}
-	}
-
-	fmt.Fprintf(os.Stderr, "[FATAL] quarantine write failed after %d attempts: %v, event: %s\n", maxRetries, lastWriteErr, string(raw))
 }
 
 func (p *Processor) normalizedDeliveryPolicy() string {
@@ -615,42 +637,21 @@ func (p *Processor) writeDLQ(raw []byte, err error) {
 		return
 	}
 
-	// Copy data under the lock, then release before sleeping on retry.
+	// Build the newline-terminated JSONL record that gets appended.
 	data := make([]byte, len(b)+1)
 	copy(data, b)
 	data[len(b)] = '\n'
 
-	p.dlqMu.Lock()
-	_, writeErr := p.dlqFile.Write(data)
-	p.dlqMu.Unlock()
-
-	if writeErr == nil {
-		if p.cfg.OnDLQWrite != nil {
-			p.cfg.OnDLQWrite(1)
+	if err := appendAll(p.dlqFile, &p.dlqMu, data); err != nil {
+		// All retries failed - this is a critical failure
+		fmt.Fprintf(os.Stderr, "[FATAL] DLQ write failed after 3 attempts: %v, event: %s\n", err, string(raw))
+		if p.cfg.OnDLQWriteFail != nil {
+			p.cfg.OnDLQWriteFail(1)
 		}
 		return
 	}
-
-	// Retry without holding the lock so concurrent writers are not blocked.
-	const maxRetries = 3
-	var lastWriteErr error
-	for attempt := 1; attempt < maxRetries; attempt++ {
-		time.Sleep(10 * time.Millisecond * time.Duration(attempt+1))
-		p.dlqMu.Lock()
-		_, lastWriteErr = p.dlqFile.Write(data)
-		p.dlqMu.Unlock()
-		if lastWriteErr == nil {
-			if p.cfg.OnDLQWrite != nil {
-				p.cfg.OnDLQWrite(1)
-			}
-			return
-		}
-	}
-
-	// All retries failed - this is a critical failure
-	fmt.Fprintf(os.Stderr, "[FATAL] DLQ write failed after %d attempts: %v, event: %s\n", maxRetries, lastWriteErr, string(raw))
-	if p.cfg.OnDLQWriteFail != nil {
-		p.cfg.OnDLQWriteFail(1)
+	if p.cfg.OnDLQWrite != nil {
+		p.cfg.OnDLQWrite(1)
 	}
 }
 
