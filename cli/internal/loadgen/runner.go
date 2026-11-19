@@ -71,19 +71,15 @@ func Run(ctx context.Context, cfg RunnerConfig) (Report, error) {
 				}
 				batch = append(batch, event)
 				if len(batch) >= cfg.BatchSize || i == count-1 {
-					if err := postBatch(ctx, client, cfg.URL, batch); err != nil {
-						var rejection *rejectionError
-						if errors.As(err, &rejection) {
-							rejected.Add(int64(len(batch)))
-						} else {
-							errorsCount.Add(int64(len(batch)))
-						}
-					} else {
-						accepted.Add(int64(len(batch)))
-					}
+					flushBatch(ctx, client, cfg, batch, &accepted, &rejected, &errorsCount)
 					batch = batch[:0]
 				}
 			}
+			// The loop may exit with events still buffered (for example when
+			// the context is cancelled mid-batch, or when event generation
+			// fails on the final iteration). Account for them instead of
+			// silently dropping them from the report.
+			flushBatch(ctx, client, cfg, batch, &accepted, &rejected, &errorsCount)
 		}(workerID, count)
 	}
 
@@ -94,6 +90,22 @@ func Run(ctx context.Context, cfg RunnerConfig) (Report, error) {
 		Errors:   errorsCount.Load(),
 		Duration: time.Since(start),
 	}, nil
+}
+
+func flushBatch(ctx context.Context, client *http.Client, cfg RunnerConfig, batch [][]byte, accepted, rejected, errorsCount *atomic.Int64) {
+	if len(batch) == 0 {
+		return
+	}
+	if err := postBatch(ctx, client, cfg.URL, batch); err != nil {
+		var rejection *rejectionError
+		if errors.As(err, &rejection) {
+			rejected.Add(int64(len(batch)))
+		} else {
+			errorsCount.Add(int64(len(batch)))
+		}
+	} else {
+		accepted.Add(int64(len(batch)))
+	}
 }
 
 func postBatch(ctx context.Context, client *http.Client, url string, batch [][]byte) error {
