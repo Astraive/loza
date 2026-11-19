@@ -39,8 +39,9 @@ def _walk(value: Any, fn: Callable[[str, Any], tuple[bool, Any]]) -> Any:
             if keep:
                 out[key] = _walk(new_value, fn)
         return out
-    if isinstance(value, list):
-        return [_walk(item, fn) for item in value]
+    if isinstance(value, (list, tuple)):
+        rebuilt = [_walk(item, fn) for item in value]
+        return tuple(rebuilt) if isinstance(value, tuple) else rebuilt
     return value
 
 
