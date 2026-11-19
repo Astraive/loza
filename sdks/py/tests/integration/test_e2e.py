@@ -127,12 +127,33 @@ def test_canonical_fields_immutable() -> None:
     ctx = logger.start_event(loza.Params(event="canon_event"))
     original_event_id = ctx.event_id
 
+    # Actively attempt to overwrite canonical fields while the event is in the
+    # pipeline. The emitter must keep the values it generated, not these injected
+    # ones; merely checking the fields at rest would not verify immutability.
+    logger.enrich(
+        ctx,
+        loza.String("event_id", "forged_event_id"),
+        loza.String("service", "forged_service"),
+        loza.String("event", "forged_event"),
+        loza.String("schema_version", "v999"),
+        loza.String("event_version", "v999"),
+        loza.String("timestamp", "1970-01-01T00:00:00Z"),
+        loza.String("outcome", "forged_outcome"),
+    )
+
     logger.finish(ctx, "success")
     payload = logger.emit(ctx)
 
     event = json.loads(payload)
-    # Canonical fields should match original
+    # Canonical fields should still match the original, pipeline-controlled values
     assert event["event_id"] == original_event_id
+    assert event["event_id"] != "forged_event_id"
+    assert event["service"] == "canon_test"
+    assert event["event"] == "canon_event"
+    assert event["schema_version"] == "v1"
+    assert event["event_version"] == "v1"
+    assert event["timestamp"] != "1970-01-01T00:00:00Z"
+    assert event["outcome"] == "success"
     # Timestamp should exist in emitted event
     assert "timestamp" in event
 
