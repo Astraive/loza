@@ -111,6 +111,40 @@ describe('Event', () => {
     assert.equal(ev.get('user.name'), 'Alice');
   });
 
+  it('merge does not allow prototype pollution via __proto__', () => {
+    const ev = new Event({ event: 'test', service: 'checkout' }, 'checkout', 'development');
+    // JSON.parse produces a genuine own `__proto__` key, like untrusted input.
+    const payload = JSON.parse('{"__proto__":{"polluted":"yes"},"safe":"ok"}');
+    ev.merge(payload);
+    assert.equal(Object.getPrototypeOf(ev.attrs), Object.prototype);
+    assert.equal(({} as any).polluted, undefined);
+    assert.equal(ev.get('polluted'), undefined);
+    assert.equal('polluted' in ev.attrs, false);
+    assert.equal(ev.get('safe'), 'ok');
+  });
+
+  it('merge keeps dangerous-looking keys as ordinary attrs', () => {
+    const ev = new Event({ event: 'test', service: 'checkout' }, 'checkout', 'development');
+    const payload = JSON.parse('{"__proto__":{"x":1},"constructor":"c","prototype":"p"}');
+    ev.merge(payload);
+    assert.ok(Object.prototype.hasOwnProperty.call(ev.attrs, '__proto__'));
+    assert.equal(ev.get('__proto__').x, 1);
+    assert.equal(ev.get('constructor'), 'c');
+    assert.equal(ev.get('prototype'), 'p');
+    assert.equal(Object.getPrototypeOf(ev.attrs), Object.prototype);
+    assert.equal(({} as any).x, undefined);
+  });
+
+  it('set and enrich do not allow prototype pollution via __proto__ key', () => {
+    const ev = new Event({ event: 'test', service: 'checkout' }, 'checkout', 'development');
+    ev.set('__proto__', { polluted: 'yes' });
+    ev.enrich({ key: '__proto__', kind: 'any', value: { polluted: 'yes' } });
+    assert.equal(Object.getPrototypeOf(ev.attrs), Object.prototype);
+    assert.equal(({} as any).polluted, undefined);
+    assert.equal(ev.get('polluted'), undefined);
+    assert.equal('polluted' in ev.attrs, false);
+  });
+
   it('getGroup returns matching attrs', () => {
     const ev = new Event({ event: 'test', service: 'checkout' }, 'checkout', 'development');
     ev.set('user.id', 'u123');
