@@ -61,5 +61,74 @@ func TestUUIDv7SequenceOverflowContinuesInNewMillisecond(t *testing.T) {
 	}
 	if first >= second {
 		t.Fatalf("IDs not monotonically increasing after overflow: %q >= %q", first, second)
+	"encoding/hex"
+	"strings"
+	"testing"
+	"time"
+)
+
+// decodeUUIDv7 returns the 48-bit timestamp and 12-bit sequence encoded in a
+// UUIDv7 string produced by formatUUID.
+func decodeUUIDv7(t *testing.T, id string) (int64, uint16) {
+	t.Helper()
+	raw, err := hex.DecodeString(strings.ReplaceAll(id, "-", ""))
+	if err != nil {
+		t.Fatalf("invalid UUID %q: %v", id, err)
+	}
+	if len(raw) != 16 {
+		t.Fatalf("invalid UUID length %d for %q", len(raw), id)
+	}
+	ms := int64(raw[0])<<40 | int64(raw[1])<<32 | int64(raw[2])<<24 |
+		int64(raw[3])<<16 | int64(raw[4])<<8 | int64(raw[5])
+	seq := uint16(raw[6]&0x0F)<<8 | uint16(raw[7])
+	return ms, seq
+}
+
+func TestUUIDv7MonotonicAcrossClockRollback(t *testing.T) {
+	// Model a prior ID having used a timestamp ahead of the current wall clock
+	// (the state left behind when the system clock jumps backwards).
+	rollbackMS := time.Now().UnixMilli() + 5_000
+	gen := &uuidV7Gen{lastMS: rollbackMS, seq: 7}
+
+	id := gen.newID()
+	ms, seq := decodeUUIDv7(t, id)
+
+	if ms != rollbackMS {
+		t.Fatalf("timestamp after rollback = %d, want %d (logical clock held)", ms, rollbackMS)
+	}
+	if seq != 8 {
+		t.Fatalf("sequence after rollback = %d, want 8", seq)
+	}
+}
+
+func TestUUIDv7MonotonicWithRepeatedRollback(t *testing.T) {
+	base := time.Now().UnixMilli() + 5_000
+	gen := &uuidV7Gen{lastMS: base}
+
+	var prev string
+	for i := 0; i < 10; i++ {
+		id := gen.newID()
+		if prev != "" && id <= prev {
+			t.Fatalf("ID %d not monotonic: %q <= %q", i, id, prev)
+		}
+		ms, _ := decodeUUIDv7(t, id)
+		if ms < base {
+			t.Fatalf("ID %d timestamp %d regressed below %d", i, ms, base)
+		}
+		prev = id
+	}
+}
+
+func TestUUIDv7SequenceOverflowAdvancesLogicalClock(t *testing.T) {
+	base := time.Now().UnixMilli() + 5_000
+	gen := &uuidV7Gen{lastMS: base, seq: 0x0FFF}
+
+	id := gen.newID()
+	ms, seq := decodeUUIDv7(t, id)
+	if ms != base+1 {
+		t.Fatalf("timestamp after sequence overflow = %d, want %d", ms, base+1)
+	}
+	if seq != 0 {
+		t.Fatalf("sequence after overflow = %d, want 0", seq)
 	}
 }

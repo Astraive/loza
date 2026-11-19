@@ -55,7 +55,7 @@ func setGlobalIDGen(g *uuidV7Gen) {
 }
 
 // NewUUIDv7 generates a new UUIDv7 string using the global generator.
-// IDs are monotonically increasing within the same millisecond.
+// IDs are monotonically increasing, including across system clock rollbacks.
 func NewUUIDv7() string {
 	return getGlobalIDGen().newID()
 }
@@ -81,14 +81,25 @@ func (g *uuidV7Gen) newID() string {
 			// the next call in this millisecond takes the "new millisecond" branch
 			// and restarts the sequence, emitting a duplicate (timestamp, seq) prefix.
 			g.lastMS = now
-			g.seq = 0
-		}
-	} else {
+	now := time.Now().UnixMilli()
+	if now > g.lastMS {
+		// Wall clock advanced: begin a new millisecond.
 		g.lastMS = now
 		g.seq = 0
+	} else {
+		// Same millisecond or the wall clock rolled back. Hold the logical
+		// timestamp fixed and advance the sequence so emitted IDs never move
+		// backwards, even when the system clock jumps to an earlier time.
+		g.seq++
+		if g.seq > 0x0FFF {
+			// Sequence exhausted for this logical millisecond: advance the
+			// logical clock instead of emitting a duplicate or stale ID.
+			g.lastMS++
+			g.seq = 0
+		}
 	}
 
-	ms := now
+	ms := g.lastMS
 	seq := g.seq
 	g.mu.Unlock()
 
