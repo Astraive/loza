@@ -15,34 +15,34 @@ import (
 var version = lozacli.Version
 
 var CommandMaturity = map[string]string{
-	"init":        "stable",
-	"cortex":      "beta",
-	"dev":         "stable",
-	"config":      "stable",
-	"schema":      "stable",
-	"collector":   "stable",
-	"worker":      "beta",
-	"emit":        "stable",
-	"query":       "stable",
-	"tail":        "stable",
-	"watch":       "experimental",
-	"status":      "stable",
-	"sinks":       "beta",
-	"dlq":         "beta",
-	"quarantine":  "beta",
-	"keys":        "beta",
-	"export":      "experimental",
-	"replay":      "beta",
-	"delete":      "beta",
-	"audit":       "beta",
-	"doctor":      "experimental",
-	"bench":       "stable",
-	"deploy":      "beta",
-	"dashboard":   "experimental",
-	"incident":    "beta",
-	"graph":       "experimental",
-	"signatures":  "experimental",
-	"debug":       "experimental",
+	"init":       "stable",
+	"cortex":     "beta",
+	"dev":        "stable",
+	"config":     "stable",
+	"schema":     "stable",
+	"collector":  "stable",
+	"worker":     "beta",
+	"emit":       "stable",
+	"query":      "stable",
+	"tail":       "stable",
+	"watch":      "experimental",
+	"status":     "stable",
+	"sinks":      "beta",
+	"dlq":        "beta",
+	"quarantine": "beta",
+	"keys":       "beta",
+	"export":     "experimental",
+	"replay":     "beta",
+	"delete":     "beta",
+	"audit":      "beta",
+	"doctor":     "experimental",
+	"bench":      "stable",
+	"deploy":     "beta",
+	"dashboard":  "experimental",
+	"incident":   "beta",
+	"graph":      "experimental",
+	"signatures": "experimental",
+	"debug":      "experimental",
 }
 
 // isGlobalOutputFormat reports whether value is one of the formats accepted by
@@ -57,31 +57,53 @@ func isGlobalOutputFormat(value string) bool {
 	return false
 }
 
-// splitGlobalFlags removes global flags from args and returns the remaining
-// command arguments together with the verbose and output-format settings.
-func splitGlobalFlags(args []string) ([]string, bool, string) {
-	verbose := false
-	outputFmt := "text"
-	filtered := make([]string, 0, len(args))
+// extractGlobalFlags removes the global flags from args and returns the
+// remaining positional arguments. The space form (--output FORMAT) and the
+// equals form (--output=FORMAT) are parsed in this one shared place so that
+// both accept any format value and behave identically.
+//
+// This combines two behaviors: the global --output flag is recognized
+// generically (any value is accepted for either form), while a subcommand's
+// own --output <path> flag is still preserved once a command has been seen and
+// the value is not a known global format (e.g. `emit sample --output x.json`).
+func extractGlobalFlags(args []string) (verbose bool, outputFmt string, filtered []string) {
+	outputFmt = "text"
+	commandSeen := false
 	for i := 0; i < len(args); i++ {
-		switch args[i] {
-		case "--verbose":
+		switch {
+		case args[i] == "--verbose":
 			verbose = true
-		case "--output":
-			if i+1 < len(args) && isGlobalOutputFormat(args[i+1]) {
-				i++
-				outputFmt = args[i]
+		case args[i] == "--output":
+			if i+1 < len(args) {
+				value := args[i+1]
+				if isGlobalOutputFormat(value) || !commandSeen {
+					// Known global format, or still before the command: consume
+					// the value as the global output format (any value is valid).
+					i++
+					outputFmt = value
+				} else {
+					// Subcommand output path: leave the flag for the subcommand.
+					filtered = append(filtered, args[i])
+				}
 			} else {
-				// Not a display format: preserve the flag and its value so the
-				// invoked subcommand can parse it (e.g. a sample output path).
+				// Dangling --output flag: leave it for the subcommand.
 				filtered = append(filtered, args[i])
 			}
-		case "--output=json", "--output=table", "--output=text":
-			outputFmt = strings.TrimPrefix(args[i], "--output=")
+		case strings.HasPrefix(args[i], "--output="):
+			_, outputFmt, _ = strings.Cut(args[i], "--output=")
 		default:
 			filtered = append(filtered, args[i])
+			commandSeen = true
 		}
 	}
+	return verbose, outputFmt, filtered
+}
+
+// splitGlobalFlags is kept for callers that expect main's
+// (args, verbose, format) ordering. It delegates to the shared parser so both
+// entry points apply identical semantics.
+func splitGlobalFlags(args []string) ([]string, bool, string) {
+	verbose, outputFmt, filtered := extractGlobalFlags(args)
 	return filtered, verbose, outputFmt
 }
 
@@ -91,7 +113,8 @@ func Run(args []string) error {
 		return nil
 	}
 
-	args, verbose, outputFmt := splitGlobalFlags(args)
+	verbose, outputFmt, filtered := extractGlobalFlags(args)
+	args = filtered
 
 	if len(args) == 0 {
 		printHelp()

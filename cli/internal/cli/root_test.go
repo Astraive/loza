@@ -108,3 +108,91 @@ func TestEmitOutputPathSurvivesGlobalFlagParsing(t *testing.T) {
 		t.Fatalf("unexpected sample output: %s", raw)
 	}
 }
+
+func TestExtractGlobalFlagsOutputForms(t *testing.T) {
+	tests := []struct {
+		name        string
+		args        []string
+		wantFmt     string
+		wantArgs    []string
+		wantVerbose bool
+	}{
+		{
+			name:     "equals form with documented literal",
+			args:     []string{"--output=json", "query"},
+			wantFmt:  "json",
+			wantArgs: []string{"query"},
+		},
+		{
+			name:     "equals form with yaml is consumed as a flag",
+			args:     []string{"--output=yaml", "config"},
+			wantFmt:  "yaml",
+			wantArgs: []string{"config"},
+		},
+		{
+			name:     "equals form with csv is consumed as a flag",
+			args:     []string{"--output=csv", "query"},
+			wantFmt:  "csv",
+			wantArgs: []string{"query"},
+		},
+		{
+			name:     "equals form with an arbitrary value",
+			args:     []string{"--output=anything"},
+			wantFmt:  "anything",
+			wantArgs: nil,
+		},
+		{
+			name:     "space form accepts any value",
+			args:     []string{"--output", "yaml", "config"},
+			wantFmt:  "yaml",
+			wantArgs: []string{"config"},
+		},
+		{
+			name:     "last output flag wins across both forms",
+			args:     []string{"--output=json", "--output", "csv", "query"},
+			wantFmt:  "csv",
+			wantArgs: []string{"query"},
+		},
+		{
+			name:        "verbose is preserved alongside equals form",
+			args:        []string{"--verbose", "--output=yaml", "version"},
+			wantFmt:     "yaml",
+			wantArgs:    []string{"version"},
+			wantVerbose: true,
+		},
+		{
+			name:     "no output flag keeps the default",
+			args:     []string{"status"},
+			wantFmt:  "text",
+			wantArgs: []string{"status"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			verbose, gotFmt, gotArgs := extractGlobalFlags(tt.args)
+			if gotFmt != tt.wantFmt {
+				t.Errorf("output format = %q, want %q", gotFmt, tt.wantFmt)
+			}
+			if !reflect.DeepEqual(gotArgs, tt.wantArgs) {
+				t.Errorf("filtered args = %#v, want %#v", gotArgs, tt.wantArgs)
+			}
+			if verbose != tt.wantVerbose {
+				t.Errorf("verbose = %v, want %v", verbose, tt.wantVerbose)
+			}
+		})
+	}
+}
+
+// TestRunEqualsOutputIsNotPositional reproduces the reported behavior: an
+// --output=<fmt> value other than json/table/text used to fall through to the
+// default case and become the first positional argument, yielding
+// "unknown command: --output=yaml". It must now be consumed as a global flag.
+func TestRunEqualsOutputIsNotPositional(t *testing.T) {
+	for _, value := range []string{"yaml", "csv", "anything"} {
+		flag := "--output=" + value
+		if err := Run([]string{flag, "version"}); err != nil {
+			t.Errorf("Run([%q, \"version\"]) = %v, want nil", flag, err)
+		}
+	}
+}
