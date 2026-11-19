@@ -40,18 +40,41 @@ def test_oversized_event_handled_gracefully() -> None:
 
 
 def test_invalid_event_name_handled() -> None:
-    """Verify invalid event names are handled."""
+    """Verify invalid event names are rejected with a typed error, not a panic."""
     logger = loza.New(loza.Test("test"))
 
-    # Python SDK accepts various types, so just verify no crashes
-    try:
-        ctx = logger.start_event(loza.Params(event=" "))
-        logger.finish(ctx, "success")
+    ctx = logger.start_event(loza.Params(event=" "))
+    logger.finish(ctx, "success")
+
+    # A whitespace-only name is invalid: emit must surface the known, typed
+    # validation error. Any other exception type (e.g. a panic-derived one)
+    # propagates out of pytest.raises and fails the test.
+    with pytest.raises(loza.EventValidationError, match=r'field "event" must be a non-empty string'):
         logger.emit(ctx)
-        # Should handle without crashing
-    except Exception:
-        # Should be a known error type, not a panic
-        pass
+
+    # A rejected event must never be reported as successfully delivered.
+    assert not ctx.emitted
+    assert ctx.event_state == "failed_validation"
+
+
+def test_invalid_event_name_never_raises_arbitrary_exception() -> None:
+    """Regression: invalid names must raise EventValidationError, never an arbitrary error."""
+    for name in (" ", "", "\t\n"):
+        logger = loza.New(loza.Test("test"))
+        ctx = logger.start_event(loza.Params(event=name))
+        logger.finish(ctx, "success")
+
+        try:
+            logger.emit(ctx)
+        except loza.EventValidationError:
+            pass
+        except BaseException as exc:  # pragma: no cover - only reached on regression
+            pytest.fail(f"invalid event name {name!r} raised unexpected {type(exc).__name__}: {exc}")
+        else:
+            pytest.fail(f"invalid event name {name!r} was silently accepted")
+
+        assert not ctx.emitted
+        assert ctx.event_state == "failed_validation"
 
 
 def test_sink_write_failure_doesnt_crash() -> None:
