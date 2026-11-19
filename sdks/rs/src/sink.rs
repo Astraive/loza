@@ -82,10 +82,24 @@ pub fn sink_health(sink: &SinkConfig) -> bool {
         SinkConfig::HttpBatch {
             endpoint,
             timeout_ms,
+            api_key,
+            basic_username,
+            basic_password,
+            insecure,
             ..
         } => {
+            let auth = (
+                api_key.as_deref(),
+                basic_username.as_deref(),
+                basic_password.as_deref(),
+                *insecure,
+            );
+            let client = collector_http_client(endpoint, auth);
             let url = format!("{}/healthz", endpoint.trim_end_matches('/'));
-            let request = crate::core::client::HTTPRequest::new("GET", &url);
+            let mut request = crate::core::client::HTTPRequest::new("GET", &url);
+            for (name, value) in collector_auth_headers(&client) {
+                request = request.with_header(name, value);
+            }
             crate::core::client::HTTPClient::with_timeout_ms(*timeout_ms)
                 .send(&request)
                 .map(|r| r.status_code < 500)
@@ -268,19 +282,8 @@ fn post_http_batch_with_ack(
     }
     request = request.timeout(std::time::Duration::from_millis(client.timeout_ms));
 
-    if let Some(api_key) = &client.api_key {
-        let auth_value = if client.auth_header.eq_ignore_ascii_case("authorization") {
-            format!("Bearer {}", api_key)
-        } else {
-            api_key.clone()
-        };
-        request = request.set(&client.auth_header, &auth_value);
-    } else if let (Some(username), Some(password)) =
-        (&client.basic_username, &client.basic_password)
-    {
-        let token =
-            base64::engine::general_purpose::STANDARD.encode(format!("{username}:{password}"));
-        request = request.set(&client.auth_header, &format!("Basic {token}"));
+    for (name, value) in collector_auth_headers(&client) {
+        request = request.set(&name, &value);
     }
     let retry_policy = retry_policy(options.max_retries);
 
@@ -425,19 +428,8 @@ fn post_http_ndjson_with_ack(
     }
     request = request.timeout(std::time::Duration::from_millis(client.timeout_ms));
 
-    if let Some(api_key) = &client.api_key {
-        let auth_value = if client.auth_header.eq_ignore_ascii_case("authorization") {
-            format!("Bearer {}", api_key)
-        } else {
-            api_key.clone()
-        };
-        request = request.set(&client.auth_header, &auth_value);
-    } else if let (Some(username), Some(password)) =
-        (&client.basic_username, &client.basic_password)
-    {
-        let token =
-            base64::engine::general_purpose::STANDARD.encode(format!("{username}:{password}"));
-        request = request.set(&client.auth_header, &format!("Basic {token}"));
+    for (name, value) in collector_auth_headers(&client) {
+        request = request.set(&name, &value);
     }
     let retry_policy = retry_policy(options.max_retries);
 
@@ -581,6 +573,27 @@ fn retryable_error_message(value: &Value) -> Option<String> {
                 None
             })
         })
+}
+
+/// Auth headers for a collector request, shared by the write and health paths.
+fn collector_auth_headers(client: &CollectorHttpClient) -> Vec<(String, String)> {
+    if let Some(api_key) = client.api_key.as_deref() {
+        let value = if client.auth_header.eq_ignore_ascii_case("authorization") {
+            format!("Bearer {api_key}")
+        } else {
+            api_key.to_string()
+        };
+        vec![(client.auth_header.clone(), value)]
+    } else if let (Some(username), Some(password)) = (
+        client.basic_username.as_deref(),
+        client.basic_password.as_deref(),
+    ) {
+        let token =
+            base64::engine::general_purpose::STANDARD.encode(format!("{username}:{password}"));
+        vec![(client.auth_header.clone(), format!("Basic {token}"))]
+    } else {
+        Vec::new()
+    }
 }
 
 fn collector_http_client(
