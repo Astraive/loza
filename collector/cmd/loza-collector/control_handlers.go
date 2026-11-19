@@ -300,6 +300,10 @@ func (s *collectorState) handleReplay(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_replay_request", "message": err.Error()})
 		return
 	}
+	if req.Filter != "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "unsupported_filter", "message": "filter is not supported for replay"})
+		return
+	}
 	if len(req.Events) == 0 {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "empty_events", "message": "events array required"})
 		return
