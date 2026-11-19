@@ -181,8 +181,8 @@ func New(config ConnectionConfig) (*Client, error) {
 		return nil, newConfigError("endpoint is required")
 	}
 	endpoint, err := url.Parse(strings.TrimRight(config.Endpoint, "/"))
-	if err != nil || endpoint.User != nil || endpoint.Host == "" || (endpoint.Scheme != "http" && endpoint.Scheme != "https") {
-		return nil, newConfigError("endpoint must be an HTTP(S) URL without userinfo")
+	if err != nil || endpoint.User != nil || endpoint.Host == "" || (endpoint.Scheme != "http" && endpoint.Scheme != "https") || endpoint.RawQuery != "" || endpoint.Fragment != "" {
+		return nil, newConfigError("endpoint must be an HTTP(S) URL without userinfo, query, or fragment")
 	}
 	if config.Collector == "" || !collectorSlug.MatchString(config.Collector) {
 		return nil, newConfigError("collector slug is required and must contain only letters, digits, '_' or '-'")

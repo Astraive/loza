@@ -68,6 +68,34 @@ func TestClientQueryUsesScopedRouteTypedParametersAndBearer(t *testing.T) {
 	}
 }
 
+func TestClientQueryAppendsRouteAfterBasePath(t *testing.T) {
+	var gotPath string
+	var gotRawQuery string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotRawQuery = r.URL.RawQuery
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"columns":[],"rows":[],"row_count":0}`))
+	}))
+	defer server.Close()
+
+	client, err := New(ConnectionConfig{
+		Endpoint:   server.URL + "/base",
+		Collector:  "demo",
+		APIKey:     "api-key",
+		HTTPClient: server.Client(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.Query(context.Background(), "from events", nil, 1); err != nil {
+		t.Fatal(err)
+	}
+	if gotPath != "/base/collectors/demo/lql/query" || gotRawQuery != "" {
+		t.Fatalf("path = %q, raw query = %q", gotPath, gotRawQuery)
+	}
+}
+
 func TestClientNewResolvesCanonicalDSNWithoutWorkspaceDependencies(t *testing.T) {
 	client, err := New(ConnectionConfig{
 		DSN:     "loza://key-id:secret@example.com/demo?env=prod&service=api",
