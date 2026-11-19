@@ -45,6 +45,19 @@ func MiddlewareWithConfig(cfg Config) func(http.Handler) http.Handler {
 			}()
 
 			next.ServeHTTP(w, r)
+			route := ""
+			if rc := chi.RouteContext(r.Context()); rc != nil {
+				route = rc.RoutePattern()
+			}
+			if route == "" && fallbackExtractor != nil {
+				route = fallbackExtractor(r)
+			}
+			if route != "" {
+				if err := loza.Set(r.Context(), loza.Route(route)); err != nil {
+					loza.ErrorContext(r.Context(), "chi middleware: failed to set route", err, "chi.route.set_error",
+						loza.String("route", route))
+				}
+			}
 		}))
 	}
 }
