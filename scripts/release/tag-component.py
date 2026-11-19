@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import os
 import subprocess
 import sys
@@ -33,6 +34,26 @@ DEFAULT_PREFIXES = {
 
 DEFAULT_GIT_AUTHOR_NAME = "github-actions[bot]"
 DEFAULT_GIT_AUTHOR_EMAIL = "41898282+github-actions[bot]@users.noreply.github.com"
+
+
+def _load_semver_re() -> Any:
+    """Reuse the canonical semver pattern from the sibling manifest validator.
+
+    Sharing the regex keeps this script and ``validate-manifests.py`` from
+    disagreeing on what a valid manifest version is.
+    """
+
+    spec = importlib.util.spec_from_file_location(
+        "loza_validate_manifests", Path(__file__).with_name("validate-manifests.py")
+    )
+    if spec is None or spec.loader is None:
+        raise RuntimeError("could not load validate-manifests.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.SEMVER_RE
+
+
+SEMVER_RE = _load_semver_re()
 
 
 def run_git(args: list[str], check: bool = True) -> subprocess.CompletedProcess[str]:
@@ -154,8 +175,10 @@ def validate_version(version: str) -> None:
     if not version:
         raise ValueError("manifest version is empty")
 
-    if version.startswith("v"):
-        raise ValueError("manifest version must not start with v")
+    if version.startswith("v") or not SEMVER_RE.match(version):
+        raise ValueError(
+            f"manifest version must be semantic version without leading v, got {version!r}"
+        )
 
 
 def create_tag(tag: str, message: str) -> None:
