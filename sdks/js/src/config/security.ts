@@ -19,8 +19,18 @@ const DEFAULT_SECURITY: Required<SecurityConfig> = {
 export class SecurityLimiter {
   private config: Required<SecurityConfig>;
 
-  constructor(config?: SecurityConfig) {
-    this.config = { ...DEFAULT_SECURITY, ...config };
+  constructor(config: SecurityConfig = {}) {
+    // Merge field-by-field so an explicitly `undefined` value (e.g. from a
+    // partially-built object) cannot overwrite a sane default and silently
+    // disable a limit.
+    this.config = {
+      redactByDefault: config.redactByDefault ?? DEFAULT_SECURITY.redactByDefault,
+      allowPII: config.allowPII ?? DEFAULT_SECURITY.allowPII,
+      maxFieldBytes: config.maxFieldBytes ?? DEFAULT_SECURITY.maxFieldBytes,
+      maxEventBytes: config.maxEventBytes ?? DEFAULT_SECURITY.maxEventBytes,
+      maxAttrCount: config.maxAttrCount ?? DEFAULT_SECURITY.maxAttrCount,
+      dropOversizedEvents: config.dropOversizedEvents ?? DEFAULT_SECURITY.dropOversizedEvents,
+    };
   }
 
   /** Returns true if the event should be dropped. */

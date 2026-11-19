@@ -128,6 +128,22 @@ describe('Core boundaries', () => {
     assert.equal(new SecurityLimiter({ dropOversizedEvents: false }).shouldDrop('long', 1000), false);
   });
 
+  it('falls back to defaults when config values are explicitly undefined', () => {
+    const defaults = new SecurityLimiter().getConfig();
+    const limiter = new SecurityLimiter({
+      redactByDefault: undefined,
+      allowPII: undefined,
+      maxFieldBytes: undefined,
+      maxEventBytes: undefined,
+      maxAttrCount: undefined,
+      dropOversizedEvents: undefined,
+    });
+    assert.deepEqual(limiter.getConfig(), defaults);
+    // An oversized event must still be dropped when maxEventBytes is undefined.
+    assert.equal(limiter.shouldDrop('x'.repeat(defaults.maxEventBytes + 1), 0), true);
+    assert.equal(limiter.isFieldOversized('x'.repeat(defaults.maxFieldBytes + 1)), true);
+  });
+
   it('supports deterministic event clocks and mutable state transitions', () => {
     const previous = setClock(() => 1000);
     try {
