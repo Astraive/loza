@@ -87,11 +87,15 @@ func (h *SlogHandler) Handle(ctx context.Context, rec slog.Record) error {
 		for _, a := range seg.attrs {
 			node.attrs = append(node.attrs, h.toAttr(a))
 		}
+	attrs := make([]loza.Attr, 0, rec.NumAttrs()+len(h.attrs))
+	for _, a := range h.attrs {
+		attrs = append(attrs, h.toAttr(a)...)
 	}
 
 	var recordAttrs []slog.Attr
 	rec.Attrs(func(a slog.Attr) bool {
 		recordAttrs = append(recordAttrs, a)
+		attrs = append(attrs, h.toAttr(a)...)
 		return true
 	})
 	if len(recordAttrs) > 0 {
@@ -143,7 +147,10 @@ func (h *SlogHandler) WithGroup(name string) slog.Handler {
 	return &out
 }
 
-func (h *SlogHandler) toAttr(a slog.Attr) loza.Attr {
+// toAttr converts a slog attr into zero or more loza attrs. It returns a slice
+// because slog semantics require a group with an empty key to be inlined into
+// the enclosing attr list rather than wrapped in a nameless group.
+func (h *SlogHandler) toAttr(a slog.Attr) []loza.Attr {
 	key := a.Key
 	v := a.Value
 	switch v.Kind() {
@@ -151,25 +158,28 @@ func (h *SlogHandler) toAttr(a slog.Attr) loza.Attr {
 		children := v.Group()
 		nested := make([]loza.Attr, 0, len(children))
 		for _, child := range children {
-			nested = append(nested, h.toAttr(child))
+			nested = append(nested, h.toAttr(child)...)
 		}
-		return loza.Group(key, nested...)
+		if key == "" {
+			return nested
+		}
+		return []loza.Attr{loza.Group(key, nested...)}
 	case slog.KindString:
-		return loza.String(key, v.String())
+		return []loza.Attr{loza.String(key, v.String())}
 	case slog.KindInt64:
-		return loza.Int64(key, v.Int64())
+		return []loza.Attr{loza.Int64(key, v.Int64())}
 	case slog.KindUint64:
-		return loza.Uint64(key, v.Uint64())
+		return []loza.Attr{loza.Uint64(key, v.Uint64())}
 	case slog.KindFloat64:
-		return loza.Float64(key, v.Float64())
+		return []loza.Attr{loza.Float64(key, v.Float64())}
 	case slog.KindBool:
-		return loza.Bool(key, v.Bool())
+		return []loza.Attr{loza.Bool(key, v.Bool())}
 	case slog.KindDuration:
-		return loza.Duration(key, v.Duration())
+		return []loza.Attr{loza.Duration(key, v.Duration())}
 	case slog.KindTime:
-		return loza.Time(key, v.Time())
+		return []loza.Attr{loza.Time(key, v.Time())}
 	default:
-		return loza.Any(key, v.Any())
+		return []loza.Attr{loza.Any(key, v.Any())}
 	}
 }
 
