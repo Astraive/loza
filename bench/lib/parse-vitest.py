@@ -25,6 +25,7 @@ def leaf_name(text):
 
 results = []
 seen = set()
+skipped = 0
 
 
 def add_result(name, ns_per_op, hz, passed):
@@ -44,7 +45,7 @@ def add_result(name, ns_per_op, hz, passed):
 
 
 with open(sys.argv[1], 'rb') as f:
-    for raw_line in f:
+    for lineno, raw_line in enumerate(f, 1):
         stripped = decode_line(raw_line).strip()
         if not stripped:
             continue
@@ -52,12 +53,20 @@ with open(sys.argv[1], 'rb') as f:
         if stripped.startswith(BENCH_MARKER):
             parts = re.split(r'\s{2,}', stripped[1:].strip())
             if len(parts) >= 5:
+                name = parts[0].strip()
                 try:
                     hz = float(parts[1].replace(',', ''))
-                    mean_ns = float(parts[4]) * 1_000_000
-                except ValueError:
+                    mean_ms = float(parts[4].replace(',', ''))
+                    mean_ns = mean_ms * 1_000_000
+                except ValueError as exc:
+                    skipped += 1
+                    print(
+                        f"warning: skipping malformed benchmark line {lineno}: "
+                        f"{exc} ({stripped!r})",
+                        file=sys.stderr,
+                    )
                     continue
-                add_result(parts[0].strip(), round(mean_ns, 2), round(hz, 2), True)
+                add_result(name, round(mean_ns, 2), round(hz, 2), True)
         elif stripped.startswith(FAIL_MARKER):
             add_result(leaf_name(stripped[1:]), 0, 0, False)
         elif re.match(r'^FAIL\b', stripped):
@@ -75,7 +84,7 @@ output = {
     'component': 'sdks/js/bench',
     'timestamp': timestamp,
     'results': results,
-    'summary': {'total': len(results), 'passed': passed, 'failed': failed}
+    'summary': {'total': len(results), 'passed': passed, 'failed': failed, 'skipped': skipped}
 }
 
 if out_file:
