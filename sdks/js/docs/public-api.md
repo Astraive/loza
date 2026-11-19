@@ -125,7 +125,7 @@ const config = production('my-service')
 | `dropKeys(...keys)` | Remove keys from the event. |
 | `maskKeys(...keys)` | Mask values, showing prefix/suffix. |
 | `redactPatterns(...patterns)` | Redact values matching regex. |
-| `composeRedactors(...redactors)` | Chain multiple redactors. |
+| `composeRedactors(...redactors)` | Apply multiple redactors in order; when keys overlap, the last redactor wins. |
 
 ## Schemas
 

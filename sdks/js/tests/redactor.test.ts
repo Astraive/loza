@@ -1,7 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  defaultRedactor, redactKeys, dropKeys, maskKeys, composeRedactors,
+  defaultRedactor, redactKeys, dropKeys, maskKeys, composeRedactors, hashKeys,
 } from '../src/redaction/redactor.ts';
 
 describe('Redactor', () => {
@@ -50,6 +50,27 @@ describe('Redactor', () => {
     assert.equal(result.attrs.password, '[REDACTED]');
     assert.equal(result.attrs.secret, undefined);
     assert.equal(result.attrs.name, 'test');
+  });
+
+  it('composeRedactors applies every redactor in order (last writer wins)', () => {
+    const payload = { attrs: { secret: 'abcdef12345', name: 'test' } };
+
+    // Redact first, then hash: the later redactor transforms the already-redacted value.
+    const redactThenHash = composeRedactors(
+      redactKeys('secret'),
+      hashKeys('secret'),
+    );
+    const hashed = redactThenHash(payload);
+    assert.match(hashed.attrs.secret, /^sha256:[a-f0-9]{64}$/);
+    assert.equal(hashed.attrs.name, 'test');
+
+    // Reversing the order changes the result, proving application is sequential
+    // and order-dependent rather than "first match wins".
+    const hashThenRedact = composeRedactors(
+      hashKeys('secret'),
+      redactKeys('secret'),
+    );
+    assert.equal(hashThenRedact(payload).attrs.secret, '[REDACTED]');
   });
 
   it('default redactor uses 14 safety-net keys', () => {

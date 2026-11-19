@@ -930,7 +930,7 @@ Redaction transforms **event payloads** before encoding. It runs after schema en
 | `hashKeys(...keys)` | Replace matching values with `sha256:{hash}` |
 | `maskKeys(...keys)` | Mask: first 2 + last 2 chars visible (`ab****yz`) |
 | `dropKeys(...keys)` | Remove matching keys entirely |
-| `composeRedactors(...redactors)` | Chain multiple redactors |
+| `composeRedactors(...redactors)` | Apply redactors in order (last wins on overlapping keys) |
 
 ```typescript
 // Default redaction (passwords, tokens, secrets)
