@@ -30,7 +30,11 @@ class Middleware:
 
     async def __call__(self, scope: dict, receive: Callable, send: Callable) -> None:
         if self.app is None:
-            return
+            raise RuntimeError(
+                "loza Starlette middleware has no wrapped ASGI app; pass an app to "
+                "Middleware(app, ...) or middleware(app, ...) before using it as an "
+                "ASGI application (e.g. middleware(app, service='checkout'))"
+            )
         if scope.get("type") != "http":
             await self.app(scope, receive, send)
             return
