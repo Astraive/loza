@@ -10,6 +10,7 @@ Measures:
 
 from __future__ import annotations
 
+import math
 import statistics
 import time
 import urllib.request
@@ -21,6 +22,27 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from bench.dataset import generate_dataset
 from loza.cortex.engine import Engine
+
+
+def _percentile(values: list[float], pct: float) -> float:
+    """Return the ``pct``-th percentile of ``values`` via linear interpolation.
+
+    ``pct`` is a fraction in [0, 1] (e.g. ``0.95`` for p95). The rank is
+    ``pct * (len(values) - 1)`` and the value is interpolated between the two
+    nearest samples. This avoids the off-by-one of ``sorted(v)[int(len(v) * pct)]``,
+    which resolves to the sample maximum for the small benchmark sample sizes.
+    """
+    if not values:
+        raise ValueError("percentile requires at least one value")
+    ordered = sorted(values)
+    if len(ordered) == 1:
+        return ordered[0]
+    rank = pct * (len(ordered) - 1)
+    lower = math.floor(rank)
+    upper = math.ceil(rank)
+    if lower == upper:
+        return ordered[lower]
+    return ordered[lower] + (ordered[upper] - ordered[lower]) * (rank - lower)
 
 
 def run_benchmark(cortex_url: str = "http://localhost:9312", seed: int = 42) -> dict:
@@ -93,8 +115,8 @@ def run_benchmark(cortex_url: str = "http://localhost:9312", seed: int = 42) -> 
         fast_latencies.append(elapsed)
 
     fast_p50 = statistics.median(fast_latencies)
-    fast_p95 = sorted(fast_latencies)[int(len(fast_latencies) * 0.95)]
-    fast_p99 = sorted(fast_latencies)[int(len(fast_latencies) * 0.99)]
+    fast_p95 = _percentile(fast_latencies, 0.95)
+    fast_p99 = _percentile(fast_latencies, 0.99)
     results["fast_p50_ms"] = fast_p50 * 1000
     results["fast_p95_ms"] = fast_p95 * 1000
     results["fast_p99_ms"] = fast_p99 * 1000
@@ -113,7 +135,7 @@ def run_benchmark(cortex_url: str = "http://localhost:9312", seed: int = 42) -> 
         deep_latencies.append(elapsed)
 
     deep_p50 = statistics.median(deep_latencies)
-    deep_p95 = sorted(deep_latencies)[int(len(deep_latencies) * 0.95)]
+    deep_p95 = _percentile(deep_latencies, 0.95)
     results["deep_p50_ms"] = deep_p50 * 1000
     results["deep_p95_ms"] = deep_p95 * 1000
     print(f"  p50: {deep_p50*1000:.0f}ms")
