@@ -60,6 +60,9 @@ type Params struct {
 //	    loza.String("tenant.id", tenantID),
 //	)
 func (p Params) With(attrs ...Attr) Params {
-	p.Custom = append(p.Custom, attrs...)
+	// Copy before appending: appending directly to p.Custom reuses its backing
+	// array when cap > len, so sibling Params built from one base would write to
+	// the same index and corrupt each other despite the value receiver.
+	p.Custom = append(append([]Attr(nil), p.Custom...), attrs...)
 	return p
 }
