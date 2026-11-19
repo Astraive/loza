@@ -35,3 +35,40 @@ func TestValidatePathAcceptsMixedSegments(t *testing.T) {
 		t.Fatalf("expected valid path, got: %v", err)
 	}
 }
+
+func TestValidatePathRejectsKeyAdjacentToIndex(t *testing.T) {
+	cases := []string{
+		"a[0]b",
+		"events[0]attrs",
+		"checkpoints[1]name",
+		"a[0]b.c",
+		"a[0].",
+	}
+	for _, tc := range cases {
+		if err := ValidatePath(tc); err == nil {
+			t.Fatalf("expected invalid path error for %q", tc)
+		}
+	}
+}
+
+func TestValidatePathAcceptsNestedIndices(t *testing.T) {
+	for _, tc := range []string{"matrix[0][1]", "a[0].[1]"} {
+		if err := ValidatePath(tc); err != nil {
+			t.Fatalf("expected valid path %q, got: %v", tc, err)
+		}
+	}
+}
+
+func TestExtractPathRejectsKeyAdjacentToIndex(t *testing.T) {
+	doc, err := DecodeObject([]byte(`{"events":[{"attrs":{"id":"x"}}]}`))
+	if err != nil {
+		t.Fatalf("decode failed: %v", err)
+	}
+
+	if got, ok := ExtractPath(doc, "events[0]attrs.id"); ok {
+		t.Fatalf("expected events[0]attrs.id to be rejected, got %v", got)
+	}
+	if got, ok := ExtractPath(doc, "events[0].attrs.id"); !ok || got != "x" {
+		t.Fatalf("expected events[0].attrs.id=x, got %v (%v)", got, ok)
+	}
+}
