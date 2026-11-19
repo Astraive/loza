@@ -12,10 +12,20 @@ pub fn unix_millis() -> u128 {
     {
         return *frozen;
     }
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis()
+    millis_since_epoch(SystemTime::now())
+}
+
+/// Convert an instant to milliseconds relative to the Unix epoch.
+///
+/// `duration_since` fails when `now` is before the epoch. Silently substituting
+/// `Duration::default()` made every pre-epoch clock report exactly `0` ms, so
+/// downstream consumers generated colliding `evt_0` IDs and `0.json` queue
+/// filenames. Instead, use the magnitude of the offset so distinct instants
+/// still map to distinct, non-zero values.
+fn millis_since_epoch(now: SystemTime) -> u128 {
+    now.duration_since(UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_millis())
+        .unwrap_or_else(|error| error.duration().as_millis())
 }
 
 pub fn freeze_at(ms: u128) {
@@ -30,4 +40,31 @@ pub fn unfreeze() {
         .get_or_init(|| Mutex::new(None))
         .lock()
         .unwrap() = None;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    #[test]
+    fn post_epoch_millis_are_the_epoch_offset() {
+        let now = UNIX_EPOCH + Duration::from_millis(1_234);
+        assert_eq!(millis_since_epoch(now), 1_234);
+    }
+
+    #[test]
+    fn pre_epoch_millis_do_not_collapse_to_zero() {
+        let now = UNIX_EPOCH - Duration::from_millis(1_500);
+        let millis = millis_since_epoch(now);
+        assert_ne!(millis, 0, "pre-epoch clock must not collapse to 0 ms");
+        assert_eq!(millis, 1_500);
+    }
+
+    #[test]
+    fn distinct_pre_epoch_instants_stay_distinct() {
+        let earlier = UNIX_EPOCH - Duration::from_millis(2_500);
+        let later = UNIX_EPOCH - Duration::from_millis(1_500);
+        assert_ne!(millis_since_epoch(earlier), millis_since_epoch(later));
+    }
 }
