@@ -3,6 +3,7 @@ package loki
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -209,6 +210,66 @@ func TestCloseWaitsForInflightPush(t *testing.T) {
 		BatchSize:     1,
 		FlushInterval: time.Hour,
 		Client:        srv.Client(),
+// closeInflightTransport blocks the first push (the in-flight WriteEvent)
+// until released, fails the first three pushes (WriteEvent's three attempts)
+// and makes later pushes succeed. It records whether the entry was ever
+// successfully pushed.
+type closeInflightTransport struct {
+	mu        sync.Mutex
+	calls     int
+	started   chan struct{}
+	release   chan struct{}
+	startOnce sync.Once
+	wantLine  string
+
+	okWithEntry bool
+}
+
+func (tr *closeInflightTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	body, _ := io.ReadAll(req.Body)
+	_ = req.Body.Close()
+
+	tr.mu.Lock()
+	tr.calls++
+	n := tr.calls
+	tr.mu.Unlock()
+
+	if n == 1 {
+		tr.startOnce.Do(func() { close(tr.started) })
+		<-tr.release
+	}
+
+	status := http.StatusServiceUnavailable
+	if n > 3 {
+		status = http.StatusNoContent
+		if strings.Contains(string(body), tr.wantLine) {
+			tr.mu.Lock()
+			tr.okWithEntry = true
+			tr.mu.Unlock()
+		}
+	}
+	return &http.Response{
+		StatusCode: status,
+		Status:     fmt.Sprintf("%d %s", status, http.StatusText(status)),
+		Header:     make(http.Header),
+		Body:       io.NopCloser(strings.NewReader("")),
+		Request:    req,
+	}, nil
+}
+
+func TestCloseWaitsForInflightWriteEvent(t *testing.T) {
+	const line = `{"event":"inflight"}`
+	tr := &closeInflightTransport{
+		started:  make(chan struct{}),
+		release:  make(chan struct{}),
+		wantLine: "inflight", // JSON-escaped quotes make the full line unreliable to match
+	}
+
+	rawSink, err := New(Config{
+		URL:           "http://loki.example/loki/api/v1/push",
+		BatchSize:     1, // appendEntry hands off a batch on the first event
+		FlushInterval: time.Hour,
+		Client:        &http.Client{Transport: tr},
 	})
 	if err != nil {
 		t.Fatalf("new sink: %v", err)
@@ -281,5 +342,56 @@ func TestCloseWaitsForInflightPush(t *testing.T) {
 	s.mu.Unlock()
 	if retained != 1 {
 		t.Fatalf("expected the failed batch to be retained in memory, got %d entries", retained)
+	writeErr := make(chan error, 1)
+	go func() {
+		writeErr <- s.WriteEvent(context.Background(), []byte(line), nil)
+	}()
+
+	select {
+	case <-tr.started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("in-flight WriteEvent push never started")
+	}
+
+	// Close while the WriteEvent is still pushing. With the fix, Close blocks
+	// in inflight.Wait(); without it, Close does an empty final Flush and
+	// returns right away. Wait for whichever happens before releasing the push.
+	closeErr := make(chan error, 1)
+	closeDone := make(chan struct{})
+	go func() {
+		closeErr <- s.Close(context.Background())
+		close(closeDone)
+	}()
+
+	select {
+	case <-closeDone:
+		// Buggy path: Close returned before the in-flight push/restore.
+	case <-time.After(300 * time.Millisecond):
+		// Fixed path: Close is waiting for the in-flight WriteEvent.
+	}
+
+	close(tr.release)
+
+	select {
+	case err := <-writeErr:
+		if err == nil {
+			t.Fatal("expected the in-flight WriteEvent push to fail")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("WriteEvent did not return")
+	}
+	select {
+	case err := <-closeErr:
+		if err != nil {
+			t.Fatalf("close: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Close did not return")
+	}
+
+	tr.mu.Lock()
+	defer tr.mu.Unlock()
+	if !tr.okWithEntry {
+		t.Fatalf("restored batch was never pushed by Close's final Flush (calls=%d)", tr.calls)
 	}
 }
