@@ -16,8 +16,7 @@ class Middleware:
         self.service = service
         self.route_resolver = route_resolver
 
-    def wrap_scope(self, scope: dict[str, Any]) -> object:
-        route = self.route_resolver(scope) if self.route_resolver else scope.get("path", "")
+    def _event_context(self, scope: dict[str, Any], route: str) -> object:
         return StartHTTPEvent(
             None,
             Params(
@@ -29,6 +28,10 @@ class Middleware:
                 service=self.service,
             ),
         )
+
+    def wrap_scope(self, scope: dict[str, Any]) -> object:
+        route = self.route_resolver(scope) if self.route_resolver else scope.get("path", "")
+        return self._event_context(scope, route)
 
     async def __call__(
         self,
@@ -45,7 +48,7 @@ class Middleware:
         status_code = 500
         response_bytes = 0
         started = time.perf_counter()
-        ctx = self.wrap_scope(scope)
+        ctx: object | None = None
 
         async def capture_send(message: dict[str, Any]) -> None:
             nonlocal status_code, response_bytes
@@ -56,6 +59,7 @@ class Middleware:
             await send(message)
 
         try:
+            ctx = self.wrap_scope(scope)
             Enrich(
                 ctx,
                 String("http.user_agent", _header(scope, b"user-agent")),
@@ -72,10 +76,16 @@ class Middleware:
         except BaseException as exc:
             # asyncio.CancelledError (a BaseException since 3.8) must finish the
             # event with an error too, otherwise `finally` emits it incomplete.
+        except Exception as exc:
+            if ctx is None:
+                # route_resolver raised before the event existed. Fall back to
+                # the raw path so the failure is still recorded and emitted.
+                ctx = self._event_context(scope, scope.get("path", ""))
             FinishError(ctx, exc, Bool("panic", True))
             raise
         finally:
-            Emit(ctx)
+            if ctx is not None:
+                Emit(ctx)
 
 
 def _header(scope: dict[str, Any], wanted: bytes) -> str:
