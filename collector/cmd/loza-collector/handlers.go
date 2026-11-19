@@ -85,6 +85,17 @@ func stampAuthorizedOwnership(raw []byte, scope publichttp.AuthorizedCollector) 
 	return stamped, nil
 }
 
+// ingestErrorStatus maps an error from ingest.ParseEvents to an HTTP status and
+// rejection code. Oversized payloads are identified by error identity (via
+// errors.Is), never by matching error-message text, so rewording the error in
+// the ingest package cannot silently turn a 413 into a 400.
+func ingestErrorStatus(err error) (int, string) {
+	if errors.Is(err, ingest.ErrPayloadTooLarge) {
+		return http.StatusRequestEntityTooLarge, "payload_too_large"
+	}
+	return http.StatusBadRequest, "invalid_request_payload"
+}
+
 func (s *collectorState) handleIngest(w http.ResponseWriter, r *http.Request) {
 	s.metrics.requestsTotal.Add(1)
 	requestID := newIngestRequestID()
@@ -120,12 +131,7 @@ func (s *collectorState) handleIngest(w http.ResponseWriter, r *http.Request) {
 	rawEvents, err := ingest.ParseEvents(r, s.config().maxBodyBytes)
 	if err != nil {
 		s.metrics.eventsRejected.Add(1)
-		status := http.StatusBadRequest
-		code := "invalid_request_payload"
-		if strings.Contains(strings.ToLower(err.Error()), "max body bytes") {
-			status = http.StatusRequestEntityTooLarge
-			code = "payload_too_large"
-		}
+		status, code := ingestErrorStatus(err)
 		writeJSON(w, status, ingestRejectResponse(requestID, code, err.Error(), false))
 		return
 	}
