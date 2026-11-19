@@ -2,6 +2,7 @@ package models
 
 import (
 	"errors"
+	"math"
 	"time"
 )
 
@@ -106,7 +107,7 @@ func (e *Edge) Validate() error {
 	if !validEdgeTypes[e.Type] {
 		return errors.New("invalid edge type")
 	}
-	if e.Weight < 0.0 || e.Weight > 1.0 {
+	if math.IsNaN(e.Weight) || e.Weight < 0.0 || e.Weight > 1.0 {
 		return errors.New("edge weight must be between 0.0 and 1.0")
 	}
 	return nil
