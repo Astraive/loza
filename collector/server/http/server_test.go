@@ -163,6 +163,35 @@ func TestBuildMuxRoutesScopedWebSocketTail(t *testing.T) {
 	}
 }
 
+func TestBuildMuxMetricsPathCollisionDoesNotPanic(t *testing.T) {
+	metricsHandler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusTeapot)
+	})
+	for _, reserved := range []string{"/health", "/healthz", "/ready", "/readyz", "/version", "/status"} {
+		t.Run(reserved, func(t *testing.T) {
+			defer func() {
+				if r := recover(); r != nil {
+					t.Fatalf("BuildMux panicked with metricsPath=%q: %v", reserved, r)
+				}
+			}()
+			_ = BuildMux("", "/health", "/ready", reserved, true, metricsHandler, nil, &routeTestHandlers{}, nil, nil, "default")
+		})
+	}
+}
+
+func TestBuildMuxRegistersCustomMetricsPath(t *testing.T) {
+	metricsHandler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusTeapot)
+	})
+	mux := BuildMux("", "/health", "/ready", "/custom-metrics", true, metricsHandler, nil, &routeTestHandlers{}, nil, nil, "")
+
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/custom-metrics", nil))
+	if rec.Code != http.StatusTeapot {
+		t.Fatalf("custom metrics status = %d, want %d", rec.Code, http.StatusTeapot)
+	}
+}
+
 func TestBuildMuxUsesLogWriteScopeForCanonicalOTLPLogs(t *testing.T) {
 	handlers := &routeTestHandlers{}
 	var requiredPermission string
