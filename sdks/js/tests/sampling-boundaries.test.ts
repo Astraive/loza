@@ -104,9 +104,12 @@ describe('Sampler boundaries', () => {
 
   it('returns policy option objects without mutation', () => {
     const policy = { key: 'value' };
+    const before = structuredClone(policy);
     assert.deepEqual(maxAttrLength(5), { maxAttrLength: 5 });
     assert.deepEqual(maxEventBytes(20), { maxEventBytes: 20 });
     assert.deepEqual(maxAttrs(3), { maxAttrs: 3 });
-    assert.deepEqual(cardinalityPolicy(policy), policy);
+    const result = cardinalityPolicy(policy);
+    assert.deepEqual(result, before);
+    assert.deepEqual(policy, before);
   });
 });
