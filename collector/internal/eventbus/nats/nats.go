@@ -63,6 +63,9 @@ type natsBus struct {
 	dlqCfg string
 	closed atomic.Bool
 	mu     sync.Mutex
+	// ctx is the bus lifecycle context. Subscription contexts derive from it so
+	// cancelling the bus stops every consumer through one cancel.
+	ctx    context.Context
 	subs   []subscription
 	cancel context.CancelFunc
 }
@@ -131,13 +134,13 @@ func New(ctx context.Context, cfg eventbus.Config) (eventbus.Bus, error) {
 	}
 
 	busCtx, cancel := context.WithCancel(context.Background())
-	_ = busCtx // used for consumer lifecycle
 
 	return &natsBus{
 		conn:   conn,
 		js:     js,
 		cfg:    nc,
 		dlqCfg: cfg.DLQTopic,
+		ctx:    busCtx,
 		cancel: cancel,
 	}, nil
 }
@@ -179,11 +182,11 @@ func (b *natsBus) Subscribe(ctx context.Context, topic string, group string, han
 		durable = b.cfg.Durable
 	}
 
-	// Derive the consumer's lifetime context from the Subscribe context so
-	// that cancelling it stops the consumer (matching the Redis adapter).
-	subCtx, cancel := context.WithCancel(ctx)
+	// Derive the consumer's lifetime context from the bus context so that
+	// Close stops every consumer, while the bus itself stays alive.
+	subCtx, cancel := context.WithCancel(b.ctx)
 
-	consumer, err := b.js.CreateOrUpdateConsumer(subCtx, b.cfg.Stream, jetstream.ConsumerConfig{
+	consumer, err := b.js.CreateOrUpdateConsumer(ctx, b.cfg.Stream, jetstream.ConsumerConfig{
 		Durable:       durable,
 		FilterSubject: subject,
 		AckPolicy:     jetstream.AckExplicitPolicy,

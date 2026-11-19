@@ -287,3 +287,38 @@ func TestCloseCancelsAndStopsSubscriptions(t *testing.T) {
 		t.Fatalf("expected subscriptions to be cleared on Close, got %d", len(bus.subs))
 	}
 }
+
+// TestCloseCancelsBusContextUsedBySubscriptions guards MASS-0183: busCtx was
+// discarded with "_ = busCtx" and Close cancelled a context no consumer used.
+// The bus context must be the parent of subscription contexts so that Close
+// actually stops consumers through it.
+func TestCloseCancelsBusContextUsedBySubscriptions(t *testing.T) {
+	busCtx, busCancel := context.WithCancel(context.Background())
+	subCtx, subCancel := context.WithCancel(busCtx)
+	defer subCancel()
+
+	stopCalled := make(chan struct{})
+	bus := &natsBus{
+		ctx:    busCtx,
+		cancel: busCancel,
+		subs: []subscription{
+			{cancel: subCancel, stop: func() { close(stopCalled) }},
+		},
+	}
+
+	if err := bus.Close(context.Background()); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	if !errors.Is(busCtx.Err(), context.Canceled) {
+		t.Fatalf("bus context not cancelled by Close: %v", busCtx.Err())
+	}
+	if !errors.Is(subCtx.Err(), context.Canceled) {
+		t.Fatalf("subscription context derived from bus context not cancelled: %v", subCtx.Err())
+	}
+	select {
+	case <-stopCalled:
+	case <-time.After(time.Second):
+		t.Fatal("subscription stop hook was not called by Close")
+	}
+}
