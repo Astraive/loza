@@ -13,6 +13,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/rs/zerolog/log"
+
 	collectorevent "github.com/astraive/loza/collector/internal/event"
 )
 
@@ -29,6 +31,12 @@ type Config struct {
 	FlushInterval time.Duration
 	Timeout       time.Duration
 	Client        *http.Client
+
+	// OnFlushError, when set, is invoked with any error returned by a
+	// background periodic flush. It is never called for errors returned to
+	// callers from WriteEvent, Flush, or Close. Use it to surface repeated
+	// push failures to monitoring instead of letting them be silently lost.
+	OnFlushError func(error)
 }
 
 type sink struct {
@@ -205,10 +213,25 @@ func (s *sink) flushLoop() {
 	for {
 		select {
 		case <-t.C:
-			_ = s.Flush(context.Background())
+			if err := s.Flush(context.Background()); err != nil {
+				s.reportFlushError(err)
+			}
 		case <-s.stop:
 			return
 		}
+	}
+}
+
+// reportFlushError makes a failed periodic flush observable: it always logs
+// the error and, when configured, forwards it to the OnFlushError callback so
+// callers can wire it into their own monitoring or metrics.
+func (s *sink) reportFlushError(err error) {
+	if err == nil {
+		return
+	}
+	log.Error().Err(err).Str("sink", s.Name()).Msg("loki: periodic flush failed")
+	if s.cfg.OnFlushError != nil {
+		s.cfg.OnFlushError(err)
 	}
 }
 

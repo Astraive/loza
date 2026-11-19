@@ -144,6 +144,23 @@ func TestCloseFinalFlushFailureDropsExplicitly(t *testing.T) {
 		BatchSize:     10,
 		FlushInterval: time.Hour,
 		Client:        srv.Client(),
+func TestPeriodicFlushErrorIsSurfaced(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = w.Write([]byte("loki unavailable"))
+	}))
+	defer srv.Close()
+
+	errCh := make(chan error, 8)
+	rawSink, err := New(Config{
+		URL:           srv.URL,
+		BatchSize:     10,
+		FlushInterval: 10 * time.Millisecond,
+		Timeout:       200 * time.Millisecond,
+		Client:        srv.Client(),
+		OnFlushError: func(err error) {
+			errCh <- err
+		},
 	})
 	if err != nil {
 		t.Fatalf("new sink: %v", err)
@@ -237,5 +254,32 @@ func TestCloseWaitsForInflightPush(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("close did not complete")
+	defer func() { _ = s.Close(context.Background()) }()
+
+	if err := s.WriteEvent(context.Background(), []byte(`{"event":"periodic"}`), nil); err != nil {
+		t.Fatalf("write event: %v", err)
+	}
+
+	select {
+	case got := <-errCh:
+		if got == nil {
+			t.Fatalf("expected a non-nil flush error")
+		}
+		if !strings.Contains(got.Error(), "push batch failed") {
+			t.Fatalf("unexpected flush error: %v", got)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatalf("periodic flush error was not surfaced through OnFlushError")
+	}
+
+	// Stop the background loop before inspecting the retained batch so the
+	// assertion does not race with a concurrent flush. Close is expected to
+	// fail here because the test server never accepts a push.
+	_ = s.Close(context.Background())
+	s.mu.Lock()
+	retained := len(s.batch)
+	s.mu.Unlock()
+	if retained != 1 {
+		t.Fatalf("expected the failed batch to be retained in memory, got %d entries", retained)
 	}
 }
