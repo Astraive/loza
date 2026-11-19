@@ -35,6 +35,25 @@ func hasNonEmptyHeader(headers map[string]string, name string) bool {
 	return false
 }
 
+// bearerCredential returns a Bearer token supplied through an Authorization
+// header, or an empty string when no Bearer credential is present. Sink callers
+// may pass an API key via Headers rather than a dedicated field, so the token
+// must be surfaced to validateCollectorCredentials to enforce TLS.
+func bearerCredential(headers map[string]string) string {
+	const prefix = "Bearer "
+	for key, value := range headers {
+		if !strings.EqualFold(key, "Authorization") {
+			continue
+		}
+		if len(value) >= len(prefix) && strings.EqualFold(value[:len(prefix)], prefix) {
+			if token := strings.TrimSpace(value[len(prefix):]); token != "" {
+				return token
+			}
+		}
+	}
+	return ""
+}
+
 // ── stdout / stderr sinks ─────────────────────────────────────────────────────
 
 type writerSink struct {
@@ -166,6 +185,24 @@ func (s *rotatingFileSink) WriteEvent(_ context.Context, encoded []byte, _ *Even
 	return err
 }
 
+// uniqueRotatedPath returns a rotation destination that does not exist yet.
+// Timestamped names have one-second resolution, so two rotations within the
+// same second would otherwise resolve to the same path and os.Rename would
+// overwrite the earlier rotated file. A numeric suffix keeps each rotation
+// distinct.
+func uniqueRotatedPath(path string, now time.Time) string {
+	base := path + "." + now.Format("20060102-150405")
+	candidate := base
+	for n := 1; ; n++ {
+		if _, err := os.Lstat(candidate); err != nil {
+			if os.IsNotExist(err) {
+				return candidate
+			}
+		}
+		candidate = fmt.Sprintf("%s.%d", base, n)
+	}
+}
+
 func (s *rotatingFileSink) rotate() error {
 	if s.f == nil {
 		return fmt.Errorf("loza: rotating file sink %q not open", s.cfg.Path)
@@ -173,8 +210,7 @@ func (s *rotatingFileSink) rotate() error {
 	if err := s.f.Close(); err != nil {
 		return fmt.Errorf("loza: close rotating file %q: %w", s.cfg.Path, err)
 	}
-	ts := time.Now().Format("20060102-150405")
-	rotated := s.cfg.Path + "." + ts
+	rotated := uniqueRotatedPath(s.cfg.Path, time.Now())
 	if err := os.Rename(s.cfg.Path, rotated); err != nil {
 		reopenErr := s.open()
 		if reopenErr != nil {
@@ -306,6 +342,7 @@ func CollectorSink(cfg CollectorSinkConfig) (Sink, error) {
 		cfg.Endpoint,
 		cfg.BasicUsername,
 		cfg.BasicPassword,
+		bearerCredential(cfg.Headers),
 		cfg.Insecure,
 	); err != nil {
 		return nil, err
@@ -534,7 +571,10 @@ type HTTPBatchSinkConfig struct {
 	FlushInterval time.Duration
 	Gzip          bool
 	Client        *http.Client
-	OnError       func(error)
+	// Transport, when set, is used for delivery and supplies retry/backoff
+	// behavior in addition to the timeout/connection settings on Client.
+	Transport *HTTPTransport
+	OnError   func(error)
 }
 
 type httpBatchSink struct {
@@ -555,6 +595,7 @@ func HTTPBatchSink(cfg HTTPBatchSinkConfig) (Sink, error) {
 		cfg.Endpoint,
 		cfg.BasicUsername,
 		cfg.BasicPassword,
+		bearerCredential(cfg.Headers),
 		cfg.Insecure,
 	); err != nil {
 		return nil, err
@@ -608,8 +649,18 @@ func (s *httpBatchSink) WriteBatch(ctx context.Context, encoded [][]byte, _ []*E
 	if len(encoded) == 0 {
 		return nil
 	}
-	payload := bytes.Join(encoded, nil)
-	return s.send(ctx, payload)
+	// Route the batch through the buffered flush path so it can never overtake
+	// events retained in s.buf after a failed flush. Appending each item keeps
+	// the byte-for-byte concatenation of bytes.Join(encoded, nil) while
+	// preserving the order of any older, already-retained events.
+	s.mu.Lock()
+	for _, e := range encoded {
+		cp := make([]byte, len(e))
+		copy(cp, e)
+		s.buf = append(s.buf, cp)
+	}
+	s.mu.Unlock()
+	return s.Flush(ctx)
 }
 
 func (s *httpBatchSink) Flush(ctx context.Context) error {
@@ -660,6 +711,17 @@ func (s *httpBatchSink) send(ctx context.Context, payload []byte) error {
 	for k, v := range s.cfg.Headers {
 		req.Header.Set(k, v)
 	}
+	if s.cfg.Transport != nil {
+		transportResp, err := s.cfg.Transport.Do(ctx, req)
+		if err != nil {
+			return err
+		}
+		if transportResp.StatusCode >= 300 {
+			return fmt.Errorf("httpbatch: unexpected status %d: %s", transportResp.StatusCode, truncateErrorBody(string(transportResp.Body)))
+		}
+		return nil
+	}
+
 	resp, err := s.cfg.Client.Do(req)
 	if err != nil {
 		return err

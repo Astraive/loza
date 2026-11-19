@@ -299,13 +299,12 @@ func Bytes(key string, val int64) Attr { return Int64(key, val) }
 // HTTPStatus sets http.status (alias for StatusCode).
 func HTTPStatus(code int) Attr { return StatusCode(code) }
 
-// Bucket creates a bucket/tag grouping attribute.
+// Bucket creates a bucket/tag grouping attribute. All values are preserved as
+// a single list under key inside the "bucket" group. Emitting one Attr per value
+// with the same key would silently keep only the last value, because attrsToMap
+// stores group children in a map keyed by the attribute key.
 func Bucket(key string, vals ...string) Attr {
-	items := make([]Attr, len(vals))
-	for i, v := range vals {
-		items[i] = String(key, v)
-	}
-	return Group("bucket", items...)
+	return Group("bucket", Any(key, vals))
 }
 
 // Tags creates a comma-separated tags attribute.

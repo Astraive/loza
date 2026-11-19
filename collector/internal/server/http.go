@@ -2,21 +2,25 @@ package server
 
 import (
 	"context"
-	"crypto/subtle"
+	"errors"
 	"net/http"
+	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"github.com/rs/zerolog/log"
 	"golang.org/x/time/rate"
 )
 
 type HTTPServer struct {
 	cfg     HTTPConfig
 	state   State
+	mu      sync.Mutex // guards server
 	server  *http.Server
 	ready   atomic.Bool
 	limiter *rate.Limiter
+	done    chan struct{} // closed when Start returns, releasing the shutdown watcher
 }
 
 func NewHTTPServer(cfg HTTPConfig, state State) *HTTPServer {
@@ -70,7 +74,7 @@ func (s *HTTPServer) Start(ctx context.Context) error {
 		writeTimeout = s.cfg.WriteTimeout
 	}
 
-	s.server = &http.Server{
+	srv := &http.Server{
 		Addr:              s.cfg.Addr,
 		Handler:           mux,
 		ReadHeaderTimeout: s.cfg.ReadHeaderTimeout,
@@ -80,31 +84,45 @@ func (s *HTTPServer) Start(ctx context.Context) error {
 		IdleTimeout:       s.cfg.IdleTimeout,
 	}
 
+	done := make(chan struct{})
+	s.mu.Lock()
+	s.server = srv
+	s.done = done
+	s.mu.Unlock()
+	// Always release the shutdown watcher when Start returns, including when
+	// ListenAndServe fails immediately (e.g. the address is already in use).
+	defer close(done)
+
 	go func() {
-		<-ctx.Done()
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		_ = s.server.Shutdown(shutdownCtx)
+		select {
+		case <-ctx.Done():
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			_ = srv.Shutdown(shutdownCtx)
+		case <-done:
+			// Start has returned; the watcher must not outlive the server.
+		}
 	}()
 
 	s.ready.Store(true)
-	return s.server.ListenAndServe()
+	return srv.ListenAndServe()
 }
 
 func (s *HTTPServer) Stop(ctx context.Context) error {
 	s.ready.Store(false)
-	if s.server == nil {
+	s.mu.Lock()
+	srv := s.server
+	s.mu.Unlock()
+	if srv == nil {
 		return nil
 	}
-	return s.server.Shutdown(ctx)
+	return srv.Shutdown(ctx)
 }
 
 func (s *HTTPServer) handleIngest(w http.ResponseWriter, r *http.Request) {
-	if s.cfg.AuthEnabled {
-		if subtle.ConstantTimeCompare([]byte(r.Header.Get(s.cfg.AuthHeader)), []byte(s.cfg.AuthValue)) != 1 {
-			http.Error(w, "Unauthorized", http.StatusUnauthorized)
-			return
-		}
+	if s.cfg.AuthEnabled && !authorizedCredential(s.cfg, r.Header.Get(s.cfg.AuthHeader)) {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
 	}
 
 	if s.cfg.RateLimitEnabled && !s.limiter.Allow() {
@@ -119,7 +137,14 @@ func (s *HTTPServer) handleIngest(w http.ResponseWriter, r *http.Request) {
 
 	events, err := parseNDJSONEvents(r.Body, s.cfg.MaxBodyBytes)
 	if err != nil {
-		http.Error(w, "Bad Request: "+err.Error(), http.StatusBadRequest)
+		if errors.Is(err, errPayloadTooLarge) {
+			http.Error(w, "Payload Too Large", http.StatusRequestEntityTooLarge)
+			return
+		}
+		// Any other read error (for example a truncated body) is a bad
+		// request, not a payload-size violation.
+		log.Error().Err(err).Msg("invalid ingest payload")
+		http.Error(w, "Bad Request", http.StatusBadRequest)
 		return
 	}
 

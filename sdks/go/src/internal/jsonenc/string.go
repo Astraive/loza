@@ -33,6 +33,18 @@ func AppendEscapedString(dst []byte, s string) []byte {
 			start = i
 			continue
 		}
+		if r == '\u2028' || r == '\u2029' {
+			// Line/paragraph separators are valid JSON but break JavaScript
+			// string literals; escape them like encoding/json does.
+			if start < i {
+				dst = append(dst, s[start:i]...)
+			}
+			dst = append(dst, `\u202`...)
+			dst = append(dst, hexChar(byte(r)&0xf))
+			i += size
+			start = i
+			continue
+		}
 		i += size
 	}
 	if start < len(s) {

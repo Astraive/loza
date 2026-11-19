@@ -422,15 +422,27 @@ func extractIP(r *http.Request, trustedProxies []*net.IPNet) string {
 	if remoteIP != nil && isTrustedProxy(remoteIP, trustedProxies) {
 		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
 			parts := strings.Split(xff, ",")
-			for _, part := range parts {
-				ip := net.ParseIP(strings.TrimSpace(part))
+			// Each proxy appends the address it observed to the right, so the
+			// rightmost entry is the closest hop and cannot be forged by the
+			// original client. Scanning left-to-right would let a client prepend
+			// an allowed IP that survives the proxy and gets selected here,
+			// bypassing AllowedIPs. Skip trusted proxy hops from the right and
+			// return the rightmost untrusted address.
+			for i := len(parts) - 1; i >= 0; i-- {
+				ip := net.ParseIP(strings.TrimSpace(parts[i]))
 				if ip != nil && !isTrustedProxy(ip, trustedProxies) {
 					return ip.String()
 				}
 			}
 		}
 		if xri := r.Header.Get("X-Real-IP"); xri != "" {
-			return strings.TrimSpace(xri)
+			// Validate and canonicalize the header before using it. Returning a
+			// raw, unparsed value would let a client inject an arbitrary string
+			// that ipAllowed's literal comparison could match. On malformed
+			// input, fall through to the trusted proxy's own address (fail closed).
+			if ip := net.ParseIP(strings.TrimSpace(xri)); ip != nil {
+				return ip.String()
+			}
 		}
 	}
 	return host

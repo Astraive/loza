@@ -16,14 +16,15 @@ import (
 )
 
 func (s *collectorState) isAuthorized(r *http.Request) bool {
-	if !s.cfg.authEnabled {
+	cfg := s.config()
+	if !cfg.authEnabled {
 		return true
 	}
 	if collectorauth.GetAuthContext(r.Context()) != nil {
 		return true
 	}
 
-	mode := strings.ToLower(strings.TrimSpace(s.cfg.identityMode))
+	mode := strings.ToLower(strings.TrimSpace(cfg.identityMode))
 	switch mode {
 	case "", "payload", "api_key":
 		return s.authorizeAPIKey(r)
@@ -37,12 +38,13 @@ func (s *collectorState) isAuthorized(r *http.Request) bool {
 }
 
 func (s *collectorState) authorizeAPIKey(r *http.Request) bool {
-	if s.cfg.apiKey == "" {
+	cfg := s.config()
+	if cfg.apiKey == "" {
 		s.logAuthFailure(r, "api_key_unconfigured")
 		return false
 	}
-	providedKey := strings.TrimSpace(r.Header.Get(s.cfg.apiKeyHeader))
-	authorized := subtle.ConstantTimeCompare([]byte(providedKey), []byte(s.cfg.apiKey)) == 1
+	providedKey := strings.TrimSpace(r.Header.Get(cfg.apiKeyHeader))
+	authorized := subtle.ConstantTimeCompare([]byte(providedKey), []byte(cfg.apiKey)) == 1
 	if !authorized {
 		s.logAuthFailure(r, "api_key")
 	}
@@ -50,6 +52,7 @@ func (s *collectorState) authorizeAPIKey(r *http.Request) bool {
 }
 
 func (s *collectorState) authorizeJWT(r *http.Request) bool {
+	cfg := s.config()
 	authorization := strings.TrimSpace(r.Header.Get("Authorization"))
 	if authorization == "" {
 		s.logAuthFailure(r, "jwt_missing_authorization")
@@ -64,7 +67,7 @@ func (s *collectorState) authorizeJWT(r *http.Request) bool {
 		s.logAuthFailure(r, "jwt_empty_token")
 		return false
 	}
-	key := jwtVerificationKey(strings.TrimSpace(s.cfg.apiKey))
+	key := jwtVerificationKey(strings.TrimSpace(cfg.apiKey))
 	if key == nil {
 		s.logAuthFailure(r, "jwt_verification_key_unconfigured")
 		return false
@@ -89,30 +92,31 @@ func (s *collectorState) authorizeJWT(r *http.Request) bool {
 }
 
 func (s *collectorState) authorizeMTLS(r *http.Request) bool {
+	cfg := s.config()
 	if r.TLS == nil || len(r.TLS.PeerCertificates) == 0 {
 		s.logAuthFailure(r, "mtls_missing_client_certificate")
 		return false
 	}
-	hasCNAllowlist := len(s.cfg.mtlsAllowedCNs) > 0
-	hasDNSAllowlist := len(s.cfg.mtlsAllowedDNS) > 0
-	hasEmailAllowlist := len(s.cfg.mtlsAllowedEmails) > 0
-	hasAnyAllowlist := hasCNAllowlist || hasDNSAllowlist || hasEmailAllowlist
+	hasCNAllowlist := len(cfg.mtlsAllowedCNs) > 0
+	hasDNSAllowlist := len(cfg.mtlsAllowedDNS) > 0
+	hasEmailAllowlist := len(cfg.mtlsAllowedEmails) > 0
+	// Fail closed: mTLS authorization requires at least one explicit identity
+	// allowlist. Trusting any certificate with a non-empty CommonName would
+	// turn authentication into full admin authorization for every client the
+	// TLS handshake accepts.
+	if !hasCNAllowlist && !hasDNSAllowlist && !hasEmailAllowlist {
+		s.logAuthFailure(r, "mtls_no_identity_allowlist")
+		return false
+	}
 
 	for _, cert := range r.TLS.PeerCertificates {
 		if cert == nil {
 			continue
 		}
 		cn := cert.Subject.CommonName
-		// If no allowlists configured, accept any cert with non-empty CN (backward compat)
-		if !hasAnyAllowlist {
-			if cn != "" {
-				return true
-			}
-			continue
-		}
 		// Check CN against allowlist
 		if hasCNAllowlist && cn != "" {
-			for _, allowed := range s.cfg.mtlsAllowedCNs {
+			for _, allowed := range cfg.mtlsAllowedCNs {
 				if cn == allowed {
 					return true
 				}
@@ -121,7 +125,7 @@ func (s *collectorState) authorizeMTLS(r *http.Request) bool {
 		// Check DNS names against allowlist
 		if hasDNSAllowlist {
 			for _, dns := range cert.DNSNames {
-				for _, allowed := range s.cfg.mtlsAllowedDNS {
+				for _, allowed := range cfg.mtlsAllowedDNS {
 					if dns == allowed {
 						return true
 					}
@@ -131,7 +135,7 @@ func (s *collectorState) authorizeMTLS(r *http.Request) bool {
 		// Check email addresses against allowlist
 		if hasEmailAllowlist {
 			for _, email := range cert.EmailAddresses {
-				for _, allowed := range s.cfg.mtlsAllowedEmails {
+				for _, allowed := range cfg.mtlsAllowedEmails {
 					if email == allowed {
 						return true
 					}

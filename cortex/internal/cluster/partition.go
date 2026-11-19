@@ -19,6 +19,12 @@ func NewPartitioner(nodeCount, nodeID int) *Partitioner {
 	if nodeID < 0 {
 		nodeID = 0
 	}
+	// PartitionKey only ever returns values in [0, nodeCount-1]. A nodeID at
+	// or above nodeCount would make ShouldProcess false for every service,
+	// leaving the node permanently idle. Clamp it into a usable slot.
+	if nodeID >= nodeCount {
+		nodeID = nodeCount - 1
+	}
 	return &Partitioner{
 		nodeCount: nodeCount,
 		nodeID:    nodeID,

@@ -25,7 +25,18 @@ func Validate(cfg Config) error {
 	if cfg.Cortex != nil && strings.TrimSpace(cfg.Cortex.URL) == "" && strings.TrimSpace(cfg.CortexRepoPath) == "" {
 		return fmt.Errorf("cortex.url or cortex_repo_path must be configured when cortex is enabled")
 	}
-	if cfg.ValidationMode != "" && !validValidationModes[strings.ToLower(strings.TrimSpace(cfg.ValidationMode))] {
+	return ValidateValidationMode(cfg.ValidationMode)
+}
+
+// ValidateValidationMode reports whether mode is a supported validation mode.
+// An empty mode is allowed and means "use the default". This is kept separate
+// from Validate so callers that only need to check a single mode (for example,
+// before generating a config file) do not have to supply the whole Config.
+func ValidateValidationMode(mode string) error {
+	if mode == "" {
+		return nil
+	}
+	if !validValidationModes[strings.ToLower(strings.TrimSpace(mode))] {
 		return fmt.Errorf("validation_mode must be one of: off, warn, enforce, quarantine")
 	}
 	return nil

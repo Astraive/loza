@@ -181,11 +181,11 @@ impl MetricsCollector {
     }
 
     pub fn render_prometheus(&self, namespace: &str) -> String {
-        let namespace = if namespace.trim().is_empty() {
-            "loza_sdk"
-        } else {
-            namespace.trim()
-        };
+        // The namespace is interpolated verbatim into Prometheus metric names
+        // below. Sanitize it to the metric-name grammar so a control character
+        // (e.g. a newline) cannot inject arbitrary metric lines into the output.
+        let namespace = sanitize_namespace(namespace);
+        let namespace = namespace.as_str();
         let snap = self.snapshot();
         let mut out = String::new();
 
@@ -387,6 +387,35 @@ fn escape_label_value(value: &str) -> String {
         .replace('"', r#"\""#)
 }
 
+/// Normalize a caller-supplied namespace into a valid Prometheus metric-name
+/// prefix. Prometheus metric names must match `[a-zA-Z_:][a-zA-Z0-9_:]*`; any
+/// other character is replaced with `_` so it cannot alter the exposition
+/// format (for example by injecting a newline followed by a fake sample).
+fn sanitize_namespace(namespace: &str) -> String {
+    let trimmed = namespace.trim();
+    if trimmed.is_empty() {
+        return "loza_sdk".to_string();
+    }
+
+    let mut sanitized: String = trimmed
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' || c == ':' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+
+    // A metric name may not start with a digit.
+    if sanitized.as_bytes()[0].is_ascii_digit() {
+        sanitized.insert(0, '_');
+    }
+
+    sanitized
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -461,5 +490,67 @@ mod tests {
         assert!(rendered.contains("test_events_created_total 0"));
         assert!(!rendered.contains("test_events_dropped_total{"));
         assert!(!rendered.contains("test_retry_total{"));
+    }
+
+    fn assert_all_sample_names_valid(rendered: &str) {
+        for line in rendered.lines() {
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+            let name = line
+                .split_once('{')
+                .or_else(|| line.split_once(' '))
+                .map(|(name, _)| name)
+                .unwrap_or(line);
+            let mut chars = name.chars();
+            assert!(
+                matches!(chars.next(), Some(c) if c.is_ascii_alphabetic() || c == '_' || c == ':'),
+                "invalid metric name: {name}"
+            );
+            assert!(
+                chars.all(|c| c.is_ascii_alphanumeric() || c == '_' || c == ':'),
+                "invalid metric name: {name}"
+            );
+        }
+    }
+
+    #[test]
+    fn namespace_cannot_inject_prometheus_metric_lines() {
+        let metrics = MetricsCollector::new();
+        metrics.record_event_created();
+
+        let clean = metrics.render_prometheus("loza");
+        let rendered = metrics.render_prometheus("x\nfake_total 1");
+
+        // A newline in the namespace must not add attacker-controlled lines.
+        assert_eq!(rendered.lines().count(), clean.lines().count());
+        assert!(!rendered.contains("fake_total 1"));
+        assert_all_sample_names_valid(&rendered);
+
+        // The legitimate sample is still emitted under the sanitized prefix.
+        assert!(rendered.contains("x_fake_total_1_events_created_total 1"));
+    }
+
+    #[test]
+    fn namespace_is_sanitized_to_metric_name_grammar() {
+        let metrics = MetricsCollector::new();
+
+        // A leading digit is not allowed in a Prometheus metric name.
+        let digit = metrics.render_prometheus("9svc\nname");
+        assert!(digit.contains("_9svc_name_events_created_total 0"));
+        assert_all_sample_names_valid(&digit);
+
+        // Quotes, braces and other control characters are neutralized too.
+        let special = metrics.render_prometheus("a\"b}c\r\n d");
+        assert!(special.contains("a_b_c___d_events_created_total 0"));
+        assert_all_sample_names_valid(&special);
+
+        // Valid namespaces are unchanged; blank namespaces keep the default.
+        assert!(metrics
+            .render_prometheus("svc_name:ok")
+            .contains("svc_name:ok_events_created_total 0"));
+        assert!(metrics
+            .render_prometheus("  \t\r\n  ")
+            .contains("loza_sdk_events_created_total 0"));
     }
 }

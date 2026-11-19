@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
+	"errors"
 	"io"
 	"strings"
 
@@ -14,9 +15,16 @@ import (
 
 const Prefix = "enc:"
 
+var errEmptyKey = errors.New("atrest: encryption key must not be empty")
+
+// ErrMissingPrefix indicates that data passed to DecryptBytes lacked the
+// encryption prefix while a decryption key was configured. Returning such data
+// verbatim would let an unauthenticated value be treated as trusted plaintext.
+var ErrMissingPrefix = errors.New("atrest: data is missing encryption prefix")
+
 func EncryptString(plain []byte, key string) (string, error) {
 	if strings.TrimSpace(key) == "" {
-		return string(plain), nil
+		return "", errEmptyKey
 	}
 	aead, err := buildAEAD(key)
 	if err != nil {
@@ -40,8 +48,20 @@ func EncryptBytes(plain []byte, key string) ([]byte, error) {
 
 func DecryptBytes(data []byte, key string) ([]byte, error) {
 	raw := strings.TrimSpace(string(data))
-	if strings.TrimSpace(key) == "" || !strings.HasPrefix(raw, Prefix) {
+	if !strings.HasPrefix(raw, Prefix) {
+		// Plaintext (written with encryption disabled) needs no key. When a
+		// key is configured, unprefixed data must not be trusted as plaintext:
+		// anything written to the store could otherwise inject a value that
+		// bypasses decryption and authentication entirely.
+		if strings.TrimSpace(key) != "" {
+			return nil, ErrMissingPrefix
+		}
 		return append([]byte(nil), data...), nil
+	}
+	if strings.TrimSpace(key) == "" {
+		// Encrypted data with no key cannot be decrypted; fail closed rather
+		// than returning the undecorated ciphertext as if it were plaintext.
+		return nil, errEmptyKey
 	}
 	payload, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(raw, Prefix))
 	if err != nil {

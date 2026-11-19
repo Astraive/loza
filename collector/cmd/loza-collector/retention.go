@@ -3,15 +3,16 @@ package main
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 )
 
 func (s *collectorState) initRetention() {
-	if !s.cfg.retentionEnabled {
+	if !s.config().retentionEnabled {
 		return
 	}
-	if s.cfg.retentionDays <= 0 && s.cfg.retentionMaxSize <= 0 {
+	if s.config().retentionDays <= 0 && s.config().retentionMaxSize <= 0 {
 		return
 	}
 	s.retentionStop = make(chan struct{})
@@ -42,28 +43,31 @@ func (s *collectorState) executeRetention() error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
-	if s.cfg.retentionDays > 0 {
-		cutoffTime := time.Now().UTC().AddDate(0, 0, -s.cfg.retentionDays)
+	var retentionErrs []error
+	if s.config().retentionDays > 0 {
+		cutoffTime := time.Now().UTC().AddDate(0, 0, -s.config().retentionDays)
 		if err := s.deleteByAge(ctx, s.queryDB, cutoffTime); err != nil {
 			logJSON("warn", "retention_age_delete_failed", map[string]any{"error": err.Error()})
+			retentionErrs = append(retentionErrs, fmt.Errorf("delete events by age: %w", err))
 		}
 	}
 
-	if s.cfg.retentionMaxSize > 0 {
+	if s.config().retentionMaxSize > 0 {
 		if err := s.deleteBySize(ctx, s.queryDB); err != nil {
 			logJSON("warn", "retention_size_delete_failed", map[string]any{"error": err.Error()})
+			retentionErrs = append(retentionErrs, fmt.Errorf("delete events by size: %w", err))
 		}
 	}
 
 	logJSON("info", "retention_executed", map[string]any{
-		"retention_days": s.cfg.retentionDays,
-		"retention_size": s.cfg.retentionMaxSize,
+		"retention_days": s.config().retentionDays,
+		"retention_size": s.config().retentionMaxSize,
 	})
-	return nil
+	return errors.Join(retentionErrs...)
 }
 
 func (s *collectorState) deleteByAge(ctx context.Context, db *sql.DB, cutoffTime time.Time) error {
-	tableIdent, err := quoteSQLIdent(s.cfg.duckDBTable)
+	tableIdent, err := quoteSQLIdent(s.config().duckDBTable)
 	if err != nil {
 		return err
 	}
@@ -86,7 +90,7 @@ func (s *collectorState) deleteByAge(ctx context.Context, db *sql.DB, cutoffTime
 }
 
 func (s *collectorState) deleteBySize(ctx context.Context, db *sql.DB) error {
-	tableIdent, err := quoteSQLIdent(s.cfg.duckDBTable)
+	tableIdent, err := quoteSQLIdent(s.config().duckDBTable)
 	if err != nil {
 		return err
 	}
@@ -96,11 +100,11 @@ func (s *collectorState) deleteBySize(ctx context.Context, db *sql.DB) error {
 		return err
 	}
 
-	if currentSize <= s.cfg.retentionMaxSize {
+	if currentSize <= s.config().retentionMaxSize {
 		return nil
 	}
 
-	excessSize := currentSize - s.cfg.retentionMaxSize
+	excessSize := currentSize - s.config().retentionMaxSize
 	query := fmt.Sprintf(`
 		DELETE FROM %s
 		WHERE event_id IN (

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -22,6 +23,21 @@ func newTestCollectorState() *collectorState {
 		keyStore:     store,
 		serverSecret: serverSecret,
 	}
+}
+
+// failingRevokeKeyStore wraps a real store but fails revocation for one key,
+// simulating a key store that cannot revoke the key being rotated out.
+type failingRevokeKeyStore struct {
+	*memoryKeyStore
+	failKeyID string
+	err       error
+}
+
+func (s *failingRevokeKeyStore) RevokeKey(keyID string) error {
+	if keyID == s.failKeyID {
+		return s.err
+	}
+	return s.memoryKeyStore.RevokeKey(keyID)
 }
 
 func TestHandleKeyCreate_StoresKeyWithCorrectHash(t *testing.T) {
@@ -203,6 +219,78 @@ func TestHandleKeyRotate_CreatesNewAndRevokesOld(t *testing.T) {
 	}
 }
 
+func TestHandleKeyRotate_RevocationFailureIsReported(t *testing.T) {
+	state := newTestCollectorState()
+
+	// Create initial key
+	body := map[string]any{"kind": "sec", "env": "live"}
+	payload, _ := json.Marshal(body)
+	createReq := httptest.NewRequest(http.MethodPost, "/admin/keys", bytes.NewReader(payload))
+	createReq.Header.Set("Content-Type", "application/json")
+	createRec := httptest.NewRecorder()
+	state.handleKeyCreate(createRec, createReq)
+
+	var createResp map[string]any
+	_ = json.Unmarshal(createRec.Body.Bytes(), &createResp)
+	oldKeyID, _ := createResp["key_id"].(string)
+	if oldKeyID == "" {
+		t.Fatal("create key: expected key_id")
+	}
+
+	// Make revocation of the old key fail during rotation.
+	store := &failingRevokeKeyStore{
+		memoryKeyStore: state.keyStore.(*memoryKeyStore),
+		failKeyID:      oldKeyID,
+		err:            errors.New("revocation backend unavailable"),
+	}
+	state.keyStore = store
+
+	rotateReq := httptest.NewRequest(http.MethodPost, "/admin/keys/"+oldKeyID+"/rotate", nil)
+	rotateReq.SetPathValue("id", oldKeyID)
+	rotateRec := httptest.NewRecorder()
+	state.handleKeyRotate(rotateRec, rotateReq)
+
+	if rotateRec.Code != http.StatusInternalServerError {
+		t.Fatalf("rotate: expected 500 when revocation fails, got %d: %s", rotateRec.Code, rotateRec.Body.String())
+	}
+
+	var rotateResp map[string]any
+	if err := json.Unmarshal(rotateRec.Body.Bytes(), &rotateResp); err != nil {
+		t.Fatalf("decode rotate response: %v", err)
+	}
+	if rotateResp["error"] != "old_key_revocation_failed" {
+		t.Errorf("error = %v, want old_key_revocation_failed", rotateResp["error"])
+	}
+	if rotated, ok := rotateResp["rotated"].(bool); !ok || rotated {
+		t.Errorf("rotated = %v, want false", rotateResp["rotated"])
+	}
+	if active, ok := rotateResp["old_key_active"].(bool); !ok || !active {
+		t.Errorf("old_key_active = %v, want true", rotateResp["old_key_active"])
+	}
+
+	// The old key must still be active in the store (it was not revoked).
+	oldRec, _ := store.FindByKeyID(context.Background(), oldKeyID)
+	if oldRec == nil {
+		t.Fatal("old key should still exist")
+	}
+	if oldRec.RevokedAt != nil {
+		t.Fatal("old key must remain active when its revocation failed")
+	}
+
+	// The new key was created first (never leave zero keys) and is reported.
+	newKeyID, _ := rotateResp["new_key_id"].(string)
+	if newKeyID == "" || newKeyID == oldKeyID {
+		t.Fatalf("new_key_id = %q, want a distinct key id", newKeyID)
+	}
+	newRec, _ := store.FindByKeyID(context.Background(), newKeyID)
+	if newRec == nil {
+		t.Fatal("new key should exist in store")
+	}
+	if newRec.RevokedAt != nil {
+		t.Fatal("new key should be active")
+	}
+}
+
 func TestHandleKeyCreate_InvalidKindDefaultsToSec(t *testing.T) {
 	state := newTestCollectorState()
 
@@ -258,4 +346,158 @@ func TestHandleKeyRevoke_NotFound(t *testing.T) {
 	if rec.Code != http.StatusNotFound {
 		t.Errorf("expected 404, got %d", rec.Code)
 	}
+}
+
+func TestValidatePolicyMap_RejectsNonNumericValues(t *testing.T) {
+	tests := []struct {
+		name    string
+		policy  map[string]any
+		wantErr string
+	}{
+		{"sample_rate_string_out_of_range", map[string]any{"sample_rate": "9"}, "sample_rate must be a number"},
+		{"max_attrs_negative_string", map[string]any{"max_attrs": "-1"}, "max_attrs must be a number"},
+		{"sample_rate_bool", map[string]any{"sample_rate": true}, "sample_rate must be a number"},
+		{"max_event_bytes_nil", map[string]any{"max_event_bytes": nil}, "max_event_bytes must be a number"},
+		{"max_attr_length_slice", map[string]any{"max_attr_length": []any{float64(1)}}, "max_attr_length must be a number"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			errs := validatePolicyMap(tt.policy)
+			for _, err := range errs {
+				if err == tt.wantErr {
+					return
+				}
+			}
+			t.Fatalf("expected error %q, got %v", tt.wantErr, errs)
+		})
+	}
+}
+
+func TestValidatePolicyMap_AcceptsValidNumericValues(t *testing.T) {
+	policy := map[string]any{
+		"max_attr_length": float64(128),
+		"max_event_bytes": float64(1024),
+		"max_attrs":       int(10),
+		"sample_rate":     float64(0.5),
+	}
+	if errs := validatePolicyMap(policy); len(errs) != 0 {
+		t.Fatalf("expected no errors for valid numeric policy, got %v", errs)
+	}
+
+	outOfRange := map[string]any{
+		"max_attrs":   float64(-1),
+		"sample_rate": float64(9),
+	}
+	errs := validatePolicyMap(outOfRange)
+	if len(errs) != 2 {
+		t.Fatalf("expected 2 errors for out-of-range numeric values, got %v", errs)
+	}
+}
+
+func TestHandlePolicyValidate_RejectsWrongTypedValue(t *testing.T) {
+	state := newTestCollectorState()
+
+	payload, _ := json.Marshal(map[string]any{"sample_rate": "9"})
+	req := httptest.NewRequest(http.MethodPost, "/admin/policy/validate", bytes.NewReader(payload))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	state.handlePolicyValidate(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for wrong-typed sample_rate, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if valid, _ := resp["valid"].(bool); valid {
+		t.Fatal("expected valid=false for wrong-typed sample_rate")
+	}
+}
+
+// TestGeneratedKeyIDIsSinglePathSegment is a regression test for generated key
+// IDs containing '/', which made them unusable with the path-based
+// /keys/{id}, /keys/{id}/revoke and /keys/{id}/rotate routes.
+func TestGeneratedKeyIDIsSinglePathSegment(t *testing.T) {
+	state := newTestCollectorState()
+
+	// Mirror the single-segment patterns registered by the HTTP server. Clients
+	// such as the CLI put the key ID directly in the path, so a generated ID
+	// must be a valid single path segment with no escaping.
+	var capturedID string
+	mux := http.NewServeMux()
+	capture := func(w http.ResponseWriter, r *http.Request) {
+		capturedID = r.PathValue("id")
+		w.WriteHeader(http.StatusOK)
+	}
+	mux.HandleFunc("DELETE /keys/{id}", capture)
+	mux.HandleFunc("POST /keys/{id}/revoke", capture)
+	mux.HandleFunc("POST /keys/{id}/rotate", capture)
+
+	assertPathSafe := func(keyID string) {
+		t.Helper()
+		if keyID == "" {
+			t.Fatal("empty key_id")
+		}
+		if strings.Contains(keyID, "/") {
+			t.Fatalf("key_id %q contains '/', so it cannot be used as a single path segment", keyID)
+		}
+		if strings.Contains(keyID, "_") {
+			t.Fatalf("key_id %q contains '_', which breaks lz_{kind}_{env}_{keyID}_{secret} parsing", keyID)
+		}
+		for _, route := range []struct{ method, path string }{
+			{http.MethodDelete, "/keys/" + keyID},
+			{http.MethodPost, "/keys/" + keyID + "/revoke"},
+			{http.MethodPost, "/keys/" + keyID + "/rotate"},
+		} {
+			routeReq := httptest.NewRequest(route.method, route.path, nil)
+			routeRec := httptest.NewRecorder()
+			mux.ServeHTTP(routeRec, routeReq)
+			if routeRec.Code != http.StatusOK {
+				t.Fatalf("route %q did not resolve (status %d) for key_id %q", route.path, routeRec.Code, keyID)
+			}
+			if capturedID != keyID {
+				t.Fatalf("route %q: PathValue(id) = %q, want %q", route.path, capturedID, keyID)
+			}
+		}
+	}
+
+	// A large batch makes the old base64 RawStdEncoding defect (~16% of the
+	// 11-character IDs contain '/') reproducible with overwhelming probability.
+	var lastKeyID string
+	const keyCount = 256
+	for i := 0; i < keyCount; i++ {
+		body, _ := json.Marshal(map[string]any{"kind": "sec", "env": "live"})
+		req := httptest.NewRequest(http.MethodPost, "/admin/keys", bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		state.handleKeyCreate(rec, req)
+		if rec.Code != http.StatusCreated {
+			t.Fatalf("create key %d: expected 201, got %d: %s", i, rec.Code, rec.Body.String())
+		}
+
+		var resp map[string]any
+		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("decode create response %d: %v", i, err)
+		}
+		keyID, _ := resp["key_id"].(string)
+		assertPathSafe(keyID)
+		lastKeyID = keyID
+	}
+
+	// Rotation generates a fresh ID via the same helper; cover that call site too.
+	rotateReq := httptest.NewRequest(http.MethodPost, "/keys/"+lastKeyID+"/rotate", nil)
+	rotateReq.SetPathValue("id", lastKeyID)
+	rotateRec := httptest.NewRecorder()
+	state.handleKeyRotate(rotateRec, rotateReq)
+	if rotateRec.Code != http.StatusOK {
+		t.Fatalf("rotate: expected 200, got %d: %s", rotateRec.Code, rotateRec.Body.String())
+	}
+	var rotateResp map[string]any
+	if err := json.Unmarshal(rotateRec.Body.Bytes(), &rotateResp); err != nil {
+		t.Fatalf("decode rotate response: %v", err)
+	}
+	newKeyID, _ := rotateResp["key_id"].(string)
+	assertPathSafe(newKeyID)
 }

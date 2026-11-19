@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math/rand"
 	"os"
 	"path/filepath"
@@ -134,20 +135,60 @@ type Result struct {
 	Err        error
 }
 
+// appendWriter is the minimal file surface used by the DLQ and quarantine
+// writers. It is an interface so tests can inject a writer that simulates a
+// short write together with an error.
+type appendWriter interface {
+	Write([]byte) (int, error)
+	Close() error
+}
+
 type Processor struct {
 	cfg            Config
 	primarySink    collectorevent.Sink
 	secondarySinks []NamedSink
 	fallbackSink   *NamedSink
 	rng            *rand.Rand
-	dlqFile        *os.File
+	dlqFile        appendWriter
 	dlqMu          sync.Mutex
-	quarantineFile *os.File
+	quarantineFile appendWriter
 	quarantineMu   sync.Mutex
 	dedupeMu       sync.Mutex
 	dedupeSeenAt   map[string]time.Time
 	redisClient    *redis.Client
 	dedupePrefix   string
+}
+
+// appendAll writes the whole buffer to an O_APPEND file, retrying failures.
+//
+// Because the file is opened with O_APPEND, every successful Write appends to
+// the end of the file. If a Write reports a partial byte count n together
+// with an error, those n bytes are already persisted. Re-writing the entire
+// buffer from the start (the previous behaviour) duplicates that prefix and
+// corrupts the JSONL record. Each attempt therefore writes only the suffix
+// that has not been persisted yet. mu serializes concurrent writers, and
+// maxAttempts bounds the retries.
+func appendAll(f appendWriter, mu *sync.Mutex, data []byte) error {
+	const maxAttempts = 3
+	written := 0
+	var lastErr error
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		if attempt > 0 {
+			time.Sleep(10 * time.Millisecond * time.Duration(attempt+1))
+		}
+		mu.Lock()
+		n, err := f.Write(data[written:])
+		mu.Unlock()
+		written += n
+		if written >= len(data) {
+			return nil
+		}
+		lastErr = err
+	}
+	if lastErr == nil {
+		lastErr = io.ErrShortWrite
+	}
+	return lastErr
 }
 
 func New(cfg Config, primary collectorevent.Sink, secondary []NamedSink, fallback *NamedSink, rng *rand.Rand) (*Processor, error) {
@@ -178,6 +219,9 @@ func New(cfg Config, primary collectorevent.Sink, secondary []NamedSink, fallbac
 			Addr:     cfg.DedupeRedisAddr,
 			Password: cfg.DedupeRedisPassword,
 			DB:       cfg.DedupeRedisDB,
+			// Required so contexts passed to Redis commands (e.g. the bounded
+			// dedupe context in isDuplicate) actually cancel socket I/O.
+			ContextTimeoutEnabled: true,
 		})
 		pingCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
@@ -267,26 +311,25 @@ func (p *Processor) Process(ctx context.Context, raw []byte) Result {
 		raw = validated
 	}
 
-	// Apply privacy redaction
+	// Apply privacy redaction. A redaction failure must fail closed in every
+	// active mode: redactPII returns the original (unredacted) payload on error,
+	// so continuing would ship sensitive fields to sinks. "warn" controls how
+	// loudly we report the failure, never whether unredacted data is delivered.
 	if p.cfg.Privacy.Mode != "" && strings.ToLower(p.cfg.Privacy.Mode) != "off" {
 		redacted, redactErr := p.redactPII(raw)
 		if redactErr != nil {
-			if strings.ToLower(p.cfg.Privacy.Mode) == "enforce" {
-				return Result{Invalid: true, Err: fmt.Errorf("privacy redaction failed: %w", redactErr)}
-			}
-			// warn mode: log and continue
 			if p.cfg.LogFunc != nil {
 				p.cfg.LogFunc("warn", "privacy_redaction_failed", map[string]any{"error": redactErr.Error()})
 			}
-		} else {
-			raw = redacted
+			return Result{Invalid: true, Err: fmt.Errorf("privacy redaction failed: %w", redactErr)}
 		}
+		raw = redacted
 	}
 
 	if p.cfg.DedupeEnabled {
 		eventID, ok := validation.ExtractStringPath(raw, p.cfg.DedupeKey)
 		if ok {
-			duplicate, dedupeErr := p.isDuplicate(eventID)
+			duplicate, dedupeErr := p.isDuplicate(ctx, eventID)
 			if dedupeErr != nil {
 				return Result{Err: fmt.Errorf("%w: %v", ErrDedupeUnavailable, dedupeErr)}
 			}
@@ -407,33 +450,14 @@ func (p *Processor) writeQuarantine(raw []byte, err error) {
 		return
 	}
 
-	// Copy data under the lock, then release before sleeping on retry.
+	// Build the newline-terminated JSONL record that gets appended.
 	data := make([]byte, len(b)+1)
 	copy(data, b)
 	data[len(b)] = '\n'
 
-	p.quarantineMu.Lock()
-	_, writeErr := p.quarantineFile.Write(data)
-	p.quarantineMu.Unlock()
-
-	if writeErr == nil {
-		return
+	if err := appendAll(p.quarantineFile, &p.quarantineMu, data); err != nil {
+		fmt.Fprintf(os.Stderr, "[FATAL] quarantine write failed after 3 attempts: %v, event: %s\n", err, string(raw))
 	}
-
-	// Retry without holding the lock so concurrent writers are not blocked.
-	const maxRetries = 3
-	var lastWriteErr error
-	for attempt := 1; attempt < maxRetries; attempt++ {
-		time.Sleep(10 * time.Millisecond * time.Duration(attempt+1))
-		p.quarantineMu.Lock()
-		_, lastWriteErr = p.quarantineFile.Write(data)
-		p.quarantineMu.Unlock()
-		if lastWriteErr == nil {
-			return
-		}
-	}
-
-	fmt.Fprintf(os.Stderr, "[FATAL] quarantine write failed after %d attempts: %v, event: %s\n", maxRetries, lastWriteErr, string(raw))
 }
 
 func (p *Processor) normalizedDeliveryPolicy() string {
@@ -615,49 +639,33 @@ func (p *Processor) writeDLQ(raw []byte, err error) {
 		return
 	}
 
-	// Copy data under the lock, then release before sleeping on retry.
+	// Build the newline-terminated JSONL record that gets appended.
 	data := make([]byte, len(b)+1)
 	copy(data, b)
 	data[len(b)] = '\n'
 
-	p.dlqMu.Lock()
-	_, writeErr := p.dlqFile.Write(data)
-	p.dlqMu.Unlock()
-
-	if writeErr == nil {
-		if p.cfg.OnDLQWrite != nil {
-			p.cfg.OnDLQWrite(1)
+	if err := appendAll(p.dlqFile, &p.dlqMu, data); err != nil {
+		// All retries failed - this is a critical failure
+		fmt.Fprintf(os.Stderr, "[FATAL] DLQ write failed after 3 attempts: %v, event: %s\n", err, string(raw))
+		if p.cfg.OnDLQWriteFail != nil {
+			p.cfg.OnDLQWriteFail(1)
 		}
 		return
 	}
-
-	// Retry without holding the lock so concurrent writers are not blocked.
-	const maxRetries = 3
-	var lastWriteErr error
-	for attempt := 1; attempt < maxRetries; attempt++ {
-		time.Sleep(10 * time.Millisecond * time.Duration(attempt+1))
-		p.dlqMu.Lock()
-		_, lastWriteErr = p.dlqFile.Write(data)
-		p.dlqMu.Unlock()
-		if lastWriteErr == nil {
-			if p.cfg.OnDLQWrite != nil {
-				p.cfg.OnDLQWrite(1)
-			}
-			return
-		}
-	}
-
-	// All retries failed - this is a critical failure
-	fmt.Fprintf(os.Stderr, "[FATAL] DLQ write failed after %d attempts: %v, event: %s\n", maxRetries, lastWriteErr, string(raw))
-	if p.cfg.OnDLQWriteFail != nil {
-		p.cfg.OnDLQWriteFail(1)
+	if p.cfg.OnDLQWrite != nil {
+		p.cfg.OnDLQWrite(1)
 	}
 }
 
 // maxDedupeEntries caps the in-memory dedupe map to prevent unbounded growth.
 const maxDedupeEntries = 100_000
 
-func (p *Processor) isDuplicate(value string) (bool, error) {
+// redisDedupeTimeout bounds each Redis dedupe operation so a slow or hung
+// Redis cannot block Process indefinitely. It is derived from the caller's
+// context so cancellation and earlier deadlines still take precedence.
+const redisDedupeTimeout = 3 * time.Second
+
+func (p *Processor) isDuplicate(ctx context.Context, value string) (bool, error) {
 	if strings.TrimSpace(value) == "" {
 		return false, nil
 	}
@@ -666,7 +674,9 @@ func (p *Processor) isDuplicate(value string) (bool, error) {
 		if strings.TrimSpace(p.dedupePrefix) != "" {
 			key = p.dedupePrefix + value
 		}
-		ok, err := p.redisClient.SetNX(context.Background(), key, "1", p.cfg.DedupeWindow).Result()
+		dedupeCtx, cancel := context.WithTimeout(ctx, redisDedupeTimeout)
+		defer cancel()
+		ok, err := p.redisClient.SetNX(dedupeCtx, key, "1", p.cfg.DedupeWindow).Result()
 		if err != nil {
 			return false, err
 		}
@@ -748,20 +758,34 @@ func (p *Processor) redactPII(raw []byte) ([]byte, error) {
 func (p *Processor) redactMap(data map[string]interface{}, prefix string) map[string]interface{} {
 	result := make(map[string]interface{})
 
+	// In allowlist mode a container's own key cannot decide whether it is
+	// sensitive: its sensitivity is determined by its descendants. Redacting a
+	// map/array wholesale on the strength of its own key would silently destroy
+	// allowlisted nested paths (e.g. allowlist ["user.email"] with a "user"
+	// object). Recurse into containers instead and evaluate only leaf fields
+	// against the allowlist.
+	allowlistMode := len(p.cfg.Privacy.Allowlist) > 0
+
 	for key, value := range data {
 		fieldPath := key
 		if prefix != "" {
 			fieldPath = prefix + "." + key
 		}
 
-		if p.shouldRedactField(fieldPath, key) {
+		nested, isMap := value.(map[string]interface{})
+		arr, isArray := value.([]interface{})
+		isContainer := isMap || isArray
+
+		// Containers are never redacted based on their own key in allowlist
+		// mode; they are traversed so allowlisted descendants survive.
+		if p.shouldRedactField(fieldPath, key) && !(allowlistMode && isContainer) {
 			result[key] = "[REDACTED]"
 			if p.cfg.LogFunc != nil {
 				p.cfg.LogFunc("info", "pii_redacted", map[string]any{"field": fieldPath})
 			}
-		} else if nested, ok := value.(map[string]interface{}); ok {
+		} else if isMap {
 			result[key] = p.redactMap(nested, fieldPath)
-		} else if arr, ok := value.([]interface{}); ok {
+		} else if isArray {
 			result[key] = p.redactArray(arr, fieldPath)
 		} else {
 			result[key] = value
@@ -836,13 +860,23 @@ func (p *Processor) matchesPattern(fieldPath, keyLower, pattern string) bool {
 
 	// Wildcard match (e.g., "user.*" matches "user.email")
 	if strings.Contains(patternLower, "*") {
-		wildcardRegex := strings.ReplaceAll(patternLower, "*", ".*")
+		// Treat every regex metacharacter literally except "*", which is the
+		// documented wildcard. QuoteMeta first so entries such as "password[.*"
+		// or "a(b*" cannot form an invalid regex, then translate the escaped
+		// "\*" back into ".*" to preserve glob semantics.
+		wildcardRegex := strings.ReplaceAll(regexp.QuoteMeta(patternLower), `\*`, ".*")
 		patternKey := "^" + wildcardRegex + "$"
 		var re *regexp.Regexp
 		if cached, ok := compiledPatternCache.Load(patternKey); ok {
 			re = cached.(*regexp.Regexp)
 		} else {
-			re = regexp.MustCompile(patternKey)
+			var err error
+			re, err = regexp.Compile(patternKey)
+			if err != nil {
+				// Defensive: the pattern is quoted, so this is unreachable in
+				// practice. Skip the pattern instead of crashing the collector.
+				return false
+			}
 			compiledPatternCache.Store(patternKey, re)
 		}
 		if match := re.MatchString(fieldPath); match {

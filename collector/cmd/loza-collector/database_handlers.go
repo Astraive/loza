@@ -28,8 +28,8 @@ type databaseQueryRequest struct {
 func (s *collectorState) databaseConnection(name string) (database.Connection, time.Duration, error) {
 	name = strings.TrimSpace(name)
 	if name == "" {
-		if s.cfg.storageConnection != "" {
-			name = s.cfg.storageConnection
+		if s.config().storageConnection != "" {
+			name = s.config().storageConnection
 		} else if s.queryConnection != nil {
 			return s.queryConnection, 10 * time.Second, nil
 		}
@@ -38,7 +38,7 @@ func (s *collectorState) databaseConnection(name string) (database.Connection, t
 	if connection == nil {
 		return nil, 0, fmt.Errorf("database connection %q not found", name)
 	}
-	for _, configured := range s.cfg.databaseConnections {
+	for _, configured := range s.config().databaseConnections {
 		if configured.name == name {
 			return connection, configured.queryTimeout, nil
 		}
@@ -77,13 +77,30 @@ func (s *collectorState) HandleDatabaseConnections(w http.ResponseWriter, r *htt
 		cancel()
 		result = append(result, entry)
 	}
-	if len(result) == 0 && s.queryConnection != nil {
+	if s.queryConnection != nil && !s.queryConnectionAlreadyListed() {
 		info := s.queryConnection.Metadata()
 		info.Name = "primary"
 		info.Primary = true
 		result = append(result, databaseConnectionResponse{Metadata: info, Health: "healthy"})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"connections": result})
+}
+
+// queryConnectionAlreadyListed reports whether the legacy query connection is
+// already represented by one of the named connections in databaseMetadata.
+// When storage.connection points at a named connection, queryConnection is that
+// same connection, so it must not be appended a second time as "primary".
+func (s *collectorState) queryConnectionAlreadyListed() bool {
+	if s.queryConnection == nil {
+		return false
+	}
+	name := s.queryConnection.Metadata().Name
+	for _, info := range s.databaseMetadata {
+		if info.Name == name {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *collectorState) HandleDatabaseConnectionTest(w http.ResponseWriter, r *http.Request) {
@@ -100,12 +117,18 @@ func (s *collectorState) HandleDatabaseConnectionTest(w http.ResponseWriter, r *
 	if effectiveName == "" {
 		effectiveName = name
 	}
-	ctx, cancel := database.BoundedContext(r.Context(), timeout)
-	defer cancel()
 	start := time.Now()
-	err = connection.Ping(ctx)
+	// Give each health probe its own timeout budget. Sharing one context meant a
+	// Ping that consumed most of the budget could leave the follow-up SELECT 1
+	// with an already-expired deadline, causing a healthy connection to be
+	// reported as unhealthy (HTTP 503).
+	pingCtx, pingCancel := database.BoundedContext(r.Context(), timeout)
+	err = connection.Ping(pingCtx)
+	pingCancel()
 	if err == nil {
-		_, err = connection.Query(ctx, "SELECT 1")
+		queryCtx, queryCancel := database.BoundedContext(r.Context(), timeout)
+		defer queryCancel()
+		_, err = connection.Query(queryCtx, "SELECT 1")
 	}
 	response := map[string]any{
 		"connection":  effectiveName,
@@ -163,7 +186,7 @@ func (s *collectorState) HandleDatabaseQuery(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	start := time.Now()
-	result, err := connection.Query(ctx, plan.SQL, plan.Args...)
+	result, err := connection.QueryWithLimit(ctx, planRowLimit(plan, req.Limit), plan.SQL, plan.Args...)
 	if err != nil {
 		writeJSON(w, http.StatusUnprocessableEntity, map[string]any{"error": "query_failed"})
 		return

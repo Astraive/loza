@@ -34,15 +34,17 @@ class Middleware:
         if scope.get("type") != "http":
             await self.app(scope, receive, send)
             return
-        status_code = 500
+        status_code = 0
+        response_started = False
         response_bytes = 0
         started = time.perf_counter()
         ctx = self.wrap_scope(scope)
 
         async def capture_send(message):
-            nonlocal status_code, response_bytes
+            nonlocal status_code, response_bytes, response_started
             if message.get("type") == "http.response.start":
                 status_code = int(message.get("status", 200))
+                response_started = True
             elif message.get("type") == "http.response.body":
                 response_bytes += len(message.get("body", b""))
             await send(message)
@@ -54,10 +56,17 @@ class Middleware:
                 String("http.remote_ip", _remote_ip(scope)),
             )
             await self.app(scope, receive, capture_send)
+            if not response_started:
+                # The wrapped app returned without starting a response. No status
+                # was observed and no exception was raised, so do not fabricate a
+                # 500 error: record the unknown outcome with status 0 instead.
+                outcome = "unknown"
+            else:
+                outcome = "error" if status_code >= 500 else "success"
+            ctx.params.status_code = status_code
             Finish(
                 ctx,
-                "error" if status_code >= 500 else "success",
-                Int("status_code", status_code),
+                outcome,
                 Int("response_bytes", response_bytes),
                 Int("duration_ms", int((time.perf_counter() - started) * 1000)),
             )
@@ -65,7 +74,14 @@ class Middleware:
             FinishError(ctx, exc, Bool("panic", True))
             raise
         finally:
-            Emit(ctx)
+            # Emission is best-effort: a telemetry failure (including a sink
+            # BaseException re-raised by panic recovery) must never replace an
+            # application exception already in flight, nor break a successful
+            # request.
+            try:
+                Emit(ctx)
+            except BaseException:
+                pass
 
 
 def _header(scope, wanted):

@@ -308,10 +308,14 @@ type collectorMetrics struct {
 	cortexBridgeFlushes    atomic.Int64
 	cortexBridgeEvents     atomic.Int64
 	cortexBridgeErrors     atomic.Int64
+	cortexBridgeDropped    atomic.Int64
 	cortexBridgeQueueDepth atomic.Int64
 }
 
 type collectorState struct {
+	// cfgMu guards cfg. Hot reload swaps the whole config while request
+	// handlers read individual fields, so readers must go through config().
+	cfgMu               sync.RWMutex
 	cfg                 collectorConfig
 	startedAt           time.Time
 	ingestSink          collectorevent.Sink
@@ -324,6 +328,7 @@ type collectorState struct {
 	diskHealthy         atomic.Bool
 	rateLimiter         *rate.Limiter
 	metrics             collectorMetrics
+	inflightMu          sync.Mutex
 	rng                 *rand.Rand
 	spoolFile           *os.File
 	spoolPosFile        string
@@ -338,10 +343,13 @@ type collectorState struct {
 	dedupeMu            sync.Mutex
 	dedupeSeenAt        map[string]time.Time
 	dedupeStore         dedupeStore
+	dlqMu               sync.Mutex
 	tailMu              sync.Mutex
 	tailSubscribers     map[chan []byte]struct{}
 	processorMu         sync.RWMutex
 	processor           *processing.Processor
+	processorClosed     bool
+	schemaRegistryMu    sync.RWMutex // guards cfg.schemaRegistry against concurrent publish/list/diff/processor reads
 	cortexBridge        *cortexBridgeClient
 	queryDB             *sql.DB
 	queryConnection     database.Connection
@@ -353,7 +361,7 @@ type collectorState struct {
 	retentionStop       chan struct{}
 	closeOnce           sync.Once
 	eventBus            eventbus.Bus
-	keyStore            *memoryKeyStore
+	keyStore            adminKeyStore
 	keyCache            *auth.MemoryKeyCache
 	keyRateLimiter      *auth.KeyRateLimiter
 	serverSecret        []byte

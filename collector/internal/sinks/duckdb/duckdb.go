@@ -29,6 +29,11 @@ func retrySleep(base time.Duration) time.Duration {
 	if base <= 0 {
 		return 0
 	}
+	// base/2 is zero for a 1ns backoff; rand.Int63n(0) panics and there is
+	// no meaningful jitter range at that scale, so return the base directly.
+	if base < 2 {
+		return base
+	}
 	return base + time.Duration(rand.Int63n(int64(base/2)))
 }
 
@@ -124,6 +129,13 @@ func New(cfg Config) (collectorevent.Sink, error) {
 	quotedTable, err := quoteTableName(cfg.Table)
 	if err != nil {
 		return nil, err
+	}
+	if cfg.WriterLoop && cfg.UseAppender {
+		// Fail fast: the Appender cannot address catalog-qualified names, and
+		// silently falling back to the wrong table would corrupt data.
+		if _, _, err := appenderTableRef(quotedTable); err != nil {
+			return nil, err
+		}
 	}
 	quotedRaw, err := quoteIdentifier(rawColumnName)
 	if err != nil {
@@ -301,17 +313,24 @@ func (s *sink) WriteEvent(ctx context.Context, encoded []byte, _ *collectorevent
 	}
 	s.mu.Unlock()
 
-	if pendingErr != nil {
+	// Always persist a detached full batch, even when an earlier background
+	// error is pending. Returning before execBatch would silently drop those
+	// events. Surface both the pending and the write error.
+	if len(batch) == 0 {
 		return pendingErr
 	}
-	if len(batch) == 0 {
-		return nil
-	}
 	if err := s.acquireFlush(ctx); err != nil {
-		return err
+		// The batch was already detached from s.buffer. Restore it so the
+		// events are not silently lost when the flush lock cannot be acquired
+		// (for example, ctx canceled while waiting on flushMu). Keep the batch
+		// ahead of any events buffered concurrently to preserve their order.
+		s.mu.Lock()
+		s.buffer = append(batch, s.buffer...)
+		s.mu.Unlock()
+		return errors.Join(pendingErr, err)
 	}
 	defer s.releaseFlush()
-	return s.execBatch(ctx, batch)
+	return errors.Join(pendingErr, s.execBatch(ctx, batch))
 }
 
 func (s *sink) Flush(ctx context.Context) error {
@@ -353,13 +372,14 @@ func (s *sink) Flush(ctx context.Context) error {
 	s.lastErr = nil
 	s.mu.Unlock()
 
-	if pendingErr != nil {
-		return pendingErr
+	// Always persist the detached batch, even when an earlier background error
+	// is pending. Returning before execBatch would silently drop the buffered
+	// events, including on Close. Surface both the pending and write errors.
+	var writeErr error
+	if len(batch) > 0 {
+		writeErr = s.execBatch(ctx, batch)
 	}
-	if len(batch) == 0 {
-		return nil
-	}
-	return s.execBatch(ctx, batch)
+	return errors.Join(pendingErr, writeErr)
 }
 
 func (s *sink) Close(ctx context.Context) error {
@@ -495,15 +515,13 @@ func (s *sink) writerWorkerAppender() {
 		if !ok {
 			return fmt.Errorf("duckdb: not a driver.Conn")
 		}
-		// Extract table and schema from the quoted table name.
-		// NewAppenderFromConn expects unquoted names.
-		table := strings.ReplaceAll(s.table, `"`, "")
-		schema := ""
-		if parts := strings.Split(table, "."); len(parts) > 1 {
-			schema = parts[0]
-			table = parts[1]
+		// NewAppenderFromConn expects unquoted schema and table names. Its C
+		// API only understands schema.table, so catalog-qualified names are
+		// rejected rather than silently appending to the wrong table.
+		schema, table, err := appenderTableRef(s.table)
+		if err != nil {
+			return err
 		}
-		var err error
 		appender, err = duckdb.NewAppenderFromConn(dxc, schema, table)
 		return err
 	})
@@ -766,6 +784,23 @@ func quoteTableName(table string) (string, error) {
 		quoted = append(quoted, `"`+part+`"`)
 	}
 	return strings.Join(quoted, "."), nil
+}
+
+// appenderTableRef converts a (possibly quoted) table name into the schema and
+// unqualified table name accepted by duckdb.NewAppenderFromConn. The Appender
+// C API takes only a schema and a table (it has no catalog parameter), so a
+// catalog-qualified three-part name cannot be addressed through it. Such names
+// are rejected explicitly instead of silently appending to the wrong table.
+func appenderTableRef(table string) (schema, name string, err error) {
+	parts := strings.Split(strings.ReplaceAll(strings.TrimSpace(table), `"`, ""), ".")
+	switch len(parts) {
+	case 1:
+		return "", parts[0], nil
+	case 2:
+		return parts[0], parts[1], nil
+	default:
+		return "", "", fmt.Errorf("duckdb: appender does not support catalog-qualified table name %q; use a one- or two-part name or disable UseAppender", table)
+	}
 }
 
 func quoteIdentifier(ident string) (string, error) {

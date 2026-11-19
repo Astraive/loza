@@ -5,6 +5,12 @@ Generates the L2 public benchmark defaults:
 - 30 deployments, 8 topology mutations (renames)
 - 24 train + 10 eval incidents, 5 recurring families
 - Seeded RNG for reproducibility
+
+Incident IDs use the form ``INC-<phase>-<N>`` (e.g. ``INC-train-100``), where
+the numeric suffix is namespaced by phase (train: 1xx, eval: 2xx). The phase
+prefix guarantees IDs are unique across the whole dataset and makes each ID
+self-describing; this supersedes the former ``INC-<100+i>`` form, which reused
+the same range for train and eval.
 """
 
 from __future__ import annotations
@@ -116,9 +122,12 @@ def generate_dataset(seed: int = 42) -> dict:
         if inc.get("remediation"):
             all_events.append(inc["remediation"])
 
-    # Generate eval incidents (held-out)
+    # Generate eval incidents (held-out). They must be generated entirely after
+    # split_time so their events/signals cannot land in train_events. Using the
+    # unshifted base_time here matters: _generate_incidents confines each phase
+    # to its own day window (see below).
     eval_incidents = _generate_incidents(
-        rng, base_time + timedelta(days=N_DAYS // 2), N_EVAL_INCIDENTS, deploy_times, "eval",
+        rng, base_time, N_EVAL_INCIDENTS, deploy_times, "eval",
     )
     for inc in eval_incidents:
         all_events.extend(inc["events"])
@@ -168,13 +177,33 @@ def _generate_incidents(
     deploy_times: list[tuple],
     phase: str,
 ) -> list[dict]:
+    """Generate incidents confined to the time window of their phase.
+
+    Train incidents are generated only on the days before the eval split and
+    eval incidents only on the days on/after it, so a time-based partition can
+    never pull a held-out incident into the training set. Incident IDs are also
+    namespaced per phase (train: INC-train-1xx, eval: INC-eval-2xx) to keep an
+    eval signal distinguishable from a training incident by ID alone.
+    """
+    if phase == "eval":
+        day_min, day_max = N_DAYS - 2, N_DAYS - 1
+        id_start = 200
+    else:
+        day_min, day_max = 0, N_DAYS - 3
+        id_start = 100
+
     incidents = []
     for i in range(count):
         family = INCIDENT_FAMILIES[i % len(INCIDENT_FAMILIES)]
-        day = rng.randint(0, 6)
+        day = rng.randint(day_min, day_max)
         ts = base_time + timedelta(days=day, hours=rng.randint(8, 22))
         svc = rng.choice(SERVICE_NAMES)
-        incident_id = f"INC-{100 + len(incidents)}"
+        # Combine both uniqueness schemes: the phase prefix (from the bench
+        # fix) makes each ID self-describing and keeps train/eval IDs from
+        # colliding, while the per-phase numeric namespace from id_start
+        # (train 1xx, eval 2xx) keeps the range-based distinction. Format:
+        # INC-<phase>-<id_start + i>.
+        incident_id = f"INC-{phase}-{id_start + len(incidents)}"
 
         # Signal
         signal = {

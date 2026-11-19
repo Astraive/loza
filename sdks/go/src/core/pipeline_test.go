@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -222,5 +223,150 @@ func TestPipelineConcurrentEnqueueAndFlushDoesNotLoseDrainWakeup(t *testing.T) {
 	defer cancel()
 	if err := p.Shutdown(ctx); err != nil {
 		t.Fatalf("shutdown failed: %v", err)
+	}
+}
+
+// countingSinkWriter records every event delivered to the sink.
+type countingSinkWriter struct{ writes atomic.Int64 }
+
+func (s *countingSinkWriter) WriteEvent(context.Context, []byte, *Event) error {
+	s.writes.Add(1)
+	return nil
+}
+func (*countingSinkWriter) Flush(context.Context) error { return nil }
+func (*countingSinkWriter) Close(context.Context) error { return nil }
+
+func TestPipelineShutdownWaitsForInFlightEnqueueBeforeClosingDone(t *testing.T) {
+	// Hold a worker inside WriteEvent and keep the queue full so that a third
+	// Enqueue is left in flight (reserved but blocked on the queue send) when
+	// Shutdown begins. Shutdown must not close done until that send completes.
+	sink := newGateSinkWriter()
+	p := NewPipeline(PipelineConfig{
+		QueueSize:     1,
+		Workers:       1,
+		FlushInterval: time.Hour,
+		Backpressure:  Block,
+		Sinks:         []SinkWriter{sink},
+	})
+
+	blocker := make(chan struct{})
+	go func() {
+		defer close(blocker)
+		ok, err := p.Enqueue(PipelineItem{Encoded: []byte("blocker")})
+		if !ok || err != nil {
+			t.Errorf("blocker enqueue failed: ok=%v err=%v", ok, err)
+		}
+	}()
+	select {
+	case got := <-sink.entered:
+		if got != "blocker" {
+			t.Fatalf("expected worker to start blocker, got %q", got)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("worker did not start blocker write")
+	}
+	<-blocker
+
+	if ok, err := p.Enqueue(PipelineItem{Encoded: []byte("filler")}); !ok || err != nil {
+		t.Fatalf("filler enqueue failed: ok=%v err=%v", ok, err)
+	}
+
+	inflightDone := make(chan struct{})
+	go func() {
+		defer close(inflightDone)
+		ok, err := p.Enqueue(PipelineItem{Encoded: []byte("inflight")})
+		if !ok || err != nil {
+			t.Errorf("inflight enqueue failed: ok=%v err=%v", ok, err)
+		}
+	}()
+
+	// Wait until the third item is reserved and blocked on the full queue.
+	deadline := time.Now().Add(2 * time.Second)
+	for p.pending.Load() < 3 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if got := p.pending.Load(); got < 3 {
+		t.Fatalf("inflight enqueue did not reach pending=3 (got %d)", got)
+	}
+
+	shutdownDone := make(chan error, 1)
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		shutdownDone <- p.Shutdown(ctx)
+	}()
+
+	// The in-flight Enqueue is still blocked on the send, so done must remain
+	// open. On the buggy code Shutdown closes done immediately and this fails.
+	select {
+	case <-p.done:
+		t.Fatal("Shutdown closed done while an Enqueue was still in flight")
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	for range 3 {
+		sink.gate <- struct{}{}
+	}
+
+	select {
+	case err := <-shutdownDone:
+		if err != nil {
+			t.Fatalf("shutdown failed: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("shutdown did not complete after releasing in-flight enqueue")
+	}
+	select {
+	case <-inflightDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("in-flight enqueue did not complete")
+	}
+
+	if writes := sink.snapshotWrites(); len(writes) != 3 {
+		t.Fatalf("expected all 3 accepted events to be written, got %v", writes)
+	}
+}
+
+func TestPipelineEnqueueRacingShutdownNeverLosesAcceptedEvents(t *testing.T) {
+	for round := range 200 {
+		sink := &countingSinkWriter{}
+		p := NewPipeline(PipelineConfig{
+			QueueSize:     1,
+			Workers:       1,
+			FlushInterval: time.Hour,
+			Backpressure:  Block,
+			Sinks:         []SinkWriter{sink},
+		})
+
+		const producers = 8
+		var accepted atomic.Int64
+		var producersWG sync.WaitGroup
+		start := make(chan struct{})
+		for range producers {
+			producersWG.Add(1)
+			go func() {
+				defer producersWG.Done()
+				<-start
+				ok, err := p.Enqueue(PipelineItem{Encoded: []byte(`{"race":true}`)})
+				if err != nil && !errors.Is(err, ErrPipelineClosed) {
+					t.Errorf("unexpected enqueue error: %v", err)
+				}
+				if ok && err == nil {
+					accepted.Add(1)
+				}
+			}()
+		}
+		close(start)
+
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		shutdownErr := p.Shutdown(ctx)
+		cancel()
+		producersWG.Wait()
+		if shutdownErr != nil {
+			t.Fatalf("round %d: shutdown failed: %v (pending=%d)", round, shutdownErr, p.pending.Load())
+		}
+		if want, got := accepted.Load(), sink.writes.Load(); got != want {
+			t.Fatalf("round %d: accepted %d events but sink wrote %d", round, want, got)
+		}
 	}
 }

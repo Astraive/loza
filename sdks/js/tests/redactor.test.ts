@@ -41,6 +41,30 @@ describe('Redactor', () => {
     assert.ok(result.attrs.credit_card.endsWith('11'));
   });
 
+  it('maskKeys masks non-string sensitive values instead of exposing them', () => {
+    const r = maskKeys('pin', 'secret', 'flag', 'payload', 'codes');
+    const result = r({
+      pin: 1234,
+      secret: 99,
+      flag: true,
+      payload: { nested: 'value' },
+      codes: [10, 20, 30],
+      name: 'Jane',
+    });
+    assert.notEqual(result.pin, 1234);
+    assert.notEqual(result.secret, 99);
+    assert.notEqual(result.flag, true);
+    assert.notDeepEqual(result.payload, { nested: 'value' });
+    assert.notDeepEqual(result.codes, [10, 20, 30]);
+    // Every masked value must be a string containing a mask character.
+    for (const key of ['pin', 'secret', 'flag', 'payload', 'codes']) {
+      assert.equal(typeof result[key], 'string', `${key} should be a masked string`);
+      assert.ok(String(result[key]).includes('*'), `${key} should be masked`);
+    }
+    // Non-matching values remain untouched.
+    assert.equal(result.name, 'Jane');
+  });
+
   it('composeRedactors chains redactors', () => {
     const r = composeRedactors(
       redactKeys('password'),

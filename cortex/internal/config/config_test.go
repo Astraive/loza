@@ -9,7 +9,10 @@ import (
 )
 
 func TestDefault(t *testing.T) {
-	cfg := Default()
+	cfg, err := Default()
+	if err != nil {
+		t.Fatalf("Default: %v", err)
+	}
 
 	if cfg.Server.Port != 9312 {
 		t.Fatalf("expected server port 9312, got %d", cfg.Server.Port)
@@ -45,7 +48,10 @@ func TestDefaultAppliesEnvOverrides(t *testing.T) {
 	t.Setenv("CORTEX_LOG_LEVEL", "debug")
 	t.Setenv("CORTEX_MATCHER_MODE", "rust")
 
-	cfg := Default()
+	cfg, err := Default()
+	if err != nil {
+		t.Fatalf("Default: %v", err)
+	}
 
 	if cfg.Server.Host != "10.0.0.1" {
 		t.Fatalf("expected env host override, got %s", cfg.Server.Host)
@@ -92,7 +98,10 @@ storage:
 	}
 	defer os.Chdir(origDir)
 
-	cfg := Default()
+	cfg, err := Default()
+	if err != nil {
+		t.Fatalf("Default: %v", err)
+	}
 
 	if cfg.Server.Host != "192.168.1.100" {
 		t.Fatalf("expected user host override, got %s", cfg.Server.Host)
@@ -128,10 +137,68 @@ func TestDefaultEnvOverridesUserFile(t *testing.T) {
 	// Env should win over user file
 	t.Setenv("CORTEX_SERVER_PORT", "5555")
 
-	cfg := Default()
+	cfg, err := Default()
+	if err != nil {
+		t.Fatalf("Default: %v", err)
+	}
 
 	if cfg.Server.Port != 5555 {
 		t.Fatalf("expected env to override user file port, got %d", cfg.Server.Port)
+	}
+}
+
+func TestDefaultRejectsMalformedUserOverrideFile(t *testing.T) {
+	dir := t.TempDir()
+	// A malformed override previously had its load error discarded, silently
+	// dropping the whole file (including any auth/TLS settings it enabled).
+	writeConfigFile(t, filepath.Join(dir, "loza-cortex.yaml"), "server: [")
+	changeWorkingDirectory(t, dir)
+
+	_, err := Default()
+	if err == nil || !strings.Contains(err.Error(), "failed to parse runtime override") {
+		t.Fatalf("Default error = %v, want runtime override parse error", err)
+	}
+}
+
+func TestDefaultRejectsInvalidUserOverrideFields(t *testing.T) {
+	dir := t.TempDir()
+	// KnownFields rejects unknown keys; the old _ = loadFile(...) discarded
+	// that error even though it can hide a misspelled security setting.
+	writeConfigFile(t, filepath.Join(dir, "loza.yaml"), "server:\n  port: 7777\nnonexistent_setting: true\n")
+	changeWorkingDirectory(t, dir)
+
+	_, err := Default()
+	if err == nil || !strings.Contains(err.Error(), "nonexistent_setting") {
+		t.Fatalf("Default error = %v, want unknown-field parse error", err)
+	}
+}
+
+func TestDefaultValidatesResultingConfig(t *testing.T) {
+	dir := t.TempDir()
+	// Enabling authentication without API keys must not yield a config that
+	// callers can use; the old Default never called Validate.
+	writeConfigFile(t, filepath.Join(dir, "loza-cortex.yaml"), "authentication:\n  enabled: true\n")
+	changeWorkingDirectory(t, dir)
+
+	_, err := Default()
+	if err == nil || !strings.Contains(err.Error(), "at least one api key is required") {
+		t.Fatalf("Default error = %v, want authentication validation error", err)
+	}
+}
+
+func TestDefaultReturnsValidConfigWithoutOverride(t *testing.T) {
+	dir := t.TempDir()
+	changeWorkingDirectory(t, dir)
+
+	cfg, err := Default()
+	if err != nil {
+		t.Fatalf("Default: %v", err)
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Default returned an invalid config: %v", err)
+	}
+	if cfg.Server.Port != 9312 || cfg.Storage.Backend != "duckdb" {
+		t.Fatalf("unexpected in-memory defaults: port=%d backend=%s", cfg.Server.Port, cfg.Storage.Backend)
 	}
 }
 
@@ -205,6 +272,117 @@ collector:
 	}
 	if cfg.Collector.TailFlushInterval != 750*time.Millisecond || cfg.Collector.TailReconnectBackoff != 5*time.Second {
 		t.Fatalf("expected collector tail timing overrides, got %+v", cfg.Collector)
+	}
+}
+
+func TestApplyEnvOverridesRejectsInvalidValues(t *testing.T) {
+	tests := []struct {
+		name string
+		key  string
+		val  string
+	}{
+		{name: "server port", key: "CORTEX_SERVER_PORT", val: "not-a-port"},
+		{name: "postgres port", key: "CORTEX_POSTGRES_PORT", val: "5432x"},
+		{name: "matcher parallelism", key: "CORTEX_MATCHER_PARALLELISM", val: "many"},
+		{name: "matcher cache size", key: "CORTEX_MATCHER_CACHE_SIZE", val: "big"},
+		{name: "matcher cache ttl", key: "CORTEX_MATCHER_CACHE_TTL", val: "45"},
+		{name: "rate limit per api key rpm", key: "CORTEX_RATELIMIT_PER_API_KEY_RPM", val: "fast"},
+		{name: "rate limit per ip rpm", key: "CORTEX_RATELIMIT_PER_IP_RPM", val: "fast"},
+		{name: "collector timeout", key: "CORTEX_COLLECTOR_TIMEOUT", val: "soon"},
+		{name: "collector max response bytes", key: "CORTEX_COLLECTOR_MAX_RESPONSE_BYTES", val: "huge"},
+		{name: "collector tail buffer size", key: "CORTEX_COLLECTOR_TAIL_BUFFER_SIZE", val: "many"},
+		{name: "collector tail batch size", key: "CORTEX_COLLECTOR_TAIL_BATCH_SIZE", val: "many"},
+		{name: "collector tail flush interval", key: "CORTEX_COLLECTOR_TAIL_FLUSH_INTERVAL", val: "fast"},
+		{name: "collector tail reconnect backoff", key: "CORTEX_COLLECTOR_TAIL_RECONNECT_BACKOFF", val: "fast"},
+		{name: "auth enabled", key: "CORTEX_AUTH_ENABLED", val: "yep"},
+		{name: "rate limit enabled", key: "CORTEX_RATELIMIT_ENABLED", val: "yep"},
+		{name: "tls enabled", key: "CORTEX_TLS_ENABLED", val: "yep"},
+		{name: "pii redaction enabled", key: "CORTEX_PII_REDACTION_ENABLED", val: "yep"},
+		{name: "collector source of truth", key: "CORTEX_COLLECTOR_SOURCE_OF_TRUTH", val: "maybe"},
+		{name: "collector tail enabled", key: "CORTEX_COLLECTOR_TAIL_ENABLED", val: "maybe"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv(tc.key, tc.val)
+			cfg := defaultConfig()
+			err := applyEnvOverrides(cfg)
+			if err == nil {
+				t.Fatalf("applyEnvOverrides accepted invalid %s=%q", tc.key, tc.val)
+			}
+			if !strings.Contains(err.Error(), tc.key) {
+				t.Fatalf("error %q does not identify %s", err, tc.key)
+			}
+			if !strings.Contains(err.Error(), tc.val) {
+				t.Fatalf("error %q does not include rejected value %q", err, tc.val)
+			}
+		})
+	}
+}
+
+func TestApplyEnvOverridesAcceptsValidValues(t *testing.T) {
+	t.Setenv("CORTEX_SERVER_PORT", "8080")
+	t.Setenv("CORTEX_MATCHER_CACHE_TTL", "45s")
+	t.Setenv("CORTEX_COLLECTOR_MAX_RESPONSE_BYTES", "16777216")
+	t.Setenv("CORTEX_TLS_ENABLED", "TRUE")
+	t.Setenv("CORTEX_COLLECTOR_TAIL_ENABLED", "1")
+
+	cfg := defaultConfig()
+	if err := applyEnvOverrides(cfg); err != nil {
+		t.Fatalf("applyEnvOverrides: %v", err)
+	}
+	if cfg.Server.Port != 8080 || cfg.Matcher.CacheTTL != 45*time.Second || cfg.Collector.MaxResponseBytes != 16777216 {
+		t.Fatalf("numeric/duration overrides not applied: %+v %+v", cfg.Server, cfg.Matcher)
+	}
+	if !cfg.TLS.Enabled || !cfg.Collector.TailEnabled {
+		t.Fatalf("boolean overrides not applied: %+v %+v", cfg.TLS, cfg.Collector)
+	}
+}
+
+func TestLoadRejectsInvalidEnvironmentOverride(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	writeConfigFile(t, path, `server:
+  port: 9312
+storage:
+  backend: duckdb
+  duckdb:
+    path: ./cortex.db
+logging:
+  level: info
+  format: json
+`)
+
+	t.Setenv("CORTEX_SERVER_PORT", "not-a-port")
+	_, err := Load(path)
+	if err == nil || !strings.Contains(err.Error(), "CORTEX_SERVER_PORT") {
+		t.Fatalf("Load error = %v, want invalid CORTEX_SERVER_PORT error", err)
+	}
+}
+
+func TestLoadDefaultRejectsInvalidEnvironmentOverride(t *testing.T) {
+	defaults := writeBundledDefaults(t)
+	useBundledDefaults(t, defaults)
+	t.Setenv("CORTEX_MATCHER_CACHE_TTL", "not-a-duration")
+
+	_, err := LoadDefault()
+	if err == nil || !strings.Contains(err.Error(), "CORTEX_MATCHER_CACHE_TTL") {
+		t.Fatalf("LoadDefault error = %v, want invalid CORTEX_MATCHER_CACHE_TTL error", err)
+	}
+}
+
+func TestDefaultRejectsInvalidEnvironmentOverride(t *testing.T) {
+	t.Setenv("CORTEX_COLLECTOR_MAX_RESPONSE_BYTES", "not-an-int")
+
+	cfg, err := Default()
+	if err == nil {
+		t.Fatal("Default accepted invalid environment override")
+	}
+	if cfg != nil {
+		t.Fatalf("Default returned a config on error: %+v", cfg)
+	}
+	if !strings.Contains(err.Error(), "CORTEX_COLLECTOR_MAX_RESPONSE_BYTES") {
+		t.Fatalf("Default error = %v, want invalid CORTEX_COLLECTOR_MAX_RESPONSE_BYTES error", err)
 	}
 }
 
@@ -327,6 +505,63 @@ func TestValidate(t *testing.T) {
 			}
 			if !tc.wantErr && err != nil {
 				t.Fatalf("unexpected error: %v", err)
+			}
+		})
+	}
+}
+
+func TestDefaultPostgresSSLModeIsSecure(t *testing.T) {
+	if got := defaultConfig().Storage.PostgreSQL.SSLMode; got != "require" {
+		t.Fatalf("default postgres ssl_mode = %q, want %q", got, "require")
+	}
+}
+
+func TestValidatePostgresSSLMode(t *testing.T) {
+	newPostgresConfig := func(host, sslMode string) Config {
+		cfg := *defaultConfig()
+		cfg.Storage.Backend = "postgres"
+		cfg.Storage.PostgreSQL.Host = host
+		cfg.Storage.PostgreSQL.SSLMode = sslMode
+		return cfg
+	}
+
+	tests := []struct {
+		name     string
+		host     string
+		mode     string
+		wantErr  bool
+		wantMode string
+	}{
+		{name: "require allowed for remote host", host: "db.example.com", mode: "require", wantMode: "require"},
+		{name: "verify-full allowed for remote host", host: "db.example.com", mode: "verify-full", wantMode: "verify-full"},
+		{name: "verify-ca allowed for remote host", host: "db.example.com", mode: "verify-ca", wantMode: "verify-ca"},
+		{name: "disable rejected for remote host", host: "db.example.com", mode: "disable", wantErr: true},
+		{name: "allow rejected for remote host", host: "db.example.com", mode: "allow", wantErr: true},
+		{name: "prefer rejected for remote host", host: "db.example.com", mode: "prefer", wantErr: true},
+		{name: "disable rejected for remote IP", host: "10.0.0.5", mode: "disable", wantErr: true},
+		{name: "disable allowed for localhost", host: "localhost", mode: "disable", wantMode: "disable"},
+		{name: "disable allowed for loopback IP", host: "127.0.0.1", mode: "disable", wantMode: "disable"},
+		{name: "disable allowed for local container service", host: "postgres", mode: "disable", wantMode: "disable"},
+		{name: "unknown mode rejected", host: "localhost", mode: "bogus", wantErr: true},
+		{name: "empty mode normalized to require", host: "db.example.com", mode: "", wantMode: "require"},
+		{name: "mode normalized to lowercase", host: "db.example.com", mode: "Verify-Full", wantMode: "verify-full"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := newPostgresConfig(tc.host, tc.mode)
+			err := cfg.Validate()
+			if tc.wantErr {
+				if err == nil {
+					t.Fatal("expected validation error")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected validation error: %v", err)
+			}
+			if cfg.Storage.PostgreSQL.SSLMode != tc.wantMode {
+				t.Fatalf("ssl_mode = %q, want %q", cfg.Storage.PostgreSQL.SSLMode, tc.wantMode)
 			}
 		})
 	}

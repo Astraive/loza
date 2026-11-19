@@ -9,9 +9,17 @@ import (
 	speccontract "github.com/astraive/loza/spec/generated/go/contract"
 )
 
+// firstExisting returns the first path that os.Stat does not report as absent.
+// A path is skipped only when it is confirmed missing (os.IsNotExist); errors such
+// as permission denied or a symlink loop are treated as existing-but-unusable
+// candidates rather than silently discarded. When every path is confirmed absent,
+// the first path is returned as the canonical default. An empty input returns "".
 func firstExisting(paths ...string) string {
+	if len(paths) == 0 {
+		return ""
+	}
 	for _, path := range paths {
-		if _, err := os.Stat(path); err == nil {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
 			return path
 		}
 	}
@@ -116,7 +124,13 @@ func ValidateEventBytesStrict(raw []byte, strict bool) error {
 		if len(raw) > speccontract.MaxEventBytes && payload["events"] == nil {
 			return fmt.Errorf("payload exceeds max_event_size_bytes (%d > %d)", len(raw), speccontract.MaxEventBytes)
 		}
-		if eventsRaw, ok := payload["events"].([]any); ok && payload["api_version"] == nil {
+		// Test for key presence, not value: json.Unmarshal maps an explicit
+		// "api_version": null to a nil interface value, which must not be
+		// mistaken for a missing key. Only payloads without the key at all may
+		// take the wrapped-events shortcut; an explicit null is routed to full
+		// ingest-envelope validation.
+		_, hasAPIVersion := payload["api_version"]
+		if eventsRaw, ok := payload["events"].([]any); ok && !hasAPIVersion {
 			for _, item := range eventsRaw {
 				event, ok := item.(map[string]any)
 				if !ok {

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import sys
 from collections.abc import Callable
 from dataclasses import replace
 from typing import Optional
@@ -325,6 +324,7 @@ from .core.timing import (
     with_process,
     with_group,
     with_timer,
+    _attrs_to_fields,
     finish_group_error,
     measure,
     step,
@@ -497,11 +497,11 @@ def checkpoint(ctx: EventContext, name: str, *attrs: Attr, **fields: Any) -> Non
 
 
 def process(ctx: EventContext, name: str, *attrs: Attr, **fields: Any) -> "ProcessHandle":
-    return ctx.start_process(name, **fields)
+    return ctx.start_process(name, **_attrs_to_fields(attrs, fields))
 
 
 def start_process(ctx: EventContext, name: str, *attrs: Attr, **fields: Any) -> "ProcessHandle":
-    return ctx.start_process(name, **fields)
+    return ctx.start_process(name, **_attrs_to_fields(attrs, fields))
 
 
 def finish_process(handle: "ProcessHandle", **attrs: Any) -> None:
@@ -517,11 +517,11 @@ def finish_group(handle: "GroupHandle", **attrs: Any) -> None:
 
 
 def timer(ctx: EventContext, name: str, *attrs: Attr, **fields: Any) -> "TimerHandle":
-    return ctx.start_timer(name, **fields)
+    return ctx.start_timer(name, **_attrs_to_fields(attrs, fields))
 
 
 def start_timer(ctx: EventContext, name: str, *attrs: Attr, **fields: Any) -> "TimerHandle":
-    return ctx.start_timer(name, **fields)
+    return ctx.start_timer(name, **_attrs_to_fields(attrs, fields))
 
 
 def stop_timer(handle: "TimerHandle", **attrs: Any) -> None:
@@ -529,7 +529,7 @@ def stop_timer(handle: "TimerHandle", **attrs: Any) -> None:
 
 
 def start_group(ctx: EventContext, name: str, *attrs: Attr, **fields: Any) -> "GroupHandle":
-    return ctx.start_group(name, **fields)
+    return ctx.start_group(name, **_attrs_to_fields(attrs, fields))
 
 
 def stopwatch() -> "StopwatchHandle":
@@ -555,11 +555,17 @@ def emit_event(event: EventContext) -> str:
 
 
 def flush(timeout: float | None = None) -> None:
-    _default.flush()
+    if timeout is None:
+        _default.flush()
+    else:
+        _default.flush(timeout)
 
 
 def shutdown(timeout: float | None = None) -> None:
-    _default.shutdown()
+    if timeout is None:
+        _default.shutdown()
+    else:
+        _default.shutdown(timeout)
 
 
 def drain(target: Any | None = None, timeout: float | None = None) -> list:
@@ -833,9 +839,17 @@ def run_event(params: Params, fn: Callable[[EventContext], Any], *attrs: Attr, *
         fn(ctx)
         _default.finish(ctx, "success", *attrs, **named)
         return _default.emit(ctx)
-    except BaseException:
-        _default.finish_error(ctx, sys.exc_info()[1] if sys.exc_info()[1] else Exception("unknown error"))
-        return _default.emit(ctx)
+    except BaseException as exc:
+        _default.finish_error(ctx, exc if exc else Exception("unknown error"))
+        emitted = _default.emit(ctx)
+        # Always finish/emit the event first, but never swallow control-flow
+        # exceptions (KeyboardInterrupt, SystemExit, GeneratorExit). Callers
+        # rely on these reaching the interpreter so Ctrl+C / sys.exit() can
+        # terminate the program. Ordinary Exception subclasses keep the
+        # historical behavior of being recorded and returning the payload.
+        if not isinstance(exc, Exception):
+            raise
+        return emitted
 
 
 def run(ctx: EventContext, fn: Callable[[EventContext], Any], *attrs: Attr, **named: Any) -> str:
@@ -844,9 +858,12 @@ def run(ctx: EventContext, fn: Callable[[EventContext], Any], *attrs: Attr, **na
         fn(ctx)
         _default.finish(ctx, "success", *attrs, **named)
         return _default.emit(ctx)
-    except BaseException:
-        _default.finish_error(ctx, sys.exc_info()[1] if sys.exc_info()[1] else Exception("unknown error"))
-        return _default.emit(ctx)
+    except BaseException as exc:
+        _default.finish_error(ctx, exc if exc else Exception("unknown error"))
+        emitted = _default.emit(ctx)
+        if not isinstance(exc, Exception):
+            raise
+        return emitted
 
 
 def from_request(req: Any, logger: Optional[Logger] = None) -> EventContext:

@@ -66,7 +66,11 @@ func (s errSink) Flush(context.Context) error { return nil }
 func (s errSink) Close(context.Context) error { return nil }
 
 func testCollectorConfig() collectorConfig {
-	cfg := runtimeConfigFromFile(defaultFileConfig())
+	fc, err := defaultFileConfig()
+	if err != nil {
+		panic(err)
+	}
+	cfg := runtimeConfigFromFile(fc)
 	cfg.authEnabled = false
 	cfg.retryMaxAttempts = 1
 	cfg.retryInitialBackoff = time.Millisecond
@@ -405,6 +409,53 @@ func TestPrepareEventNormalizesEventTypeAlias(t *testing.T) {
 	}
 }
 
+func TestPrepareEventNullPayloadWithIdentityEnforcement(t *testing.T) {
+	cfg := testCollectorConfig()
+	cfg.processorRegistry = []string{"identity"}
+	cfg.authIdentityWins = true
+	cfg.allowPayloadIdentity = false
+	cfg.boundServiceName = "checkout"
+	state := &collectorState{cfg: cfg}
+
+	// json.Unmarshal("null", &payload) succeeds and leaves payload nil. Before
+	// the fix, applyIdentity wrote into that nil map and panicked.
+	next, govErr := state.prepareEvent([]byte("null"))
+	if govErr != nil {
+		t.Fatalf("prepare event: %v", govErr)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(next, &payload); err != nil {
+		t.Fatalf("decode governed event: %v", err)
+	}
+	if payload == nil {
+		t.Fatalf("expected governed event object, got null")
+	}
+	if got := payload["service"]; got != "checkout" {
+		t.Fatalf("expected bound service identity, got %#v", got)
+	}
+	serviceIdentity, ok := payload["service_identity"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected service_identity object, got %#v", payload["service_identity"])
+	}
+	if got := serviceIdentity["name"]; got != "checkout" {
+		t.Fatalf("expected bound service identity name, got %#v", got)
+	}
+}
+
+func TestPrepareEventNullPayloadPassesThroughWithoutGovernance(t *testing.T) {
+	cfg := testCollectorConfig()
+	cfg.processorRegistry = nil
+	state := &collectorState{cfg: cfg}
+
+	next, govErr := state.prepareEvent([]byte("null"))
+	if govErr != nil {
+		t.Fatalf("prepare event: %v", govErr)
+	}
+	if string(next) != "null" {
+		t.Fatalf("expected null payload to pass through unchanged, got %q", next)
+	}
+}
+
 func TestHandleIngestInvalidJSON(t *testing.T) {
 	sink := &fakeSink{}
 	state := &collectorState{
@@ -547,7 +598,7 @@ func TestHandleSchemaPublishAndDiff(t *testing.T) {
 	if publishRec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d body=%s", publishRec.Code, publishRec.Body.String())
 	}
-	if len(state.cfg.schemaRegistry) == 0 {
+	if len(state.config().schemaRegistry) == 0 {
 		t.Fatal("expected registry entry to be published")
 	}
 
@@ -614,6 +665,30 @@ func TestHandleOTLPLogs(t *testing.T) {
 	}
 	if len(sink.events) != 1 {
 		t.Fatalf("expected 1 converted event, got %d", len(sink.events))
+	}
+}
+
+func TestHandleOTLPLogsRejectsUnknownFields(t *testing.T) {
+	sink := &fakeSink{}
+	state := &collectorState{
+		cfg:         testCollectorConfig(),
+		ingestSink:  sink,
+		rateLimiter: rate.NewLimiter(rate.Limit(1000), 1000),
+	}
+	state.ready.Store(true)
+
+	// protojson rejects unknown fields by default. The removed encoding/json
+	// fallback silently ignored them, producing an empty request that was
+	// answered with 202 accepted. Such malformed payloads must now be rejected.
+	body := `{"unknown":1}`
+	req := httptest.NewRequest(http.MethodPost, "/otlp/logs", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	state.handleOTLPLogs(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for unknown field payload, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if len(sink.events) != 0 {
+		t.Fatalf("expected no converted events, got %d", len(sink.events))
 	}
 }
 
@@ -758,6 +833,7 @@ func TestConfigureHTTPServerTLSForMTLS(t *testing.T) {
 	cfg := testCollectorConfig()
 	cfg.identityMode = "mtls"
 	cfg.serverConfig.HTTP.TLSEnabled = true
+	cfg.serverConfig.HTTP.TLSClientCAFile = writeTestClientCAFile(t)
 	if err := configureHTTPServerTLS(server, cfg); err != nil {
 		t.Fatalf("configure tls: %v", err)
 	}
@@ -801,6 +877,45 @@ func TestHandleIngestMaxBodyExceeded(t *testing.T) {
 
 	if rec.Code != http.StatusRequestEntityTooLarge {
 		t.Fatalf("expected 413, got %d", rec.Code)
+	}
+	var resp ingest.Response
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.Error != "payload_too_large" {
+		t.Fatalf("expected payload_too_large, got %q", resp.Error)
+	}
+}
+
+// rewordedTooLargeError mimics a future ErrPayloadTooLarge from the ingest
+// package whose message was reworded: it Is-matches the sentinel but its text
+// deliberately does not contain the legacy "max body bytes" phrase. The status
+// must still be 413, proving detection is identity-based, not text-based.
+type rewordedTooLargeError struct{}
+
+func (rewordedTooLargeError) Error() string { return "upstream reworded this error" }
+
+func (rewordedTooLargeError) Is(target error) bool {
+	return target == ingest.ErrPayloadTooLarge
+}
+
+func TestIngestErrorStatusDoesNotDependOnMessageText(t *testing.T) {
+	status, code := ingestErrorStatus(rewordedTooLargeError{})
+	if status != http.StatusRequestEntityTooLarge {
+		t.Fatalf("expected 413 for sentinel error, got %d", status)
+	}
+	if code != "payload_too_large" {
+		t.Fatalf("expected payload_too_large, got %q", code)
+	}
+
+	// Conversely, an unrelated error that happens to contain the legacy wording
+	// must not be misclassified as too large.
+	status, code = ingestErrorStatus(errors.New("payload exceeds max body bytes, unrelated"))
+	if status != http.StatusBadRequest {
+		t.Fatalf("expected 400 for unrelated error, got %d", status)
+	}
+	if code != "invalid_request_payload" {
+		t.Fatalf("expected invalid_request_payload, got %q", code)
 	}
 }
 
@@ -974,6 +1089,7 @@ func TestHandleMetricsPrometheusFormat(t *testing.T) {
 		rateLimiter: rate.NewLimiter(rate.Limit(1000), 1000),
 	}
 	state.ready.Store(true)
+	state.diskHealthy.Store(true)
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)

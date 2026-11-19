@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -13,21 +14,34 @@ import (
 )
 
 type fakeDatabaseConnection struct {
-	info database.Metadata
+	info      database.Metadata
+	lastLimit int
+	queries   int
 }
 
 func (f *fakeDatabaseConnection) Backend() string             { return f.info.Backend }
 func (f *fakeDatabaseConnection) Metadata() database.Metadata { return f.info }
-func (f *fakeDatabaseConnection) Query(context.Context, string, ...any) (database.Result, error) {
+func (f *fakeDatabaseConnection) Query(ctx context.Context, query string, args ...any) (database.Result, error) {
+	return f.QueryWithLimit(ctx, 0, query, args...)
+}
+func (f *fakeDatabaseConnection) QueryWithLimit(_ context.Context, limit int, _ string, _ ...any) (database.Result, error) {
+	f.lastLimit = limit
+	f.queries++
 	return database.Result{Columns: []string{"value"}, Rows: [][]any{{"ok"}}}, nil
 }
 func (f *fakeDatabaseConnection) Ping(context.Context) error  { return nil }
 func (f *fakeDatabaseConnection) Close(context.Context) error { return nil }
 
-type fakeLQLCompiler struct{}
+type fakeLQLCompiler struct {
+	planLimit int
+}
 
-func (fakeLQLCompiler) Compile(context.Context, LQLCompileRequest) (ParameterizedPlan, error) {
-	return ParameterizedPlan{SQL: "SELECT value", Args: []any{}}, nil
+func (f fakeLQLCompiler) Compile(_ context.Context, req LQLCompileRequest) (ParameterizedPlan, error) {
+	limit := f.planLimit
+	if limit == 0 {
+		limit = req.Limit
+	}
+	return ParameterizedPlan{SQL: "SELECT value", Args: []any{}, Limit: limit}, nil
 }
 func (fakeLQLCompiler) Close(context.Context) error { return nil }
 func TestDatabaseConnectionsMetadataIsSanitized(t *testing.T) {
@@ -54,6 +68,66 @@ func TestDatabaseConnectionsMetadataIsSanitized(t *testing.T) {
 	}
 }
 
+func TestDatabaseConnectionsIncludesLegacyQueryConnectionWithNamedConnections(t *testing.T) {
+	named := &fakeDatabaseConnection{info: database.Metadata{Name: "analytics", Backend: "postgres"}}
+	legacy := &fakeDatabaseConnection{info: database.Metadata{Name: "primary", Backend: "duckdb"}}
+	state := &collectorState{
+		cfg:                 collectorConfig{authEnabled: false},
+		databaseConnections: map[string]database.Connection{"analytics": named},
+		databaseMetadata:    map[string]database.Metadata{"analytics": named.Metadata()},
+		queryConnection:     legacy,
+	}
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/collectors/acme/database/connections", nil)
+	request = request.WithContext(publichttp.WithAuthorizedCollector(request.Context(), "acme", "prod"))
+	state.HandleDatabaseConnections(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("metadata status = %d", recorder.Code)
+	}
+	var payload struct {
+		Connections []databaseConnectionResponse `json:"connections"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode connections: %v (body=%s)", err, recorder.Body.String())
+	}
+	names := make(map[string]int, len(payload.Connections))
+	for _, entry := range payload.Connections {
+		names[entry.Name]++
+	}
+	if names["analytics"] != 1 {
+		t.Fatalf("named connection missing or duplicated: %s", recorder.Body.String())
+	}
+	if names["primary"] != 1 {
+		t.Fatalf("legacy queryConnection hidden when named connection exists: %s", recorder.Body.String())
+	}
+}
+
+func TestDatabaseConnectionsDoesNotDuplicateNamedStorageConnection(t *testing.T) {
+	storage := &fakeDatabaseConnection{info: database.Metadata{Name: "analytics", Backend: "postgres"}}
+	state := &collectorState{
+		cfg:                 collectorConfig{authEnabled: false, storageConnection: "analytics"},
+		databaseConnections: map[string]database.Connection{"analytics": storage},
+		databaseMetadata:    map[string]database.Metadata{"analytics": storage.Metadata()},
+		queryConnection:     storage, // storage.connection points at the named connection
+	}
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/collectors/acme/database/connections", nil)
+	request = request.WithContext(publichttp.WithAuthorizedCollector(request.Context(), "acme", "prod"))
+	state.HandleDatabaseConnections(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("metadata status = %d", recorder.Code)
+	}
+	var payload struct {
+		Connections []databaseConnectionResponse `json:"connections"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode connections: %v (body=%s)", err, recorder.Body.String())
+	}
+	if len(payload.Connections) != 1 || payload.Connections[0].Name != "analytics" {
+		t.Fatalf("storage connection duplicated or renamed: %s", recorder.Body.String())
+	}
+}
+
 func TestDatabaseQueryUsesNamedConnection(t *testing.T) {
 	connection := &fakeDatabaseConnection{info: database.Metadata{Name: "analytics", Backend: "postgres"}}
 	state := &collectorState{
@@ -70,6 +144,94 @@ func TestDatabaseQueryUsesNamedConnection(t *testing.T) {
 	state.HandleDatabaseQuery(recorder, request)
 	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), `"backend":"postgres"`) {
 		t.Fatalf("named query failed: status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestDatabaseQueryThreadsPlanLimitToCollector(t *testing.T) {
+	connection := &fakeDatabaseConnection{info: database.Metadata{Name: "analytics", Backend: "postgres"}}
+	state := &collectorState{
+		cfg: collectorConfig{
+			authEnabled:         false,
+			databaseConnections: []databaseConnectionConfig{{name: "analytics", queryTimeout: time.Second}},
+		},
+		databaseConnections: map[string]database.Connection{"analytics": connection},
+		// The compiler enforces a tighter bound than the request asked for;
+		// the collector must receive the plan's limit, not zero.
+		lqlCompiler: fakeLQLCompiler{planLimit: 3},
+	}
+	request := httptest.NewRequest(http.MethodPost, "/collectors/acme/database/query", strings.NewReader(`{"connection":"analytics","query":"from events","limit":50}`))
+	request = request.WithContext(publichttp.WithAuthorizedCollector(request.Context(), "acme", "prod"))
+	recorder := httptest.NewRecorder()
+	state.HandleDatabaseQuery(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("query status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if connection.queries != 1 {
+		t.Fatalf("expected one collector query, got %d", connection.queries)
+	}
+	if connection.lastLimit != 3 {
+		t.Fatalf("collector limit = %d, want plan limit 3", connection.lastLimit)
+	}
+}
+
+// budgetConsumingConnection models a healthy connection whose Ping consumes the
+// whole timeout budget before succeeding. The follow-up SELECT 1 probe must be
+// given a fresh budget, otherwise it inherits an expired deadline.
+type budgetConsumingConnection struct {
+	info          database.Metadata
+	queryObserved bool
+	queryCtxErr   error
+}
+
+func (f *budgetConsumingConnection) Backend() string             { return f.info.Backend }
+func (f *budgetConsumingConnection) Metadata() database.Metadata { return f.info }
+func (f *budgetConsumingConnection) Ping(ctx context.Context) error {
+	// Block until this operation's budget is exhausted, then report success —
+	// a slow but ultimately healthy database.
+	<-ctx.Done()
+	return nil
+}
+func (f *budgetConsumingConnection) Query(ctx context.Context, query string, args ...any) (database.Result, error) {
+	f.queryObserved = true
+	f.queryCtxErr = ctx.Err()
+	if err := ctx.Err(); err != nil {
+		return database.Result{}, err
+	}
+	return database.Result{Columns: []string{"value"}, Rows: [][]any{{"ok"}}}, nil
+}
+func (f *budgetConsumingConnection) QueryWithLimit(ctx context.Context, limit int, query string, args ...any) (database.Result, error) {
+	return f.Query(ctx, query, args...)
+}
+func (f *budgetConsumingConnection) Close(context.Context) error { return nil }
+
+func TestDatabaseConnectionTestGivesProbeFreshTimeoutBudget(t *testing.T) {
+	const timeout = 40 * time.Millisecond
+	connection := &budgetConsumingConnection{
+		info: database.Metadata{Name: "analytics", Backend: "postgres"},
+	}
+	state := &collectorState{
+		cfg: collectorConfig{
+			authEnabled:         false,
+			databaseConnections: []databaseConnectionConfig{{name: "analytics", queryTimeout: timeout}},
+		},
+		databaseConnections: map[string]database.Connection{"analytics": connection},
+	}
+	request := httptest.NewRequest(http.MethodGet, "/collectors/acme/database/connections/analytics/test", nil)
+	request.SetPathValue("name", "analytics")
+	request = request.WithContext(publichttp.WithAuthorizedCollector(request.Context(), "acme", "prod"))
+	recorder := httptest.NewRecorder()
+	state.HandleDatabaseConnectionTest(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s (query ctx err = %v)", recorder.Code, recorder.Body.String(), connection.queryCtxErr)
+	}
+	if !connection.queryObserved {
+		t.Fatal("SELECT 1 probe was not executed")
+	}
+	if connection.queryCtxErr != nil {
+		t.Fatalf("SELECT 1 probe received an exhausted context: %v", connection.queryCtxErr)
+	}
+	if !strings.Contains(recorder.Body.String(), `"healthy":true`) {
+		t.Fatalf("expected healthy response, got: %s", recorder.Body.String())
 	}
 }
 

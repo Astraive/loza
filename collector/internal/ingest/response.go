@@ -9,7 +9,7 @@ const (
 )
 
 type EventAck struct {
-	Index     int    `json:"index,omitempty"`
+	Index     int    `json:"index"`
 	EventID   string `json:"event_id,omitempty"`
 	Status    string `json:"status"`
 	Retryable bool   `json:"retryable"`

@@ -55,6 +55,23 @@ func (*inflatedReaderFrom) ReadFrom(r io.Reader) (int64, error) {
 	return 2, nil
 }
 
+// shrinkingReaderFrom models a writer that consumes the whole source but
+// writes fewer bytes to the response (e.g. a compressing writer). The bytes
+// read from the source (cr.n) therefore exceed the bytes actually written (n).
+type shrinkingReaderFrom struct{ *baseTestWriter }
+func (*shrinkingReaderFrom) ReadFrom(r io.Reader) (int64, error) {
+	_, _ = io.Copy(io.Discard, r)
+	return 3, nil
+}
+
+// zeroReportingReaderFrom models a ReaderFrom implementation that consumes the
+// source but does not report a byte count, exercising the fallback to cr.n.
+type zeroReportingReaderFrom struct{ *baseTestWriter }
+func (*zeroReportingReaderFrom) ReadFrom(r io.Reader) (int64, error) {
+	_, _ = io.Copy(io.Discard, r)
+	return 0, nil
+}
+
 type maskHPR struct{ *baseTestWriter }
 func (*maskHPR) Hijack() (net.Conn, *bufio.ReadWriter, error) { return nil, nil, context.Canceled }
 func (*maskHPR) Push(string, *http.PushOptions) error { return nil }
@@ -113,5 +130,37 @@ func TestResponseWriterCoversEveryOptionalInterfaceCombination(t *testing.T) {
 	base := &responseWriter{ResponseWriter: &inflatedReaderFrom{newBaseTestWriter()}}
 	if n, err := base.readFrom(strings.NewReader("x")); err != nil || n != 2 || base.bytes != 2 {
 		t.Fatalf("inflated ReadFrom = n:%d err:%v bytes:%d", n, err, base.bytes)
+	}
+}
+
+func TestResponseWriterReadFromTracksBytesActuallyWritten(t *testing.T) {
+	// The underlying writer reads 10 source bytes but reports writing only 3.
+	// response_bytes must reflect the 3 bytes written, not the 10 bytes read.
+	base := &responseWriter{ResponseWriter: &shrinkingReaderFrom{newBaseTestWriter()}}
+	n, err := base.readFrom(strings.NewReader("0123456789"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if n != 3 {
+		t.Fatalf("ReadFrom returned n=%d, want 3", n)
+	}
+	if base.bytes != 3 {
+		t.Fatalf("response bytes = %d, want 3 (bytes written, not the 10 bytes read)", base.bytes)
+	}
+}
+
+func TestResponseWriterReadFromFallsBackToSourceCountWhenWriterReportsZero(t *testing.T) {
+	// When the underlying ReaderFrom reports no byte count, the number of
+	// bytes read from the source is the best available estimate.
+	base := &responseWriter{ResponseWriter: &zeroReportingReaderFrom{newBaseTestWriter()}}
+	n, err := base.readFrom(strings.NewReader("0123456789"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if n != 0 {
+		t.Fatalf("ReadFrom returned n=%d, want 0 (caller contract preserved)", n)
+	}
+	if base.bytes != 10 {
+		t.Fatalf("response bytes = %d, want 10 (fallback to source count)", base.bytes)
 	}
 }

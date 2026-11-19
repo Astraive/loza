@@ -81,6 +81,12 @@ pub struct ContextCarrier {
     pub request_id: Option<String>,
     pub incident_id: Option<String>,
     pub baggage: BTreeMap<String, String>,
+    /// W3C traceparent version captured from an incoming header. `None` falls
+    /// back to `00` for carriers built locally.
+    pub traceparent_version: Option<String>,
+    /// W3C traceparent trace-flags captured from an incoming header. `None`
+    /// falls back to `01` (sampled) for carriers built locally.
+    pub traceparent_flags: Option<String>,
 }
 
 pub trait ContextSource {
@@ -216,6 +222,16 @@ impl ContextCarrier {
         self
     }
 
+    pub fn with_traceparent_version(mut self, version: impl Into<String>) -> Self {
+        self.traceparent_version = Some(version.into());
+        self
+    }
+
+    pub fn with_traceparent_flags(mut self, flags: impl Into<String>) -> Self {
+        self.traceparent_flags = Some(flags.into());
+        self
+    }
+
     pub fn from_traceparent(traceparent: &str) -> Option<Self> {
         let mut parts = traceparent.trim().split('-');
         let version = parts.next()?;
@@ -239,7 +255,9 @@ impl ContextCarrier {
         Some(
             Self::new()
                 .with_trace_id(trace_id.to_ascii_lowercase())
-                .with_span_id(span_id.to_ascii_lowercase()),
+                .with_span_id(span_id.to_ascii_lowercase())
+                .with_traceparent_version(version.to_ascii_lowercase())
+                .with_traceparent_flags(flags.to_ascii_lowercase()),
         )
     }
 
@@ -253,10 +271,21 @@ impl ContextCarrier {
         {
             return None;
         }
+        let version = self.traceparent_version.as_deref().unwrap_or("00");
+        let flags = self.traceparent_flags.as_deref().unwrap_or("01");
+        if version.len() != 2
+            || flags.len() != 2
+            || !version.chars().all(|ch| ch.is_ascii_hexdigit())
+            || !flags.chars().all(|ch| ch.is_ascii_hexdigit())
+        {
+            return None;
+        }
         Some(format!(
-            "00-{}-{}-01",
+            "{}-{}-{}-{}",
+            version.to_ascii_lowercase(),
             trace_id.to_ascii_lowercase(),
-            span_id.to_ascii_lowercase()
+            span_id.to_ascii_lowercase(),
+            flags.to_ascii_lowercase()
         ))
     }
 }
@@ -334,6 +363,8 @@ pub struct EventContext {
     pub groups: Vec<Map<String, Value>>,
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub timers: Vec<Map<String, Value>>,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub links: Vec<Map<String, Value>>,
     #[serde(skip, default)]
     process_step: u32,
     #[serde(skip_serializing_if = "std::ops::Not::not", default)]
@@ -363,11 +394,11 @@ impl EventContext {
         let timestamp = OffsetDateTime::now_utc()
             .format(&Rfc3339)
             .unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_string());
-        let event_id = format!("evt_{started_unix_ms}");
+        let event_id = crate::internal::core::uuidv7::new_event_id();
         let request_id = params
             .request_id
             .clone()
-            .unwrap_or_else(|| format!("req_{started_unix_ms}"));
+            .unwrap_or_else(crate::internal::core::uuidv7::new_request_id);
         Self {
             timestamp,
             schema_version: LOZA_SPEC_VERSION.to_string(),
@@ -403,6 +434,7 @@ impl EventContext {
             processes: Vec::new(),
             groups: Vec::new(),
             timers: Vec::new(),
+            links: Vec::new(),
             process_step: 0,
             partial: false,
             partial_reason: None,
@@ -434,7 +466,9 @@ impl EventContext {
     }
 
     pub fn set_attr(&mut self, key: impl Into<String>, value: impl Into<Value>) {
-        let _ = self.ensure_mutable();
+        if self.ensure_mutable().is_err() {
+            return;
+        }
         self.mark_active_if_created();
         let key = key.into();
         let value = value.into();
@@ -452,7 +486,9 @@ impl EventContext {
     }
 
     pub fn append_attr(&mut self, attr: Attr) {
-        let _ = self.ensure_mutable();
+        if self.ensure_mutable().is_err() {
+            return;
+        }
         self.mark_active_if_created();
         if attr.sensitive {
             self.sensitive_keys.push(attr.key.clone());
@@ -474,7 +510,9 @@ impl EventContext {
     }
 
     pub fn merge_group(&mut self, group: &str, key: impl Into<String>, value: impl Into<Value>) {
-        let _ = self.ensure_mutable();
+        if self.ensure_mutable().is_err() {
+            return;
+        }
         self.mark_active_if_created();
         let target = match group {
             "http" => &mut self.http,
@@ -487,9 +525,21 @@ impl EventContext {
     }
 
     pub fn delete_attr(&mut self, key: &str) {
-        let _ = self.ensure_mutable();
+        if self.ensure_mutable().is_err() {
+            return;
+        }
         self.mark_active_if_created();
-        self.attrs.remove(key);
+        if let Some(child) = key.strip_prefix("user.") {
+            remove_nested(&mut self.user, child);
+        } else if let Some(child) = key.strip_prefix("tenant.") {
+            remove_nested(&mut self.tenant, child);
+        } else if let Some(child) = key.strip_prefix("http.") {
+            remove_nested(&mut self.http, child);
+        } else if let Some(child) = key.strip_prefix("resource.") {
+            remove_nested(&mut self.resource, child);
+        } else {
+            remove_nested(&mut self.attrs, key);
+        }
     }
 
     pub fn checkpoint(&mut self, name: &str) {
@@ -497,7 +547,9 @@ impl EventContext {
     }
 
     pub fn checkpoint_with_attrs(&mut self, name: &str, attrs: &[Attr]) {
-        let _ = self.ensure_mutable();
+        if self.ensure_mutable().is_err() {
+            return;
+        }
         self.mark_active_if_created();
         let mut checkpoint = Map::new();
         checkpoint.insert("name".to_string(), Value::String(name.to_string()));
@@ -515,9 +567,11 @@ impl EventContext {
 
     /// Start a named process step and return a handle to finish it.
     pub fn start_process(&mut self, name: &str) -> ProcessHandle {
-        let _ = self.ensure_mutable();
-        self.mark_active_if_created();
-        self.process_step += 1;
+        let mutable = self.ensure_mutable().is_ok();
+        if mutable {
+            self.mark_active_if_created();
+            self.process_step += 1;
+        }
         ProcessHandle {
             name: name.to_string(),
             step: self.process_step,
@@ -528,8 +582,10 @@ impl EventContext {
 
     /// Start a named timer and return a handle to stop it.
     pub fn start_timer(&mut self, name: &str) -> TimerHandle {
-        let _ = self.ensure_mutable();
-        self.mark_active_if_created();
+        let mutable = self.ensure_mutable().is_ok();
+        if mutable {
+            self.mark_active_if_created();
+        }
         TimerHandle {
             name: name.to_string(),
             started_at_instant: std::time::Instant::now(),
@@ -538,8 +594,10 @@ impl EventContext {
 
     /// Start a named group phase and return a handle to finish it.
     pub fn start_group(&mut self, name: &str) -> GroupHandle {
-        let _ = self.ensure_mutable();
-        self.mark_active_if_created();
+        let mutable = self.ensure_mutable().is_ok();
+        if mutable {
+            self.mark_active_if_created();
+        }
         GroupHandle {
             name: name.to_string(),
             started_at_instant: std::time::Instant::now(),
@@ -773,6 +831,24 @@ fn set_nested(target: &mut Map<String, Value>, key: &str, value: Value) {
     }
 }
 
+fn remove_nested(target: &mut Map<String, Value>, key: &str) {
+    let mut current = target;
+    let mut parts = key.split('.').peekable();
+    while let Some(part) = parts.next() {
+        if parts.peek().is_none() {
+            current.remove(part);
+            return;
+        }
+        let Some(entry) = current.get_mut(part) else {
+            return;
+        };
+        let Some(child) = entry.as_object_mut() else {
+            return;
+        };
+        current = child;
+    }
+}
+
 fn default_lifecycle() -> Arc<Mutex<LifecycleState>> {
     Arc::new(Mutex::new(LifecycleState {
         state: String::new(),
@@ -847,7 +923,7 @@ impl ProcessHandle {
         entry.insert("ended_at_ms".to_string(), Value::Number(ended_ms.into()));
         entry.insert(
             "duration_ms".to_string(),
-            Value::Number((ended_ms - self.started_at_ms).into()),
+            Value::Number(ended_ms.saturating_sub(self.started_at_ms).into()),
         );
         for attr in attrs {
             if attr.key == "status_code" {
@@ -921,7 +997,7 @@ impl GroupHandle {
         entry.insert("ended_at_ms".to_string(), Value::Number(ended_ms.into()));
         entry.insert(
             "duration_ms".to_string(),
-            Value::Number((ended_ms - self.started_at_ms).into()),
+            Value::Number(ended_ms.saturating_sub(self.started_at_ms).into()),
         );
         for attr in attrs {
             if attr.key == "status_code" {
@@ -981,5 +1057,87 @@ fn apply_hash_dotted_or_flat(obj: &mut Map<String, Value>, key: &str) {
                 hash_in_map(map, key);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Regression test for MASS-0756: finishing a handle after a backward clock
+    /// adjustment (or against a different event) used to subtract a larger
+    /// `started_at_ms` from a smaller `ended_ms`, panicking in debug builds and
+    /// wrapping to a huge value in release builds. The duration must saturate
+    /// at zero instead.
+    #[test]
+    fn process_finish_duration_saturates_when_end_precedes_start() {
+        let mut event = EventContext::new("test", Params::new("test"));
+        let handle = ProcessHandle {
+            name: "backwards".to_string(),
+            step: 1,
+            started_at_instant: std::time::Instant::now(),
+            started_at_ms: u64::MAX,
+        };
+
+        handle.finish(&mut event, &[]);
+
+        let duration = event.processes[0]
+            .get("duration_ms")
+            .and_then(|v| v.as_u64())
+            .expect("duration_ms must be present");
+        assert_eq!(duration, 0, "duration must saturate to zero, not underflow");
+    }
+
+    #[test]
+    fn group_finish_duration_saturates_when_end_precedes_start() {
+        let mut event = EventContext::new("test", Params::new("test"));
+        let handle = GroupHandle {
+            name: "backwards".to_string(),
+            started_at_instant: std::time::Instant::now(),
+            started_at_ms: u64::MAX,
+        };
+
+        handle.finish(&mut event, &[]);
+
+        let duration = event.groups[0]
+            .get("duration_ms")
+            .and_then(|v| v.as_u64())
+            .expect("duration_ms must be present");
+        assert_eq!(duration, 0, "duration must saturate to zero, not underflow");
+    }
+
+    #[test]
+    fn process_finish_duration_still_normal_when_end_follows_start() {
+        let mut event = EventContext::new("test", Params::new("test"));
+        let handle = event.start_process("normal");
+        handle.finish(&mut event, &[]);
+
+        let duration = event.processes[0]
+            .get("duration_ms")
+            .and_then(|v| v.as_u64())
+            .expect("duration_ms must be present");
+        assert!(
+            duration < 60_000,
+            "normal duration must not wrap to a huge value"
+        );
+    }
+
+    const TRACE_ID: &str = "0af7651916cd43dd8448eb211c80319c";
+    const SPAN_ID: &str = "b7ad6b7169203331";
+
+    #[test]
+    fn carrier_round_trips_version_and_not_sampled_flag() {
+        let header = format!("01-{}-{}-00", TRACE_ID, SPAN_ID);
+        let carrier = ContextCarrier::from_traceparent(&header).expect("valid traceparent");
+        assert_eq!(carrier.traceparent().as_deref(), Some(header.as_str()));
+    }
+
+    #[test]
+    fn locally_built_carrier_keeps_default_version_and_sampled_flag() {
+        let carrier = ContextCarrier::new()
+            .with_trace_id(TRACE_ID)
+            .with_span_id(SPAN_ID);
+        let expected = format!("00-{}-{}-01", TRACE_ID, SPAN_ID);
+        assert_eq!(carrier.traceparent().as_deref(), Some(expected.as_str()));
     }
 }

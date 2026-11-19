@@ -5,6 +5,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"log"
 	"os"
 	"regexp"
 	"strconv"
@@ -25,7 +26,22 @@ var (
 
 type fileConfig = collectorconfig.Config
 
-func defaultFileConfig() fileConfig { return collectorconfig.Default() }
+func defaultFileConfig() (fileConfig, error) { return collectorconfig.LoadDefaults() }
+
+// loadFileConfig overlays path on top of fc. When cfgFileExplicit is true the
+// user supplied -c, so the file is mandatory: any stat, read, or parse failure
+// is returned to the caller instead of silently falling back to defaults. When
+// no -c was supplied the historical best-effort behaviour is preserved: a
+// missing default file is tolerated and only an existing file is parsed.
+func loadFileConfig(fc *fileConfig, path string, cfgFileExplicit bool) error {
+	if _, err := os.Stat(path); err != nil {
+		if cfgFileExplicit {
+			return fmt.Errorf("config file %q: %w", path, err)
+		}
+		return nil
+	}
+	return collectorconfig.LoadFile(fc, path)
+}
 
 func loadCollectorConfigFromArgs(args []string) (collectorConfig, error) {
 	fs := flag.NewFlagSet("run", flag.ContinueOnError)
@@ -44,14 +60,15 @@ func loadCollectorConfigFromArgs(args []string) (collectorConfig, error) {
 		return collectorConfig{}, err
 	}
 
-	fc := defaultFileConfig()
+	set := map[string]bool{}
+	fs.Visit(func(f *flag.Flag) { set[f.Name] = true })
 
-	if *cfgFile != "" {
-		if _, err := os.Stat(*cfgFile); err == nil {
-			if err := collectorconfig.LoadFile(&fc, *cfgFile); err != nil {
-				return collectorConfig{}, err
-			}
-		}
+	fc, err := defaultFileConfig()
+	if err != nil {
+		return collectorConfig{}, err
+	}
+	if err := loadFileConfig(&fc, *cfgFile, set["c"]); err != nil {
+		return collectorConfig{}, err
 	}
 	if err := applyEnvOverrides(&fc); err != nil {
 		return collectorConfig{}, err
@@ -59,9 +76,6 @@ func loadCollectorConfigFromArgs(args []string) (collectorConfig, error) {
 	if err := loadSchemaRegistryFile(&fc); err != nil {
 		return collectorConfig{}, err
 	}
-
-	set := map[string]bool{}
-	fs.Visit(func(f *flag.Flag) { set[f.Name] = true })
 
 	if set["addr"] && *addr != "" {
 		fc.Collector.Addr = *addr
@@ -140,11 +154,15 @@ func loadPrintableConfig(args []string) (fileConfig, error) {
 	if err := fs.Parse(args); err != nil {
 		return fileConfig{}, err
 	}
-	fc := defaultFileConfig()
-	if _, err := os.Stat(cfgFile); err == nil {
-		if err := collectorconfig.LoadFile(&fc, cfgFile); err != nil {
-			return fileConfig{}, err
-		}
+	set := map[string]bool{}
+	fs.Visit(func(f *flag.Flag) { set[f.Name] = true })
+
+	fc, err := defaultFileConfig()
+	if err != nil {
+		return fileConfig{}, err
+	}
+	if err := loadFileConfig(&fc, cfgFile, set["c"]); err != nil {
+		return fileConfig{}, err
 	}
 	if err := applyEnvOverrides(&fc); err != nil {
 		return fileConfig{}, err
@@ -237,11 +255,7 @@ func applyEnvOverrides(fc *fileConfig) error {
 			*dst = strings.ToLower(v)
 		}
 	}
-	setCSV := func(key string, dst *[]string) {
-		v, ok := get(key)
-		if !ok {
-			return
-		}
+	parseCSV := func(v string) []string {
 		parts := strings.Split(v, ",")
 		out := make([]string, 0, len(parts))
 		for _, part := range parts {
@@ -249,7 +263,31 @@ func applyEnvOverrides(fc *fileConfig) error {
 				out = append(out, trimmed)
 			}
 		}
-		*dst = out
+		return out
+	}
+	setCSV := func(key string, dst *[]string) {
+		if v, ok := get(key); ok {
+			*dst = parseCSV(v)
+		}
+	}
+	// resolveEnvWithAlias resolves a setting from a canonical env name and a
+	// deprecated backward-compatible alias. The canonical name always wins and
+	// every fallback or conflict is logged so precedence is never silent.
+	resolveEnvWithAlias := func(canonical, alias, field string) (string, bool) {
+		canonicalValue, hasCanonical := get(canonical)
+		aliasValue, hasAlias := get(alias)
+		switch {
+		case hasCanonical && hasAlias:
+			log.Printf("config: %s and deprecated alias %s both set for %s; using %s=%q", canonical, alias, field, canonical, canonicalValue)
+			return canonicalValue, true
+		case hasCanonical:
+			return canonicalValue, true
+		case hasAlias:
+			log.Printf("config: using deprecated alias %s for %s; prefer %s", alias, field, canonical)
+			return aliasValue, true
+		default:
+			return "", false
+		}
 	}
 
 	setString("COLLECTOR_ADDR", &fc.Collector.Addr)
@@ -511,12 +549,17 @@ func applyEnvOverrides(fc *fileConfig) error {
 	setString("LOZA_EVENTBUS_NATS_STREAM", &fc.EventBus.NATS.Stream)
 	setString("LOZA_EVENTBUS_NATS_SUBJECT", &fc.EventBus.NATS.Subject)
 	setString("LOZA_EVENTBUS_NATS_DURABLE", &fc.EventBus.NATS.Durable)
-	setCSV("LOZA_EVENTBUS_KAFKA_BROKERS", &fc.EventBus.Kafka.Brokers)
-	setString("LOZA_EVENTBUS_KAFKA_TOPIC", &fc.EventBus.Kafka.Topic)
-	setString("LOZA_EVENTBUS_KAFKA_GROUP", &fc.EventBus.Kafka.ConsumerGroup)
-	setCSV("LOZA_KAFKA_BROKERS", &fc.EventBus.Kafka.Brokers)
-	setString("LOZA_KAFKA_TOPIC", &fc.EventBus.Kafka.Topic)
-	setString("LOZA_KAFKA_GROUP", &fc.EventBus.Kafka.ConsumerGroup)
+	// LOZA_EVENTBUS_KAFKA_* is the canonical name; LOZA_KAFKA_* is a deprecated
+	// alias kept for backward compatibility (see resolveEnvWithAlias).
+	if v, ok := resolveEnvWithAlias("LOZA_EVENTBUS_KAFKA_BROKERS", "LOZA_KAFKA_BROKERS", "eventbus.kafka.brokers"); ok {
+		fc.EventBus.Kafka.Brokers = parseCSV(v)
+	}
+	if v, ok := resolveEnvWithAlias("LOZA_EVENTBUS_KAFKA_TOPIC", "LOZA_KAFKA_TOPIC", "eventbus.kafka.topic"); ok {
+		fc.EventBus.Kafka.Topic = v
+	}
+	if v, ok := resolveEnvWithAlias("LOZA_EVENTBUS_KAFKA_GROUP", "LOZA_KAFKA_GROUP", "eventbus.kafka.consumer_group"); ok {
+		fc.EventBus.Kafka.ConsumerGroup = v
+	}
 
 	if fc.Auth.Value == "" && fc.Auth.ValueEnv != "" {
 		fc.Auth.Value = strings.TrimSpace(os.Getenv(fc.Auth.ValueEnv))
@@ -1105,10 +1148,20 @@ func validateFileConfig(fc fileConfig) error {
 	if fc.Limits.MaxStringLength < 0 {
 		return errors.New("limits.max_string_length must be >= 0")
 	}
-	switch strings.ToLower(strings.TrimSpace(fc.Identity.Mode)) {
+	identityMode := strings.ToLower(strings.TrimSpace(fc.Identity.Mode))
+	switch identityMode {
 	case "", "payload", "api_key", "jwt", "mtls":
 	default:
 		return errors.New("identity.mode must be payload, api_key, jwt, or mtls")
+	}
+	// mTLS authorization must be scoped to explicit identities. Without at
+	// least one allowlist every trusted client certificate would be granted
+	// admin access, so require one at configuration time (fail closed).
+	if identityMode == "mtls" &&
+		len(fc.Identity.MTLSAllowedCNs) == 0 &&
+		len(fc.Identity.MTLSAllowedDNS) == 0 &&
+		len(fc.Identity.MTLSAllowedEmails) == 0 {
+		return errors.New("at least one of identity.mtls_allowed_cns, identity.mtls_allowed_dns, or identity.mtls_allowed_emails must be configured when identity.mode is mtls")
 	}
 	switch strings.ToLower(strings.TrimSpace(fc.Privacy.Mode)) {
 	case "", "off", "warn", "enforce":
@@ -1961,8 +2014,12 @@ func parseConfigBool(raw string) (bool, error) {
 	}
 }
 
+// redactedSecret replaces credential values in `config print` output. Secrets
+// resolved from config files or the environment must never reach stdout.
+const redactedSecret = "[REDACTED]"
+
 func marshalPrintableConfig(fc fileConfig) ([]byte, error) {
-	redacted := fc
+	redacted := redactConfigForPrint(fc)
 
 	var out bytes.Buffer
 	enc := yaml.NewEncoder(&out)
@@ -1975,4 +2032,31 @@ func marshalPrintableConfig(fc fileConfig) ([]byte, error) {
 		return nil, err
 	}
 	return out.Bytes(), nil
+}
+
+// redactConfigForPrint returns a printable copy of fc with every credential
+// field replaced by a redaction marker. Fanout outputs live in a shared slice,
+// so that slice is copied before its secret fields are cleared; this keeps the
+// caller's config untouched.
+func redactConfigForPrint(fc fileConfig) fileConfig {
+	redacted := fc
+
+	redacted.Auth.Value = redactedSecret
+	redacted.Auth.ServerSecret = redactedSecret
+
+	redacted.Fanout.Outputs = append([]collectorconfig.FanoutOutputConfig(nil), fc.Fanout.Outputs...)
+	for i := range redacted.Fanout.Outputs {
+		out := &redacted.Fanout.Outputs[i]
+		out.ClickHouse.Password = redactedSecret
+		out.Postgres.DSN = redactedSecret
+		out.S3.AccessKey = redactedSecret
+		out.S3.SecretKey = redactedSecret
+	}
+
+	redacted.Dedupe.RedisPassword = redactedSecret
+	redacted.CortexBridge.APIKey = redactedSecret
+	redacted.EventBus.Redis.Password = redactedSecret
+	redacted.EventBus.NATS.Password = redactedSecret
+
+	return redacted
 }

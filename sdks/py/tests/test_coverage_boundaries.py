@@ -155,6 +155,27 @@ def test_config_validation_and_layer_precedence(monkeypatch: pytest.MonkeyPatch,
     assert config_module._find_user_config_path() == user_file
 
 
+def test_simple_yaml_preserves_hash_in_values_and_strips_real_comments() -> None:
+    from loza.config import config as legacy_config
+
+    source = (
+        'collector_endpoint: "https://host/#frag" # trailing comment\n'
+        "api_key: ab#cd\n"
+        "note: 'it''s #fine' # real comment\n"
+        'escaped: "a\\"b #c"\n'
+        "plain: value # another comment\n"
+    )
+    expected = {
+        "collector_endpoint": "https://host/#frag",
+        "api_key": "ab#cd",
+        "note": "it''s #fine",
+        "escaped": 'a\\"b #c',
+        "plain": "value",
+    }
+    assert config_module._parse_simple_yaml(source) == expected
+    assert legacy_config._parse_simple_yaml(source) == expected
+
+
 def test_lql_queries_encode_values_and_decode_failures(monkeypatch: pytest.MonkeyPatch) -> None:
     result = lql.QueryResult(["id"], [{"id": 1}], duration_ms=2)
     assert len(result) == 1 and list(result) == [{"id": 1}] and "columns=1" in repr(result)
@@ -220,6 +241,36 @@ def test_lql_queries_encode_values_and_decode_failures(monkeypatch: pytest.Monke
         lql.urllib.request, "urlopen", lambda *_args, **_kwargs: _Response(b'{"columns": [], "rows": []}')
     )
     assert lql.query_sql("https://collector", "select 1", api_key="sql-key").rows == []
+
+
+@pytest.mark.parametrize(
+    ("duration_ms", "row_count", "expected_duration_ms", "expected_row_count"),
+    [
+        (None, None, 0, 2),
+        ("not-a-number", "also-bad", 0, 2),
+        ([1, 2], {"bad": True}, 0, 2),
+        (12.9, 7, 12, 7),
+    ],
+)
+def test_lql_query_coerces_invalid_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+    duration_ms: object,
+    row_count: object,
+    expected_duration_ms: int,
+    expected_row_count: int,
+) -> None:
+    payload = json.dumps(
+        {
+            "columns": [],
+            "rows": [{"id": 1}, {"id": 2}],
+            "duration_ms": duration_ms,
+            "row_count": row_count,
+        }
+    ).encode()
+    monkeypatch.setattr(lql.urllib.request, "urlopen", lambda *_args, **_kwargs: _Response(payload))
+    result = lql.query_lql("https://collector", "select")
+    assert result.duration_ms == expected_duration_ms
+    assert result.row_count == expected_row_count
 
 
 def test_metrics_render_all_series_and_escaping() -> None:
@@ -494,10 +545,11 @@ def test_sinks_and_cortex_adapters(monkeypatch: pytest.MonkeyPatch, tmp_path: Pa
 def test_http_batch_auth_and_response_paths(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[object] = []
     monkeypatch.setattr(
-        httpbatch_module.urllib.request,
-        "urlopen",
-        lambda req, **kwargs: (
-            calls.append((req, kwargs)) or _Response(b'{"acks":[{"event_id":"e"}],"errors":[],"request_id":"r"}')
+        httpbatch_module,
+        "_open_with_redirect_guard",
+        lambda req, timeout, endpoint: (
+            calls.append((req, {"timeout": timeout}))
+            or _Response(b'{"acks":[{"event_id":"e"}],"errors":[],"request_id":"r"}')
         ),
     )
     stats = SimpleNamespace(on_collector_ack=lambda **kwargs: calls.append(kwargs))
@@ -514,12 +566,12 @@ def test_http_batch_auth_and_response_paths(monkeypatch: pytest.MonkeyPatch) -> 
     custom = HTTPBatchSink("https://collector/events", api_key="key", auth_header="X-Key")
     assert custom._auth_headers() == {"X-Key": "key"}
     ndjson = HTTPBatchSink("https://collector/events", ndjson=True, enable_compression=False)
-    monkeypatch.setattr(httpbatch_module.urllib.request, "urlopen", lambda *_args, **_kwargs: _Response(b"{}"))
+    monkeypatch.setattr(httpbatch_module, "_open_with_redirect_guard", lambda *_args, **_kwargs: _Response(b"{}"))
     ndjson.write_batch(["one\n", "two"])
     with pytest.raises(ValueError):
         HTTPBatchSink("http://remote.example/events", username="u", password="p")
     monkeypatch.setattr(
-        httpbatch_module.urllib.request, "urlopen", lambda *_args, **_kwargs: (_ for _ in ()).throw(URLError("down"))
+        httpbatch_module, "_open_with_redirect_guard", lambda *_args, **_kwargs: (_ for _ in ()).throw(URLError("down"))
     )
     with pytest.raises(RuntimeError, match="collector send failed"):
         HTTPBatchSink("https://collector/events", retries=0).write(
@@ -780,6 +832,7 @@ def test_collector_client_helpers_and_http_paths(monkeypatch: pytest.MonkeyPatch
             _Response(b'{"state":"ok"}'),
         ]
     )
+    monkeypatch.setattr(http_client, "_open_with_redirect_guard", lambda *_args, **_kwargs: next(responses))
     monkeypatch.setattr(http_client, "urlopen", lambda *_args, **_kwargs: next(responses))
     assert client.send_batch([valid]).accepted == 1
     assert (
@@ -892,6 +945,48 @@ def test_testkit_lifecycle_helpers_and_non_live_integrations() -> None:
     event_dict = {"event": "info", "key": "value"}
     assert structlog(None, "info", event_dict)["key"] == "value"
     assert bind_loza(logger) is logger and processor(emit_immediate=False)
+
+
+def test_structlog_processor_does_not_mutate_event_dict(monkeypatch: pytest.MonkeyPatch) -> None:
+    from loza.integrations.structlog import adapter as structlog_adapter
+
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(
+        structlog_adapter,
+        "Info",
+        lambda message, **attrs: captured.update(message=message, attrs=attrs),
+    )
+
+    event_dict = {"event": "hello world", "user": "alice", "count": 3}
+    processor = structlog_adapter.StructlogProcessor()
+
+    result = processor(None, "info", event_dict)
+
+    # The caller's dict (and the value returned to the next processor) must keep
+    # the "event" key so downstream processors/renderers can read the message.
+    assert result is event_dict
+    assert result == {"event": "hello world", "user": "alice", "count": 3}
+    assert event_dict["event"] == "hello world"
+
+    # The emitted message comes from "event", which is not forwarded as an attr.
+    assert captured["message"] == "hello world"
+    assert captured["attrs"] == {"user": "alice", "count": 3}
+
+    # With no "event" key the method name is used as the message, still without
+    # mutating the shared dict.
+    captured.clear()
+    bare = {"user": "bob"}
+    processor(None, "warning", bare)
+    assert captured["message"] == "warning"
+    assert captured["attrs"] == {"user": "bob"}
+    assert bare == {"user": "bob"}
+
+    # Immediate emission disabled: no emit and no mutation.
+    captured.clear()
+    quiet = structlog_adapter.StructlogProcessor(emit_immediate=False)
+    unchanged = {"event": "silent", "user": "carol"}
+    assert quiet(None, "info", unchanged) == {"event": "silent", "user": "carol"}
+    assert captured == {}
 
 
 def test_active_logger_error_and_pipeline_lifecycle() -> None:

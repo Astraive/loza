@@ -80,7 +80,7 @@ class CortexClient:
         try:
             resp = self._get("/healthz")
             return resp.get("status") == "ok"
-        except (URLError, HTTPError, OSError):
+        except (URLError, HTTPError, OSError, ValueError):
             return False
 
     def ready(self) -> bool:
@@ -88,7 +88,7 @@ class CortexClient:
         try:
             resp = self._get("/readyz")
             return resp.get("status") == "ok" or resp.get("ready") is True
-        except (URLError, HTTPError, OSError):
+        except (URLError, HTTPError, OSError, ValueError):
             return False
 
     def metrics(self) -> str:

@@ -15,6 +15,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { resolve, join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { Config } from './config.ts';
+import { applyDSN } from './dsn-config.ts';
 import { parse as parseDSN } from './dsn.ts';
 
 // ── Simple YAML parser ──────────────────────────────────────────────────────
@@ -212,9 +213,23 @@ export function loadFileConfig(): YamlRecord {
 export function mergeFileConfig(base: Config, raw: YamlRecord): Config {
   const cfg = { ...base };
 
+  // Resolve a loza:// collector_url through the shared DSN applicator first.
+  // Explicit YAML fields applied below then override DSN-derived values, just
+  // as explicit env vars and code options are applied after a DSN elsewhere.
+  const collectorRaw = raw.collector_url;
+  let dsnApplied = false;
+  if (typeof collectorRaw === 'string' && collectorRaw.startsWith('loza://')) {
+    try {
+      applyDSN(cfg, parseDSN(collectorRaw));
+      dsnApplied = true;
+    } catch {
+      // Invalid DSN — keep the raw value; env vars or code config may fix it.
+    }
+  }
+
   // ── Top-level scalar fields ────────────────────────────────────────────────
 
-  applyString(raw, cfg, 'collector_url', 'collectorUrl');
+  if (!dsnApplied) applyString(raw, cfg, 'collector_url', 'collectorUrl');
   applyString(raw, cfg, 'service_name', 'service');
   applyString(raw, cfg, 'service', 'service');
   applyString(raw, cfg, 'service_version', 'version');
@@ -237,29 +252,6 @@ export function mergeFileConfig(base: Config, raw: YamlRecord): Config {
   applyBoolean(raw, cfg, 'enable_compression', 'enableCompression');
   applyBoolean(raw, cfg, 'include_host', 'includeHost');
   applyBoolean(raw, cfg, 'include_runtime', 'includeRuntime');
-
-  // ── Parse collector_url as DSN if it uses loza:// scheme ───────────────────
-
-  if (cfg.collectorUrl && cfg.collectorUrl.startsWith('loza://')) {
-    try {
-      const dsn = parseDSN(cfg.collectorUrl);
-      cfg.collectorUrl = dsn.baseURL;
-      cfg.collectorName = dsn.collectorName;
-      if (dsn.username !== undefined) {
-        cfg.username = dsn.username;
-        cfg.password = dsn.password ?? '';
-      }
-      // Extract DSN-derived values (only override if not already set from YAML)
-      if (dsn.env && dsn.env !== 'default' && cfg.environment === 'development') {
-        cfg.environment = dsn.env;
-      }
-      if (dsn.service && !cfg.service) {
-        cfg.service = dsn.service;
-      }
-    } catch {
-      // Invalid DSN — leave as-is, env vars or code config may fix it
-    }
-  }
 
   // ── Nested: async ──────────────────────────────────────────────────────────
 

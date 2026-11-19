@@ -4,6 +4,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"log"
 	"os"
 	"regexp"
 	"strconv"
@@ -131,6 +132,20 @@ func (c *workerConfig) buildEventBusConfig() eventbus.Config {
 	return cfg
 }
 
+// loadWorkerFileConfig overlays path on top of fc. An explicitly supplied -c
+// is mandatory: any stat, read, or parse failure is returned instead of being
+// silently ignored in favour of defaults. Without -c the previous best-effort
+// behaviour is kept, tolerating a missing default file.
+func loadWorkerFileConfig(fc *workerFileConfig, path string, cfgFileExplicit bool) error {
+	if _, err := os.Stat(path); err != nil {
+		if cfgFileExplicit {
+			return fmt.Errorf("config file %q: %w", path, err)
+		}
+		return nil
+	}
+	return collectorconfig.LoadFile(fc, path)
+}
+
 func loadWorkerConfigFromArgs(args []string) (workerConfig, error) {
 	cfgFile := "loza.yaml"
 	fs := flag.NewFlagSet("run", flag.ContinueOnError)
@@ -138,12 +153,19 @@ func loadWorkerConfigFromArgs(args []string) (workerConfig, error) {
 	if err := fs.Parse(args); err != nil {
 		return workerConfig{}, err
 	}
-
-	fc := collectorconfig.Default()
-	if _, err := os.Stat(cfgFile); err == nil {
-		if err := collectorconfig.LoadFile(&fc, cfgFile); err != nil {
-			return workerConfig{}, err
+	cfgFileExplicit := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "c" {
+			cfgFileExplicit = true
 		}
+	})
+
+	fc, err := collectorconfig.LoadDefaults()
+	if err != nil {
+		return workerConfig{}, err
+	}
+	if err := loadWorkerFileConfig(&fc, cfgFile, cfgFileExplicit); err != nil {
+		return workerConfig{}, err
 	}
 	if err := applyWorkerEnvOverrides(&fc); err != nil {
 		return workerConfig{}, err
@@ -186,11 +208,7 @@ func applyWorkerEnvOverrides(fc *workerFileConfig) error {
 			*dst = v
 		}
 	}
-	setCSV := func(key string, dst *[]string) {
-		v, ok := get(key)
-		if !ok {
-			return
-		}
+	parseCSV := func(v string) []string {
 		parts := strings.Split(v, ",")
 		out := make([]string, 0, len(parts))
 		for _, part := range parts {
@@ -198,7 +216,31 @@ func applyWorkerEnvOverrides(fc *workerFileConfig) error {
 				out = append(out, trimmed)
 			}
 		}
-		*dst = out
+		return out
+	}
+	setCSV := func(key string, dst *[]string) {
+		if v, ok := get(key); ok {
+			*dst = parseCSV(v)
+		}
+	}
+	// resolveEnvWithAlias resolves a setting from a canonical env name and a
+	// deprecated backward-compatible alias. The canonical name always wins and
+	// every fallback or conflict is logged so precedence is never silent.
+	resolveEnvWithAlias := func(canonical, alias, field string) (string, bool) {
+		canonicalValue, hasCanonical := get(canonical)
+		aliasValue, hasAlias := get(alias)
+		switch {
+		case hasCanonical && hasAlias:
+			log.Printf("config: %s and deprecated alias %s both set for %s; using %s=%q", canonical, alias, field, canonical, canonicalValue)
+			return canonicalValue, true
+		case hasCanonical:
+			return canonicalValue, true
+		case hasAlias:
+			log.Printf("config: using deprecated alias %s for %s; prefer %s", alias, field, canonical)
+			return aliasValue, true
+		default:
+			return "", false
+		}
 	}
 	setInt := func(key string, dst *int) error {
 		v, ok := get(key)
@@ -261,12 +303,17 @@ func applyWorkerEnvOverrides(fc *workerFileConfig) error {
 	setString("LOZA_EVENTBUS_NATS_STREAM", &fc.EventBus.NATS.Stream)
 	setString("LOZA_EVENTBUS_NATS_SUBJECT", &fc.EventBus.NATS.Subject)
 	setString("LOZA_EVENTBUS_NATS_DURABLE", &fc.EventBus.NATS.Durable)
-	setCSV("LOZA_EVENTBUS_KAFKA_BROKERS", &fc.EventBus.Kafka.Brokers)
-	setString("LOZA_EVENTBUS_KAFKA_TOPIC", &fc.EventBus.Kafka.Topic)
-	setString("LOZA_EVENTBUS_KAFKA_GROUP", &fc.EventBus.Kafka.ConsumerGroup)
-	setCSV("LOZA_KAFKA_BROKERS", &fc.EventBus.Kafka.Brokers)
-	setString("LOZA_KAFKA_TOPIC", &fc.EventBus.Kafka.Topic)
-	setString("LOZA_KAFKA_GROUP", &fc.EventBus.Kafka.ConsumerGroup)
+	// LOZA_EVENTBUS_KAFKA_* is the canonical name; LOZA_KAFKA_* is a deprecated
+	// alias kept for backward compatibility (see resolveEnvWithAlias).
+	if v, ok := resolveEnvWithAlias("LOZA_EVENTBUS_KAFKA_BROKERS", "LOZA_KAFKA_BROKERS", "eventbus.kafka.brokers"); ok {
+		fc.EventBus.Kafka.Brokers = parseCSV(v)
+	}
+	if v, ok := resolveEnvWithAlias("LOZA_EVENTBUS_KAFKA_TOPIC", "LOZA_KAFKA_TOPIC", "eventbus.kafka.topic"); ok {
+		fc.EventBus.Kafka.Topic = v
+	}
+	if v, ok := resolveEnvWithAlias("LOZA_EVENTBUS_KAFKA_GROUP", "LOZA_KAFKA_GROUP", "eventbus.kafka.consumer_group"); ok {
+		fc.EventBus.Kafka.ConsumerGroup = v
+	}
 	return nil
 }
 

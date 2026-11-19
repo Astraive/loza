@@ -5,12 +5,13 @@ import io
 import json
 import socket
 import urllib.error
+import urllib.parse
 from typing import Any
 
 import pytest
 
 from lql_client import Client, ConnectionConfig, ErrorCategory, QueryColumn, QueryError, QueryResult, QueryValue
-from lql_client.client import _parse_dsn, _valid_collector
+from lql_client.client import _http_error, _parse_dsn, _valid_collector
 
 
 class FakeResponse:
@@ -72,6 +73,22 @@ def test_dsn_normalization_selects_tls_and_default_ports(dsn: str, endpoint: str
     parsed = _parse_dsn(dsn)
     assert parsed["endpoint"] == endpoint
     assert parsed["collector"] == "events"
+
+
+@pytest.mark.parametrize(
+    ("dsn", "endpoint"),
+    [
+        ("loza://[::1]/collector?tls=true", "https://[::1]:9308"),
+        ("loza://[2001:db8::1]/collector", "https://[2001:db8::1]:443"),
+        ("loza://[2001:db8::1]:9308/collector?tls=false", "http://[2001:db8::1]:9308"),
+    ],
+)
+def test_dsn_ipv6_host_is_bracketed_in_endpoint(dsn: str, endpoint: str) -> None:
+    parsed = _parse_dsn(dsn)
+    assert parsed["endpoint"] == endpoint
+    split = urllib.parse.urlsplit(parsed["endpoint"])
+    assert split.hostname and ":" in split.hostname
+    assert split.port is not None
 
 
 def test_dsn_normalization_decodes_credentials_and_query_options() -> None:
@@ -149,6 +166,46 @@ def test_client_configuration_overrides_dsn_values() -> None:
     assert client._password == "config-pass"
 
 
+def test_client_repr_redacts_credentials() -> None:
+    api_key = "SECRET-API-KEY-DO-NOT-LOG"
+    password = "SECRET-PASSWORD-DO-NOT-LOG"
+    client = Client(
+        ConnectionConfig(
+            endpoint="https://collector.example",
+            collector="demo",
+            api_key=api_key,
+            username="lz_pub_user",
+            password=password,
+        )
+    )
+
+    rendered = repr(client)
+
+    assert api_key not in rendered
+    assert password not in rendered
+    assert "collector.example" in rendered
+    assert "demo" in rendered
+
+
+def test_connection_config_repr_redacts_credentials() -> None:
+    api_key = "SECRET-API-KEY-DO-NOT-LOG"
+    password = "SECRET-PASSWORD-DO-NOT-LOG"
+    config = ConnectionConfig(
+        endpoint="https://collector.example",
+        collector="demo",
+        api_key=api_key,
+        username="lz_pub_user",
+        password=password,
+    )
+
+    rendered = repr(config)
+
+    assert api_key not in rendered
+    assert password not in rendered
+    assert "collector.example" in rendered
+    assert "demo" in rendered
+
+
 def test_invalid_dsn_is_wrapped_as_configuration_error() -> None:
     with pytest.raises(QueryError) as caught:
         Client(ConnectionConfig(dsn="not-a-loza-dsn"))
@@ -174,6 +231,26 @@ def test_invalid_client_configuration_is_categorized(config: ConnectionConfig) -
     with pytest.raises(QueryError) as caught:
         Client(config)
     assert caught.value.category == ErrorCategory.INVALID_CONFIGURATION
+
+
+@pytest.mark.parametrize(
+    "credentials",
+    [
+        {"api_key": "secret"},
+        {"api_key": "secret", "username": "user", "password": "pass"},
+    ],
+)
+def test_credentials_over_remote_http_require_tls(credentials: dict[str, Any]) -> None:
+    with pytest.raises(QueryError) as caught:
+        Client(ConnectionConfig(endpoint="http://collector.example", collector="demo", **credentials))
+    assert caught.value.category == ErrorCategory.INVALID_CONFIGURATION
+
+
+@pytest.mark.parametrize("endpoint", ["http://localhost:9308", "http://127.0.0.1:9308", "http://[::1]:9308", "https://collector.example"])
+def test_api_key_over_localhost_or_https_is_allowed(endpoint: str) -> None:
+    client = Client(ConnectionConfig(endpoint=endpoint, collector="demo", api_key="secret"))
+    assert client._api_key == "secret"
+
 
 def test_client_uses_dsn_username_when_password_is_already_configured() -> None:
     client = Client(
@@ -312,6 +389,37 @@ def test_query_maps_http_error_statuses(status: int, payload: bytes, category: E
     assert caught.value.category == category
     assert caught.value.status == status
     assert str(caught.value) == message
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        b"[]",
+        b"123",
+        b'"oops"',
+        b"null",
+        b"true",
+    ],
+)
+def test_http_error_coerces_non_object_json_bodies(payload: bytes) -> None:
+    error = _http_error(400, payload)
+    assert isinstance(error, QueryError)
+    assert error.category == ErrorCategory.DIAGNOSTICS
+    assert error.status == 400
+    assert str(error) == "LQL query failed with HTTP 400"
+    assert error.diagnostics == []
+
+
+def test_query_surfaces_query_error_for_non_object_json_error_body(monkeypatch: pytest.MonkeyPatch) -> None:
+    def urlopen(_request: Any, timeout: float) -> Any:
+        raise urllib.error.HTTPError("https://collector.example", 400, "failed", {}, io.BytesIO(b"[]"))
+
+    monkeypatch.setattr("lql_client.client.urllib.request.urlopen", urlopen)
+    with pytest.raises(QueryError) as caught:
+        make_client().query("from events")
+    assert caught.value.category == ErrorCategory.DIAGNOSTICS
+    assert caught.value.status == 400
+    assert str(caught.value) == "LQL query failed with HTTP 400"
 
 
 @pytest.mark.parametrize(

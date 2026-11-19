@@ -1,7 +1,7 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 
 use cortex_match::graph::{
-    compute_graph_signature, extract_causality_pattern, graph_相似度, match_graph_pattern, Edge,
+    compute_graph_signature, extract_causality_pattern, graph_similarity, match_graph_pattern, Edge,
     EdgeType, IncidentGraph, Node, NodeType,
 };
 use cortex_match::signature::{
@@ -327,7 +327,7 @@ fn bench_large_ruleset(c: &mut Criterion) {
     c.bench_function("graph_similarity", |b| {
         let g2 = make_graph("cand", 8);
         b.iter(|| {
-            let sim = graph_相似度(black_box(&query_graph), black_box(&g2));
+            let sim = graph_similarity(black_box(&query_graph), black_box(&g2));
             black_box(sim);
         })
     });

@@ -33,8 +33,8 @@ def _run_sampler_bench(
     for _ in range(iterations):
         t0 = time.perf_counter()
         ctx = logger.start_event(loza.Params(event="bench.sampler"))
-        loza.finish(ctx, "success")
-        loza.emit(ctx)
+        logger.finish(ctx, "success")
+        logger.emit(ctx)
         latencies.append((time.perf_counter() - t0) * 1_000_000)
 
     latencies.sort()

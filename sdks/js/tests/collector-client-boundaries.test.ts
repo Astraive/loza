@@ -26,6 +26,11 @@ describe('CollectorClient boundaries', () => {
     assert.throws(() => new CollectorClient({ url: 'https://example.com', password: 'secret' }), /password requires/);
     assert.throws(() => new CollectorClient({ url: 'https://example.com', username: 'private' }), /require a password/);
     assert.throws(() => new CollectorClient({ url: 'http://example.com', username: 'u', password: 'p' }), /require HTTPS/);
+    // Regression: API keys must not be sent over cleartext HTTP to non-local hosts.
+    assert.throws(() => new CollectorClient({ url: 'http://example.com', apiKey: 'secret-key' }), /require HTTPS/);
+    assert.throws(() => new CollectorClient({ url: 'http://example.com', apiKey: 'secret-key', authHeader: 'Authorization' }), /require HTTPS/);
+    assert.doesNotThrow(() => new CollectorClient({ url: 'http://127.0.0.1:9308', apiKey: 'secret-key' }));
+    assert.doesNotThrow(() => new CollectorClient({ url: 'https://example.com', apiKey: 'secret-key' }));
     let requests = 0;
     const { server, url } = await startCollector((req, res) => {
       requests++;
@@ -47,6 +52,35 @@ describe('CollectorClient boundaries', () => {
     } finally {
       await stopCollector(server);
     }
+  });
+
+  it('rejects credentials over plaintext HTTP to non-loopback hosts', () => {
+    // An API key is sent in a header by sendBatch()/request(); allowing it with
+    // an http: URL leaked the secret in cleartext. Every credential shape must
+    // be gated, not just Basic auth.
+    assert.throws(
+      () => new CollectorClient({ url: 'http://collector.example.com', apiKey: 'super-secret' }),
+      /require HTTPS/,
+    );
+    assert.throws(
+      () => new CollectorClient({ url: 'http://collector.example.com', apiKey: 'super-secret', authHeader: 'Authorization' }),
+      /require HTTPS/,
+    );
+    assert.throws(
+      () => new CollectorClient({ url: 'http://collector.example.com:9308', username: 'lz_pub_capability' }),
+      /require HTTPS/,
+    );
+    assert.throws(
+      () => new CollectorClient({ url: 'http://collector.example.com', username: 'u', password: 'p' }),
+      /require HTTPS/,
+    );
+
+    // HTTPS, loopback HTTP, and uncredentialed remote HTTP remain valid.
+    assert.doesNotThrow(() => new CollectorClient({ url: 'https://collector.example.com', apiKey: 'super-secret' }));
+    assert.doesNotThrow(() => new CollectorClient({ url: 'http://localhost:9308', apiKey: 'super-secret' }));
+    assert.doesNotThrow(() => new CollectorClient({ url: 'http://127.0.0.1:9308', apiKey: 'super-secret' }));
+    assert.doesNotThrow(() => new CollectorClient({ url: 'http://[::1]:9308', apiKey: 'super-secret' }));
+    assert.doesNotThrow(() => new CollectorClient({ url: 'http://collector.example.com' }));
   });
 
   it('sends batches, validates events, and invokes admin API endpoints', async () => {
@@ -143,6 +177,44 @@ describe('CollectorClient boundaries', () => {
       });
     } finally {
       await stopCollector(emptyServer);
+    }
+  });
+
+  it('decodes multi-byte UTF-8 response bodies split across chunk boundaries', async () => {
+    const expected = {
+      version: 'café 日本語 🚀',
+      ingest_api_version: 'v1',
+      schema_version: 'v1',
+      event_version: 'v1',
+    };
+    const payload = Buffer.from(JSON.stringify(expected), 'utf8');
+
+    // Locate a lead byte immediately followed by a continuation byte so the
+    // split lands in the middle of a multi-byte UTF-8 sequence.
+    let split = -1;
+    for (let i = 0; i < payload.length - 1; i++) {
+      if (payload[i]! >= 0xC2 && payload[i]! <= 0xF4 && (payload[i + 1]! & 0xC0) === 0x80) {
+        split = i + 1;
+        break;
+      }
+    }
+    assert.ok(split > 0, 'response body must contain a multi-byte UTF-8 sequence');
+    const first = payload.subarray(0, split);
+    const second = payload.subarray(split);
+
+    const { server, url } = await startCollector((_req, res) => {
+      res.setHeader('content-type', 'application/json');
+      res.socket?.setNoDelay(true);
+      // Send the two halves separately so the client observes two `data`
+      // events, with the multi-byte character straddling the boundary.
+      res.write(first);
+      setTimeout(() => res.end(second), 25);
+    });
+    try {
+      const client = new CollectorClient({ url });
+      assert.deepEqual(await client.version(), expected);
+    } finally {
+      await stopCollector(server);
     }
   });
 });

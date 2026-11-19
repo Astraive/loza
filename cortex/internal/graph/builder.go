@@ -74,7 +74,11 @@ func (b *Builder) AddNode(ctx context.Context, node *models.Node) error {
 		return fmt.Errorf("node validation failed: %w", err)
 	}
 	node.CreatedAt = time.Now()
-	return b.graphStore.SaveNode(ctx, node)
+	if err := b.graphStore.SaveNode(ctx, node); err != nil {
+		return err
+	}
+	b.adjCache.Invalidate()
+	return nil
 }
 
 func (b *Builder) AddEdge(ctx context.Context, edge *models.Edge) error {
@@ -93,7 +97,11 @@ func (b *Builder) AddEdge(ctx context.Context, edge *models.Edge) error {
 	}
 
 	edge.CreatedAt = time.Now()
-	return b.graphStore.SaveEdge(ctx, edge)
+	if err := b.graphStore.SaveEdge(ctx, edge); err != nil {
+		return err
+	}
+	b.adjCache.Invalidate()
+	return nil
 }
 
 func (b *Builder) GetNode(ctx context.Context, nodeID string) (*models.Node, error) {
@@ -114,7 +122,10 @@ func (b *Builder) TraverseGraph(ctx context.Context, startNodeID string, opts mo
 	queue = append(queue, startNodeID)
 
 	var allNodes []*models.Node
-	var allEdges []*models.Edge
+	// Candidate edges are collected during traversal and filtered against the
+	// final node set below, so an edge is never returned unless both of its
+	// endpoints are part of the view.
+	var candidateEdges []*models.Edge
 
 	currentDepth := 0
 	for len(queue) > 0 && currentDepth < opts.MaxDepth {
@@ -168,7 +179,7 @@ func (b *Builder) TraverseGraph(ctx context.Context, startNodeID string, opts mo
 					}
 				}
 
-				allEdges = append(allEdges, edge)
+				candidateEdges = append(candidateEdges, edge)
 
 				if !visited[edge.ToNodeID] {
 					queue = append(queue, edge.ToNodeID)
@@ -177,6 +188,24 @@ func (b *Builder) TraverseGraph(ctx context.Context, startNodeID string, opts mo
 		}
 		queue = queue[levelSize:]
 		currentDepth++
+	}
+
+	// An edge can point at a node that is absent from the view: beyond MaxDepth,
+	// excluded by the time window, or missing from the store. Drop those dangling
+	// references so every returned edge resolves to a node in the view.
+	nodeIDs := make(map[string]struct{}, len(allNodes))
+	for _, node := range allNodes {
+		nodeIDs[node.ID] = struct{}{}
+	}
+	var allEdges []*models.Edge
+	for _, edge := range candidateEdges {
+		if _, ok := nodeIDs[edge.FromNodeID]; !ok {
+			continue
+		}
+		if _, ok := nodeIDs[edge.ToNodeID]; !ok {
+			continue
+		}
+		allEdges = append(allEdges, edge)
 	}
 
 	return &models.GraphView{Nodes: allNodes, Edges: allEdges}, nil

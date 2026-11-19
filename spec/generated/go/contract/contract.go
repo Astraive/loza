@@ -209,6 +209,12 @@ func ValidateFlexibleJSONBytes(raw []byte, strict bool) error {
 		return validateAny(payload, strict)
 	}
 	scanner := bufio.NewScanner(bytes.NewReader(trimmed))
+	// bufio.Scanner defaults to a 64 KiB token limit. A single NDJSON record
+	// (for example inside an "events" wrapper) can be larger than that, and
+	// the Python emitter's splitlines() path has no such limit. Size the buffer
+	// to the whole payload so no line is silently skipped, then surface any
+	// scanner error (such as bufio.ErrTooLong) instead of returning nil.
+	scanner.Buffer(make([]byte, 0, 64*1024), len(trimmed))
 	for scanner.Scan() {
 		line := bytes.TrimSpace(scanner.Bytes())
 		if len(line) == 0 {
@@ -221,6 +227,9 @@ func ValidateFlexibleJSONBytes(raw []byte, strict bool) error {
 		if err := validateAny(payload, strict); err != nil {
 			return err
 		}
+	}
+	if err := scanner.Err(); err != nil {
+		return ValidationErrors{{Field: "payload", Code: "invalid_ndjson", Message: fmt.Sprintf("failed to read NDJSON payload: %v", err)}}
 	}
 	return nil
 }

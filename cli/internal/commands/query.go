@@ -2,9 +2,12 @@ package commands
 
 import (
 	"context"
+	"encoding/csv"
 	"encoding/json"
 	"flag"
 	"fmt"
+	"math/big"
+	"os"
 	"strconv"
 	"strings"
 
@@ -28,6 +31,13 @@ func parseQueryParameter(raw string) (string, any, error) {
 	}
 	if integer, err := strconv.ParseInt(value, 10, 64); err == nil {
 		return key, integer, nil
+	}
+	// An integer outside the int64 range must not fall through to ParseFloat:
+	// float64 cannot represent every integer exactly and would round the value.
+	// json.Number keeps the exact digits when the parameter is marshaled for the
+	// collector (see encodeLQLParameters for the matching type tag).
+	if integer, ok := new(big.Int).SetString(value, 10); ok {
+		return key, json.Number(integer.String()), nil
 	}
 	if decimal, err := strconv.ParseFloat(value, 64); err == nil {
 		return key, decimal, nil
@@ -87,7 +97,6 @@ func QueryCommand(ctx context.Context, cfg config.Config, args []string) error {
 	}
 }
 
-
 func printCSV(result []byte) error {
 	var data map[string]any
 	if err := json.Unmarshal(result, &data); err != nil {
@@ -100,12 +109,18 @@ func printCSV(result []byte) error {
 	for _, c := range cols {
 		headers = append(headers, fmt.Sprintf("%v", c))
 	}
-	fmt.Println(strings.Join(headers, ","))
+	w := csv.NewWriter(os.Stdout)
+	if err := w.Write(headers); err != nil {
+		return err
+	}
 	for _, r := range rows {
 		cells := extractRow(r, cols)
-		fmt.Println(strings.Join(cells, ","))
+		if err := w.Write(cells); err != nil {
+			return err
+		}
 	}
-	return nil
+	w.Flush()
+	return w.Error()
 }
 
 func printTable(result []byte) error {

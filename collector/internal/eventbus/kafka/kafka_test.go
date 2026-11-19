@@ -2,12 +2,24 @@ package kafka
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/astraive/loza/collector/internal/eventbus"
+	"github.com/twmb/franz-go/pkg/kerr"
+	"github.com/twmb/franz-go/pkg/kgo"
 )
+
+type errTypeA struct{ msg string }
+
+func (e errTypeA) Error() string { return e.msg }
+
+type errTypeB struct{ msg string }
+
+func (e errTypeB) Error() string { return e.msg }
 
 func TestKafkaRequiresBrokers(t *testing.T) {
 	ctx := context.Background()
@@ -17,6 +29,27 @@ func TestKafkaRequiresBrokers(t *testing.T) {
 	})
 	if err == nil {
 		t.Error("expected error for empty brokers")
+	}
+}
+
+// Regression test for #499: idempotence combined with a non-"all" acks mode
+// must produce a valid franz-go client instead of failing New with
+// "idempotency requires acks=all".
+func TestProducerOptsIdempotenceWithNonAllAcks(t *testing.T) {
+	for _, acks := range []string{"0", "1"} {
+		t.Run("acks="+acks, func(t *testing.T) {
+			kc := eventbus.KafkaConfig{
+				Brokers:           []string{"127.0.0.1:9092"},
+				Topic:             "loza.test",
+				Acks:              acks,
+				EnableIdempotence: true,
+			}
+			client, err := kgo.NewClient(producerOpts(kc)...)
+			if err != nil {
+				t.Fatalf("kgo.NewClient with idempotence and acks=%q: %v", acks, err)
+			}
+			client.Close()
+		})
 	}
 }
 
@@ -85,5 +118,110 @@ func TestKafkaBusContract(t *testing.T) {
 	case <-done:
 	case <-time.After(15 * time.Second):
 		t.Fatal("timeout waiting for message")
+	}
+}
+
+// TestPublishFirstErrHandlesDifferingErrorTypes reproduces the scenario that
+// previously panicked in Publish: concurrent produce callbacks reporting
+// errors whose concrete (dynamic) types differ. Storing such errors in a
+// single atomic.Value makes CompareAndSwap panic with "inconsistently typed
+// value into Value". The recorder must accept mixed error types without
+// panicking and still return a non-nil error.
+func TestPublishFirstErrHandlesDifferingErrorTypes(t *testing.T) {
+	errs := []error{
+		errTypeA{"a"},                          // distinct struct type
+		errTypeB{"b"},                          // another distinct struct type
+		errors.New("c"),                        // *errors.errorString
+		fmt.Errorf("d: %w", errTypeA{"inner"}), // *fmt.wrapError
+	}
+
+	var first firstProduceErr
+	const calls = 200
+	var wg sync.WaitGroup
+	for i := 0; i < calls; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			first.set(errs[i%len(errs)])
+		}(i)
+	}
+	wg.Wait()
+
+	if got := first.load(); got == nil {
+		t.Fatal("expected an error to be recorded")
+	}
+}
+
+// TestPublishFirstErrKeepsFirstError verifies that nil errors are ignored and
+// that the first non-nil error is preserved even when a later error has a
+// different concrete type.
+func TestPublishFirstErrKeepsFirstError(t *testing.T) {
+	var first firstProduceErr
+	first.set(nil)
+	if got := first.load(); got != nil {
+		t.Fatalf("expected nil error, got %v", got)
+	}
+
+	want := errTypeA{"first"}
+	first.set(want)
+	first.set(errTypeB{"second"})
+	if got := first.load(); got != want {
+		t.Fatalf("first error not preserved: got %v (type %T), want %v", got, got, want)
+	}
+}
+
+func TestIsTopicAlreadyExists(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{
+			name: "typed kerr code 36",
+			err:  kerr.TopicAlreadyExists,
+			want: true,
+		},
+		{
+			// Regression: a code-36 error whose message text does not contain
+			// "TOPIC_ALREADY_EXISTS" must still be treated as benign. The old
+			// string-matching check classified this as a fatal startup error.
+			name: "code 36 with different message text",
+			err: &kerr.Error{
+				Code:        kerr.TopicAlreadyExists.Code,
+				Message:     "TOPIC_EXISTS",
+				Description: "the topic is already present",
+			},
+			want: true,
+		},
+		{
+			name: "wrapped code 36 error",
+			err:  fmt.Errorf("create topic: %w", kerr.TopicAlreadyExists),
+			want: true,
+		},
+		{
+			name: "different typed kafka error",
+			err:  kerr.UnknownTopicOrPartition,
+			want: false,
+		},
+		{
+			// Regression: a non-kafka error merely mentioning the string must
+			// not be mistaken for a benign topic-exists response.
+			name: "plain error containing the old marker string",
+			err:  errors.New("TOPIC_ALREADY_EXISTS is not a kafka error type"),
+			want: false,
+		},
+		{
+			name: "nil error",
+			err:  nil,
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isTopicAlreadyExists(tt.err); got != tt.want {
+				t.Errorf("isTopicAlreadyExists(%v) = %v, want %v", tt.err, got, tt.want)
+			}
+		})
 	}
 }

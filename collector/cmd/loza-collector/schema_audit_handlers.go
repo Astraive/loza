@@ -30,12 +30,13 @@ func (s *collectorState) handleSchemaList(w http.ResponseWriter, r *http.Request
 		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "auth_failed"})
 		return
 	}
+	cfg := s.config()
 	writeJSON(w, http.StatusOK, map[string]any{
-		"mode":            s.cfg.schemaMode,
-		"schema_version":  s.cfg.schemaSchemaVersion,
-		"event_version":   s.cfg.schemaEventVersion,
-		"registry":        s.cfg.schemaRegistry,
-		"quarantine_path": s.cfg.schemaQuarantinePath,
+		"mode":            cfg.schemaMode,
+		"schema_version":  cfg.schemaSchemaVersion,
+		"event_version":   cfg.schemaEventVersion,
+		"registry":        s.schemaRegistrySnapshot(),
+		"quarantine_path": cfg.schemaQuarantinePath,
 	})
 }
 
@@ -74,9 +75,18 @@ func (s *collectorState) handleSchemaPublish(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
+	// Serialize publishes with the reader paths (list, diff and processor
+	// setup) under the registry lock, and read/commit the config through the
+	// snapshot accessors so a concurrent SIGHUP reload cannot be lost. Mutate
+	// only a private deep copy so readers never observe a half-written slice
+	// header or a concurrently modified element, and so a failed save leaves
+	// both the in-memory registry and disk unchanged (no partial publishes).
+	s.schemaRegistryMu.Lock()
+	cfg := s.config()
+	registry := cloneSchemaRegistry(cfg.schemaRegistry)
 	updated := false
-	for i := range s.cfg.schemaRegistry {
-		current := &s.cfg.schemaRegistry[i]
+	for i := range registry {
+		current := &registry[i]
 		if current.SchemaVersion == entry.SchemaVersion && current.EventVersion == entry.EventVersion {
 			current.RequiredFields = append([]string(nil), entry.RequiredFields...)
 			updated = true
@@ -84,16 +94,24 @@ func (s *collectorState) handleSchemaPublish(w http.ResponseWriter, r *http.Requ
 		}
 	}
 	if !updated {
-		s.cfg.schemaRegistry = append(s.cfg.schemaRegistry, collectorconfig.SchemaRegistryEntry{
+		registry = append(registry, collectorconfig.SchemaRegistryEntry{
 			SchemaVersion:  entry.SchemaVersion,
 			EventVersion:   entry.EventVersion,
 			RequiredFields: append([]string(nil), entry.RequiredFields...),
 		})
 	}
-	if err := saveSchemaRegistryFile(s.cfg.schemaRegistryFile, s.cfg.schemaRegistry, s.cfg.storageEncryptionKey); err != nil {
+	if err := saveSchemaRegistryFile(cfg.schemaRegistryFile, registry, cfg.storageEncryptionKey); err != nil {
+		s.schemaRegistryMu.Unlock()
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "schema_registry_save_failed", "message": err.Error()})
 		return
 	}
+	// Commit only after persistence succeeds, publishing a fresh config
+	// snapshot so concurrent readers never see a partial update. Release the
+	// registry lock before taking processorMu (processor setup also reads the
+	// registry) to keep a consistent lock order with ensureProcessor.
+	cfg.schemaRegistry = registry
+	s.setConfig(cfg)
+	s.schemaRegistryMu.Unlock()
 
 	s.processorMu.Lock()
 	if s.processor != nil {
@@ -128,13 +146,44 @@ func decodeSchemaEntryRequest(w http.ResponseWriter, r *http.Request) (schemaEnt
 }
 
 func (s *collectorState) findSchemaRegistryEntry(schemaVersion, eventVersion string) *collectorconfig.SchemaRegistryEntry {
-	for i := range s.cfg.schemaRegistry {
-		entry := &s.cfg.schemaRegistry[i]
+	s.schemaRegistryMu.RLock()
+	defer s.schemaRegistryMu.RUnlock()
+	cfg := s.config()
+	for i := range cfg.schemaRegistry {
+		entry := &cfg.schemaRegistry[i]
 		if entry.SchemaVersion == schemaVersion && entry.EventVersion == eventVersion {
-			return entry
+			// Return a copy so callers can use the result after the lock is
+			// released without racing with a concurrent publish.
+			found := *entry
+			found.RequiredFields = append([]string(nil), entry.RequiredFields...)
+			return &found
 		}
 	}
 	return nil
+}
+
+// schemaRegistrySnapshot returns a deep copy of the schema registry taken
+// under the registry lock, so callers can read it without holding the lock.
+func (s *collectorState) schemaRegistrySnapshot() []collectorconfig.SchemaRegistryEntry {
+	s.schemaRegistryMu.RLock()
+	defer s.schemaRegistryMu.RUnlock()
+	// Read via config() so a concurrent SIGHUP reload swapping s.cfg cannot
+	// race with this snapshot.
+	return cloneSchemaRegistry(s.config().schemaRegistry)
+}
+
+// cloneSchemaRegistry deep-copies a registry slice, including each entry's
+// RequiredFields backing array.
+func cloneSchemaRegistry(entries []collectorconfig.SchemaRegistryEntry) []collectorconfig.SchemaRegistryEntry {
+	if len(entries) == 0 {
+		return nil
+	}
+	out := make([]collectorconfig.SchemaRegistryEntry, len(entries))
+	for i, entry := range entries {
+		out[i] = entry
+		out[i].RequiredFields = append([]string(nil), entry.RequiredFields...)
+	}
+	return out
 }
 
 type piiAuditRequest struct {
@@ -172,7 +221,7 @@ func (s *collectorState) auditPII(ctx context.Context, limit int) ([]map[string]
 	var closeDB func()
 	if db == nil {
 		var err error
-		db, err = sql.Open(s.cfg.duckDBDriver, s.cfg.duckDBPath)
+		db, err = sql.Open(s.config().duckDBDriver, s.config().duckDBPath)
 		if err != nil {
 			return nil, 0, err
 		}
@@ -182,15 +231,15 @@ func (s *collectorState) auditPII(ctx context.Context, limit int) ([]map[string]
 		defer closeDB()
 	}
 
-	query := fmt.Sprintf("SELECT %s FROM %s LIMIT ?", mustQuoteSQLIdent(s.cfg.duckDBRawColumn), mustQuoteSQLIdent(s.cfg.duckDBTable))
+	query := fmt.Sprintf("SELECT %s FROM %s LIMIT ?", mustQuoteSQLIdent(s.config().duckDBRawColumn), mustQuoteSQLIdent(s.config().duckDBTable))
 	rows, err := db.QueryContext(ctx, query, limit)
 	if err != nil {
 		return nil, 0, err
 	}
 	defer rows.Close()
 
-	blocked := make(map[string]struct{}, len(s.cfg.privacyBlocklist))
-	for _, key := range s.cfg.privacyBlocklist {
+	blocked := make(map[string]struct{}, len(s.config().privacyBlocklist))
+	for _, key := range s.config().privacyBlocklist {
 		blocked[normalizeSensitiveKey(key)] = struct{}{}
 	}
 
@@ -367,7 +416,7 @@ func (s *collectorState) handleBlueprintList(w http.ResponseWriter, r *http.Requ
 	db := s.queryDB
 	if db == nil {
 		var err error
-		db, err = sql.Open(s.cfg.duckDBDriver, s.cfg.duckDBPath)
+		db, err = sql.Open(s.config().duckDBDriver, s.config().duckDBPath)
 		if err != nil {
 			writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "db_open_failed", "message": err.Error()})
 			return
@@ -375,7 +424,7 @@ func (s *collectorState) handleBlueprintList(w http.ResponseWriter, r *http.Requ
 		defer db.Close()
 	}
 
-	rows, err := db.Query("SELECT column_name, data_type FROM information_schema.columns WHERE table_name = ? ORDER BY ordinal_position", s.cfg.duckDBTable)
+	rows, err := db.Query("SELECT column_name, data_type FROM information_schema.columns WHERE table_name = ? ORDER BY ordinal_position", s.config().duckDBTable)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "query_failed", "message": err.Error()})
 		return
@@ -398,7 +447,7 @@ func (s *collectorState) applyBlueprint(bp Blueprint) error {
 	db := s.queryDB
 	if db == nil {
 		var err error
-		db, err = sql.Open(s.cfg.duckDBDriver, s.cfg.duckDBPath)
+		db, err = sql.Open(s.config().duckDBDriver, s.config().duckDBPath)
 		if err != nil {
 			return fmt.Errorf("open db: %w", err)
 		}
@@ -416,10 +465,25 @@ func (s *collectorState) applyBlueprint(bp Blueprint) error {
 		"DECIMAL": true, "NUMERIC": true,
 	}
 
-	tableIdent, err := quoteSQLIdent(s.cfg.duckDBTable)
+	tableIdent, err := quoteSQLIdent(s.config().duckDBTable)
 	if err != nil {
-		return fmt.Errorf("invalid table name %q: %w", s.cfg.duckDBTable, err)
+		return fmt.Errorf("invalid table name %q: %w", s.config().duckDBTable, err)
 	}
+
+	// Apply every column in a single transaction so that a failure partway
+	// through the loop rolls back the columns that were already added. Without
+	// this, an error returns 500 (apply_failed) but leaves a partially applied
+	// blueprint in the table.
+	tx, err := db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin blueprint transaction: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
 
 	for colName, colDef := range bp.Columns {
 		colIdent, err := quoteSQLIdent(colName)
@@ -458,9 +522,13 @@ func (s *collectorState) applyBlueprint(bp Blueprint) error {
 			}
 		}
 		query := fmt.Sprintf("ALTER TABLE %s ADD COLUMN IF NOT EXISTS %s %s", tableIdent, colIdent, typ)
-		if _, err := db.Exec(query); err != nil {
+		if _, err := tx.Exec(query); err != nil {
 			return fmt.Errorf("add column %s: %w", colName, err)
 		}
 	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit blueprint transaction: %w", err)
+	}
+	committed = true
 	return nil
 }

@@ -18,6 +18,7 @@ const maxSpoolReplayRecordBytes = 16 * 1024 * 1024
 var (
 	errSpoolCapacity         = errors.New("spool capacity exceeded")
 	errDeliveryQueueCapacity = errors.New("delivery queue bytes exceeded")
+	errProcessorClosed       = errors.New("processor is closed")
 )
 
 type spoolDelivery struct {
@@ -32,15 +33,15 @@ func (d spoolDelivery) storedBytes() int64 {
 }
 
 func (s *collectorState) initReliability() error {
-	if s.cfg.reliabilityMode != "spool" && s.cfg.reliabilityMode != "hybrid" {
+	if s.config().reliabilityMode != "spool" && s.config().reliabilityMode != "hybrid" {
 		return nil
 	}
 	s.reliabilityCtx, s.reliabilityCancel = context.WithCancel(context.Background())
-	if err := os.MkdirAll(s.cfg.spoolDir, 0o755); err != nil {
+	if err := os.MkdirAll(s.config().spoolDir, 0o755); err != nil {
 		return fmt.Errorf("mkdir spool dir: %w", err)
 	}
 
-	spoolPath := filepath.Join(s.cfg.spoolDir, s.cfg.spoolFile)
+	spoolPath := filepath.Join(s.config().spoolDir, s.config().spoolFile)
 	f, err := os.OpenFile(spoolPath, os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
 		return fmt.Errorf("open spool file: %w", err)
@@ -59,7 +60,7 @@ func (s *collectorState) initReliability() error {
 	if st, err := f.Stat(); err == nil {
 		currentSize := st.Size()
 		s.metrics.spoolBytes.Store(currentSize)
-		if currentSize > s.cfg.maxSpoolBytes {
+		if currentSize > s.config().maxSpoolBytes {
 			s.spoolHealthy.Store(false)
 		} else if s.spoolProcessedPos >= currentSize {
 			s.metrics.spoolBytes.Store(0)
@@ -69,7 +70,7 @@ func (s *collectorState) initReliability() error {
 		}
 	}
 
-	s.deliveryQueue = make(chan spoolDelivery, s.cfg.deliveryQueueSize)
+	s.deliveryQueue = make(chan spoolDelivery, s.config().deliveryQueueSize)
 	s.deliverySpace = make(chan struct{}, 1)
 	s.deliveryWG.Add(1)
 	go s.deliveryWorker()
@@ -155,12 +156,19 @@ func (s *collectorState) closeReliability() {
 			}
 			s.spoolFile = nil
 		}
+		// Hold the write lock for the whole teardown so it is mutually
+		// exclusive with the RLock-held Process/WriteDLQ call sites. Closing
+		// the processor while a request holds a reference to it would either
+		// use an already-closed processor or race with its internal state.
+		s.processorMu.Lock()
 		if s.processor != nil {
 			if err := s.processor.Close(); err != nil {
 				logJSON("error", "processor_close_failed", map[string]any{"error": err.Error()})
 			}
 			s.processor = nil
 		}
+		s.processorClosed = true
+		s.processorMu.Unlock()
 	})
 }
 
@@ -194,9 +202,9 @@ func (s *collectorState) appendSpoolLocked(raw []byte) (spoolDelivery, error) {
 	}
 
 	record := append([]byte(nil), raw...)
-	if encryptionEnabled(s.cfg.storageEncryptionKey) {
+	if encryptionEnabled(s.config().storageEncryptionKey) {
 		var err error
-		record, err = encryptBlob(record, s.cfg.storageEncryptionKey)
+		record, err = encryptBlob(record, s.config().storageEncryptionKey)
 		if err != nil {
 			return spoolDelivery{}, err
 		}
@@ -212,13 +220,13 @@ func (s *collectorState) appendSpoolLocked(raw []byte) (spoolDelivery, error) {
 		unprocessedBytes = startOffset
 	}
 	projectedBytes := unprocessedBytes + int64(len(stored))
-	if s.cfg.maxSpoolBytes > 0 && projectedBytes > s.cfg.maxSpoolBytes {
+	if s.config().maxSpoolBytes > 0 && projectedBytes > s.config().maxSpoolBytes {
 		return spoolDelivery{}, fmt.Errorf(
 			"%w: current=%d record=%d max=%d",
 			errSpoolCapacity,
 			unprocessedBytes,
 			len(stored),
-			s.cfg.maxSpoolBytes,
+			s.config().maxSpoolBytes,
 		)
 	}
 
@@ -231,7 +239,7 @@ func (s *collectorState) appendSpoolLocked(raw []byte) (spoolDelivery, error) {
 		_ = s.spoolFile.Truncate(startOffset)
 		return spoolDelivery{}, io.ErrShortWrite
 	}
-	if s.cfg.spoolFsync {
+	if s.config().spoolFsync {
 		if err := s.spoolFile.Sync(); err != nil {
 			_ = s.spoolFile.Truncate(startOffset)
 			_, _ = s.spoolFile.Seek(0, io.SeekEnd)
@@ -249,7 +257,7 @@ func (s *collectorState) appendSpoolLocked(raw []byte) (spoolDelivery, error) {
 }
 
 func (s *collectorState) validateDeliveryPayload(raw []byte) error {
-	if !s.memoryLimiterEnabled() || s.cfg.maxQueueBytes <= 0 || int64(len(raw)) <= s.cfg.maxQueueBytes {
+	if !s.memoryLimiterEnabled() || s.config().maxQueueBytes <= 0 || int64(len(raw)) <= s.config().maxQueueBytes {
 		return nil
 	}
 	s.metrics.requestsThrottled.Add(1)
@@ -257,9 +265,9 @@ func (s *collectorState) validateDeliveryPayload(raw []byte) error {
 	logJSON("warn", "delivery_queue_bytes_exceeded", map[string]any{
 		"event_bytes": len(raw),
 		"queue_bytes": s.metrics.queueBytes.Load(),
-		"max_bytes":   s.cfg.maxQueueBytes,
+		"max_bytes":   s.config().maxQueueBytes,
 	})
-	err := fmt.Errorf("%w: event=%d max=%d", errDeliveryQueueCapacity, len(raw), s.cfg.maxQueueBytes)
+	err := fmt.Errorf("%w: event=%d max=%d", errDeliveryQueueCapacity, len(raw), s.config().maxQueueBytes)
 	s.maybeWriteDLQ(raw, err)
 	return err
 }
@@ -281,8 +289,8 @@ func (s *collectorState) enqueueDelivery(item spoolDelivery) error {
 	for {
 		current := s.metrics.queueBytes.Load()
 		withinLimit := !s.memoryLimiterEnabled() ||
-			s.cfg.maxQueueBytes <= 0 ||
-			current+size <= s.cfg.maxQueueBytes
+			s.config().maxQueueBytes <= 0 ||
+			current+size <= s.config().maxQueueBytes
 		durableOversize := item.endOffset > item.startOffset && current == 0
 		if withinLimit || durableOversize {
 			if s.metrics.queueBytes.CompareAndSwap(current, current+size) {
@@ -372,18 +380,30 @@ func (s *collectorState) processSpoolEvent(item spoolDelivery) {
 
 func (s *collectorState) maybeWriteDLQ(raw []byte, err error) {
 	s.processorMu.RLock()
-	proc := s.processor
-	s.processorMu.RUnlock()
-	if proc == nil {
-		if initErr := s.ensureProcessor(); initErr != nil {
-			logJSON("error", "collector_dlq_processor_not_initialized", map[string]any{"error": initErr.Error()})
-			return
-		}
-		s.processorMu.RLock()
-		proc = s.processor
+	if s.processorClosed {
 		s.processorMu.RUnlock()
+		return
 	}
-	proc.WriteDLQ(raw, err)
+	proc := s.processor
+	if proc != nil {
+		// Keep the read lock across the write so a concurrent teardown (which
+		// takes the write lock) cannot close the processor out from under us.
+		proc.WriteDLQ(raw, err)
+		s.processorMu.RUnlock()
+		return
+	}
+	s.processorMu.RUnlock()
+
+	if initErr := s.ensureProcessor(); initErr != nil {
+		logJSON("error", "collector_dlq_processor_not_initialized", map[string]any{"error": initErr.Error()})
+		return
+	}
+	s.processorMu.RLock()
+	defer s.processorMu.RUnlock()
+	if s.processorClosed || s.processor == nil {
+		return
+	}
+	s.processor.WriteDLQ(raw, err)
 }
 
 func (s *collectorState) markSpoolDelivered(item spoolDelivery) {
@@ -487,7 +507,7 @@ func (s *collectorState) replaySpool() error {
 	replayCount := int64(0)
 	skippedCount := int64(0)
 	sc := bufio.NewScanner(s.spoolFile)
-	maxRecordBytes := int(s.cfg.maxEventBytes)
+	maxRecordBytes := int(s.config().maxEventBytes)
 	if maxRecordBytes <= 0 || maxRecordBytes > maxSpoolReplayRecordBytes {
 		maxRecordBytes = maxSpoolReplayRecordBytes
 	}
@@ -517,13 +537,24 @@ func (s *collectorState) replaySpool() error {
 		}
 
 		decoded := append([]byte(nil), line...)
-		if encryptionEnabled(s.cfg.storageEncryptionKey) {
-			if plain, err := decryptBlob(decoded, s.cfg.storageEncryptionKey); err == nil {
+		quarantineReason := ""
+		if encryptionEnabled(s.config().storageEncryptionKey) {
+			plain, err := decryptBlob(decoded, s.config().storageEncryptionKey)
+			if err != nil {
+				logJSON("warn", "spool_replay_decrypt_failed", map[string]any{
+					"error":        err.Error(),
+					"start_offset": item.startOffset,
+				})
+				quarantineReason = "decryption_failed"
+			} else {
 				decoded = plain
 			}
 		}
-		if !json.Valid(decoded) {
-			s.quarantineBadSpoolLine(decoded)
+		if quarantineReason == "" && !json.Valid(decoded) {
+			quarantineReason = "invalid_spool_record"
+		}
+		if quarantineReason != "" {
+			s.quarantineBadSpoolLine(decoded, quarantineReason)
 			item.skip = true
 			if err := s.enqueueDelivery(item); err != nil {
 				return fmt.Errorf("enqueue invalid spool record: %w", err)
@@ -554,13 +585,13 @@ func (s *collectorState) replaySpool() error {
 	return nil
 }
 
-func (s *collectorState) quarantineBadSpoolLine(raw []byte) {
+func (s *collectorState) quarantineBadSpoolLine(raw []byte, reason string) {
 	if s.spoolBadFile == "" || len(bytes.TrimSpace(raw)) == 0 {
 		return
 	}
 	entry := map[string]any{
 		"timestamp": time.Now().UTC().Format(time.RFC3339Nano),
-		"reason":    "invalid_spool_record",
+		"reason":    reason,
 		"raw":       string(raw),
 	}
 	encoded, err := json.Marshal(entry)

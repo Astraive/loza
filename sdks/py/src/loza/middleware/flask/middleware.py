@@ -26,9 +26,27 @@ class Middleware:
             ),
         )
 
+    def _respond_without_app(self, environ: dict, start_response: Callable) -> Iterable[bytes]:
+        """Return a WSGI-valid 500 and emit a LOZA error event when no app is configured.
+
+        ``app=None`` is the default, so a common miswire (``wsgi_app = middleware()``)
+        would otherwise return an empty iterable without ever calling
+        ``start_response``, which WSGI servers reject and which emits no event.
+        """
+        start_response("500 Internal Server Error", [("Content-Type", "text/plain")])
+        ctx = self.wrap_scope(environ)
+        FinishError(
+            ctx,
+            RuntimeError("loza.flask.middleware: no WSGI app configured (app=None)"),
+            Bool("panic", True),
+            Int("status_code", 500),
+        )
+        Emit(ctx)
+        return [b"Internal Server Error"]
+
     def __call__(self, environ: dict, start_response: Callable) -> Iterable[bytes]:
         if self.app is None:
-            return []
+            return self._respond_without_app(environ, start_response)
         status_code = 500
         response_bytes = 0
         started = time.perf_counter()
@@ -46,6 +64,7 @@ class Middleware:
                 String("http.remote_ip", environ.get("REMOTE_ADDR", "")),
             )
             response = self.app(environ, capture_start_response)
+            ctx.params.status_code = status_code
         except Exception as exc:
             FinishError(ctx, exc, Bool("panic", True))
             Emit(ctx)
@@ -66,7 +85,6 @@ class Middleware:
                 Finish(
                     ctx,
                     "error" if status_code >= 500 else "success",
-                    Int("status_code", status_code),
                     Int("response_bytes", response_bytes),
                     Int("duration_ms", int((time.perf_counter() - started) * 1000)),
                 )
@@ -81,7 +99,6 @@ class Middleware:
                         Finish(
                             ctx,
                             "error" if status_code >= 500 else "success",
-                            Int("status_code", status_code),
                             Int("response_bytes", response_bytes),
                             Int("duration_ms", int((time.perf_counter() - started) * 1000)),
                         )

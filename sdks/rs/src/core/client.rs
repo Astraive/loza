@@ -137,7 +137,14 @@ impl HTTPClient {
         } else {
             req.call()
         };
-        let response = response.map_err(io::Error::other)?;
+        // ureq 2.x reports HTTP status codes >= 400 as `Err(Error::Status(_, response))`.
+        // The response still carries the status, headers and body, so return it as a
+        // successful `HTTPResponse` rather than collapsing it into a transport error.
+        let response = match response {
+            Ok(response) => response,
+            Err(ureq::Error::Status(_, response)) => response,
+            Err(err) => return Err(io::Error::other(err)),
+        };
         let status_code = response.status();
         let mut headers = BTreeMap::new();
         for name in response.headers_names() {
@@ -249,17 +256,46 @@ impl CollectorHttpClient {
     }
 
     /// Build an ingest envelope from encoded events.
+    ///
+    /// Events that cannot be parsed as JSON are preserved as
+    /// `{"malformed": <original encoded event>}` so they are never silently
+    /// dropped. Use [`Self::try_envelope`] when malformed events must instead be
+    /// reported to the caller as an error.
     pub fn envelope(&self, encoded_events: &[String]) -> Value {
         let events: Vec<Value> = encoded_events
             .iter()
-            .filter_map(|event| serde_json::from_str(event).ok())
+            .map(|event| {
+                serde_json::from_str(event)
+                    .unwrap_or_else(|_| serde_json::json!({ "malformed": event }))
+            })
             .collect();
+        self.build_envelope(&events)
+    }
+
+    /// Build an ingest envelope from encoded events, rejecting malformed input.
+    ///
+    /// Returns an error naming the index and parse failure of the first event
+    /// that is not valid JSON. Unlike [`Self::envelope`], no event is dropped or
+    /// replaced and the caller learns which input is invalid.
+    pub fn try_envelope(&self, encoded_events: &[String]) -> Result<Value, String> {
+        let events = encoded_events
+            .iter()
+            .enumerate()
+            .map(|(index, event)| {
+                serde_json::from_str(event)
+                    .map_err(|error| format!("event at index {index} is not valid JSON: {error}"))
+            })
+            .collect::<Result<Vec<Value>, String>>()?;
+        Ok(self.build_envelope(&events))
+    }
+
+    fn build_envelope(&self, events: &[Value]) -> Value {
         let service = self
             .service
             .clone()
-            .or_else(|| infer_service(&events))
+            .or_else(|| infer_service(events))
             .unwrap_or_else(|| "unknown".to_string());
-        build_ingest_envelope(&events, &self.sdk_name, &self.sdk_version, &service)
+        build_ingest_envelope(events, &self.sdk_name, &self.sdk_version, &service)
     }
 
     /// Validate an ingest envelope.
@@ -289,17 +325,21 @@ impl CollectorHttpClient {
         let client = HTTPClient::with_timeout_ms(self.timeout_ms);
         let mut request = HTTPRequest::new(method, &url);
 
+        // Any configured credential (Bearer API key or Basic auth) must never be
+        // transmitted to a remote collector over plaintext HTTP. Validate the
+        // endpoint before either auth branch adds the credential to the request.
+        let has_api_key = self.api_key.is_some();
+        let has_basic_auth = self.basic_username.is_some() && self.basic_password.is_some();
+        if has_api_key || has_basic_auth {
+            validate_credentialed_endpoint(&self.endpoint, self.insecure)?;
+        }
+
         if let Some(api_key) = &self.api_key {
             request = request.with_header(&self.auth_header, format!("Bearer {}", api_key));
         } else {
             match (&self.basic_username, &self.basic_password) {
                 (Some(username), Some(password)) => {
-                    validate_basic_auth_endpoint(
-                        &self.endpoint,
-                        username,
-                        password,
-                        self.insecure,
-                    )?;
+                    validate_basic_auth_username(username)?;
                     let token = base64::engine::general_purpose::STANDARD
                         .encode(format!("{username}:{password}"));
                     request = request.with_header(&self.auth_header, format!("Basic {token}"));
@@ -340,7 +380,7 @@ impl CollectorHttpClient {
     /// Validate events locally against the ingest envelope contract.
     /// The collector does not expose a dedicated `/validate` endpoint.
     pub fn validate(&self, events: &[String]) -> Result<CollectorResponse, String> {
-        let envelope = self.envelope(events);
+        let envelope = self.try_envelope(events)?;
         self.validate_envelope(&envelope)?;
         Ok(CollectorResponse {
             status_code: 200,
@@ -353,7 +393,7 @@ impl CollectorHttpClient {
 
     /// Ingest events into the collector.
     pub fn ingest(&self, events: &[String]) -> Result<CollectorResponse, String> {
-        let envelope = self.envelope(events);
+        let envelope = self.try_envelope(events)?;
         self.request("POST", "/events", Some(envelope))
     }
 
@@ -369,7 +409,8 @@ impl CollectorHttpClient {
 
     /// Delete events from the collector by event ID.
     pub fn delete(&self, event_id: &str) -> Result<CollectorResponse, String> {
-        self.request("DELETE", &format!("/events/{}", event_id), None)
+        let segment = encode_path_segment(event_id)?;
+        self.request("DELETE", &format!("/events/{segment}"), None)
     }
 
     /// Replay events from the dead-letter queue.
@@ -388,7 +429,8 @@ impl CollectorHttpClient {
 
     /// Read a dead-letter queue entry.
     pub fn dlq_read(&self, entry_id: &str) -> Result<CollectorResponse, String> {
-        self.request("GET", &format!("/dlq/{}", entry_id), None)
+        let segment = encode_path_segment(entry_id)?;
+        self.request("GET", &format!("/dlq/{segment}"), None)
     }
 
     /// Replay specific dead-letter queue entries.
@@ -407,7 +449,8 @@ impl CollectorHttpClient {
 
     /// Revoke an API key.
     pub fn keys_revoke(&self, key_id: &str) -> Result<CollectorResponse, String> {
-        self.request("DELETE", &format!("/keys/{}", key_id), None)
+        let segment = encode_path_segment(key_id)?;
+        self.request("DELETE", &format!("/keys/{segment}"), None)
     }
 
     /// List configured sinks on the collector.
@@ -417,12 +460,14 @@ impl CollectorHttpClient {
 
     /// Test a configured sink on the collector.
     pub fn sinks_test(&self, name: &str) -> Result<CollectorResponse, String> {
-        self.request("POST", &format!("/sinks/{}/test", name), None)
+        let segment = encode_path_segment(name)?;
+        self.request("POST", &format!("/sinks/{segment}/test"), None)
     }
 
     /// Rotate an API key.
     pub fn keys_rotate(&self, key_id: &str) -> Result<CollectorResponse, String> {
-        self.request("POST", &format!("/keys/{}/rotate", key_id), None)
+        let segment = encode_path_segment(key_id)?;
+        self.request("POST", &format!("/keys/{segment}/rotate"), None)
     }
 
     /// Validate an event governance policy.
@@ -462,11 +507,14 @@ impl CollectorHttpClient {
                 None,
             ));
         }
-        let route = self
-            .collector_name
-            .as_ref()
-            .map(|collector| format!("/collectors/{collector}/lql/query"))
-            .unwrap_or_else(|| "/lql/query".to_string());
+        let route = match &self.collector_name {
+            Some(collector) => {
+                let segment = encode_path_segment(collector)
+                    .map_err(|error| QueryLqlError::new("invalid_configuration", &error, None))?;
+                format!("/collectors/{segment}/lql/query")
+            }
+            None => "/lql/query".to_string(),
+        };
         let response = self
             .request(
                 "POST",
@@ -640,18 +688,12 @@ pub fn inject_http_headers(request: &mut HTTPRequest, event: &crate::EventContex
         .insert("x-request-id".to_string(), event.request_id.clone());
 }
 
-/// Extract trace context from HTTP headers.
-fn validate_basic_auth_endpoint(
-    endpoint: &str,
-    username: &str,
-    _password: &str,
-    insecure: bool,
-) -> Result<(), String> {
-    if username.is_empty() || username.contains(':') || username.chars().any(char::is_whitespace) {
-        return Err(
-            "basic auth username must be non-empty and contain no ':' or whitespace".into(),
-        );
-    }
+/// Reject endpoint configurations that would expose credentials in cleartext.
+///
+/// Applies to every authenticated request, whether the credential is a Bearer
+/// API key or HTTP Basic auth. HTTPS is always allowed; plaintext HTTP is only
+/// permitted for explicit loopback endpoints or when `insecure` is set.
+fn validate_credentialed_endpoint(endpoint: &str, insecure: bool) -> Result<(), String> {
     let Some((scheme, rest)) = endpoint.split_once("://") else {
         return Ok(());
     };
@@ -673,6 +715,15 @@ fn validate_basic_auth_endpoint(
     Err("credentialed HTTP requires TLS (set insecure explicitly for local development)".into())
 }
 
+fn validate_basic_auth_username(username: &str) -> Result<(), String> {
+    if username.is_empty() || username.contains(':') || username.chars().any(char::is_whitespace) {
+        return Err(
+            "basic auth username must be non-empty and contain no ':' or whitespace".into(),
+        );
+    }
+    Ok(())
+}
+
 pub fn extract_http_headers(
     headers: &BTreeMap<String, String>,
 ) -> (Option<String>, Option<String>, Option<String>) {
@@ -691,6 +742,36 @@ fn infer_service(events: &[Value]) -> Option<String> {
         }
     }
     None
+}
+
+/// Percent-encode a single URL path segment.
+///
+/// Untrusted identifiers are interpolated into request paths below. Without
+/// encoding, a value such as `../keys`, `?x=1` or `#frag` would change the
+/// request target, allowing path/query injection on the collector. Every byte
+/// outside the RFC 3986 unreserved set is escaped.
+///
+/// A bare `.` or `..` is rejected: URL parsers normalize dot segments (even
+/// percent-encoded ones such as `%2E%2E`) away, so these cannot be represented
+/// safely as a single path segment.
+fn encode_path_segment(value: &str) -> Result<String, String> {
+    if matches!(value, "." | "..") {
+        return Err(format!(
+            "invalid path segment {value:?}: dot segments are not allowed"
+        ));
+    }
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+    let mut encoded = String::with_capacity(value.len());
+    for &byte in value.as_bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~') {
+            encoded.push(byte as char);
+        } else {
+            encoded.push('%');
+            encoded.push(HEX[(byte >> 4) as usize] as char);
+            encoded.push(HEX[(byte & 0x0F) as usize] as char);
+        }
+    }
+    Ok(encoded)
 }
 
 fn normalize_collector_endpoint(endpoint: String) -> String {

@@ -269,7 +269,10 @@ func isEventAfterCursor(event *models.Event, cursor collectorbridge.Cursor) bool
 
 func cursorLess(a, b collectorbridge.Cursor) bool {
 	if a.Timestamp.IsZero() {
-		return !b.Timestamp.IsZero() || stringsGreaterThanEmpty(b.EventID)
+		if b.Timestamp.IsZero() {
+			return a.EventID < b.EventID
+		}
+		return true
 	}
 	if b.Timestamp.IsZero() {
 		return false
@@ -341,8 +344,4 @@ func sleepWithContext(ctx context.Context, d time.Duration) bool {
 	case <-timer.C:
 		return true
 	}
-}
-
-func stringsGreaterThanEmpty(v string) bool {
-	return v != ""
 }

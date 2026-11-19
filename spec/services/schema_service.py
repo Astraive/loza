@@ -160,12 +160,16 @@ class SchemaServiceHandler(BaseHTTPRequestHandler):
 
         if path.startswith("/schemas/"):
             rel = path[len("/schemas/"):]
-            # Base dir: spec/schemas/json/
-            target = root / "spec" / "schemas" / "json" / rel
-            # protect against path traversal
+            # root already points at spec/, so schemas live in spec/schemas/json/
+            base = root / "schemas" / "json"
+            target = base / rel
+            # Protect against path traversal. is_relative_to() enforces a real
+            # path boundary; a string-prefix check would wrongly accept a
+            # sibling such as spec/schemas/json_evil/ as "inside" json/.
             try:
+                base = base.resolve()
                 target = target.resolve()
-                if not str(target).startswith(str((root / "spec" / "schemas" / "json").resolve())):
+                if not target.is_relative_to(base):
                     self.send_error(HTTPStatus.FORBIDDEN, "forbidden")
                     return
             except Exception:

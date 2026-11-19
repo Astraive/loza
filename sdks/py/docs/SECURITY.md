@@ -91,6 +91,35 @@ loza.enrich(ctx,
 
 `SensitiveString` triggers redaction by the configured redactor. `HashString` hashes the value at construction time, before the event reaches the redactor.
 
+## PII pseudonymization helpers
+
+`loza.email_hash(...)` and `loza.ip_hash(...)` turn low-entropy values (emails,
+IP addresses) into pseudonyms using keyed HMAC-SHA256. A bare SHA-256 digest of
+these values can be reversed offline with a dictionary or rainbow table, so a
+secret key is required.
+
+Set a high-entropy key once for the process:
+
+```sh
+export LOZA_PII_HASH_SECRET="$(openssl rand -hex 32)"
+```
+
+```python
+loza.email_hash("alice@example.com")  # keyed with LOZA_PII_HASH_SECRET
+loza.ip_hash("192.168.1.1")
+```
+
+A key can also be supplied per call from a secret manager:
+
+```python
+loza.email_hash("alice@example.com", secret=vault.fetch("pii-hash-key"))
+```
+
+If no key is configured, a random key is generated per process. Pseudonyms are
+then safe from offline guessing but cannot be correlated across restarts; set
+`LOZA_PII_HASH_SECRET` or pass `secret=` when stable pseudonyms are needed.
+Previously emitted (unkeyed) hashes are not compatible and must be re-baselined.
+
 ## MarkSensitive
 
 Mark any existing attribute as sensitive:

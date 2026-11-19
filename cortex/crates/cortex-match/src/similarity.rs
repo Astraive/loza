@@ -23,8 +23,10 @@ pub mod similarity {
             .map(|(x, y)| x * y)
             .sum();
 
-        let a_mag = a.iter().map(|x| x * x).sum::<f64>().sqrt();
-        let b_mag = b.iter().map(|x| x * x).sum::<f64>().sqrt();
+        // Magnitudes must cover the same prefix as the dot product; otherwise
+        // extra dimensions inflate the denominator and corrupt the similarity.
+        let a_mag = a.iter().take(min_len).map(|x| x * x).sum::<f64>().sqrt();
+        let b_mag = b.iter().take(min_len).map(|x| x * x).sum::<f64>().sqrt();
 
         if a_mag == 0.0 || b_mag == 0.0 {
             return 0.0;
@@ -93,7 +95,7 @@ pub mod similarity {
             if ts.len() < 2 {
                 return ts.iter().map(|&t| t as f64).collect();
             }
-            let min = ts[0];
+            let min = ts.iter().min().copied().unwrap_or(ts[0]);
             let max = ts.iter().max().copied().unwrap_or(ts[0]);
             let range = (max - min).max(1) as f64;
             ts.iter().map(|&t| (t - min) as f64 / range).collect()
@@ -211,6 +213,20 @@ mod tests {
     }
 
     #[test]
+    fn test_cosine_different_lengths_uses_common_prefix() {
+        // Identical prefixes must score 1.0 regardless of trailing dimensions.
+        let short = vec![1.0];
+        let long = vec![1.0, 1.0, 1.0];
+
+        assert!((similarity::cosine(&short, &long) - 1.0).abs() < 1e-6);
+        assert!((similarity::cosine(&long, &short) - 1.0).abs() < 1e-6);
+
+        // Orthogonal prefixes must score 0.0 even if the trailing tail is large.
+        let orthogonal = vec![0.0, 5.0, 5.0];
+        assert!((similarity::cosine(&short, &orthogonal) - 0.0).abs() < 1e-6);
+    }
+
+    #[test]
     fn test_jaccard() {
         let a = vec!["latency", "error"];
         let b = vec!["latency", "error"];
@@ -218,6 +234,22 @@ mod tests {
 
         assert!((similarity::jaccard(&a, &b) - 1.0).abs() < 1e-6);
         assert!((similarity::jaccard(&a, &c) - 0.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_temporal_uses_true_min_for_unsorted_sequences() {
+        // Both sequences share the same relative shape (peak, trough, rise),
+        // but the first element is not the minimum. Normalization must use the
+        // true min/max; using ts[0] as the min yields negative normalized
+        // values and collapses similarity to 0.0.
+        let a = [100, 10, 50];
+        let b = [90, 20, 40];
+
+        let sim = similarity::temporal(&a, &b);
+        assert!(
+            sim > 0.9,
+            "expected high temporal similarity for matching shapes, got {sim}"
+        );
     }
 
     #[test]

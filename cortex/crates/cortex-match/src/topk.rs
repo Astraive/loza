@@ -27,14 +27,19 @@ impl PartialOrd for PQItem {
 
 impl Ord for PQItem {
     fn cmp(&self, other: &Self) -> Ordering {
-        self.score
-            .partial_cmp(&other.score)
+        // Invert the comparison so BinaryHeap behaves as a min-heap: peek()
+        // then returns the smallest score currently retained, which is the
+        // candidate that should be evicted when a better one arrives.
+        other
+            .score
+            .partial_cmp(&self.score)
             .unwrap_or(Ordering::Equal)
     }
 }
 
 /// Efficient top-k matching using priority queue
 /// Avoids sorting all candidates, only maintains heap of size k
+#[derive(Clone)]
 pub struct TopK {
     k: usize,
     threshold: f64,
@@ -62,6 +67,10 @@ impl TopK {
 
     pub fn k(&self) -> usize {
         self.k
+    }
+
+    pub fn metric(&self) -> &str {
+        &self.metric
     }
 
     /// Search for top-k similar signatures
@@ -219,6 +228,50 @@ mod tests {
 
         assert_eq!(results.len(), 5);
         assert!(results[0].similarity >= results[1].similarity);
+    }
+
+    /// Regression test for the max-heap top-k defect: a mid-range score that
+    /// arrives after the heap is full must still displace the weakest kept
+    /// candidate. With a max-heap, peek() was the *largest* score, so the
+    /// replacement branch was taken only when a score beat the current best,
+    /// causing scores that belong in the top-k to be discarded.
+    #[test]
+    fn test_topk_replaces_weakest_not_best() {
+        let query = Signature {
+            feature_vector: vec![1.0, 0.0],
+            ..Signature::new()
+        };
+
+        let candidate = |x: f64, y: f64, shape: &str| {
+            let mut sig = Signature::new();
+            sig.feature_vector = vec![x, y];
+            sig.shape = shape.to_string();
+            sig
+        };
+
+        // cosine similarity against [1.0, 0.0]; each vector is unit length.
+        let candidates = vec![
+            candidate(1.0, 0.0, "best"),          // score 1.0
+            candidate(0.5, 0.8660254, "weak"),    // score 0.5
+            candidate(0.9, 0.43588989, "mid"),    // score 0.9 <- must displace "weak"
+        ];
+
+        let topk = TopK::new(2).with_metric("cosine");
+        let results = topk.search(&query, &candidates);
+        let brute = search_brute(&query, &candidates, 2, "cosine");
+
+        assert_eq!(results.len(), 2);
+        for (got, expected) in results.iter().zip(brute.iter()) {
+            assert!(
+                (got.similarity - expected.similarity).abs() < 1e-6,
+                "top-k {:?} differs from brute-force top-k {:?}",
+                got,
+                expected
+            );
+        }
+        assert!((results[0].similarity - 1.0).abs() < 1e-6);
+        assert!((results[1].similarity - 0.9).abs() < 1e-6);
+        assert_eq!(results[1].signature_id, "mid");
     }
 
     #[test]

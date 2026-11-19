@@ -12,6 +12,7 @@ import (
 	"github.com/astraive/loza/cortex/internal/matcher"
 	"github.com/astraive/loza/cortex/internal/models"
 	"github.com/astraive/loza/cortex/internal/storage"
+	"github.com/rs/zerolog/log"
 )
 
 type IncidentReconstructor struct {
@@ -112,6 +113,19 @@ func (r *IncidentReconstructor) ReconstructFromSignal(ctx context.Context, signa
 	return r.reconstruct(ctx, incidentID, 3)
 }
 
+// recordEnrichmentFailure logs a failed enrichment subsystem and marks the
+// result as partial. Reconstruction of the causal chain and symptoms can still
+// succeed without matcher/learner backends, so failures there are surfaced as
+// diagnostics on the returned context rather than aborting the whole result.
+func (r *IncidentReconstructor) recordEnrichmentFailure(result *models.IncidentContext, subsystem string, err error) {
+	result.Partial = true
+	result.Warnings = append(result.Warnings, fmt.Sprintf("%s failed: %v", subsystem, err))
+	log.Warn().Err(err).
+		Str("incident_id", result.IncidentID).
+		Str("subsystem", subsystem).
+		Msg("reconstruction enrichment subsystem failed")
+}
+
 func (r *IncidentReconstructor) reconstruct(ctx context.Context, incidentID string, maxDepth int) (*models.IncidentContext, error) {
 	incident, err := r.incidentStore.Get(ctx, incidentID)
 	if err != nil {
@@ -157,13 +171,17 @@ func (r *IncidentReconstructor) reconstruct(ctx context.Context, incidentID stri
 	symptoms := r.extractSymptoms(causalChain)
 	context.Symptoms = symptoms
 
-	sig, err := r.matcher.ExtractSignature(ctx, context)
-	if err == nil {
+	sig, sigErr := r.matcher.ExtractSignature(ctx, context)
+	if sigErr != nil {
+		r.recordEnrichmentFailure(context, "signature extraction", sigErr)
+	} else {
 		if incident != nil && incident.SignatureID != "" {
 			sig.SignatureID = incident.SignatureID
 		}
-		similar, err := r.matcher.FindSimilar(ctx, sig, 5)
-		if err == nil {
+		similar, simErr := r.matcher.FindSimilar(ctx, sig, 5)
+		if simErr != nil {
+			r.recordEnrichmentFailure(context, "similarity search", simErr)
+		} else {
 			context.SimilarIncidents = similar
 		}
 	}
@@ -179,8 +197,10 @@ func (r *IncidentReconstructor) reconstruct(ctx context.Context, incidentID stri
 	})
 
 	if len(context.SimilarIncidents) > 0 {
-		stats, err := r.remediation.GetTopRemediations(ctx, context.SimilarIncidents[0].IncidentID, 3)
-		if err == nil {
+		stats, actionErr := r.remediation.GetTopRemediations(ctx, context.SimilarIncidents[0].IncidentID, 3)
+		if actionErr != nil {
+			r.recordEnrichmentFailure(context, "remediation lookup", actionErr)
+		} else {
 			for i, s := range stats {
 				context.SuggestedActions = append(context.SuggestedActions, models.RemediationAction{
 					Action:           s.Action,
@@ -561,7 +581,7 @@ func (r *IncidentReconstructor) reconstructAdaptive(ctx context.Context, inciden
 
 	graphView, err := r.graphBuilder.TraverseGraph(ctx, incidentID, models.TraversalOptions{
 		MaxDepth:      maxDepth,
-		EdgeTypes:    r.getReconstructionEdgeTypes(),
+		EdgeTypes:     r.getReconstructionEdgeTypes(),
 		TimeWindowMin: windowMin,
 		TimeWindowMax: windowMax,
 	})
@@ -610,16 +630,28 @@ func (r *IncidentReconstructor) reconstructAdaptive(ctx context.Context, inciden
 
 	result.Symptoms = r.extractSymptoms(causalChain)
 
-	sig, err := r.matcher.ExtractSignature(ctx, result)
-	if err == nil {
+	sig, sigErr := r.matcher.ExtractSignature(ctx, result)
+	if sigErr != nil {
+		r.recordEnrichmentFailure(result, "signature extraction", sigErr)
+	} else {
+		// ExtractSignature uses the incident ID as the signature ID. Propagate the
+		// incident's known signature ID so FindSimilar filters out this incident's
+		// own stored signature instead of returning it as a "similar past incident".
+		if incident != nil && incident.SignatureID != "" {
+			sig.SignatureID = incident.SignatureID
+		}
 		similar, simErr := r.matcher.FindSimilar(ctx, sig, 5)
-		if simErr == nil {
+		if simErr != nil {
+			r.recordEnrichmentFailure(result, "similarity search", simErr)
+		} else {
 			result.SimilarIncidents = similar
 		}
 
 		if len(similar) > 0 {
 			stats, actionErr := r.remediation.GetTopRemediations(ctx, similar[0].IncidentID, 5)
-			if actionErr == nil {
+			if actionErr != nil {
+				r.recordEnrichmentFailure(result, "remediation lookup", actionErr)
+			} else {
 				for _, s := range stats {
 					result.SuggestedActions = append(result.SuggestedActions, models.RemediationAction{
 						Action:           s.Action,

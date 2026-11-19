@@ -26,12 +26,11 @@ type CortexConfig struct {
 	APIKey string `yaml:"api_key"`
 }
 
-func Default() Config {
-	cfg, err := loadDefaults()
-	if err != nil {
-		panic(err)
-	}
-	return cfg
+// Default returns the built-in defaults loaded from the defaults file.
+// It returns an error instead of panicking when the defaults file is missing
+// or malformed, so callers can handle a recoverable read failure.
+func Default() (Config, error) {
+	return loadDefaults()
 }
 
 func Load() (Config, error) {
@@ -51,12 +50,19 @@ func Load() (Config, error) {
 		if err := yaml.Unmarshal(raw, &cfg); err != nil {
 			return Config{}, err
 		}
+	} else if !os.IsNotExist(err) {
+		return Config{}, err
 	}
-	cfg.CollectorRepoPath = filepath.Clean(cfg.CollectorRepoPath)
+	if strings.TrimSpace(cfg.CollectorRepoPath) != "" {
+		cfg.CollectorRepoPath = filepath.Clean(cfg.CollectorRepoPath)
+	}
 	if strings.TrimSpace(cfg.CortexRepoPath) != "" {
 		cfg.CortexRepoPath = filepath.Clean(cfg.CortexRepoPath)
 	}
-	cfg.SpecRepoPath = filepath.Clean(cfg.SpecRepoPath)
+	if strings.TrimSpace(cfg.SpecRepoPath) != "" {
+		cfg.SpecRepoPath = filepath.Clean(cfg.SpecRepoPath)
+	}
+	cfg.ValidationMode = strings.ToLower(strings.TrimSpace(cfg.ValidationMode))
 	return cfg, Validate(cfg)
 }
 

@@ -26,14 +26,17 @@ export class SecurityLimiter {
   /** Returns true if the event should be dropped. */
   shouldDrop(encoded: string, attrCount: number): boolean {
     if (!this.config.dropOversizedEvents) return false;
-    if (encoded.length > this.config.maxEventBytes) return true;
+    // `.length` counts UTF-16 code units, not UTF-8 bytes. A multibyte
+    // character can be up to ~3x (BMP) or ~2x (astral) its code-unit length,
+    // so measuring bytes is required to actually enforce the byte cap.
+    if (Buffer.byteLength(encoded, 'utf8') > this.config.maxEventBytes) return true;
     if (attrCount > this.config.maxAttrCount) return true;
     return false;
   }
 
   /** Check if a single field value exceeds max field bytes. */
   isFieldOversized(value: string): boolean {
-    return value.length > this.config.maxFieldBytes;
+    return Buffer.byteLength(value, 'utf8') > this.config.maxFieldBytes;
   }
 
   getConfig(): Required<SecurityConfig> {

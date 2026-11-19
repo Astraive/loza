@@ -4,9 +4,26 @@ from __future__ import annotations
 # Do NOT add new constants here—all definitions come from loza-spec/generated/python/loza_contract.py
 
 import sys
+import logging
 import importlib.machinery
 import importlib.util
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
+
+
+def _validate_flexible_json_bytes_unavailable(raw: bytes, strict: bool) -> None:
+    """Callable fallback for backup contracts that omit ``validate_flexible_json_bytes``.
+
+    The symbol is part of this module's public ``__all__``. Resolving it to ``None``
+    would leave an exported-but-uncallable name that raises ``TypeError`` at call
+    time. Keeping a real callable preserves the API and fails with an actionable
+    error instead.
+    """
+    raise NotImplementedError(
+        "validate_flexible_json_bytes is not available in the bundled backup contract; "
+        "install loza-spec to enable flexible JSON byte validation."
+    )
 
 # Try importing from loza-spec (primary path - when installed as dependency)
 try:
@@ -35,7 +52,15 @@ try:
         ValidationError,
         ValidationErrors,
     )
-except Exception:
+except ImportError:
+    # Only a genuinely missing/incomplete dependency may trigger fallback. Any other
+    # import-time failure (NameError, bad constant, validation error, ...) must
+    # propagate instead of silently running against a stale contract.
+    logger.warning(
+        "Could not import the authoritative loza contract; falling back to the "
+        "monorepo/backup contract, which may omit spec/security fixes.",
+        exc_info=True,
+    )
     # Fallback: try importing from sibling loza-spec directory (for development/monorepo)
     try:
         spec_dir = Path(__file__).parent.parent.parent.parent.parent.parent / "spec" / "generated" / "python"
@@ -68,7 +93,12 @@ except Exception:
             )
         else:
             raise ImportError(f"loza-spec not found at {spec_dir}")
-    except Exception as e:
+    except ImportError as e:
+        logger.warning(
+            "Could not import the loza contract from the monorepo path; falling "
+            "back to the backup contract, which may omit spec/security fixes.",
+            exc_info=True,
+        )
         backup_path = Path(__file__).with_name("spec_contract.py.bak")
         if not backup_path.exists():
             raise ImportError(
@@ -104,7 +134,9 @@ except Exception:
         validate_event_payload_detailed = getattr(
             backup, "validate_event_payload_detailed", backup.validate_event_payload
         )
-        validate_flexible_json_bytes = getattr(backup, "validate_flexible_json_bytes", None)
+        validate_flexible_json_bytes = getattr(
+            backup, "validate_flexible_json_bytes", _validate_flexible_json_bytes_unavailable
+        )
         ValidationError = getattr(backup, "ValidationError", ValueError)
         ValidationErrors = getattr(backup, "ValidationErrors", list)
 

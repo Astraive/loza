@@ -68,15 +68,23 @@ def run_benchmark(cortex_url: str = "http://localhost:9312", seed: int = 42) -> 
     batch_size = 1000
     n_batches = 10
     times = []
-    for _ in range(n_batches):
-        batch = eval_events[:batch_size]
+    events_ingested = 0
+    for i in range(n_batches):
+        # Use a distinct, non-overlapping slice each iteration so the rest of
+        # the eval set is measured instead of re-ingesting the first batch.
+        batch = eval_events[i * batch_size:(i + 1) * batch_size]
+        if not batch:
+            break
         t0 = time.monotonic()
         engine.ingest(batch)
         elapsed = time.monotonic() - t0
         times.append(elapsed)
+        events_ingested += len(batch)
 
-    avg_time = statistics.mean(times)
-    throughput = batch_size / avg_time
+    # Derive throughput from the events actually ingested: the final batch may
+    # be short, and empty batches must not be counted as zero-time work.
+    avg_time = statistics.mean(times) if times else 0.0
+    throughput = events_ingested / sum(times) if times else 0.0
     results["ingestion_throughput_eps"] = throughput
     results["ingestion_avg_ms"] = avg_time * 1000
     print(f"  Throughput: {throughput:.0f} events/sec (target: >=1000)")

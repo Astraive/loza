@@ -9,7 +9,7 @@ import {
   assertHasCheckpoint, snapshotEvent, MockSink, FakeClock,
   setClock, setIdGenerator, resetForTest, goldenTest, conformanceSuite,
 } from '../src/testkit/helpers.ts';
-import { String, SensitiveString } from '../src/core/event.ts';
+import { String, SensitiveString, _now } from '../src/core/event.ts';
 
 describe('Testkit boundaries', () => {
   it('creates test loggers and captures emitted events', async () => {
@@ -49,6 +49,28 @@ describe('Testkit boundaries', () => {
     assert.equal(lastEvent(), undefined);
   });
 
+  it('isolates captured events between independent testkit instances', async () => {
+    clearEvents();
+    const kitA = testkit();
+    const kitB = testkit();
+
+    await kitA.logger.info('from-a');
+    await kitB.logger.info('from-b');
+
+    assert.equal(kitA.events().length, 1);
+    assert.equal(kitB.events().length, 1);
+    assert.deepEqual(kitA.events(), kitA.sink.getEvents());
+    assert.deepEqual(kitB.events(), kitB.sink.getEvents());
+
+    const aEvents = kitA.events();
+    kitB.clearEvents();
+    assert.deepEqual(kitB.events(), []);
+    assert.deepEqual(kitA.events(), aEvents, 'clearing one kit must not wipe another');
+
+    kitA.clearEvents();
+    assert.deepEqual(kitA.events(), []);
+  });
+
   it('provides mock sinks and deterministic clocks and IDs', async () => {
     const sink = new MockSink();
     await sink.write('one');
@@ -70,6 +92,16 @@ describe('Testkit boundaries', () => {
     resetForTest();
     setIdGenerator(() => 'fixed-id');
     resetForTest();
+  });
+
+  it('resetForTest restores the real clock after a fake clock is installed', () => {
+    setClock(() => 300);
+    assert.equal(_now(), 300);
+    const before = Date.now();
+    resetForTest();
+    const after = Date.now();
+    const now = _now();
+    assert.ok(now >= before && now <= after, `expected a real timestamp after reset, got ${now}`);
   });
 
   it('writes and compares golden files and reports conformance availability', () => {

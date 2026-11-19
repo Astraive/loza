@@ -460,3 +460,52 @@ func TestParseSchemeAlwaysLoza(t *testing.T) {
 		t.Errorf("Scheme = %q, want %q", dsn.Scheme, "loza")
 	}
 }
+
+// Regression test for MASS-0843 / issue #932: the collector path must be a
+// single canonical slug. Multi-segment and dot-segment paths were previously
+// embedded (percent-encoded) into every resolved endpoint URL.
+func TestParseRejectsInvalidCollectorSlugs(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+	}{
+		{"dotdot traversal", "loza://host/../../admin"},
+		{"single dot", "loza://host/."},
+		{"double dot", "loza://host/.."},
+		{"encoded dotdot", "loza://host/%2e%2e"},
+		{"multi-segment path", "loza://host/foo/bar"},
+		{"encoded slash", "loza://host/foo%2Fbar"},
+		{"trailing slash", "loza://host/foo/"},
+		{"leading double slash", "loza://host//foo"},
+		{"backslash", "loza://host/foo\\bar"},
+		{"encoded backslash", "loza://host/foo%5Cbar"},
+		{"whitespace", "loza://host/foo%20bar"},
+		{"non-ASCII", "loza://host/caf%C3%A9"},
+		{"query punctuation", "loza://host/foo%3Fbar"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if dsn, err := Parse(tt.input); err == nil {
+				t.Fatalf("expected error for %q, got valid DSN: %+v", tt.input, dsn)
+			}
+		})
+	}
+}
+
+func TestParseAcceptsValidCollectorSlugs(t *testing.T) {
+	for _, slug := range []string{"demo", "my-app", "my_app", "v1.2", "A0Z", "a.b-c_d"} {
+		t.Run(slug, func(t *testing.T) {
+			dsn, err := Parse("loza://host/" + slug)
+			if err != nil {
+				t.Fatalf("expected valid DSN for slug %q, got error: %v", slug, err)
+			}
+			if dsn.CollectorName != slug {
+				t.Fatalf("CollectorName = %q, want %q", dsn.CollectorName, slug)
+			}
+			want := "https://host:443/collectors/" + slug + "/events"
+			if dsn.EventsURL != want {
+				t.Fatalf("EventsURL = %q, want %q", dsn.EventsURL, want)
+			}
+		})
+	}
+}

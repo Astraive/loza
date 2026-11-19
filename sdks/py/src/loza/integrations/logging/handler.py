@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 from typing import Any
 
@@ -38,7 +39,21 @@ class LozaHandler(logging.Handler):
 
 
 def _json_safe(value: Any) -> bool:
-    return isinstance(value, (str, int, float, bool, type(None), list, tuple, dict))
+    """Return True only when *value* can be encoded by the event serializer.
+
+    A shallow type check is not enough: a ``dict``/``list`` may contain nested
+    values (for example ``datetime``) that ``json.dumps`` cannot encode. Such a
+    value would make the whole event fail serialization in ``core.logger`` and
+    be silently dropped. Mirror the serializer's strictness here so unsafe
+    attributes are filtered out instead of reaching ``json.dumps``.
+    """
+    try:
+        # ``sort_keys=True`` matches the eventual event encoding, which also
+        # sorts keys and would otherwise fail on mixed-type nested keys.
+        json.dumps(value, sort_keys=True)
+    except (TypeError, ValueError, RecursionError):
+        return False
+    return True
 
 
 def Handler(**kwargs) -> LozaHandler:

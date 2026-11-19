@@ -54,14 +54,16 @@ class Middleware:
                 String("http.remote_ip", _remote_ip(scope)),
             )
             await self.app(scope, receive, capture_send)
+            ctx.params.status_code = status_code
             Finish(
                 ctx,
                 "error" if status_code >= 500 else "success",
-                Int("status_code", status_code),
                 Int("response_bytes", response_bytes),
                 Int("duration_ms", int((time.perf_counter() - started) * 1000)),
             )
-        except Exception as exc:
+        except BaseException as exc:
+            # asyncio.CancelledError (a BaseException since 3.8) must finish the
+            # event with an error too, otherwise `finally` emits it incomplete.
             FinishError(ctx, exc, Bool("panic", True))
             raise
         finally:

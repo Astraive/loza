@@ -12,6 +12,7 @@ import (
 	"github.com/astraive/loza/cortex/internal/models"
 	"github.com/astraive/loza/cortex/internal/storage"
 	"github.com/astraive/loza/cortex/internal/topology"
+	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
 )
 
@@ -36,7 +37,12 @@ func DefaultConfig() Config {
 }
 
 // FromConfig creates a Config from the cortex config file values.
+// A non-positive decayPeriod is normalized to the default so the resulting
+// Config never carries an interval that would make decay undefined.
 func FromConfig(decayPeriod time.Duration, decayRate, archiveThreshold, mergeTolerance, featureVectorAlpha float64) Config {
+	if decayPeriod <= 0 {
+		decayPeriod = DefaultConfig().DecayPeriod
+	}
 	return Config{
 		DecayPeriod:        decayPeriod,
 		DecayRate:          decayRate,
@@ -49,17 +55,17 @@ func FromConfig(decayPeriod time.Duration, decayRate, archiveThreshold, mergeTol
 // SignatureEvolver handles long-horizon operational memory:
 // behavioral equivalence, signature merging, decay, and cascading renames.
 type SignatureEvolver struct {
-	cfg           Config
+	cfg            Config
 	signatureStore storage.SignatureStore
-	topology      *topology.Resolver
+	topology       *topology.Resolver
 }
 
 // NewSignatureEvolver creates a new evolver and registers topology callbacks.
 func NewSignatureEvolver(cfg Config, signatureStore storage.SignatureStore, topo *topology.Resolver) *SignatureEvolver {
 	ev := &SignatureEvolver{
-		cfg:           cfg,
+		cfg:            cfg,
 		signatureStore: signatureStore,
-		topology:      topo,
+		topology:       topo,
 	}
 
 	// Register callback for cascading renames
@@ -76,9 +82,13 @@ func (ev *SignatureEvolver) Evolve(ctx context.Context, sig *models.IncidentSign
 	// Compute behavioral hash
 	sig.BehavioralHash = ComputeBehavioralHash(sig)
 
-	// Check for existing behavioral match
+	// Check for existing behavioral match. An empty result with a nil error
+	// means no match; a non-nil error is a store failure and must surface.
 	existing, err := ev.signatureStore.FindByBehavioralHash(ctx, sig.BehavioralHash)
-	if err == nil && len(existing) > 0 {
+	if err != nil {
+		return nil, fmt.Errorf("failed to find signature by behavioral hash: %w", err)
+	}
+	if len(existing) > 0 {
 		// Found a behaviorally equivalent signature — merge
 		best := existing[0]
 		for _, e := range existing[1:] {
@@ -100,19 +110,25 @@ func (ev *SignatureEvolver) Evolve(ctx context.Context, sig *models.IncidentSign
 		return merged, nil
 	}
 
-	// No behavioral match — check for similar temporal patterns
+	// No behavioral match — check for similar temporal patterns. As above,
+	// an empty result is "no match"; a non-nil error is a store failure.
 	candidates, err := ev.signatureStore.List(ctx, 1000)
-	if err == nil {
-		for _, cand := range candidates {
-			if ev.isSimilarTemporal(sig, cand) {
-				merged := ev.mergeSignatures(cand, sig)
-				merged.ParentSignatureID = cand.SignatureID
-				merged.Version = cand.Version + 1
-				if err := ev.signatureStore.Save(ctx, merged); err != nil {
-					return nil, fmt.Errorf("failed to save merged signature: %w", err)
-				}
-				return merged, nil
+	if err != nil {
+		return nil, fmt.Errorf("failed to list signatures: %w", err)
+	}
+	for _, cand := range candidates {
+		if ev.isSimilarTemporal(sig, cand) {
+			merged := ev.mergeSignatures(cand, sig)
+			// A temporal merge derives a new signature from the candidate. Give it a
+			// distinct ID so Save inserts a child instead of overwriting the parent
+			// with a self-referential ParentSignatureID.
+			merged.SignatureID = uuid.NewString()
+			merged.ParentSignatureID = cand.SignatureID
+			merged.Version = cand.Version + 1
+			if err := ev.signatureStore.Save(ctx, merged); err != nil {
+				return nil, fmt.Errorf("failed to save merged signature: %w", err)
 			}
+			return merged, nil
 		}
 	}
 
@@ -135,6 +151,13 @@ func (ev *SignatureEvolver) Decay(ctx context.Context) (int, error) {
 	archived, err := ev.signatureStore.ArchiveStale(ctx, threshold)
 	if err != nil {
 		return 0, fmt.Errorf("failed to archive stale signatures: %w", err)
+	}
+
+	// A non-positive DecayPeriod makes the decay interval undefined. Skip
+	// per-signature decay rather than dividing by zero. Archiving above is
+	// independent of this value and has already been applied.
+	if ev.cfg.DecayPeriod <= 0 {
+		return archived, nil
 	}
 
 	sigs, err := ev.signatureStore.List(ctx, 10000)

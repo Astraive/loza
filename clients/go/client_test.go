@@ -68,6 +68,34 @@ func TestClientQueryUsesScopedRouteTypedParametersAndBearer(t *testing.T) {
 	}
 }
 
+func TestClientQueryAppendsRouteAfterBasePath(t *testing.T) {
+	var gotPath string
+	var gotRawQuery string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotRawQuery = r.URL.RawQuery
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"columns":[],"rows":[],"row_count":0}`))
+	}))
+	defer server.Close()
+
+	client, err := New(ConnectionConfig{
+		Endpoint:   server.URL + "/base",
+		Collector:  "demo",
+		APIKey:     "api-key",
+		HTTPClient: server.Client(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.Query(context.Background(), "from events", nil, 1); err != nil {
+		t.Fatal(err)
+	}
+	if gotPath != "/base/collectors/demo/lql/query" || gotRawQuery != "" {
+		t.Fatalf("path = %q, raw query = %q", gotPath, gotRawQuery)
+	}
+}
+
 func TestClientNewResolvesCanonicalDSNWithoutWorkspaceDependencies(t *testing.T) {
 	client, err := New(ConnectionConfig{
 		DSN:     "loza://key-id:secret@example.com/demo?env=prod&service=api",
@@ -97,5 +125,55 @@ func TestClientQueryReturnsStableTimeoutCategory(t *testing.T) {
 	_, err = client.Query(context.Background(), "from events", nil, 1)
 	if err == nil || ErrorCategoryOf(err) != ErrorTimeout {
 		t.Fatalf("error = %v, category = %q", err, ErrorCategoryOf(err))
+	}
+}
+
+// Regression: a Bearer API key must never be sent over plaintext HTTP to a
+// non-local endpoint. The old guard only checked basic auth (and was gated on
+// an empty API key), so API-key credentials reached the Authorization header
+// over an http:// connection.
+func TestNewRequiresTLSForCredentialsOnNonLocalEndpoints(t *testing.T) {
+	cases := []struct {
+		name    string
+		config  ConnectionConfig
+		wantErr bool
+	}{
+		{
+			name:    "API key with plaintext HTTP endpoint",
+			config:  ConnectionConfig{Endpoint: "http://example.com", Collector: "demo", APIKey: "secret-key"},
+			wantErr: true,
+		},
+		{
+			name:    "API key with tls=false DSN to non-local host",
+			config:  ConnectionConfig{DSN: "loza://example.com/demo?tls=false", APIKey: "secret-key"},
+			wantErr: true,
+		},
+		{
+			name:    "basic auth with plaintext HTTP endpoint",
+			config:  ConnectionConfig{Endpoint: "http://example.com", Collector: "demo", Username: "private", Password: "secret"},
+			wantErr: true,
+		},
+		{
+			name:   "API key with HTTPS endpoint",
+			config: ConnectionConfig{Endpoint: "https://example.com", Collector: "demo", APIKey: "secret-key"},
+		},
+		{
+			name:   "API key with plaintext HTTP localhost endpoint",
+			config: ConnectionConfig{Endpoint: "http://127.0.0.1:9308", Collector: "demo", APIKey: "secret-key"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := New(tc.config)
+			if tc.wantErr {
+				if err == nil || ErrorCategoryOf(err) != ErrorInvalidConfiguration {
+					t.Fatalf("New() error = %v, category = %q; want invalid configuration", err, ErrorCategoryOf(err))
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("New() unexpected error: %v", err)
+			}
+		})
 	}
 }

@@ -84,8 +84,21 @@ _fake_now: datetime | None = None
 _captured_events: list[dict[str, Any]] = []
 
 
+class _CapturingSink(MemorySink):
+    """Memory sink that also records every emitted event in the module buffer.
+
+    This backs the ``events()`` / ``last_event()`` helpers exposed by ``testkit()``
+    so they observe the events actually written by the testkit logger.
+    """
+
+    def write(self, encoded: str) -> None:
+        super().write(encoded)
+        _captured_events.append(json.loads(encoded))
+
+
 def testkit(service: str = "test") -> dict[str, Any]:
-    logger, sink = TestLogger(service)
+    sink = _CapturingSink()
+    logger = Logger(Config.test(service).with_sink(sink))
     return {
         "logger": logger,
         "sink": sink,
@@ -108,12 +121,24 @@ def clear_events() -> None:
     _captured_events.clear()
 
 
-def golden_test(path: str, event: dict[str, Any]) -> bool:
+def golden_test(path: str, event: dict[str, Any], update: bool = False) -> bool:
+    """Compare a snapshotted ``event`` against the golden file at ``path``.
+
+    A missing golden file is a failure: it must not be silently created and
+    reported as a successful comparison, otherwise a mistyped path, a deleted
+    fixture, or a first run can pass without comparing anything. Pass
+    ``update=True`` to explicitly (re)create the golden file from ``event``.
+    """
     snapshot = json.dumps(snapshot_event(event), sort_keys=True, separators=(",", ":"))
     target = Path(path)
-    if not target.exists():
+    if update:
+        target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(snapshot + "\n", encoding="utf-8")
         return True
+    if not target.exists():
+        raise FileNotFoundError(
+            f"golden file {path!s} does not exist; call golden_test(..., update=True) to create it explicitly"
+        )
     return json.dumps(json.loads(target.read_text(encoding="utf-8")), sort_keys=True, separators=(",", ":")) == snapshot
 
 

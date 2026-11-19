@@ -2,7 +2,6 @@ package server
 
 import (
 	"context"
-	"crypto/subtle"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -62,25 +61,6 @@ func NewWebSocketUpgrader(allowedOrigins []string) websocket.Upgrader {
 	}
 }
 
-var websocketUpgrader = websocket.Upgrader{
-	ReadBufferSize:  16 * 1024,
-	WriteBufferSize: 16 * 1024,
-	Subprotocols:    []string{auth.WebSocketTailProtocol},
-	CheckOrigin: func(r *http.Request) bool {
-		origin := r.Header.Get("Origin")
-		if origin == "" {
-			return true // Non-browser clients (no Origin header)
-		}
-		// Allow localhost for development (exact host match, not suffix)
-		if origin == "http://localhost" || strings.HasPrefix(origin, "http://localhost:") ||
-			origin == "http://127.0.0.1" || strings.HasPrefix(origin, "http://127.0.0.1:") ||
-			origin == "http://[::1]" || strings.HasPrefix(origin, "http://[::1]:") {
-			return true
-		}
-		return false
-	},
-}
-
 func ParseTailFilters(r *http.Request) (TailFilters, error) {
 	filters := TailFilters{Limit: 1000}
 	q := r.URL.Query()
@@ -92,6 +72,8 @@ func ParseTailFilters(r *http.Request) (TailFilters, error) {
 		filters.Since = ts.UTC()
 	}
 	filters.AfterEventID = strings.TrimSpace(q.Get("after_event_id"))
+	filters.Collector = strings.TrimSpace(q.Get("collector"))
+	filters.Environment = strings.TrimSpace(q.Get("environment"))
 	filters.Service = strings.TrimSpace(q.Get("service"))
 	filters.Kind = strings.TrimSpace(q.Get("kind"))
 	filters.TraceID = strings.TrimSpace(q.Get("trace_id"))
@@ -118,7 +100,7 @@ func NewTailWebSocketHandler(cfg HTTPConfig, state TailState) http.Handler {
 			if credential := auth.WebSocketCredential(r); credential != "" {
 				provided = credential
 			}
-			if subtle.ConstantTimeCompare([]byte(provided), []byte(cfg.AuthValue)) != 1 {
+			if !authorizedCredential(cfg, provided) {
 				http.Error(w, "Unauthorized", http.StatusUnauthorized)
 				return
 			}
@@ -151,6 +133,9 @@ func NewTailWebSocketHandler(cfg HTTPConfig, state TailState) http.Handler {
 			return
 		}
 		for _, raw := range history {
+			if !state.TailMatches(r.Context(), raw, filters) {
+				continue
+			}
 			if err := conn.WriteMessage(websocket.TextMessage, raw); err != nil {
 				return
 			}

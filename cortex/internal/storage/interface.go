@@ -137,7 +137,7 @@ type SignatureStore interface {
 
 type SalienceStore interface {
 	Save(ctx context.Context, score *models.SalienceScore) error
-	Get(ctx context.Context, eventType string) (float64, error)
+	Get(ctx context.Context, eventType string) (*models.SalienceScore, error)
 	List(ctx context.Context, limit int) ([]*models.SalienceScore, error)
 }
 
@@ -152,4 +152,5 @@ type FeedbackStore interface {
 	Save(ctx context.Context, fb *models.RemediationFeedback) error
 	GetByRemediation(ctx context.Context, remediationID string) ([]*models.RemediationFeedback, error)
 	GetSuccessRate(ctx context.Context, action string, signatureID string) (float64, error)
+	GetAverageTimeToResolve(ctx context.Context, action string, signatureID string) (int64, error)
 }

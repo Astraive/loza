@@ -9,9 +9,9 @@ from email.utils import parsedate_to_datetime
 from ipaddress import ip_address
 from os import getenv
 from typing import Any, Iterable
-from urllib.parse import urlencode, urlparse
+from urllib.parse import quote, urlencode, urlparse
 from urllib.error import HTTPError, URLError
-from urllib.request import Request, urlopen
+from urllib.request import HTTPRedirectHandler, Request, build_opener, urlopen
 from ..generated.spec_contract import (
     CollectorResponse,
     LOZA_INGEST_API_VERSION,
@@ -138,6 +138,7 @@ class CollectorClient:
     ) -> None:
         _validate_collector_endpoint(endpoint)
         _validate_basic_auth_endpoint(endpoint, username, password)
+        _validate_auth_requires_https(endpoint, api_key=api_key, username=username, password=password)
         self.endpoint = endpoint
         self.api_key = api_key
         self.auth_header = auth_header
@@ -171,7 +172,7 @@ class CollectorClient:
         for attempt in range(self.retries + 1):
             try:
                 try:
-                    with urlopen(request, timeout=self.timeout) as response:
+                    with _open_with_redirect_guard(request, self.timeout, self.endpoint) as response:
                         status = getattr(response, "status", response.getcode())
                         headers_obj = getattr(response, "headers", None)
                         raw = response.read()
@@ -305,6 +306,9 @@ def _validate_collector_endpoint(endpoint: str) -> None:
             raise ValueError("collector endpoint resolves to a non-public address")
 
 
+_LOCAL_AUTH_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
+
+
 def _validate_basic_auth_endpoint(endpoint: str, username: str, password: str) -> None:
     if not username and password:
         raise ValueError("collector basic auth password requires a username")
@@ -313,8 +317,21 @@ def _validate_basic_auth_endpoint(endpoint: str, username: str, password: str) -
     if not username:
         return
     parsed = urlparse(endpoint)
-    if parsed.scheme == "http" and (parsed.hostname or "").lower() not in {"localhost", "127.0.0.1", "::1"}:
+    if parsed.scheme == "http" and (parsed.hostname or "").lower() not in _LOCAL_AUTH_HOSTS:
         raise ValueError("collector basic auth requires HTTPS except for local endpoints")
+
+
+def _validate_auth_requires_https(endpoint: str, *, api_key: str = "", username: str = "", password: str = "") -> None:
+    """Reject cleartext HTTP for non-local endpoints carrying a credential.
+
+    Basic auth, Bearer tokens, and custom API-key headers must never be sent
+    over an unencrypted connection. Loopback hosts stay allowed for local dev.
+    """
+    if not (api_key or username or password):
+        return
+    parsed = urlparse(endpoint)
+    if parsed.scheme == "http" and (parsed.hostname or "").lower() not in _LOCAL_AUTH_HOSTS:
+        raise ValueError("authenticated collector endpoints require HTTPS except for local endpoints")
 
 
 def _private_endpoint_allowed() -> bool:
@@ -323,6 +340,47 @@ def _private_endpoint_allowed() -> bool:
 
 def _default_port(scheme: str) -> int:
     return 443 if scheme == "https" else 80
+
+
+def _origin(url: str) -> tuple[str, str, int]:
+    """Return the normalized (scheme, host, port) origin of a URL."""
+    try:
+        parsed = urlparse(url)
+        return (parsed.scheme.lower(), (parsed.hostname or "").lower(), parsed.port or _default_port(parsed.scheme))
+    except ValueError as exc:
+        raise ValueError("redirect target is malformed") from exc
+
+
+class _SameOriginRedirectHandler(HTTPRedirectHandler):
+    """Refuse redirects that would leave the configured collector origin.
+
+    urllib copies the request's custom headers (including Authorization) onto
+    the redirected request, and endpoint validation only happens once at
+    construction time. Allowing an arbitrary collector-supplied Location would
+    therefore forward credentials to an unvalidated host and enable SSRF.
+    """
+
+    def __init__(self, endpoint: str) -> None:
+        self._endpoint = endpoint
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        try:
+            _validate_collector_endpoint(newurl)
+            target_origin = _origin(newurl)
+            allowed_origin = _origin(self._endpoint)
+        except ValueError:
+            # A None result makes urllib surface the 3xx as the final response;
+            # callers already treat status >= 300 as a failed send.
+            return None
+        if target_origin != allowed_origin:
+            return None
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+def _open_with_redirect_guard(request: Request, timeout: float, endpoint: str):
+    """Open a credentialed request without following off-origin redirects."""
+    opener = build_opener(_SameOriginRedirectHandler(endpoint))
+    return opener.open(request, timeout=timeout)
 
 
 def WrapHTTPClient(client=None):
@@ -334,6 +392,16 @@ def NewRoundTripper(base=None):
 
 
 # ── CollectorClient API extensions ──────────────────────────────────────────
+
+
+def _quote_segment(value: Any) -> str:
+    """Percent-encode a single dynamic URL path segment.
+
+    Caller-supplied identifiers must not be able to rewrite the request path
+    or inject query parameters/fragments. Encoding each segment with an empty
+    ``safe`` set neutralizes ``/``, ``?`` and ``#`` (and other reserved bytes).
+    """
+    return quote(str(value), safe="")
 
 
 def _collector_request(
@@ -376,13 +444,13 @@ def _collector_tail(self, **params):
 def _collector_delete(self, **params):
     event_id = params.get("event_id") or params.get("id")
     if event_id:
-        return _collector_request(self, "DELETE", f"/events/{event_id}")
+        return _collector_request(self, "DELETE", f"/events/{_quote_segment(event_id)}")
     tenant_id = params.get("tenant_id")
     if tenant_id:
-        return _collector_request(self, "DELETE", f"/events/by-tenant/{tenant_id}")
+        return _collector_request(self, "DELETE", f"/events/by-tenant/{_quote_segment(tenant_id)}")
     user_id = params.get("user_id")
     if user_id:
-        return _collector_request(self, "DELETE", f"/events/by-user/{user_id}")
+        return _collector_request(self, "DELETE", f"/events/by-user/{_quote_segment(user_id)}")
     raise ValueError("delete requires one of: event_id/id, tenant_id, user_id")
 
 
@@ -395,11 +463,11 @@ def _collector_dlq_list(self, **params):
 
 
 def _collector_dlq_read(self, dlq_id):
-    return _collector_request(self, "GET", f"/dlq/{dlq_id}")
+    return _collector_request(self, "GET", f"/dlq/{_quote_segment(dlq_id)}")
 
 
 def _collector_dlq_replay(self, dlq_id):
-    return _collector_request(self, "POST", f"/dlq/{dlq_id}/replay")
+    return _collector_request(self, "POST", f"/dlq/{_quote_segment(dlq_id)}/replay")
 
 
 def _collector_keys_create(self, **params):
@@ -407,11 +475,11 @@ def _collector_keys_create(self, **params):
 
 
 def _collector_keys_revoke(self, key_id):
-    return _collector_request(self, "DELETE", f"/keys/{key_id}")
+    return _collector_request(self, "DELETE", f"/keys/{_quote_segment(key_id)}")
 
 
 def _collector_keys_rotate(self, key_id):
-    return _collector_request(self, "POST", f"/keys/{key_id}/rotate")
+    return _collector_request(self, "POST", f"/keys/{_quote_segment(key_id)}/rotate")
 
 
 def _collector_sinks_list(self):
@@ -419,7 +487,7 @@ def _collector_sinks_list(self):
 
 
 def _collector_sinks_test(self, name):
-    return _collector_request(self, "POST", f"/sinks/{name}/test")
+    return _collector_request(self, "POST", f"/sinks/{_quote_segment(name)}/test")
 
 
 def _collector_policy_validate(self, policy):

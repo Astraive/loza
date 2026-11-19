@@ -2,6 +2,8 @@ package core
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -70,7 +72,7 @@ func TestEventBuffer_IntervalFlush(t *testing.T) {
 	var flushedEvents atomic.Int32
 
 	buf := NewEventBuffer(EventBufferConfig{
-		BatchSize:     100,                // Large batch size to avoid batch-based flush
+		BatchSize:     100,                    // Large batch size to avoid batch-based flush
 		FlushInterval: 100 * time.Millisecond, // Short interval for testing
 		MaxBufferSize: 1000,
 		FlushFunc: func(ctx context.Context, events []*Event, encoded [][]byte) error {
@@ -193,6 +195,67 @@ func TestEventBuffer_CloseFlush(t *testing.T) {
 
 	if flushedEvents.Load() != 7 {
 		t.Errorf("Expected 7 flushed events, got %d", flushedEvents.Load())
+	}
+}
+
+// TestEventBuffer_AddAfterClose verifies that events added after Close are
+// rejected rather than buffered with no flush loop left to drain them.
+func TestEventBuffer_AddAfterClose(t *testing.T) {
+	var flushCount atomic.Int32
+	var flushedEvents atomic.Int32
+
+	buf := NewEventBuffer(EventBufferConfig{
+		BatchSize:     100,
+		FlushInterval: time.Hour, // Long interval to avoid time-based flushes
+		MaxBufferSize: 1000,
+		FlushFunc: func(ctx context.Context, events []*Event, encoded [][]byte) error {
+			flushCount.Add(1)
+			flushedEvents.Add(int32(len(events)))
+			return nil
+		},
+	})
+
+	ctx := context.Background()
+
+	// Add events before close; they should be flushed by Close.
+	for i := 0; i < 3; i++ {
+		ev := &Event{EventID: NewUUIDv7()}
+		if err := buf.Add(ctx, ev, []byte("test")); err != nil {
+			t.Fatalf("Add before close failed: %v", err)
+		}
+	}
+
+	if err := buf.Close(ctx); err != nil {
+		t.Fatalf("Close failed: %v", err)
+	}
+
+	flushCountAfterClose := flushCount.Load()
+	flushedEventsAfterClose := flushedEvents.Load()
+	if flushCountAfterClose != 1 || flushedEventsAfterClose != 3 {
+		t.Fatalf("Expected Close to flush 3 events once, got %d flushes / %d events",
+			flushCountAfterClose, flushedEventsAfterClose)
+	}
+
+	// Adding after Close must be rejected, not silently buffered.
+	ev := &Event{EventID: NewUUIDv7()}
+	if err := buf.Add(ctx, ev, []byte("test")); !errors.Is(err, ErrBufferClosed) {
+		t.Fatalf("Expected ErrBufferClosed after Close, got %v", err)
+	}
+
+	// The rejected event must not be stranded in the buffer.
+	if buf.Size() != 0 {
+		t.Errorf("Expected empty buffer after rejected Add, got size %d", buf.Size())
+	}
+
+	// A second Close must not flush any stranded events.
+	if err := buf.Close(ctx); err != nil {
+		t.Fatalf("Second Close failed: %v", err)
+	}
+	if got := flushCount.Load(); got != flushCountAfterClose {
+		t.Errorf("Expected no additional flushes after second Close, got %d -> %d", flushCountAfterClose, got)
+	}
+	if got := flushedEvents.Load(); got != flushedEventsAfterClose {
+		t.Errorf("Expected no additional flushed events after second Close, got %d -> %d", flushedEventsAfterClose, got)
 	}
 }
 
@@ -503,5 +566,80 @@ func TestEventBuffer_DefaultConfig(t *testing.T) {
 
 	if buf.maxBufferSize != 10000 {
 		t.Errorf("Expected default max buffer size 10000, got %d", buf.maxBufferSize)
+	}
+}
+
+// TestEventBuffer_ConcurrentAddDoesNotDropPendingBatch is a regression test for
+// the race where Add() released the mutex before flushing a full batch. A
+// concurrent Add() could then grab the lock, see a full buffer and drop the
+// oldest event from a batch that was still pending a flush. With
+// batchSize == maxBufferSize this window is acute: every event that fills the
+// buffer is immediately ripe for an overflow drop. The fix snapshots the batch
+// while holding the same lock that guards the overflow drop, so no event from
+// a full batch can be evicted before it is handed to the flush function.
+func TestEventBuffer_ConcurrentAddDoesNotDropPendingBatch(t *testing.T) {
+	const (
+		batchSize     = 1 // maxBufferSize == batchSize makes the race window acute
+		numGoroutines = 16
+		eventsPerGor  = 500
+	)
+
+	var (
+		flushedTotal atomic.Int64
+		mu           sync.Mutex
+		seen         = make(map[string]int)
+	)
+
+	buf := NewEventBuffer(EventBufferConfig{
+		BatchSize:     batchSize,
+		FlushInterval: time.Hour, // avoid time-based flushes
+		MaxBufferSize: batchSize,
+		FlushFunc: func(ctx context.Context, events []*Event, encoded [][]byte) error {
+			mu.Lock()
+			for _, ev := range events {
+				seen[ev.EventID]++
+			}
+			mu.Unlock()
+			flushedTotal.Add(int64(len(events)))
+			return nil
+		},
+	})
+	defer buf.Close(context.Background())
+
+	ctx := context.Background()
+
+	var wg sync.WaitGroup
+	for g := 0; g < numGoroutines; g++ {
+		wg.Add(1)
+		go func(g int) {
+			defer wg.Done()
+			for j := 0; j < eventsPerGor; j++ {
+				id := fmt.Sprintf("g%d-%d", g, j)
+				_ = buf.Add(ctx, &Event{EventID: id}, []byte(id))
+			}
+		}(g)
+	}
+	wg.Wait()
+
+	// Flush any remainder so every accepted event is accounted for.
+	_ = buf.Flush(ctx)
+
+	total := numGoroutines * eventsPerGor
+	if got := buf.DroppedCount(); got != 0 {
+		t.Errorf("expected 0 dropped events when batchSize == maxBufferSize, got %d", got)
+	}
+	if got := flushedTotal.Load(); got != int64(total) {
+		t.Errorf("expected %d flushed events, got %d", total, got)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	for g := 0; g < numGoroutines; g++ {
+		for j := 0; j < eventsPerGor; j++ {
+			id := fmt.Sprintf("g%d-%d", g, j)
+			if seen[id] != 1 {
+				t.Fatalf("event %s flushed %d times, want exactly 1", id, seen[id])
+			}
+		}
 	}
 }

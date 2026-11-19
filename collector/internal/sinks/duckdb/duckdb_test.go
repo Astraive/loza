@@ -34,6 +34,53 @@ func TestQuoteTableNameRejectsInvalidIdentifier(t *testing.T) {
 	}
 }
 
+func TestAppenderTableRef(t *testing.T) {
+	tests := []struct {
+		name       string
+		table      string
+		wantSchema string
+		wantTable  string
+		wantErr    bool
+	}{
+		{name: "unqualified quoted", table: `"events"`, wantTable: "events"},
+		{name: "unqualified plain", table: "events", wantTable: "events"},
+		{name: "schema qualified quoted", table: `"main"."events"`, wantSchema: "main", wantTable: "events"},
+		{name: "schema qualified plain", table: "main.events", wantSchema: "main", wantTable: "events"},
+		// Regression: a catalog-qualified name used to be parsed as
+		// schema=catalog, table=schema, silently appending to the wrong table.
+		{name: "catalog qualified quoted", table: `"cat"."main"."events"`, wantErr: true},
+		{name: "catalog qualified plain", table: "cat.main.events", wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			schema, table, err := appenderTableRef(tt.table)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("expected error for %q, got schema=%q table=%q", tt.table, schema, table)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if schema != tt.wantSchema || table != tt.wantTable {
+				t.Fatalf("got (%q, %q), want (%q, %q)", schema, table, tt.wantSchema, tt.wantTable)
+			}
+		})
+	}
+}
+
+func TestNewRejectsCatalogQualifiedTableWithAppender(t *testing.T) {
+	_, err := New(Config{
+		Table:       "cat.main.events",
+		WriterLoop:  true,
+		UseAppender: true,
+	})
+	if err == nil || !strings.Contains(err.Error(), "catalog-qualified") {
+		t.Fatalf("expected catalog-qualified table error, got %v", err)
+	}
+}
+
 func TestBuildSchemaInsertQuery(t *testing.T) {
 	q := buildSchemaInsertQuery(`"events"`, []string{"event_id", "status_code"}, true, `"raw"`)
 	want := `INSERT INTO "events" ("event_id", "status_code", "raw") VALUES (?, ?, ?)`
@@ -245,6 +292,90 @@ func TestWriteEventBatchingFlush(t *testing.T) {
 	}
 	assertRowCount(t, db, 1)
 }
+
+func TestFlushWritesBufferedBatchWhenPriorErrorPending(t *testing.T) {
+	db := openSQLiteDB(t)
+	mustExec(t, db, `CREATE TABLE events (raw TEXT)`)
+
+	rawSink, err := New(Config{DB: db, Table: "events", BatchSize: 10})
+	if err != nil {
+		t.Fatalf("new sink failed: %v", err)
+	}
+	s := rawSink.(*sink)
+
+	ctx := context.Background()
+	if err := s.WriteEvent(ctx, []byte(`{"event_id":"buffered"}`), nil); err != nil {
+		t.Fatalf("write event failed: %v", err)
+	}
+	assertRowCount(t, db, 0)
+
+	pendingErr := errors.New("prior background failure")
+	s.mu.Lock()
+	s.lastErr = pendingErr
+	s.mu.Unlock()
+
+	flushErr := s.Flush(ctx)
+	if !errors.Is(flushErr, pendingErr) {
+		t.Fatalf("Flush should surface pending error, got: %v", flushErr)
+	}
+	assertRowCount(t, db, 1)
+}
+
+func TestCloseFlushesBufferedBatchWhenPriorErrorPending(t *testing.T) {
+	db := openSQLiteDB(t)
+	mustExec(t, db, `CREATE TABLE events (raw TEXT)`)
+
+	rawSink, err := New(Config{DB: db, Table: "events", BatchSize: 10})
+	if err != nil {
+		t.Fatalf("new sink failed: %v", err)
+	}
+	s := rawSink.(*sink)
+
+	ctx := context.Background()
+	if err := s.WriteEvent(ctx, []byte(`{"event_id":"buffered"}`), nil); err != nil {
+		t.Fatalf("write event failed: %v", err)
+	}
+
+	pendingErr := errors.New("prior background failure")
+	s.mu.Lock()
+	s.lastErr = pendingErr
+	s.mu.Unlock()
+
+	closeErr := s.Close(ctx)
+	if !errors.Is(closeErr, pendingErr) {
+		t.Fatalf("Close should surface pending error, got: %v", closeErr)
+	}
+	assertRowCount(t, db, 1)
+}
+
+func TestWriteEventWritesFullBatchWhenPriorErrorPending(t *testing.T) {
+	db := openSQLiteDB(t)
+	mustExec(t, db, `CREATE TABLE events (raw TEXT)`)
+
+	rawSink, err := New(Config{DB: db, Table: "events", BatchSize: 2})
+	if err != nil {
+		t.Fatalf("new sink failed: %v", err)
+	}
+	s := rawSink.(*sink)
+
+	ctx := context.Background()
+	if err := s.WriteEvent(ctx, []byte(`{"event_id":"a"}`), nil); err != nil {
+		t.Fatalf("write event a failed: %v", err)
+	}
+	assertRowCount(t, db, 0)
+
+	pendingErr := errors.New("prior background failure")
+	s.mu.Lock()
+	s.lastErr = pendingErr
+	s.mu.Unlock()
+
+	writeErr := s.WriteEvent(ctx, []byte(`{"event_id":"b"}`), nil)
+	if !errors.Is(writeErr, pendingErr) {
+		t.Fatalf("WriteEvent should surface pending error, got: %v", writeErr)
+	}
+	assertRowCount(t, db, 2)
+}
+
 func TestFlushHonorsCanceledContextWhileWaitingForSerialization(t *testing.T) {
 	db := openSQLiteDB(t)
 	mustExec(t, db, `CREATE TABLE events (raw TEXT)`)
@@ -271,6 +402,44 @@ func TestFlushHonorsCanceledContextWhileWaitingForSerialization(t *testing.T) {
 	case <-time.After(200 * time.Millisecond):
 		t.Fatal("Flush blocked on serialization after context cancellation")
 	}
+}
+
+func TestWriteEventRestoresBatchWhenAcquireFlushFails(t *testing.T) {
+	db := openSQLiteDB(t)
+	mustExec(t, db, `CREATE TABLE events (raw TEXT)`)
+
+	rawSink, err := New(Config{DB: db, Table: "events", BatchSize: 2})
+	if err != nil {
+		t.Fatalf("new sink failed: %v", err)
+	}
+	s := rawSink.(*sink)
+
+	// Occupy the flush lock so acquireFlush cannot succeed while ctx is canceled.
+	s.flushMu <- struct{}{}
+
+	// First event only fills the buffer; the second detaches a full batch.
+	if err := s.WriteEvent(context.Background(), []byte(`{"event_id":"a"}`), nil); err != nil {
+		t.Fatalf("write a failed: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := s.WriteEvent(ctx, []byte(`{"event_id":"b"}`), nil); !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context cancellation from acquireFlush, got: %v", err)
+	}
+
+	s.mu.Lock()
+	buffered := len(s.buffer)
+	s.mu.Unlock()
+	if buffered != 2 {
+		t.Fatalf("expected detached batch to be restored, want 2 buffered events, got %d", buffered)
+	}
+
+	// Release the lock and confirm the restored batch is written, not dropped.
+	<-s.flushMu
+	if err := s.Flush(context.Background()); err != nil {
+		t.Fatalf("flush failed: %v", err)
+	}
+	assertRowCount(t, db, 2)
 }
 
 func TestWriteEventBatchingFlushInterval(t *testing.T) {
@@ -507,6 +676,28 @@ func assertRowCount(t *testing.T, db *sql.DB, want int) {
 	t.Helper()
 	if got := rowCount(t, db); got != want {
 		t.Fatalf("row count mismatch: want=%d got=%d", want, got)
+	}
+}
+
+func TestRetrySleepSmallBackoff(t *testing.T) {
+	// A 1ns backoff used to panic because base/2 == 0 was passed to
+	// rand.Int63n. Small backoffs must return the base without a panic.
+	for _, base := range []time.Duration{0, 1, 2, 3} {
+		got := retrySleep(base)
+		switch {
+		case base <= 0:
+			if got != 0 {
+				t.Fatalf("retrySleep(%s) = %s, want 0", base, got)
+			}
+		case base < 2:
+			if got != base {
+				t.Fatalf("retrySleep(%s) = %s, want %s", base, got, base)
+			}
+		default:
+			if got < base || got >= base+base/2 {
+				t.Fatalf("retrySleep(%s) = %s, want [base, base+base/2)", base, got)
+			}
+		}
 	}
 }
 

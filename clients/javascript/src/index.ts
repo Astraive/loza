@@ -85,33 +85,33 @@ export class Client {
     }
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), this.config.timeoutMs);
-    const normalizedLimit = Math.max(1, Math.min(Math.trunc(limit), 1000));
-    const encodedParameters: Record<string, QueryValue> = {};
-    for (const [name, value] of Object.entries(parameters)) {
-      encodedParameters[name] = isQueryValue(value)
-        ? value
-        : { type: inferType(value), value };
-    }
-    const endpoint = `${this.config.endpoint}/collectors/${encodeURIComponent(this.config.collector)}/lql/query`;
-    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-    if (this.config.apiKey) {
-      headers.Authorization = `Bearer ${this.config.apiKey}`;
-    } else if (this.config.username) {
-      headers.Authorization = `Basic ${base64(`${this.config.username}:${this.config.password}`)}`;
-    }
-    if (this.config.env) headers['X-Loza-Env'] = this.config.env;
-    if (this.config.service) headers['X-Loza-Service'] = this.config.service;
     try {
+      const normalizedLimit = Math.max(1, Math.min(Math.trunc(limit), 1000));
+      // Use a null-prototype map so arbitrary names (e.g. "__proto__") become own
+      // properties instead of triggering Object.prototype's inherited setter, which
+      // would silently drop the parameter and reassign the map's prototype.
+      const encodedParameters: Record<string, QueryValue> = Object.create(null) as Record<string, QueryValue>;
+      for (const [name, value] of Object.entries(parameters)) {
+        encodedParameters[name] = isQueryValue(value)
+          ? value
+          : { type: inferType(value), value };
+      }
+      const endpoint = `${this.config.endpoint}/collectors/${encodeURIComponent(this.config.collector)}/lql/query`;
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (this.config.apiKey) {
+        headers.Authorization = `Bearer ${this.config.apiKey}`;
+      } else if (this.config.username) {
+        headers.Authorization = `Basic ${base64(`${this.config.username}:${this.config.password}`)}`;
+      }
+      if (this.config.env) headers['X-Loza-Env'] = this.config.env;
+      if (this.config.service) headers['X-Loza-Service'] = this.config.service;
       const response = await this.config.fetch(endpoint, {
         method: 'POST',
         headers,
         body: JSON.stringify({ query: source, parameters: encodedParameters, limit: normalizedLimit }),
         signal: controller.signal,
       });
-      const raw = await response.arrayBuffer();
-      if (raw.byteLength > this.config.maxResponseBytes) {
-        throw new QueryError('LQL response exceeds the configured size limit', ErrorCategory.MalformedResponse);
-      }
+      const raw = await readBoundedResponse(response, this.config.maxResponseBytes);
       const text = new TextDecoder().decode(raw);
       if (!response.ok) {
         throw decodeHTTPError(response.status, text);
@@ -154,8 +154,8 @@ function resolveConfig(input: ConnectionConfig): ResolvedConfig {
   if (username && !password && !username.startsWith('lz_pub_')) {
     throw new QueryError('invalid LQL connection configuration: basic username requires a password', ErrorCategory.InvalidConfiguration);
   }
-  if (username && !apiKey && endpointURL.protocol === 'http:' && !isLocalhost(endpointURL.hostname)) {
-    throw new QueryError('invalid LQL connection configuration: basic authentication requires TLS', ErrorCategory.InvalidConfiguration);
+  if ((apiKey || username) && endpointURL.protocol === 'http:' && !isLocalhost(endpointURL.hostname)) {
+    throw new QueryError('invalid LQL connection configuration: credentials require TLS', ErrorCategory.InvalidConfiguration);
   }
   return {
     endpoint: endpoint.replace(/\/$/, ''), collector, apiKey, username, password, env, service,
@@ -186,6 +186,39 @@ function parseDSN(raw: string): { endpoint: string; collector: string; username:
     collector, username, password,
     env: parsed.searchParams.get('env') || 'default', service: parsed.searchParams.get('service') || '',
   };
+}
+
+async function readBoundedResponse(response: Response, maxBytes: number): Promise<Uint8Array> {
+  const declared = response.headers.get('content-length');
+  if (declared !== null && Number(declared) > maxBytes) {
+    throw new QueryError('LQL response exceeds the configured size limit', ErrorCategory.MalformedResponse);
+  }
+  const body = response.body;
+  if (!body) return new Uint8Array(0);
+  const reader = body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > maxBytes) {
+        await reader.cancel();
+        throw new QueryError('LQL response exceeds the configured size limit', ErrorCategory.MalformedResponse);
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  const merged = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    merged.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return merged;
 }
 
 function decodeResult(text: string): QueryResult {

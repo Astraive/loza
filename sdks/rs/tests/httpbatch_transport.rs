@@ -9,6 +9,11 @@ use std::time::Duration;
 
 #[test]
 fn http_batch_sink_posts_gzipped_events_to_collector() {
+    // The collector client reads LOZA_COLLECTOR_API_KEY /
+    // LOZA_COLLECTOR_API_KEY_HEADER from the process-global environment at
+    // emit time. Serialize with the key-from-environment test so its
+    // transient set_var/remove_var cannot leak into this sink's request.
+    let _guard = env_lock().lock().expect("env lock");
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind test server");
     listener
         .set_nonblocking(false)
@@ -86,6 +91,12 @@ fn http_batch_sink_posts_gzipped_events_to_collector() {
     assert!(decoded.contains("\"events\":["));
     assert!(decoded.contains("\"event\":\"checkout.collector\""));
     assert!(decoded.contains("\"service\":\"checkout\""));
+    // Regression guard: the sibling env-key test uses this exact value. If
+    // env_lock discipline regresses, its transient key leaks into this request.
+    assert!(
+        !head.contains("secret-key"),
+        "a sibling test's API key leaked through the process-global environment"
+    );
 }
 
 #[test]
@@ -128,6 +139,45 @@ fn http_batch_sink_uses_api_key_from_environment() {
     std::env::remove_var("LOZA_COLLECTOR_API_KEY_HEADER");
 
     assert!(head.contains("X-API-Key: secret-key"));
+}
+
+#[test]
+fn env_lock_serializes_global_collector_env_access() {
+    // Regression for the cross-test env race: the collector API-key variables
+    // are process-global and are read at emit time, so every HttpBatchSink
+    // test must hold env_lock while it sets or observes them. This proves the
+    // lock actually excludes a sibling while a transient key is present.
+    let guard = env_lock().lock().expect("env lock");
+
+    let (acquired_tx, acquired_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel::<()>();
+    let contender = thread::spawn(move || {
+        let _g = env_lock().lock().expect("env lock");
+        acquired_tx.send(()).expect("signal lock acquired");
+        release_rx.recv().expect("wait for release");
+    });
+
+    std::env::set_var("LOZA_COLLECTOR_API_KEY", "sibling-leaked-key");
+    std::env::set_var("LOZA_COLLECTOR_API_KEY_HEADER", "X-API-Key");
+
+    // While this test holds the lock with the key set, a sibling cannot
+    // acquire it and construct/emit a sink that observes the transient value.
+    assert!(
+        acquired_rx
+            .recv_timeout(Duration::from_millis(200))
+            .is_err(),
+        "sibling acquired env_lock while collector key env vars were set"
+    );
+
+    std::env::remove_var("LOZA_COLLECTOR_API_KEY");
+    std::env::remove_var("LOZA_COLLECTOR_API_KEY_HEADER");
+    drop(guard);
+
+    release_tx.send(()).expect("release contender");
+    acquired_rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("sibling acquires lock after release");
+    contender.join().expect("contender thread");
 }
 
 fn find_headers_end(raw: &[u8]) -> Option<usize> {

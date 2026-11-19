@@ -401,6 +401,7 @@ LOZA_SPEC_VERSION = CONTRACT['spec_version']
 LOZA_INGEST_API_VERSION = CONTRACT['api_version']
 LOZA_EVENT_VERSION = CONTRACT['event_version']
 MAX_EVENT_BYTES = CONTRACT['limits']['max_event_size_bytes']
+MAX_BATCH_BYTES = CONTRACT['limits']['max_batch_size_bytes']
 ALLOWED_TOP_LEVEL_FIELDS = set(CONTRACT['allowed_top_level_fields'])
 CANONICAL_FIELDS = set(CONTRACT['canonical_fields'])
 ALLOWED_KINDS = set(CONTRACT['enums']['kinds'])
@@ -521,8 +522,13 @@ def validate_event_payload(payload: dict[str, Any], strict: bool) -> None:
         raise ValidationErrors(errors)
 
 def validate_event_payload_detailed(payload: dict[str, Any], strict: bool) -> list[ValidationError]:
-    normalized, _ = normalize_event_aliases(payload)
     errors: list[ValidationError] = []
+    # Strict mode forbids aliases (CONTRACT alias_policy.strict_mode =
+    # "reject_before_normalization"): reject `event_type` before it is
+    # normalized away, matching the other SDKs' `alias_not_allowed` error.
+    if strict and 'event_type' in payload:
+        errors.append(ValidationError(field='event_type', code='alias_not_allowed', message='field "event_type" is not allowed in strict mode; use "event" instead'))
+    normalized, _ = normalize_event_aliases(payload)
     if strict:
         for key in normalized:
             if key not in ALLOWED_TOP_LEVEL_FIELDS:
@@ -537,6 +543,7 @@ def validate_event_payload_detailed(payload: dict[str, Any], strict: bool) -> li
     if normalized.get('event_version') not in {LOZA_EVENT_VERSION}:
         errors.append(ValidationError(field='event_version', code='unsupported_event_version', message=f'field "event_version" has unsupported value "{normalized.get("event_version")}"'))
     _req_service(normalized, errors)
+    _req_str(normalized, 'kind', 'missing_kind', errors)
     _req_enum(normalized, 'kind', ALLOWED_KINDS, errors)
     _opt_enum(normalized, 'level', ALLOWED_LEVELS, errors)
     _opt_enum(normalized, 'outcome', ALLOWED_OUTCOMES, errors)
@@ -546,28 +553,47 @@ def validate_event_payload_detailed(payload: dict[str, Any], strict: bool) -> li
     _opt_status_code(normalized, 'status_code', errors)
     return errors
 
+def _event_bytes_too_large(size: int) -> ValidationErrors:
+    return ValidationErrors([ValidationError(field='payload', code='too_large', message=f'payload exceeds max_event_size_bytes ({size} > {MAX_EVENT_BYTES})')])
+
+def _validate_event_size(payload: Any, strict: bool) -> None:
+    size = len(json.dumps(payload, separators=(',', ':'), ensure_ascii=False).encode('utf-8'))
+    if size > MAX_EVENT_BYTES:
+        raise _event_bytes_too_large(size)
+    validate_event_payload(payload, strict)
+
 def validate_flexible_json_bytes(raw: bytes, strict: bool) -> None:
     trimmed = raw.strip()
     if not trimmed:
         raise ValidationErrors([ValidationError(field='payload', code='empty_payload', message='payload is empty')])
-    if len(trimmed) > MAX_EVENT_BYTES and b'"events"' not in trimmed and b'\n' not in trimmed:
-        raise ValidationErrors([ValidationError(field='payload', code='too_large', message=f'payload exceeds max_event_size_bytes ({len(trimmed)} > {MAX_EVENT_BYTES})')])
+    # Enforce a hard raw-byte ceiling on every payload regardless of shape. The
+    # format is determined by parsing below, never by sniffing arbitrary bytes
+    # such as b'"events"' or b'\n' (which allowed oversized single events to
+    # skip the max_event_size_bytes check entirely).
+    if len(trimmed) > MAX_BATCH_BYTES:
+        raise ValidationErrors([ValidationError(field='payload', code='too_large', message=f'payload exceeds max_batch_size_bytes ({len(trimmed)} > {MAX_BATCH_BYTES})')])
     try:
         payload = json.loads(trimmed)
     except json.JSONDecodeError:
         for line in trimmed.splitlines():
-            if line.strip():
-                validate_event_payload(json.loads(line), strict)
+            line = line.strip()
+            if not line:
+                continue
+            if len(line) > MAX_EVENT_BYTES:
+                raise _event_bytes_too_large(len(line))
+            validate_event_payload(json.loads(line), strict)
         return
-    if isinstance(payload, dict) and 'events' in payload and 'api_version' not in payload:
+    if isinstance(payload, dict) and 'events' in payload:
         for event in payload['events']:
-            validate_event_payload(event, strict)
+            _validate_event_size(event, strict)
         return
     if isinstance(payload, list):
         for event in payload:
-            validate_event_payload(event, strict)
+            _validate_event_size(event, strict)
         return
     if isinstance(payload, dict):
+        if len(trimmed) > MAX_EVENT_BYTES:
+            raise _event_bytes_too_large(len(trimmed))
         validate_event_payload(payload, strict)
         return
     raise ValidationErrors([ValidationError(field='payload', code='invalid_payload', message='payload must be a JSON object, array, wrapper, or NDJSON')])

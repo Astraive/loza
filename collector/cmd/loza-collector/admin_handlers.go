@@ -1,8 +1,10 @@
 package main
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -12,6 +14,15 @@ import (
 	"github.com/astraive/loza/collector/internal/auth"
 	speccontract "github.com/astraive/loza/spec/generated/go/contract"
 )
+
+// adminKeyStore is the subset of key-store operations needed by the admin
+// handlers. Keeping it as an interface lets tests exercise store failure paths.
+// It satisfies auth.KeyStore because FindByKeyID is part of its method set.
+type adminKeyStore interface {
+	FindByKeyID(ctx context.Context, keyID string) (*auth.KeyRecord, error)
+	CreateKey(rec *auth.KeyRecord) error
+	RevokeKey(keyID string) error
+}
 
 func (s *collectorState) handleValidate(w http.ResponseWriter, r *http.Request) {
 	if !s.isAuthorized(r) {
@@ -44,8 +55,8 @@ func (s *collectorState) handleSchemaCheck(w http.ResponseWriter, r *http.Reques
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"valid":          true,
-		"schema_version": s.cfg.schemaSchemaVersion,
-		"event_version":  s.cfg.schemaEventVersion,
+		"schema_version": s.config().schemaSchemaVersion,
+		"event_version":  s.config().schemaEventVersion,
 	})
 }
 
@@ -102,18 +113,16 @@ func (s *collectorState) handleKeyCreate(w http.ResponseWriter, r *http.Request)
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_env", "message": "env must be 'live', 'test', or 'dev'"})
 		return
 	}
-	token8, err := randomToken(8)
+	keyID, err := generateKeyID()
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "token_generation_failed"})
 		return
 	}
-	token24, err := randomToken(24)
+	secret, err := randomToken(24)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "token_generation_failed"})
 		return
 	}
-	keyID := "k" + token8
-	secret := token24
 	key := "lz_" + kind + "_" + env + "_" + keyID + "_" + secret
 
 	// Store the new key in the key store so it can authenticate requests
@@ -124,12 +133,12 @@ func (s *collectorState) handleKeyCreate(w http.ResponseWriter, r *http.Request)
 			keyKind = auth.KeyKindPublic
 		}
 		newKey := &auth.KeyRecord{
-			ID:           keyID,
-			KeyID:        keyID,
-			SecretHash:   secretHash,
-			Kind:         keyKind,
-			Roles:        []auth.Role{auth.RoleIngestServer},
-			AllowedEnvs:  []string{env},
+			ID:          keyID,
+			KeyID:       keyID,
+			SecretHash:  secretHash,
+			Kind:        keyKind,
+			Roles:       []auth.Role{auth.RoleIngestServer},
+			AllowedEnvs: []string{env},
 		}
 		if err := s.keyStore.CreateKey(newKey); err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "key_store_error"})
@@ -195,12 +204,11 @@ func (s *collectorState) handleKeyRotate(w http.ResponseWriter, r *http.Request)
 	}
 
 	// Generate a NEW keyID for the rotated key
-	token8, err := randomToken(8)
+	newKeyID, err := generateKeyID()
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "token_generation_failed"})
 		return
 	}
-	newKeyID := "k" + token8
 	newSecret, err := randomToken(24)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "token_generation_failed"})
@@ -209,19 +217,31 @@ func (s *collectorState) handleKeyRotate(w http.ResponseWriter, r *http.Request)
 	// Store the NEW key FIRST, then revoke old (order matters: never leave zero keys)
 	secretHash := auth.HashSecret(newSecret, s.serverSecret)
 	newKey := &auth.KeyRecord{
-		ID:           newKeyID,
-		KeyID:        newKeyID,
-		SecretHash:   secretHash,
-		Kind:         oldRecord.Kind,
-		Roles:        []auth.Role{auth.RoleIngestServer},
-		AllowedEnvs:  []string{env},
+		ID:          newKeyID,
+		KeyID:       newKeyID,
+		SecretHash:  secretHash,
+		Kind:        oldRecord.Kind,
+		Roles:       []auth.Role{auth.RoleIngestServer},
+		AllowedEnvs: []string{env},
 	}
 	if err := s.keyStore.CreateKey(newKey); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "key_store_error"})
 		return
 	}
-	// Revoke old key AFTER new key is stored
-	_ = s.keyStore.RevokeKey(oldKeyID)
+	// Revoke old key AFTER new key is stored. A failed revocation means the old
+	// (potentially compromised) key is still active, so this is not a successful
+	// rotation and must not be reported as one.
+	if err := s.keyStore.RevokeKey(oldKeyID); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{
+			"error":          "old_key_revocation_failed",
+			"message":        "new key was created but the old key could not be revoked and is still active",
+			"rotated":        false,
+			"old_key_id":     oldKeyID,
+			"new_key_id":     newKeyID,
+			"old_key_active": true,
+		})
+		return
+	}
 
 	// Invalidate cache for old key
 	if s.keyCache != nil {
@@ -256,13 +276,24 @@ func validateCollectorPayload(payload map[string]any, strict bool) error {
 func validatePolicyMap(policy map[string]any) []string {
 	var errors []string
 	for _, key := range []string{"max_attr_length", "max_event_bytes", "max_attrs"} {
-		if value, ok := policy[key]; ok && numeric(value) < 0 {
+		value, ok := policy[key]
+		if !ok {
+			continue
+		}
+		n, isNumeric := numeric(value)
+		if !isNumeric {
+			errors = append(errors, key+" must be a number")
+			continue
+		}
+		if n < 0 {
 			errors = append(errors, key+" must be non-negative")
 		}
 	}
 	if rate, ok := policy["sample_rate"]; ok {
-		value := numeric(rate)
-		if value < 0 || value > 1 {
+		value, isNumeric := numeric(rate)
+		if !isNumeric {
+			errors = append(errors, "sample_rate must be a number")
+		} else if value < 0 || value > 1 {
 			errors = append(errors, "sample_rate must be between 0 and 1")
 		}
 	}
@@ -276,14 +307,18 @@ func statusForValidation(errors []string) int {
 	return http.StatusBadRequest
 }
 
-func numeric(value any) float64 {
+// numeric reports the numeric value of v and whether v was actually a
+// supported numeric type. Callers must check the boolean: treating an
+// unsupported type as zero would let wrong-typed policy values pass range
+// validation (e.g. sample_rate: "9" becoming 0).
+func numeric(value any) (float64, bool) {
 	switch v := value.(type) {
 	case float64:
-		return v
+		return v, true
 	case int:
-		return float64(v)
+		return float64(v), true
 	default:
-		return 0
+		return 0, false
 	}
 }
 
@@ -302,4 +337,17 @@ func randomToken(size int) (string, error) {
 	// Use base64 RawStdEncoding (uses + and /, not _) to avoid
 	// conflicts with the _ separator in the key format lz_{kind}_{env}_{keyID}_{secret}.
 	return strings.TrimRight(base64.RawStdEncoding.EncodeToString(buf), "="), nil
+}
+
+// generateKeyID returns a key identifier that is safe to use as a single path
+// segment in the /keys/{id}, /keys/{id}/revoke and /keys/{id}/rotate routes.
+// The random component is hex encoded: unlike base64's standard alphabet it
+// never contains '/', and unlike base64's URL alphabet it never contains '_'
+// (the separator in lz_{kind}_{env}_{keyID}_{secret}).
+func generateKeyID() (string, error) {
+	buf := make([]byte, 8)
+	if _, err := rand.Read(buf); err != nil {
+		return "", fmt.Errorf("crypto/rand.Read failed: %w", err)
+	}
+	return "k" + hex.EncodeToString(buf), nil
 }

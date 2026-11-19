@@ -289,12 +289,7 @@ func WithInsecure(insecure bool) ConfigOption {
 
 // WithOtelBridge enables or disables OpenTelemetry bridge integration.
 func WithOtelBridge(enabled bool) ConfigOption {
-	return func(cfg Config) Config {
-		if enabled {
-			cfg.Async.Enabled = true
-		}
-		return cfg
-	}
+	return func(cfg Config) Config { return cfg.WithOTelBridge(enabled) }
 }
 
 // WithRetry configures the maximum retry attempts.
@@ -332,8 +327,11 @@ func WithDSN(raw string) ConfigOption {
 	return func(cfg Config) Config {
 		d, username, password, err := parseSDKDSN(raw)
 		if err != nil {
-			// Store the parse error; it will surface during NewClient validation.
-			cfg.CollectorURL = "" // signal invalid state
+			// Record the parse error explicitly. An empty CollectorURL cannot
+			// act as a sentinel: mergeCodeConfig ignores it and a defaults-file
+			// URL would be used instead. Validate surfaces this field so both
+			// New and NewClient fail on a malformed DSN.
+			cfg.dsnErr = err
 			return cfg
 		}
 		cfg.CollectorURL = d.BaseURL

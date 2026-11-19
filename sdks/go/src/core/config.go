@@ -206,7 +206,13 @@ type Config struct {
 	IDGen IDGenerator
 
 	// ── Clock ─────────────────────────────────────────────────────────────────
-	Clock                  Clock
+	Clock Clock
+	// dsnErr records a parse failure from the WithDSN code option. It is kept
+	// explicitly (rather than encoded as an empty CollectorURL) so the error
+	// survives config merging and is surfaced by Validate. An empty CollectorURL
+	// is a valid zero value that mergeCodeConfig deliberately ignores, so it
+	// cannot be used as an invalid-state sentinel.
+	dsnErr                 error
 	codeSetCompression     bool
 	codeSetAsync           bool
 	codeSetBackpressure    bool
@@ -242,9 +248,13 @@ func (c Config) WithEnvironment(environment string) Config {
 	return c
 }
 
-// WithSink appends a sink.
+// WithSink returns a copy of cfg with sink appended to its sinks.
+//
+// The Sinks slice is copied before appending so that Configs derived from the
+// same parent never share a backing array: appending into spare capacity of a
+// shared slice would otherwise overwrite sinks written by sibling Configs.
 func (c Config) WithSink(sink Sink) Config {
-	c.Sinks = append(c.Sinks, sink)
+	c.Sinks = append(append([]Sink(nil), c.Sinks...), sink)
 	return c
 }
 
@@ -463,6 +473,16 @@ func (c Config) WithDropOversizedEvents(drop bool) Config {
 // Validate validates cfg and returns explicit field-level errors.
 // In strict mode, additional config checks are enforced.
 func (c Config) Validate() error {
+	// A malformed loza:// DSN supplied via WithDSN is a hard configuration
+	// error. Surface it before any other check so callers never receive a
+	// silently misdirected client when DSN parsing failed.
+	if c.dsnErr != nil {
+		return &ConfigValidationError{
+			Field:   "DSN",
+			Problem: c.dsnErr.Error(),
+		}
+	}
+
 	// Validate service name (required in strict mode)
 	if c.Strict && strings.TrimSpace(c.Service) == "" {
 		return &ConfigValidationError{
@@ -590,13 +610,17 @@ func (c Config) Validate() error {
 			Problem: "basic auth username requires a password unless it is an lz_pub_ capability",
 		}
 	}
-	if c.DSNUsername != "" {
-		if strings.ContainsAny(c.DSNUsername, ":\t\r\n ") {
-			return &ConfigValidationError{
-				Field:   "DSNUsername",
-				Problem: "basic auth username must not contain ':' or whitespace",
-			}
+	if c.DSNUsername != "" && strings.ContainsAny(c.DSNUsername, ":\t\r\n ") {
+		return &ConfigValidationError{
+			Field:   "DSNUsername",
+			Problem: "basic auth username must not contain ':' or whitespace",
 		}
+	}
+	// Bearer API keys and Basic-auth credentials are both secrets. Require TLS
+	// whenever either is configured, unless Insecure is explicitly enabled for
+	// a local development host. Without this, a config that only sets APIKey
+	// could send "Authorization: Bearer <key>" over plaintext HTTP.
+	if c.DSNUsername != "" || c.APIKey != "" {
 		if endpointURL, err := url.Parse(strings.TrimSpace(c.CollectorURL)); err == nil &&
 			strings.EqualFold(endpointURL.Scheme, "http") &&
 			(!c.Insecure || !isLocalCollectorHost(endpointURL.Hostname())) {
@@ -673,7 +697,7 @@ func isLocalCollectorHost(host string) bool {
 	}
 }
 
-func validateCollectorCredentials(endpoint, username, password string, insecure bool) error {
+func validateCollectorCredentials(endpoint, username, password, apiKey string, insecure bool) error {
 	if endpointURL, err := url.Parse(strings.TrimSpace(endpoint)); err == nil &&
 		endpointURL.User != nil {
 		return fmt.Errorf("loza: collector credentials must not be embedded in the endpoint URL")
@@ -684,16 +708,18 @@ func validateCollectorCredentials(endpoint, username, password string, insecure 
 	if username != "" && password == "" && !dsn.IsPublicCredentialUsername(username) {
 		return fmt.Errorf("loza: basic auth username requires a password unless it is an lz_pub_ capability")
 	}
-	if username == "" {
-		return nil
-	}
-	if strings.ContainsAny(username, ":\t\r\n ") {
+	if username != "" && strings.ContainsAny(username, ":\t\r\n ") {
 		return fmt.Errorf("loza: basic auth username must not contain ':' or whitespace")
 	}
-	if endpointURL, err := url.Parse(strings.TrimSpace(endpoint)); err == nil &&
-		strings.EqualFold(endpointURL.Scheme, "http") &&
-		(!insecure || !isLocalCollectorHost(endpointURL.Hostname())) {
-		return fmt.Errorf("loza: credentialed collector endpoints require TLS (set Insecure only for local development)")
+	// A Bearer API key is as sensitive as Basic-auth credentials. Apply the
+	// same TLS requirement whenever either credential is present, instead of
+	// returning early when no Basic-auth username was supplied.
+	if username != "" || apiKey != "" {
+		if endpointURL, err := url.Parse(strings.TrimSpace(endpoint)); err == nil &&
+			strings.EqualFold(endpointURL.Scheme, "http") &&
+			(!insecure || !isLocalCollectorHost(endpointURL.Hostname())) {
+			return fmt.Errorf("loza: credentialed collector endpoints require TLS (set Insecure only for local development)")
+		}
 	}
 	return nil
 }
@@ -1080,14 +1106,17 @@ func NewClient(cfg Config) (*Logger, error) {
 	// Step 3: Apply code-level config (highest precedence)
 	merged = mergeCodeConfig(merged, cfg)
 
+	// Step 4: Validate the final config before sanitizing the endpoint.
+	// safeCollectorEndpoint strips URL userinfo, so validating first keeps the
+	// embedded-credential rejection in Config.Validate reachable and avoids
+	// silently dropping credentials supplied in LOZA_COLLECTOR_URL.
+	if err := validateSDKConfig(merged); err != nil {
+		return nil, fmt.Errorf("loza: invalid configuration: %w", err)
+	}
+
 	merged.CollectorURL = safeCollectorEndpoint(merged.CollectorURL)
 	if strings.TrimSpace(merged.CollectorURL) == "" && strings.TrimSpace(merged.CollectorEndpoint) != "" {
 		merged.CollectorURL = safeCollectorEndpoint(merged.CollectorEndpoint)
-	}
-
-	// Step 4: Validate the final config
-	if err := validateSDKConfig(merged); err != nil {
-		return nil, fmt.Errorf("loza: invalid configuration: %w", err)
 	}
 
 	// If no explicit sink was configured, route events to the collector endpoint
@@ -1107,6 +1136,16 @@ func NewClient(cfg Config) (*Logger, error) {
 			headers["X-Loza-Env"] = merged.Environment
 		}
 
+		// Build a transport that honors the configured timeout, connection
+		// timeout, retry count and backoff. Previously the default sink used
+		// a hard-coded HTTP client and silently ignored all four settings.
+		transport := NewHTTPTransport(HTTPTransportConfig{
+			MaxRetries:        merged.MaxRetries,
+			MaxBackoff:        merged.MaxBackoff,
+			Timeout:           merged.Timeout,
+			ConnectionTimeout: merged.ConnectionTimeout,
+		})
+
 		batchSink, err := HTTPBatchSink(HTTPBatchSinkConfig{
 			Endpoint:      collectorRouteURL(merged.CollectorURL, merged.CollectorName, "/events"),
 			Headers:       headers,
@@ -1114,6 +1153,8 @@ func NewClient(cfg Config) (*Logger, error) {
 			FlushInterval: merged.Async.FlushInterval,
 			Gzip:          merged.EnableCompression,
 			Insecure:      merged.Insecure,
+			Client:        transport.Client(),
+			Transport:     transport,
 			OnError: func(err error) {
 				if merged.StatsHandler != nil {
 					merged.StatsHandler.OnError(err)
@@ -1146,6 +1187,12 @@ func shouldInstallDefaultCollectorSink(cfg Config) bool {
 // mergeCodeConfig merges code-level config into base, with code taking precedence
 // for any non-zero/non-nil fields.
 func mergeCodeConfig(base, code Config) Config {
+	// A DSN parse failure is a sticky code-level error: propagate it so the
+	// final Validate call surfaces it instead of silently falling back to a
+	// defaults-file or environment collector URL.
+	if code.dsnErr != nil {
+		base.dsnErr = code.dsnErr
+	}
 	if code.CollectorURL != "" {
 		base.CollectorURL = code.CollectorURL
 	}

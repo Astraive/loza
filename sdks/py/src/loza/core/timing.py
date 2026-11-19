@@ -11,6 +11,23 @@ if TYPE_CHECKING:
     from .event import Attr
 
 
+# Keys owned by the timing events themselves. User-supplied attrs must never be
+# allowed to replace these measured values in to_dict() output.
+_RESERVED_EVENT_KEYS = frozenset({
+    "step",
+    "name",
+    "started_at_ms",
+    "ended_at_ms",
+    "duration_ms",
+    "status_code",
+})
+
+
+def _non_reserved_attrs(attrs: dict[str, object]) -> dict[str, object]:
+    """Return user attrs with reserved event fields removed."""
+    return {k: v for k, v in attrs.items() if k not in _RESERVED_EVENT_KEYS}
+
+
 @dataclass(slots=True)
 class EventProcess:
     step: int
@@ -31,7 +48,7 @@ class EventProcess:
         }
         if self.status_code:
             d["status_code"] = self.status_code
-        d.update(self.attrs)
+        d.update(_non_reserved_attrs(self.attrs))
         return d
 
 
@@ -53,7 +70,7 @@ class EventGroup:
         }
         if self.status_code:
             d["status_code"] = self.status_code
-        d.update(self.attrs)
+        d.update(_non_reserved_attrs(self.attrs))
         return d
 
 
@@ -71,7 +88,7 @@ class EventTimer:
         }
         if self.status_code:
             d["status_code"] = self.status_code
-        d.update(self.attrs)
+        d.update(_non_reserved_attrs(self.attrs))
         return d
 
 
@@ -196,16 +213,26 @@ class StopwatchHandle:
 # --- Timing helper methods (added to EventContext at runtime) ---
 
 
+def _attrs_to_fields(attrs: tuple[Attr, ...], fields: dict[str, Any]) -> dict[str, Any]:
+    """Convert positional ``Attr`` objects into keyword fields.
+
+    Keyword fields win on key collisions, mirroring ``Logger.checkpoint``.
+    """
+    data: dict[str, Any] = {a.key: a.value for a in attrs}
+    data.update(fields)
+    return data
+
+
 def with_process(ctx: Any, name: str, *attrs: Attr, **fields: Any) -> ProcessHandle:
-    return ctx.start_process(name, **fields)
+    return ctx.start_process(name, **_attrs_to_fields(attrs, fields))
 
 
 def with_group(ctx: Any, name: str, *attrs: Attr, **fields: Any) -> GroupHandle:
-    return ctx.start_group(name, **fields)
+    return ctx.start_group(name, **_attrs_to_fields(attrs, fields))
 
 
 def with_timer(ctx: Any, name: str, *attrs: Attr, **fields: Any) -> TimerHandle:
-    return ctx.start_timer(name, **fields)
+    return ctx.start_timer(name, **_attrs_to_fields(attrs, fields))
 
 
 def finish_group_error(handle: GroupHandle, error: BaseException, **attrs: object) -> None:

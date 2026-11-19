@@ -1,6 +1,8 @@
 package core
 
 import (
+	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -115,6 +117,52 @@ func TestGroup_StartFinish(t *testing.T) {
 	}
 }
 
+func TestFinishGroupError_RecordsStatusCodeAndError(t *testing.T) {
+	ev := newTestEvent(t)
+	group, err := ev.StartGroup("shipment")
+	if err != nil {
+		t.Fatalf("StartGroup: %v", err)
+	}
+	if err := FinishGroupError(group, errTest, 503); err != nil {
+		t.Fatalf("FinishGroupError: %v", err)
+	}
+
+	if len(ev.Groups) != 1 {
+		t.Fatalf("expected 1 group, got %d", len(ev.Groups))
+	}
+	g := ev.Groups[0]
+	if g.StatusCode != 503 {
+		t.Errorf("expected status_code 503, got %d", g.StatusCode)
+	}
+	var hasErrMsg bool
+	for _, a := range g.Attrs {
+		if a.Key == "error_message" && a.Value == errTest.Error() {
+			hasErrMsg = true
+		}
+	}
+	if !hasErrMsg {
+		t.Errorf("expected error_message attr %q, got %+v", errTest.Error(), g.Attrs)
+	}
+}
+
+func TestPhase_ErrorRecordsStatusCode(t *testing.T) {
+	ev := newTestEvent(t)
+	ctx := storeEvent(context.Background(), ev)
+	wantErr := errors.New("phase failed")
+	if err := Phase(ctx, "failing_phase", func() error { return wantErr }); !errors.Is(err, wantErr) {
+		t.Fatalf("expected Phase to return the fn error, got %v", err)
+	}
+
+	if len(ev.Groups) != 1 {
+		t.Fatalf("expected 1 group, got %d", len(ev.Groups))
+	}
+	g := ev.Groups[0]
+	// Error phases must record the same non-zero status as error steps (Step uses 1).
+	if g.StatusCode != 1 {
+		t.Errorf("expected status_code 1 for failed phase, got %d", g.StatusCode)
+	}
+}
+
 func TestStopwatch_Elapsed(t *testing.T) {
 	sw := Stopwatch()
 	time.Sleep(10 * time.Millisecond)
@@ -213,6 +261,121 @@ func TestTiming_WireFormat(t *testing.T) {
 	}
 }
 
+// Regression test for the WithProcess/WithGroup/WithTimer helpers silently
+// discarding their attrs argument instead of recording it on the emitted
+// process/group/timer.
+func TestWithHelpers_ForwardAttrs(t *testing.T) {
+	checkAttr := func(t *testing.T, attrs []Attr, key string, want any) {
+		t.Helper()
+		got, ok := attrValue(attrs, key)
+		if !ok {
+			t.Errorf("attr %q missing", key)
+			return
+		}
+		if got != want {
+			t.Errorf("attr %q = %v, want %v", key, got, want)
+		}
+	}
+
+	t.Run("process success", func(t *testing.T) {
+		ev := newTestEvent(t)
+		ctx := storeEvent(context.Background(), ev)
+		err := WithProcess(ctx, "validate", func() error { return nil },
+			String("gateway", "stripe"), Int("status_code", 202))
+		if err != nil {
+			t.Fatalf("WithProcess: %v", err)
+		}
+		if len(ev.Processes) != 1 {
+			t.Fatalf("expected 1 process, got %d", len(ev.Processes))
+		}
+		p := ev.Processes[0]
+		checkAttr(t, p.Attrs, "gateway", "stripe")
+		if p.StatusCode != 202 {
+			t.Errorf("status code = %d, want 202", p.StatusCode)
+		}
+		if _, ok := attrValue(p.Attrs, "status_code"); ok {
+			t.Errorf("status_code should be promoted out of attrs")
+		}
+	})
+
+	t.Run("group success", func(t *testing.T) {
+		ev := newTestEvent(t)
+		ctx := storeEvent(context.Background(), ev)
+		err := WithGroup(ctx, "checkout", func() error { return nil }, String("result", "ok"))
+		if err != nil {
+			t.Fatalf("WithGroup: %v", err)
+		}
+		if len(ev.Groups) != 1 {
+			t.Fatalf("expected 1 group, got %d", len(ev.Groups))
+		}
+		checkAttr(t, ev.Groups[0].Attrs, "result", "ok")
+	})
+
+	t.Run("timer success", func(t *testing.T) {
+		ev := newTestEvent(t)
+		ctx := storeEvent(context.Background(), ev)
+		err := WithTimer(ctx, "db.query", func() error { return nil },
+			String("query", "select 1"), Int("status_code", 200))
+		if err != nil {
+			t.Fatalf("WithTimer: %v", err)
+		}
+		if len(ev.Timers) != 1 {
+			t.Fatalf("expected 1 timer, got %d", len(ev.Timers))
+		}
+		tr := ev.Timers[0]
+		checkAttr(t, tr.Attrs, "query", "select 1")
+		if tr.StatusCode != 200 {
+			t.Errorf("status code = %d, want 200", tr.StatusCode)
+		}
+	})
+
+	t.Run("attrs kept on error paths", func(t *testing.T) {
+		wantErr := errors.New("boom")
+		ev := newTestEvent(t)
+		ctx := storeEvent(context.Background(), ev)
+
+		if err := WithProcess(ctx, "proc", func() error { return wantErr }, String("p", "1")); !errors.Is(err, wantErr) {
+			t.Fatalf("WithProcess error = %v, want %v", err, wantErr)
+		}
+		if len(ev.Processes) != 1 {
+			t.Fatalf("expected 1 process, got %d", len(ev.Processes))
+		}
+		checkAttr(t, ev.Processes[0].Attrs, "p", "1")
+		checkAttr(t, ev.Processes[0].Attrs, "error_message", "boom")
+
+		if err := WithGroup(ctx, "grp", func() error { return wantErr }, String("g", "2")); !errors.Is(err, wantErr) {
+			t.Fatalf("WithGroup error = %v, want %v", err, wantErr)
+		}
+		if len(ev.Groups) != 1 {
+			t.Fatalf("expected 1 group, got %d", len(ev.Groups))
+		}
+		checkAttr(t, ev.Groups[0].Attrs, "g", "2")
+		checkAttr(t, ev.Groups[0].Attrs, "error_message", "boom")
+
+		if err := WithTimer(ctx, "tmr", func() error { return wantErr }, String("t", "3")); !errors.Is(err, wantErr) {
+			t.Fatalf("WithTimer error = %v, want %v", err, wantErr)
+		}
+		if len(ev.Timers) != 1 {
+			t.Fatalf("expected 1 timer, got %d", len(ev.Timers))
+		}
+		checkAttr(t, ev.Timers[0].Attrs, "t", "3")
+		checkAttr(t, ev.Timers[0].Attrs, "error", wantErr)
+	})
+
+	t.Run("no event still runs fn", func(t *testing.T) {
+		called := false
+		if err := WithProcess(context.Background(), "noop", func() error {
+			called = true
+			return nil
+		}, String("ignored", "value")); err != nil {
+			t.Fatalf("WithProcess: %v", err)
+		}
+		if !called {
+			t.Error("expected fn to run when ctx has no event")
+		}
+	})
+}
+
 var errTest = &testError{msg: "test error"}
 
 type testError struct{ msg string }
@@ -222,13 +385,13 @@ func (e *testError) Error() string { return e.msg }
 func newTestEvent(t *testing.T) *Event {
 	t.Helper()
 	ev := &Event{
-		EventID:    "evt_test",
-		Timestamp:  time.Now(),
-		StartedAt:  time.Now(),
-		Event:      "test.event",
-		Kind:       "event",
-		Level:      LevelInfo,
-		state:      EventStateActive,
+		EventID:   "evt_test",
+		Timestamp: time.Now(),
+		StartedAt: time.Now(),
+		Event:     "test.event",
+		Kind:      "event",
+		Level:     LevelInfo,
+		state:     EventStateActive,
 	}
 	return ev
 }

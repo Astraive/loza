@@ -24,23 +24,39 @@ export function lozaHttpMiddleware(opts: HttpMiddlewareOptions = {}) {
       AttrString('http.remote_ip', req.socket?.remoteAddress || ''),
     );
 
+    // A request can settle through res.end, the response 'error' event, or a
+    // synchronous throw from downstream middleware. Only settle it once so a
+    // later path cannot finish/emit an already-emitted event.
+    let settled = false;
+    const finishAndEmit = (finalize: () => void) => {
+      if (settled) return;
+      settled = true;
+      finalize();
+      loza.emit(ev).catch(() => {});
+    };
+
     const originalEnd = res.end;
     res.end = function (...args: any[]) {
       const durationMs = Date.now() - startedAt;
-      const outcome = res.statusCode >= 500 ? 'error' : 'success';
-      loza.finish(ev, outcome,
-        AttrInt('status_code', res.statusCode),
-        AttrInt('duration_ms', durationMs),
-      );
-      loza.emit(ev).catch(() => {});
+      finishAndEmit(() => {
+        const outcome = res.statusCode >= 500 ? 'error' : 'success';
+        loza.finish(ev, outcome,
+          AttrInt('status_code', res.statusCode),
+          AttrInt('duration_ms', durationMs),
+        );
+      });
       return originalEnd.apply(res, args);
     };
 
     res.on('error', (err: Error) => {
-      loza.finishError(ev, err);
-      loza.emit(ev).catch(() => {});
+      finishAndEmit(() => loza.finishError(ev, err));
     });
 
-    next();
+    try {
+      next();
+    } catch (err: any) {
+      finishAndEmit(() => loza.finishError(ev, err));
+      throw err;
+    }
   };
 }

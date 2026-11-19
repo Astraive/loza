@@ -107,12 +107,13 @@ class Engine:
         # Causal chain
         causal_chain = []
         for ce in resp.get("causal_chain", []):
+            attrs = ce.get("attributes") or {}
             causal_chain.append(
                 CausalEdge(
-                    cause_id=ce.get("attributes", {}).get("cause_id", ""),
+                    cause_id=attrs.get("cause_id", ""),
                     effect_id=ce.get("event_id", ""),
                     evidence=ce.get("description", ""),
-                    confidence=ce.get("attributes", {}).get("confidence", 0.5),
+                    confidence=attrs.get("confidence", 0.5),
                 )
             )
 

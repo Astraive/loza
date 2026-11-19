@@ -74,6 +74,82 @@ func TestMiddlewarePanicAfterWritePreservesResponseAndEventStatus(t *testing.T) 
 	}
 }
 
+func TestMiddlewareRecoversPanicInRouteExtractor(t *testing.T) {
+	store := configureMemoryStore(t)
+	h := MiddlewareWithConfig(Config{
+		RouteExtractor: func(*http.Request) string {
+			panic("boom-route-extractor")
+		},
+	})(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		t.Error("next handler must not run when request setup panics")
+	}))
+
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/users/123", nil)
+
+	// A panic in the user-supplied extractor must be contained by the
+	// middleware instead of escaping to the caller.
+	func() {
+		defer func() {
+			if rec := recover(); rec != nil {
+				t.Fatalf("panic escaped middleware: %v", rec)
+			}
+		}()
+		h.ServeHTTP(rr, req)
+	}()
+
+	if rr.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500 after setup panic, got %d", rr.Code)
+	}
+	if body := rr.Body.String(); !strings.Contains(body, http.StatusText(http.StatusInternalServerError)) {
+		t.Fatalf("expected 500 response body, got %q", body)
+	}
+	// The panic happened before an event was started, so none should be emitted.
+	if store.Len() != 0 {
+		t.Fatalf("expected no emitted events for pre-start panic, got %d", store.Len())
+	}
+}
+
+func TestMiddlewareOutcomeFromStatusCode(t *testing.T) {
+	cases := []struct {
+		name        string
+		statusCode  int
+		wantOutcome string
+	}{
+		{name: "ok", statusCode: http.StatusOK, wantOutcome: "success"},
+		{name: "created", statusCode: http.StatusCreated, wantOutcome: "success"},
+		{name: "redirect", statusCode: http.StatusFound, wantOutcome: "success"},
+		{name: "bad request", statusCode: http.StatusBadRequest, wantOutcome: "error"},
+		{name: "not found", statusCode: http.StatusNotFound, wantOutcome: "error"},
+		{name: "internal server error", statusCode: http.StatusInternalServerError, wantOutcome: "error"},
+		{name: "service unavailable", statusCode: http.StatusServiceUnavailable, wantOutcome: "error"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			store := configureMemoryStore(t)
+			h := Middleware()(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(tc.statusCode)
+			}))
+
+			rr := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodGet, "/status", nil)
+			h.ServeHTTP(rr, req)
+
+			if rr.Code != tc.statusCode {
+				t.Fatalf("expected response status %d, got %d", tc.statusCode, rr.Code)
+			}
+			ev := singleEvent(t, store)
+			if ev.Outcome != tc.wantOutcome {
+				t.Fatalf("status %d: expected outcome %q, got %q", tc.statusCode, tc.wantOutcome, ev.Outcome)
+			}
+			if ev.StatusCode != tc.statusCode {
+				t.Fatalf("expected event status %d, got %d", tc.statusCode, ev.StatusCode)
+			}
+		})
+	}
+}
+
 func TestMiddlewareCapturesRouteAndSelectedHeaders(t *testing.T) {
 	store := configureMemoryStore(t)
 	extractorCalls := 0

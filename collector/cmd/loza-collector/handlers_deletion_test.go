@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -473,5 +474,79 @@ func TestDeletionResponseFormat(t *testing.T) {
 
 	if resp.Deleted != 0 {
 		t.Errorf("Expected 0 deleted events (empty table), got %d", resp.Deleted)
+	}
+}
+
+// TestDeleteByUserWithSQLMetacharacters verifies that deleting by a user ID
+// containing a SQL quote and LIKE wildcard characters is handled by bound
+// parameters and escapeLIKE, rather than the removed, unused escapeSQL helper.
+// Quotes must be matched literally (no string interpolation) and wildcards
+// must not broaden the match.
+func TestDeleteByUserWithSQLMetacharacters(t *testing.T) {
+	db, err := sql.Open("duckdb", ":memory:")
+	if err != nil {
+		t.Fatalf("Failed to open test database: %v", err)
+	}
+	defer db.Close()
+
+	if _, err := db.Exec(`CREATE TABLE events (
+		event_id VARCHAR,
+		user_id VARCHAR,
+		tenant_id VARCHAR,
+		timestamp TIMESTAMP,
+		raw VARCHAR
+	)`); err != nil {
+		t.Fatalf("Failed to create test table: %v", err)
+	}
+
+	// Contains an apostrophe (SQL string delimiter), '%' and '_' (LIKE
+	// wildcards). None must be interpreted as SQL syntax or a wildcard.
+	userID := `user'%_1`
+	// Would match the unescaped LIKE pattern `user%_1`, so it must survive.
+	otherUserID := `userX_1`
+
+	rows := []struct {
+		eventID string
+		userID  string
+		raw     string
+	}{
+		{"evt-1", userID, fmt.Sprintf(`{"user_id":%q}`, userID)},
+		{"evt-2", userID, "{}"},
+		{"evt-other", otherUserID, fmt.Sprintf(`{"user_id":%q}`, otherUserID)},
+	}
+	for _, row := range rows {
+		if _, err := db.Exec(
+			`INSERT INTO events (event_id, user_id, tenant_id, timestamp, raw) VALUES (?, ?, ?, CURRENT_TIMESTAMP, ?)`,
+			row.eventID, row.userID, "tenant1", row.raw,
+		); err != nil {
+			t.Fatalf("Failed to insert test data: %v", err)
+		}
+	}
+
+	state := &collectorState{
+		cfg:     collectorConfig{duckDBTable: "events"},
+		queryDB: db,
+	}
+
+	deleted, err := state.deleteEventsByUser(context.Background(), userID, nil)
+	if err != nil {
+		t.Fatalf("deleteEventsByUser with SQL metacharacters failed: %v", err)
+	}
+	if deleted != 2 {
+		t.Fatalf("Expected 2 deleted events, got %d", deleted)
+	}
+
+	var count int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM events WHERE event_id = 'evt-other'`).Scan(&count); err != nil {
+		t.Fatalf("Failed to query events: %v", err)
+	}
+	if count != 1 {
+		t.Errorf("Expected the differently-named user's event to remain, got count %d", count)
+	}
+	if err := db.QueryRow(`SELECT COUNT(*) FROM events`).Scan(&count); err != nil {
+		t.Fatalf("Failed to query events: %v", err)
+	}
+	if count != 1 {
+		t.Errorf("Expected exactly 1 event to remain, got %d", count)
 	}
 }

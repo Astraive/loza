@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math/rand"
 	"net/http"
@@ -21,7 +22,25 @@ type RunnerConfig struct {
 	BodySize  int
 }
 
+// rejectionError reports a batch the server explicitly refused with a 4xx
+// status code. It lets the runner tell a rejection apart from a transport or
+// server-side failure so Report.Rejected is populated correctly.
+type rejectionError struct {
+	statusCode int
+}
+
+func (e *rejectionError) Error() string {
+	return fmt.Sprintf("loadgen post rejected with %d", e.statusCode)
+}
+
 func Run(ctx context.Context, cfg RunnerConfig) (Report, error) {
+	if cfg.Workers <= 0 {
+		return Report{}, fmt.Errorf("loadgen: workers must be greater than zero, got %d", cfg.Workers)
+	}
+	if cfg.BatchSize <= 0 {
+		return Report{}, fmt.Errorf("loadgen: batch size must be positive, got %d", cfg.BatchSize)
+	}
+
 	client := &http.Client{Timeout: 30 * time.Second}
 	var accepted atomic.Int64
 	var rejected atomic.Int64
@@ -55,14 +74,15 @@ func Run(ctx context.Context, cfg RunnerConfig) (Report, error) {
 				}
 				batch = append(batch, event)
 				if len(batch) >= cfg.BatchSize || i == count-1 {
-					if err := postBatch(ctx, client, cfg.URL, batch); err != nil {
-						errorsCount.Add(int64(len(batch)))
-					} else {
-						accepted.Add(int64(len(batch)))
-					}
+					flushBatch(ctx, client, cfg, batch, &accepted, &rejected, &errorsCount)
 					batch = batch[:0]
 				}
 			}
+			// The loop may exit with events still buffered (for example when
+			// the context is cancelled mid-batch, or when event generation
+			// fails on the final iteration). Account for them instead of
+			// silently dropping them from the report.
+			flushBatch(ctx, client, cfg, batch, &accepted, &rejected, &errorsCount)
 		}(workerID, count)
 	}
 
@@ -73,6 +93,22 @@ func Run(ctx context.Context, cfg RunnerConfig) (Report, error) {
 		Errors:   errorsCount.Load(),
 		Duration: time.Since(start),
 	}, nil
+}
+
+func flushBatch(ctx context.Context, client *http.Client, cfg RunnerConfig, batch [][]byte, accepted, rejected, errorsCount *atomic.Int64) {
+	if len(batch) == 0 {
+		return
+	}
+	if err := postBatch(ctx, client, cfg.URL, batch); err != nil {
+		var rejection *rejectionError
+		if errors.As(err, &rejection) {
+			rejected.Add(int64(len(batch)))
+		} else {
+			errorsCount.Add(int64(len(batch)))
+		}
+	} else {
+		accepted.Add(int64(len(batch)))
+	}
 }
 
 func postBatch(ctx context.Context, client *http.Client, url string, batch [][]byte) error {
@@ -97,6 +133,9 @@ func postBatch(ctx context.Context, client *http.Client, url string, batch [][]b
 		return err
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode >= 400 && resp.StatusCode < 500 {
+		return &rejectionError{statusCode: resp.StatusCode}
+	}
 	if resp.StatusCode >= 300 {
 		return fmt.Errorf("loadgen post returned %d", resp.StatusCode)
 	}

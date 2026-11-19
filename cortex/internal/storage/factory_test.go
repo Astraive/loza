@@ -9,7 +9,10 @@ import (
 )
 
 func TestNewStorageSupportsDuckDB(t *testing.T) {
-	cfg := config.Default()
+	cfg, err := config.Default()
+	if err != nil {
+		t.Fatalf("Default: %v", err)
+	}
 	cfg.Storage.Backend = "duckdb"
 	cfg.Storage.DuckDB.Path = filepath.Join(t.TempDir(), "cortex.duckdb")
 
@@ -21,10 +24,13 @@ func TestNewStorageSupportsDuckDB(t *testing.T) {
 }
 
 func TestNewStorageRejectsUnsupportedBackend(t *testing.T) {
-	cfg := config.Default()
+	cfg, err := config.Default()
+	if err != nil {
+		t.Fatalf("Default: %v", err)
+	}
 	cfg.Storage.Backend = "sqlite"
 
-	_, err := NewStorage(cfg)
+	_, err = NewStorage(cfg)
 	if err == nil {
 		t.Fatal("expected error")
 	}

@@ -56,3 +56,49 @@ fn lifecycle_event_helpers_work() {
 
     assert!(loza::current_event().is_none());
 }
+
+#[test]
+fn link_event_stores_linked_id_in_links() {
+    let mut ctx = loza::start_event(None, loza::Params::new("link.request"));
+
+    // Free-function API must record the link instead of silently dropping the id.
+    loza::link_event(&mut ctx, "evt_parent");
+    assert_eq!(ctx.links.len(), 1, "link_event must store the link");
+    assert_eq!(
+        ctx.links[0].get("type").and_then(|v| v.as_str()),
+        Some("event")
+    );
+    assert_eq!(
+        ctx.links[0].get("target").and_then(|v| v.as_str()),
+        Some("evt_parent"),
+        "link must carry the linked event id"
+    );
+
+    // The adjacent Logger::link_event implementation must behave identically.
+    let logger = loza::test("link-svc");
+    logger.link_event(&mut ctx, "evt_second");
+    assert_eq!(ctx.links.len(), 2, "Logger::link_event must append the link");
+    assert_eq!(
+        ctx.links[1].get("target").and_then(|v| v.as_str()),
+        Some("evt_second")
+    );
+
+    // The link must survive into the emitted payload under the spec `links` field.
+    let snapshot = loza::SnapshotEvent(&ctx);
+    let payload: serde_json::Value =
+        serde_json::from_str(&snapshot).expect("snapshot must be valid JSON");
+    let links = payload
+        .get("links")
+        .and_then(|v| v.as_array())
+        .expect("links must be serialized when non-empty");
+    assert_eq!(links.len(), 2);
+    assert!(links
+        .iter()
+        .any(|l| l.get("target").and_then(|v| v.as_str()) == Some("evt_parent")));
+    assert!(links
+        .iter()
+        .any(|l| l.get("target").and_then(|v| v.as_str()) == Some("evt_second")));
+
+    // Linking must not fabricate an error entry.
+    assert!(ctx.error.is_none());
+}

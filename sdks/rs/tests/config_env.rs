@@ -82,6 +82,92 @@ fn credentialed_dsn_configures_scoped_endpoint_and_preserves_api_key_precedence(
     }
 }
 
+fn http_batch_sink(
+    endpoint: &str,
+    api_key: Option<&str>,
+    basic: Option<(&str, &str)>,
+    insecure: bool,
+) -> loza::SinkConfig {
+    loza::SinkConfig::HttpBatch {
+        endpoint: endpoint.to_string(),
+        api_key: api_key.map(str::to_string),
+        basic_username: basic.map(|(user, _)| user.to_string()),
+        basic_password: basic.map(|(_, password)| password.to_string()),
+        insecure,
+        timeout_ms: 2_000,
+        max_batch_bytes: 256 * 1024,
+        max_retries: 3,
+        enable_compression: true,
+        ndjson: false,
+    }
+}
+
+#[test]
+fn remote_plaintext_basic_auth_sink_is_rejected_even_when_insecure() {
+    let cfg = Config::test("checkout").with_sink(http_batch_sink(
+        "http://collector.example.com/events",
+        None,
+        Some(("svc", "secret")),
+        true,
+    ));
+    assert!(
+        cfg.validate().is_err(),
+        "credentialed remote HTTP sinks must be rejected regardless of insecure"
+    );
+}
+
+#[test]
+fn credentialed_scheme_less_sink_is_rejected() {
+    for endpoint in ["//collector.example.com/events", "collector.example.com:80/events"] {
+        let cfg = Config::test("checkout").with_sink(http_batch_sink(
+            endpoint,
+            None,
+            Some(("svc", "secret")),
+            false,
+        ));
+        assert!(
+            cfg.validate().is_err(),
+            "credentialed scheme-less sink endpoint {endpoint:?} must be rejected"
+        );
+    }
+}
+
+#[test]
+fn api_key_over_remote_http_sink_is_rejected() {
+    let cfg = Config::test("checkout").with_sink(http_batch_sink(
+        "http://collector.example.com/events",
+        Some("lz_pub_key"),
+        None,
+        false,
+    ));
+    assert!(
+        cfg.validate().is_err(),
+        "API keys must not be sent over remote plaintext HTTP"
+    );
+}
+
+#[test]
+fn https_and_explicit_local_insecure_credentialed_sinks_are_allowed() {
+    let https = Config::test("checkout").with_sink(http_batch_sink(
+        "https://collector.example.com/events",
+        None,
+        Some(("svc", "secret")),
+        false,
+    ));
+    assert!(https.validate().is_ok(), "HTTPS sinks should validate");
+
+    let local = Config::test("checkout").with_sink(http_batch_sink(
+        "http://127.0.0.1:9308/events",
+        None,
+        Some(("svc", "secret")),
+        true,
+    ));
+    assert!(
+        local.validate().is_ok(),
+        "explicit insecure local sinks should remain usable"
+    );
+}
+
 fn env_lock() -> &'static Mutex<()> {
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
     LOCK.get_or_init(|| Mutex::new(()))

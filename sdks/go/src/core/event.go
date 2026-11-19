@@ -2,6 +2,7 @@ package core
 
 import (
 	"fmt"
+	"math"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -261,16 +262,19 @@ func (e *Event) finish(now time.Time, outcome string, attrs []Attr) error {
 	for _, a := range attrs {
 		e.applyCanonical(a)
 	}
-	e.setStateLocked(EventStateFinished)
-	e.mu.Unlock()
-
-	var custom []Attr
+	// Append custom attrs while still holding the mutex so that committing the
+	// finished state and recording custom attrs is a single atomic step. Calling
+	// AddAttrs after unlocking left a window where a concurrent emit could move
+	// the event to emitted, dropping the attrs and returning an error after the
+	// finish had already been committed.
 	for _, a := range attrs {
 		if !isCanonicalKey(a.Key) {
-			custom = append(custom, a)
+			e.Attrs = append(e.Attrs, a)
 		}
 	}
-	return e.AddAttrs(custom)
+	e.setStateLocked(EventStateFinished)
+	e.mu.Unlock()
+	return nil
 }
 
 // finishWithError marks the event as errored, extracts error info, and processes extra attrs.
@@ -298,16 +302,17 @@ func (e *Event) finishWithError(now time.Time, err error, extractor ErrorExtract
 	for _, a := range attrs {
 		e.applyCanonical(a)
 	}
-	e.setStateLocked(EventStateFinished)
-	e.mu.Unlock()
-
-	var custom []Attr
+	// Append custom attrs while still holding the mutex so that committing the
+	// finished state and recording custom attrs is a single atomic step (see
+	// finish above for the race this avoids).
 	for _, a := range attrs {
 		if !isCanonicalKey(a.Key) {
-			custom = append(custom, a)
+			e.Attrs = append(e.Attrs, a)
 		}
 	}
-	return e.AddAttrs(custom)
+	e.setStateLocked(EventStateFinished)
+	e.mu.Unlock()
+	return nil
 }
 
 // Enrich appends attrs to this event.
@@ -953,8 +958,14 @@ func canonicalInt(v any) (int, bool) {
 	case int:
 		return vv, true
 	case int64:
+		if vv > math.MaxInt || vv < math.MinInt {
+			return 0, false
+		}
 		return int(vv), true
 	case uint64:
+		if vv > math.MaxInt {
+			return 0, false
+		}
 		return int(vv), true
 	default:
 		return 0, false
@@ -1162,6 +1173,9 @@ func canonicalInt64(v any) (int64, bool) {
 	case int:
 		return int64(vv), true
 	case uint64:
+		if vv > math.MaxInt64 {
+			return 0, false
+		}
 		return int64(vv), true
 	case time.Duration:
 		return vv.Milliseconds(), true

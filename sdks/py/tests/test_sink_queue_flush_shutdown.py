@@ -30,6 +30,40 @@ def test_sink_queue_flush_shutdown_helpers():
     loza.shutdown()
 
 
+class _RecordingTimeoutLogger:
+    def __init__(self) -> None:
+        self.flush_calls: list[float] = []
+        self.shutdown_calls: list[float] = []
+
+    def flush(self, timeout: float = 30.0) -> None:
+        self.flush_calls.append(timeout)
+
+    def shutdown(self, timeout: float = 30.0) -> None:
+        self.shutdown_calls.append(timeout)
+
+
+def test_flush_and_shutdown_forward_timeout(monkeypatch):
+    recorder = _RecordingTimeoutLogger()
+    monkeypatch.setattr(loza, "_default", recorder)
+
+    loza.flush(2.5)
+    loza.shutdown(1.5)
+
+    assert recorder.flush_calls == [2.5]
+    assert recorder.shutdown_calls == [1.5]
+
+
+def test_flush_and_shutdown_omit_timeout_when_unspecified(monkeypatch):
+    recorder = _RecordingTimeoutLogger()
+    monkeypatch.setattr(loza, "_default", recorder)
+
+    loza.flush()
+    loza.shutdown()
+
+    assert recorder.flush_calls == [30.0]
+    assert recorder.shutdown_calls == [30.0]
+
+
 def test_disk_offline_buffer_acknowledges_only_after_delivery(tmp_path):
     path = tmp_path / "offline.ndjson"
     buffer = DiskOfflineBuffer(path)

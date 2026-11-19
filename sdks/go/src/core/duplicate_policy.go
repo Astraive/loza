@@ -3,7 +3,7 @@ package core
 import "fmt"
 
 func applyDuplicateFieldPolicy(ev *Event, policy DuplicateFieldPolicy) error {
-	if ev == nil || len(ev.Attrs) == 0 {
+	if ev == nil {
 		return nil
 	}
 
@@ -14,7 +14,8 @@ func applyDuplicateFieldPolicy(ev *Event, policy DuplicateFieldPolicy) error {
 	ev.MuLock()
 	defer ev.MuUnlock()
 
-	// Re-check under lock in case attrs were added concurrently
+	// Check under the lock: reading the ev.Attrs slice header without ev.mu
+	// races with concurrent setters such as AddAttrs.
 	if len(ev.Attrs) == 0 {
 		return nil
 	}
@@ -33,10 +34,14 @@ func applyDuplicateFieldPolicy(ev *Event, policy DuplicateFieldPolicy) error {
 			if ev.applyCanonical(a) {
 				continue
 			}
-			a.Key = "attrs." + a.Key
+			// Keep the canonical key: the encoder already places every extra
+			// attr under a single top-level "attrs" object. Prefixing with
+			// "attrs." here would make the dot-expanding encoder nest a second
+			// "attrs" object (attrs.attrs.<key>).
 			out = append(out, a)
 		case KeepBothUnderAttrs:
-			a.Key = "attrs." + a.Key
+			// Keep the canonical key so the encoder wrapper emits one "attrs"
+			// object (attrs.<key>) rather than a doubly nested one.
 			out = append(out, a)
 		case ErrorOnDuplicate:
 			return &DuplicateFieldError{Key: a.Key}

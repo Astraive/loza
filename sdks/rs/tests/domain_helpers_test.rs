@@ -154,7 +154,7 @@ fn test_sink_extras() {
     let _ = MultiSink(&[]);
     let _ = OtlpSink("http://localhost:4317");
     let sink = MemorySink();
-    Drain(&sink);
+    Drain(&sink).expect("drain");
     Pause(&sink);
     Resume(&sink);
     let _ = QueueSize(&sink);
@@ -363,7 +363,7 @@ fn test_drain_sink() {
     let logger = New(cfg);
     let ctx = logger.start_event(Params::new("drain.event"));
     let _ = logger.emit(&ctx);
-    Drain(&sink);
+    Drain(&sink).expect("drain");
 }
 
 #[test]
@@ -390,4 +390,38 @@ fn test_bind_event_clones() {
     let logger = New(config);
     let bound = BindEvent(&logger, &ctx);
     assert_eq!(bound.event_id, ctx.event_id);
+}
+
+#[test]
+fn test_http_user_agent_truncates_on_utf8_boundary() {
+    // Regression: a multibyte character straddling byte offset 512 used to
+    // make String::truncate(512) panic because 512 was not a char boundary.
+    let emoji = "\u{1F389}"; // 4 bytes in UTF-8
+    assert_eq!(emoji.len(), 4);
+
+    let ua = format!("{}{}tail", "a".repeat(511), emoji);
+    assert!(ua.len() > 512);
+
+    let attr = HTTPUserAgent(ua);
+    assert_eq!(attr.key, "http.user_agent");
+    let truncated = attr.value.as_str().expect("value must be a string");
+    assert!(truncated.len() <= 512);
+    // The last valid boundary at or before 512 is 511 (the emoji starts there).
+    assert_eq!(truncated, "a".repeat(511));
+
+    // A char boundary exactly at 512 is retained.
+    let exact = HTTPUserAgent(format!("{}b", "a".repeat(512)));
+    assert_eq!(exact.value.as_str().unwrap(), "a".repeat(512));
+
+    // A multibyte char ending exactly at 512 is kept intact.
+    let whole = HTTPUserAgent(format!("{}{}b", "a".repeat(508), emoji));
+    assert_eq!(
+        whole.value.as_str().unwrap(),
+        format!("{}{}", "a".repeat(508), emoji)
+    );
+    assert_eq!(whole.value.as_str().unwrap().len(), 512);
+
+    // Short input is left untouched.
+    let short = HTTPUserAgent("Mozilla/5.0");
+    assert_eq!(short.value.as_str().unwrap(), "Mozilla/5.0");
 }

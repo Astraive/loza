@@ -116,6 +116,33 @@ describe('Sink boundaries', () => {
     }
   });
 
+  it('preserves the endpoint query string in outgoing requests', async () => {
+    const received = Promise.withResolvers<string>();
+    const { server, endpoint } = await listenServer((req, res) => {
+      req.resume();
+      req.on('end', () => {
+        received.resolve(req.url || '');
+        res.statusCode = 200;
+        res.end(acceptedResponse);
+      });
+    });
+    try {
+      const sink = new HTTPBatchSink({
+        endpoint: `${endpoint}?access_token=secret123&route=tenant-a`,
+        enableCompression: false,
+        retries: 0,
+        batchSize: 1,
+      });
+      await sink.write('{"event":"query"}');
+      assert.equal(
+        await received.promise,
+        '/events?access_token=secret123&route=tenant-a'
+      );
+    } finally {
+      await closeServer(server);
+    }
+  });
+
   it('sends NDJSON batches without compression and preserves events on failures', async () => {
     let requests = 0;
     const { server, endpoint } = await listenServer((_req, res) => {
@@ -303,6 +330,11 @@ describe('Sink boundaries', () => {
     assert.throws(() => new HTTPBatchSink({ endpoint: 'https://example.com/events', password: 'secret' }), /password requires/);
     assert.throws(() => new HTTPBatchSink({ endpoint: 'https://example.com/events', username: 'private' }), /require a password/);
     assert.throws(() => new HTTPBatchSink({ endpoint: 'http://example.com/events', username: 'user', password: 'secret' }), /require HTTPS/);
+    // Regression: Bearer/custom-header API keys must not be sent over cleartext HTTP to non-local hosts.
+    assert.throws(() => new HTTPBatchSink({ endpoint: 'http://example.com/events', apiKey: 'secret-key' }), /require HTTPS/);
+    assert.throws(() => new HTTPBatchSink({ endpoint: 'http://example.com/events', apiKey: 'secret-key', authHeader: 'X-Loza-Api-Key' }), /require HTTPS/);
+    assert.doesNotThrow(() => new HTTPBatchSink({ endpoint: 'http://localhost/events', apiKey: 'secret-key' }));
+    assert.doesNotThrow(() => new HTTPBatchSink({ endpoint: 'https://example.com/events', apiKey: 'secret-key' }));
     assert.doesNotThrow(() => new HTTPBatchSink({ endpoint: 'http://localhost/events', username: 'user', password: 'secret' }));
     assert.doesNotThrow(() => new HTTPBatchSink({ endpoint: 'https://example.com/events', username: 'lz_pub_capability' }));
     assert.ok(collectorSink({ endpoint: 'http://localhost/events' }) instanceof CollectorSink);

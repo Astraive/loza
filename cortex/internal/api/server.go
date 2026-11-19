@@ -147,7 +147,13 @@ func (s *Server) Router() http.Handler {
 
 	r.Use(middleware.SecurityHeaders)
 	r.Use(httpmiddleware.RequestID)
-	r.Use(httpmiddleware.RealIP)
+	// NOTE: Do not install chi's RealIP middleware here. It unconditionally
+	// overwrites r.RemoteAddr from client-controlled X-Forwarded-For / X-Real-IP
+	// / True-Client-IP headers with no trust check, which lets clients spoof their
+	// address. The rate limiter derives the client IP from the real socket
+	// RemoteAddr and only honours proxy headers when the peer is a configured
+	// TrustedProxies CIDR (see RateLimiter.extractClientIP). Keeping RealIP here
+	// would defeat that guard and poison request logs.
 	r.Use(httpmiddleware.Logger)
 	r.Use(httpmiddleware.Recoverer)
 
@@ -217,6 +223,12 @@ func (s *Server) Healthz(w http.ResponseWriter, r *http.Request) {
 func (s *Server) Readyz(w http.ResponseWriter, r *http.Request) {
 	ready := true
 	checks := map[string]string{}
+
+	// Honor the explicit readiness flag so the service can be drained.
+	if !s.ready {
+		ready = false
+		checks["ready"] = "not_ready"
+	}
 
 	// Check if graph engine is initialized
 	if s.graph == nil {
@@ -362,7 +374,7 @@ func (s *Server) Reconstruct(w http.ResponseWriter, r *http.Request) {
 
 	if err != nil {
 		log.Warn().Err(err).Msg("reconstruct failed")
-		http.Error(w, "not found", http.StatusNotFound)
+		writeReconstructError(w, err)
 		return
 	}
 
@@ -387,7 +399,7 @@ func (s *Server) ReconstructIncident(w http.ResponseWriter, r *http.Request) {
 
 	if err != nil {
 		log.Warn().Err(err).Str("incident_id", incidentID).Msg("reconstruct incident failed")
-		http.Error(w, "not found", http.StatusNotFound)
+		writeReconstructError(w, err)
 		return
 	}
 
@@ -440,6 +452,16 @@ func graphLookupStatus(err error) int {
 		return http.StatusNotFound
 	}
 	return http.StatusInternalServerError
+}
+
+// writeReconstructError reports a missing incident as 404 and any other
+// storage/internal failure as 500, matching the graph lookup handlers.
+func writeReconstructError(w http.ResponseWriter, err error) {
+	if graphLookupStatus(err) == http.StatusNotFound {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	http.Error(w, "internal error", http.StatusInternalServerError)
 }
 
 func graphDepth(r *http.Request) (int, error) {

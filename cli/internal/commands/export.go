@@ -13,7 +13,9 @@ func ExportCommand(cfg config.Config, args []string) error {
 	fs := flag.NewFlagSet("export", flag.ContinueOnError)
 	engine := fs.String("engine", "duckdb", "query engine")
 	outputPath := fs.String("o", "export.ndjson", "output file path")
-	format := fs.String("format", "ndjson", "output format (ndjson or parquet)")
+	// --output is the documented spelling; keep -o as a backwards-compatible alias.
+	fs.StringVar(outputPath, "output", "export.ndjson", "output file path")
+	format := fs.String("format", "ndjson", "output format (ndjson)")
 	table := fs.String("table", "events", "table name to query")
 	if err := fs.Parse(args); err != nil {
 		return err

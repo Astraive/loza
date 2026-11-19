@@ -1,5 +1,6 @@
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 import sys
 
 repo_root = Path(__file__).resolve().parents[2]
@@ -34,6 +35,27 @@ class TestCollectorDedupe(unittest.TestCase):
         resp2 = handle_event(event, self.queue, self.store)
         self.assertEqual(resp1['status'], 'accepted')
         self.assertEqual(resp2['status'], 'duplicate')
+        files = list(self.queue.path.glob('*.json'))
+        self.assertEqual(len(files), 1)
+
+    def test_enqueue_failure_releases_dedupe_claim(self):
+        """A failed enqueue must not permanently suppress a redelivery (MASS-0849/#939)."""
+        event = {
+            'event_id': 'evt-enqueue-fail',
+            'schema_version': 'v1',
+            'event_version': 'v1',
+            'timestamp': '2026-05-18T12:30:45Z',
+            'service': 'svc',
+            'event': 'x',
+        }
+        with patch.object(self.queue, 'produce', side_effect=OSError('simulated enqueue failure')):
+            with self.assertRaises(OSError):
+                handle_event(event, self.queue, self.store)
+
+        # The claim must have been rolled back so the redelivery is not a duplicate.
+        self.assertFalse(self.store.is_seen('evt-enqueue-fail'))
+        resp = handle_event(event, self.queue, self.store)
+        self.assertEqual(resp['status'], 'accepted')
         files = list(self.queue.path.glob('*.json'))
         self.assertEqual(len(files), 1)
 

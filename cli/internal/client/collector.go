@@ -8,10 +8,10 @@ import (
 	"io"
 	"math"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -41,26 +41,41 @@ func RunLoadgenCommand(ctx context.Context, collectorRepoPath string, args []str
 
 // CheckHealth checks the collector health endpoint.
 func CheckHealth(baseURL string) error {
-	if err := expectStatus(strings.TrimRight(baseURL, "/")+"/health", http.StatusOK); err == nil {
+	return CheckHealthContext(context.Background(), baseURL)
+}
+
+// CheckHealthContext checks the collector health endpoint, honoring ctx.
+func CheckHealthContext(ctx context.Context, baseURL string) error {
+	if err := expectStatusContext(ctx, strings.TrimRight(baseURL, "/")+"/health", http.StatusOK); err == nil {
 		return nil
 	}
-	return expectStatus(strings.TrimRight(baseURL, "/")+"/healthz", http.StatusOK)
+	return expectStatusContext(ctx, strings.TrimRight(baseURL, "/")+"/healthz", http.StatusOK)
 }
 
 // CheckReady checks the collector ready endpoint.
 func CheckReady(baseURL string) error {
-	if err := expectStatus(strings.TrimRight(baseURL, "/")+"/ready", http.StatusOK); err == nil {
+	return CheckReadyContext(context.Background(), baseURL)
+}
+
+// CheckReadyContext checks the collector ready endpoint, honoring ctx.
+func CheckReadyContext(ctx context.Context, baseURL string) error {
+	if err := expectStatusContext(ctx, strings.TrimRight(baseURL, "/")+"/ready", http.StatusOK); err == nil {
 		return nil
 	}
-	return expectStatus(strings.TrimRight(baseURL, "/")+"/readyz", http.StatusOK)
+	return expectStatusContext(ctx, strings.TrimRight(baseURL, "/")+"/readyz", http.StatusOK)
 }
 
 // PostIngest posts event data to the collector ingest endpoint.
 func PostIngest(baseURL, contentType string, payload []byte) error {
+	return PostIngestContext(context.Background(), baseURL, contentType, payload)
+}
+
+// PostIngestContext posts event data to the collector ingest endpoint, honoring ctx.
+func PostIngestContext(ctx context.Context, baseURL, contentType string, payload []byte) error {
 	if err := validateIngestPayload(contentType, payload); err != nil {
 		return err
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), defaultTimeout)
+	ctx, cancel := context.WithTimeout(ctx, defaultTimeout)
 	defer cancel()
 	var lastErr error
 	for attempt := 0; attempt < 3; attempt++ {
@@ -75,10 +90,12 @@ func PostIngest(baseURL, contentType string, payload []byte) error {
 		if err != nil {
 			lastErr = err
 			if attempt < 2 {
-				time.Sleep(backoffDelay(attempt, ""))
+				if sleepErr := sleepContext(ctx, backoffDelay(attempt, "")); sleepErr != nil {
+					return sleepErr
+				}
 				continue
 			}
-			return err
+			break
 		}
 
 		body, readErr := readResponseBody(resp.Body)
@@ -86,10 +103,12 @@ func PostIngest(baseURL, contentType string, payload []byte) error {
 		if readErr != nil {
 			lastErr = readErr
 			if attempt < 2 {
-				time.Sleep(backoffDelay(attempt, ""))
+				if sleepErr := sleepContext(ctx, backoffDelay(attempt, "")); sleepErr != nil {
+					return sleepErr
+				}
 				continue
 			}
-			return readErr
+			break
 		}
 
 		outcome, reason := collectorResponseOutcome(resp.StatusCode, body)
@@ -99,10 +118,12 @@ func PostIngest(baseURL, contentType string, payload []byte) error {
 		case "retryable":
 			lastErr = fmt.Errorf("collector reported retryable response: %s", reason)
 			if attempt < 2 {
-				time.Sleep(backoffDelay(attempt, resp.Header.Get("Retry-After")))
+				if sleepErr := sleepContext(ctx, backoffDelay(attempt, resp.Header.Get("Retry-After"))); sleepErr != nil {
+					return sleepErr
+				}
 				continue
 			}
-			return lastErr
+			// Exhausted retries fall through so the post-loop return wraps lastErr.
 		default:
 			if resp.StatusCode >= 300 {
 				return fmt.Errorf("collector returned %d: %s", resp.StatusCode, string(body))
@@ -115,7 +136,12 @@ func PostIngest(baseURL, contentType string, payload []byte) error {
 
 // FetchStatus fetches the collector status endpoint.
 func FetchStatus(baseURL string) ([]byte, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), defaultTimeout)
+	return FetchStatusContext(context.Background(), baseURL)
+}
+
+// FetchStatusContext fetches the collector status endpoint, honoring ctx.
+func FetchStatusContext(ctx context.Context, baseURL string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(ctx, defaultTimeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(baseURL, "/")+"/status", nil)
 	if err != nil {
@@ -136,7 +162,12 @@ func FetchStatus(baseURL string) ([]byte, error) {
 
 // FetchMetrics fetches Prometheus metrics from the collector.
 func FetchMetrics(baseURL string) ([]byte, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), defaultTimeout)
+	return FetchMetricsContext(context.Background(), baseURL)
+}
+
+// FetchMetricsContext fetches Prometheus metrics from the collector, honoring ctx.
+func FetchMetricsContext(ctx context.Context, baseURL string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(ctx, defaultTimeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(baseURL, "/")+"/metrics", nil)
 	if err != nil {
@@ -198,6 +229,9 @@ func encodeLQLParameters(parameters map[string]any) map[string]any {
 			kind = "bool"
 		case int, int8, int16, int32, int64:
 			kind = "int"
+		case json.Number:
+			// Exact integer beyond int64, kept as a raw JSON number to avoid float rounding.
+			kind = "int"
 		case float32, float64:
 			kind = "float"
 		}
@@ -242,7 +276,6 @@ func QueryLQL(baseURL, source string, parameters map[string]any, limit int) ([]b
 	return readResponseBody(resp.Body)
 }
 
-
 // TailStream opens an HTTP stream to the collector for tailing events.
 func TailStream(ctx context.Context, baseURL string) (io.ReadCloser, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(baseURL, "/")+"/tail", nil)
@@ -271,7 +304,7 @@ func FetchDLQ(baseURL string) ([]byte, error) {
 }
 
 func FetchDLQItem(baseURL, id string) ([]byte, error) {
-	return getJSON(baseURL, "/dlq/"+id)
+	return getJSON(baseURL, "/dlq/"+url.PathEscape(id))
 }
 
 func ReplayDLQ(ctx context.Context, baseURL string) ([]byte, error) {
@@ -279,7 +312,7 @@ func ReplayDLQ(ctx context.Context, baseURL string) ([]byte, error) {
 }
 
 func ReplayDLQItem(ctx context.Context, baseURL, id string) ([]byte, error) {
-	return postJSON(ctx, baseURL, "/dlq/"+id+"/replay", nil)
+	return postJSON(ctx, baseURL, "/dlq/"+url.PathEscape(id)+"/replay", nil)
 }
 
 func FetchSchema(baseURL string) ([]byte, error) {
@@ -315,15 +348,15 @@ func AuditPII(ctx context.Context, baseURL string, payload []byte) ([]byte, erro
 }
 
 func DeleteEventsByTenant(ctx context.Context, baseURL, tenantID, reason string) ([]byte, error) {
-	return deleteJSON(ctx, baseURL, "/events/by-tenant/"+tenantID, reason)
+	return deleteJSON(ctx, baseURL, "/events/by-tenant/"+url.PathEscape(tenantID), reason)
 }
 
 func DeleteEventsByUser(ctx context.Context, baseURL, userID, reason string) ([]byte, error) {
-	return deleteJSON(ctx, baseURL, "/events/by-user/"+userID, reason)
+	return deleteJSON(ctx, baseURL, "/events/by-user/"+url.PathEscape(userID), reason)
 }
 
 func DeleteEventByID(ctx context.Context, baseURL, eventID, reason string) ([]byte, error) {
-	return deleteJSON(ctx, baseURL, "/events/"+eventID, reason)
+	return deleteJSON(ctx, baseURL, "/events/"+url.PathEscape(eventID), reason)
 }
 
 func FetchSinks(baseURL string) ([]byte, error) {
@@ -331,15 +364,15 @@ func FetchSinks(baseURL string) ([]byte, error) {
 }
 
 func FetchSinkHealth(baseURL, name string) ([]byte, error) {
-	return getJSON(baseURL, "/sinks/"+name)
+	return getJSON(baseURL, "/sinks/"+url.PathEscape(name))
 }
 
 func TestSink(ctx context.Context, baseURL, name string) ([]byte, error) {
-	return postJSON(ctx, baseURL, "/sinks/"+name+"/test", nil)
+	return postJSON(ctx, baseURL, "/sinks/"+url.PathEscape(name)+"/test", nil)
 }
 
 func DeleteDLQItem(ctx context.Context, baseURL, id string) ([]byte, error) {
-	return deleteJSON(ctx, baseURL, "/dlq/"+id, "")
+	return deleteJSON(ctx, baseURL, "/dlq/"+url.PathEscape(id), "")
 }
 
 func PublishBlueprint(ctx context.Context, baseURL string, payload []byte) ([]byte, error) {
@@ -355,11 +388,11 @@ func FetchQuarantine(baseURL string) ([]byte, error) {
 }
 
 func ReplayQuarantineItem(ctx context.Context, baseURL, id string) ([]byte, error) {
-	return postJSON(ctx, baseURL, "/quarantine/"+id+"/replay", nil)
+	return postJSON(ctx, baseURL, "/quarantine/"+url.PathEscape(id)+"/replay", nil)
 }
 
 func DeleteQuarantineItem(ctx context.Context, baseURL, id string) ([]byte, error) {
-	return deleteJSON(ctx, baseURL, "/quarantine/"+id, "")
+	return deleteJSON(ctx, baseURL, "/quarantine/"+url.PathEscape(id), "")
 }
 
 func CreateAPIKey(ctx context.Context, baseURL string, payload []byte) ([]byte, error) {
@@ -367,26 +400,21 @@ func CreateAPIKey(ctx context.Context, baseURL string, payload []byte) ([]byte, 
 }
 
 func RevokeAPIKey(ctx context.Context, baseURL, id string) ([]byte, error) {
-	return postJSON(ctx, baseURL, "/keys/"+id+"/revoke", nil)
+	return postJSON(ctx, baseURL, "/keys/"+url.PathEscape(id)+"/revoke", nil)
 }
 
 func RotateAPIKey(ctx context.Context, baseURL, id string) ([]byte, error) {
-	return postJSON(ctx, baseURL, "/keys/"+id+"/rotate", nil)
+	return postJSON(ctx, baseURL, "/keys/"+url.PathEscape(id)+"/rotate", nil)
 }
 
 func WatchStream(ctx context.Context, baseURL string, filters map[string]string) (io.ReadCloser, error) {
 	base := strings.TrimRight(baseURL, "/") + "/tail"
 	if len(filters) > 0 {
-		keys := make([]string, 0, len(filters))
-		for k := range filters {
-			keys = append(keys, k)
+		values := make(url.Values, len(filters))
+		for k, v := range filters {
+			values.Set(k, v)
 		}
-		sort.Strings(keys)
-		params := make([]string, 0, len(keys))
-		for _, k := range keys {
-			params = append(params, k+"="+filters[k])
-		}
-		base += "?" + strings.Join(params, "&")
+		base += "?" + values.Encode()
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base, nil)
 	if err != nil {
@@ -406,7 +434,11 @@ func WatchStream(ctx context.Context, baseURL string, filters map[string]string)
 }
 
 func expectStatus(url string, want int) error {
-	ctx, cancel := context.WithTimeout(context.Background(), defaultTimeout)
+	return expectStatusContext(context.Background(), url, want)
+}
+
+func expectStatusContext(ctx context.Context, url string, want int) error {
+	ctx, cancel := context.WithTimeout(ctx, defaultTimeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
@@ -428,6 +460,21 @@ func clientWithTimeout(timeout time.Duration) *http.Client {
 	return &http.Client{Timeout: timeout}
 }
 
+// sleepContext waits for d while remaining responsive to ctx cancellation.
+func sleepContext(ctx context.Context, d time.Duration) error {
+	if d <= 0 {
+		return ctx.Err()
+	}
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
 func getJSON(baseURL, path string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), defaultTimeout)
 	defer cancel()
@@ -441,7 +488,10 @@ func getJSON(baseURL, path string) ([]byte, error) {
 		return nil, err
 	}
 	defer resp.Body.Close()
-	body, _ := readResponseBody(resp.Body)
+	body, err := readResponseBody(resp.Body)
+	if err != nil {
+		return nil, err
+	}
 	if resp.StatusCode >= 300 {
 		return nil, fmt.Errorf("collector returned %d: %s", resp.StatusCode, string(body))
 	}
@@ -463,7 +513,10 @@ func postJSON(ctx context.Context, baseURL, path string, payload []byte) ([]byte
 		return nil, err
 	}
 	defer resp.Body.Close()
-	body, _ := readResponseBody(resp.Body)
+	body, err := readResponseBody(resp.Body)
+	if err != nil {
+		return nil, err
+	}
 	if resp.StatusCode >= 300 {
 		return nil, fmt.Errorf("collector returned %d: %s", resp.StatusCode, string(body))
 	}
@@ -490,7 +543,10 @@ func deleteJSON(ctx context.Context, baseURL, path, reason string) ([]byte, erro
 		return nil, err
 	}
 	defer resp.Body.Close()
-	body, _ := readResponseBody(resp.Body)
+	body, err := readResponseBody(resp.Body)
+	if err != nil {
+		return nil, err
+	}
 	if resp.StatusCode >= 300 {
 		return nil, fmt.Errorf("collector returned %d: %s", resp.StatusCode, string(body))
 	}
@@ -510,7 +566,14 @@ func validateIngestPayload(contentType string, payload []byte) error {
 }
 
 func readResponseBody(body io.Reader) ([]byte, error) {
-	return io.ReadAll(io.LimitReader(body, maxCLIResponseBytes+1))
+	data, err := io.ReadAll(io.LimitReader(body, maxCLIResponseBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > maxCLIResponseBytes {
+		return nil, fmt.Errorf("response too large: exceeds %d bytes", maxCLIResponseBytes)
+	}
+	return data, nil
 }
 
 func validateIngestEnvelopeShape(envelope map[string]any) error {

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -123,5 +124,118 @@ func TestFlushRestoreOnFailure(t *testing.T) {
 	}
 	if calls.Load() != 2 {
 		t.Fatalf("expected 2 push attempts, got %d", calls.Load())
+	}
+}
+
+// TestCloseFinalFlushFailureDropsExplicitly reproduces the reported defect:
+// a failed final push during Close used to be restored into s.batch after the
+// flush loop was stopped, leaving entries stranded in a sink that can never
+// flush them again. The fix reports the drop explicitly and keeps the sink
+// free of unflushable entries.
+func TestCloseFinalFlushFailureDropsExplicitly(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+		_, _ = w.Write([]byte("upstream down"))
+	}))
+	defer srv.Close()
+
+	rawSink, err := New(Config{
+		URL:           srv.URL,
+		BatchSize:     10,
+		FlushInterval: time.Hour,
+		Client:        srv.Client(),
+	})
+	if err != nil {
+		t.Fatalf("new sink: %v", err)
+	}
+	s := rawSink.(*sink)
+
+	if err := s.WriteEvent(context.Background(), []byte(`{"event":"stranded"}`), nil); err != nil {
+		t.Fatalf("write event: %v", err)
+	}
+
+	err = s.Close(context.Background())
+	if err == nil {
+		t.Fatal("expected Close to report the failed final flush")
+	}
+	if !strings.Contains(err.Error(), "dropping 1 buffered entries") {
+		t.Fatalf("Close must explicitly report the dropped entries, got: %v", err)
+	}
+
+	s.mu.Lock()
+	remaining := len(s.batch)
+	s.mu.Unlock()
+	if remaining != 0 {
+		t.Fatalf("closed sink must not retain unflushable entries, got %d", remaining)
+	}
+}
+
+// TestCloseWaitsForInflightPush verifies that Close waits for a push already
+// in flight before performing the final flush, so a failed in-flight push has
+// been restored and its entries are picked up by the final flush.
+func TestCloseWaitsForInflightPush(t *testing.T) {
+	pushStarted := make(chan struct{})
+	releasePush := make(chan struct{})
+	var once sync.Once
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		once.Do(func() { close(pushStarted) })
+		<-releasePush
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+
+	rawSink, err := New(Config{
+		URL: srv.URL,
+		// BatchSize 1 makes appendEntry hand the batch straight to WriteEvent,
+		// which then blocks in an in-flight push.
+		BatchSize:     1,
+		FlushInterval: time.Hour,
+		Client:        srv.Client(),
+	})
+	if err != nil {
+		t.Fatalf("new sink: %v", err)
+	}
+	s := rawSink.(*sink)
+
+	writeCtx, cancelWrite := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancelWrite()
+	writeDone := make(chan error, 1)
+	go func() {
+		writeDone <- s.WriteEvent(writeCtx, []byte(`{"event":"inflight"}`), nil)
+	}()
+
+	select {
+	case <-pushStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("push did not start")
+	}
+
+	closeDone := make(chan error, 1)
+	go func() { closeDone <- s.Close(context.Background()) }()
+
+	select {
+	case err := <-closeDone:
+		t.Fatalf("Close returned before the in-flight push completed: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	close(releasePush)
+
+	select {
+	case err := <-writeDone:
+		if err != nil {
+			t.Fatalf("write event: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("write did not complete")
+	}
+	select {
+	case err := <-closeDone:
+		if err != nil {
+			t.Fatalf("close: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("close did not complete")
 	}
 }

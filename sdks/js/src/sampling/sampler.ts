@@ -84,12 +84,16 @@ export function notSampler(sampler: Sampler): Sampler {
 /** Token-bucket rate limiter — keeps events up to `rate` per `windowMs`. */
 export function sampleRateLimited(rate: number, windowMs: number = 1000): Sampler {
   let tokens = rate;
+  // A bucket must hold at least one whole token. Capping at `rate` alone
+  // starves fractional rates (0 < rate < 1) forever because credit can never
+  // reach the 1 needed to emit an event. Mirrors the Python SDK's capacity.
+  const capacity = Math.max(rate, 1);
   let last = Date.now();
   return () => {
     const now = Date.now();
     const elapsed = now - last;
     last = now;
-    tokens = Math.min(rate, tokens + elapsed * (rate / windowMs));
+    tokens = Math.min(capacity, tokens + elapsed * (rate / windowMs));
     if (tokens < 1) return false;
     tokens -= 1;
     return true;

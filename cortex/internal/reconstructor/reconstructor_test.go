@@ -3,6 +3,7 @@ package reconstructor
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -140,7 +141,9 @@ func (f *fakeReconSignatureStore) UpdateLastMatched(_ context.Context, id string
 }
 
 type fakeReconRemediationStore struct {
-	stats map[string][]*models.RemediationStats
+	stats     map[string][]*models.RemediationStats
+	listErr   error
+	listCalls int
 }
 
 func (f *fakeReconRemediationStore) Save(context.Context, *models.Remediation) error {
@@ -156,6 +159,10 @@ func (f *fakeReconRemediationStore) ListByIncident(context.Context, string) ([]*
 }
 
 func (f *fakeReconRemediationStore) ListBySignature(_ context.Context, signatureID string, limit int) ([]*models.RemediationStats, error) {
+	f.listCalls++
+	if f.listErr != nil {
+		return nil, f.listErr
+	}
 	items := f.stats[signatureID]
 	if limit > 0 && len(items) > limit {
 		items = items[:limit]
@@ -177,6 +184,10 @@ func (f *fakeReconFeedbackStore) GetSuccessRate(context.Context, string, string)
 	return 0, nil
 }
 
+func (f *fakeReconFeedbackStore) GetAverageTimeToResolve(context.Context, string, string) (int64, error) {
+	return 0, nil
+}
+
 func buildReconIncidentGraph(store *fakeReconGraphStore, incidentID string) {
 	now := time.Now()
 	store.nodes[incidentID] = &models.Node{
@@ -186,9 +197,9 @@ func buildReconIncidentGraph(store *fakeReconGraphStore, incidentID string) {
 		CreatedAt: now,
 	}
 	store.nodes["metric-1"] = &models.Node{
-		ID:        "metric-1",
-		Type:      models.NodeTypeMetric,
-		Label:     "svc-a",
+		ID:    "metric-1",
+		Type:  models.NodeTypeMetric,
+		Label: "svc-a",
 		Attributes: map[string]interface{}{
 			"service":     "svc-a",
 			"metric_name": "error_rate",
@@ -198,9 +209,9 @@ func buildReconIncidentGraph(store *fakeReconGraphStore, incidentID string) {
 		CreatedAt: now.Add(time.Second),
 	}
 	store.nodes["log-1"] = &models.Node{
-		ID:        "log-1",
-		Type:      models.NodeTypeLog,
-		Label:     "svc-b",
+		ID:    "log-1",
+		Type:  models.NodeTypeLog,
+		Label: "svc-b",
 		Attributes: map[string]interface{}{
 			"service": "svc-b",
 			"level":   "error",
@@ -270,6 +281,9 @@ func TestReconstructFastAndFromSignal(t *testing.T) {
 	if ctx.Confidence <= 0.5 || ctx.Confidence > 1 {
 		t.Fatalf("unexpected confidence: %v", ctx.Confidence)
 	}
+	if ctx.Partial || len(ctx.Warnings) != 0 {
+		t.Fatalf("successful reconstruction should not be flagged partial: Partial=%v Warnings=%v", ctx.Partial, ctx.Warnings)
+	}
 
 	signalStore := &fakeReconIncidentStore{incidents: map[string]*models.Incident{}}
 	buildReconIncidentGraph(graphStore, "signal-1")
@@ -285,5 +299,228 @@ func TestReconstructFastAndFromSignal(t *testing.T) {
 	}
 	if signalCtx.IncidentID != "signal-1" || len(signalStore.saved) != 1 {
 		t.Fatalf("expected signal incident to be saved and reconstructed, got %+v", signalCtx)
+	}
+}
+
+// fakeErrSignatureService is a SignatureService whose enrichment calls can be
+// made to fail so the reconstructor's error surfacing can be exercised.
+type fakeErrSignatureService struct {
+	extractErr    error
+	similarErr    error
+	similar       []*models.SimilarIncident
+	findCallCount int
+}
+
+func (f *fakeErrSignatureService) Score(_, _ *models.IncidentSignature) (float64, error) {
+	return 0, nil
+}
+func (f *fakeErrSignatureService) TopK(_ *models.IncidentSignature, _ []*models.IncidentSignature, _ int) ([]matcher.Match, error) {
+	return nil, nil
+}
+func (f *fakeErrSignatureService) ExtractSignature(_ context.Context, _ *models.IncidentContext) (*models.IncidentSignature, error) {
+	if f.extractErr != nil {
+		return nil, f.extractErr
+	}
+	return &models.IncidentSignature{SignatureID: "sig-1"}, nil
+}
+func (f *fakeErrSignatureService) FindSimilar(_ context.Context, _ *models.IncidentSignature, _ int) ([]*models.SimilarIncident, error) {
+	f.findCallCount++
+	if f.similarErr != nil {
+		return nil, f.similarErr
+	}
+	return f.similar, nil
+}
+func (f *fakeErrSignatureService) RegisterSignature(_ context.Context, _ *models.IncidentSignature) error {
+	return nil
+}
+func (f *fakeErrSignatureService) UpdateSignature(_ context.Context, _ string, _ *models.SignatureUpdate) error {
+	return nil
+}
+
+func newReconWithFailingEnrichment(ms *fakeErrSignatureService, remStore *fakeReconRemediationStore) *IncidentReconstructor {
+	graphStore := &fakeReconGraphStore{nodes: map[string]*models.Node{}, edges: map[string][]*models.Edge{}}
+	buildReconIncidentGraph(graphStore, "inc-1")
+	incidentStore := &fakeReconIncidentStore{
+		incidents: map[string]*models.Incident{
+			"inc-1": {ID: "inc-1", SignatureID: "sig-1", Status: "active", Severity: "high", PrimaryService: "svc-a"},
+		},
+	}
+	learnerSvc := learner.NewLearner(remStore, &fakeReconFeedbackStore{}, &fakeReconSignatureStore{
+		sigs:    map[string]*models.IncidentSignature{},
+		similar: map[string][]*models.SimilarIncident{},
+	})
+	return NewIncidentReconstructor(graph.NewBuilder(graphStore), ms, learnerSvc, incidentStore)
+}
+
+// TestReconstructEnrichmentFailuresAreReported verifies that failures of the
+// matcher/learner backends are no longer silently swallowed: the reconstruction
+// still returns its partial result, but it is flagged Partial with a diagnostic
+// warning so callers can distinguish it from a genuine low-signal incident.
+func TestReconstructEnrichmentFailuresAreReported(t *testing.T) {
+	backendErr := errors.New("backend unavailable")
+	withSimilar := []*models.SimilarIncident{{IncidentID: "historic", Similarity: 0.9}}
+
+	tests := []struct {
+		name          string
+		extractErr    error
+		similarErr    error
+		similar       []*models.SimilarIncident
+		listErr       error
+		wantWarning   string
+		wantFindCalls int
+		wantListCalls int
+	}{
+		{
+			name:        "signature extraction failure",
+			extractErr:  backendErr,
+			wantWarning: "signature extraction",
+		},
+		{
+			name:          "similarity search failure",
+			similarErr:    backendErr,
+			wantFindCalls: 1,
+			wantWarning:   "similarity search",
+		},
+		{
+			name:          "remediation lookup failure",
+			similar:       withSimilar,
+			listErr:       backendErr,
+			wantFindCalls: 1,
+			wantListCalls: 1,
+			wantWarning:   "remediation lookup",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ms := &fakeErrSignatureService{
+				extractErr: tc.extractErr,
+				similarErr: tc.similarErr,
+				similar:    tc.similar,
+			}
+			remStore := &fakeReconRemediationStore{
+				stats:   map[string][]*models.RemediationStats{},
+				listErr: tc.listErr,
+			}
+			recon := newReconWithFailingEnrichment(ms, remStore)
+
+			ctx, err := recon.ReconstructFast(context.Background(), "inc-1")
+			if err != nil {
+				t.Fatalf("enrichment failure should still return partial result, got error: %v", err)
+			}
+			if ctx == nil {
+				t.Fatal("expected partial reconstruction context, got nil")
+			}
+			if !ctx.Partial {
+				t.Fatal("expected Partial to be set when an enrichment subsystem fails")
+			}
+			if len(ctx.Warnings) == 0 {
+				t.Fatal("expected a diagnostic warning when an enrichment subsystem fails")
+			}
+			if joined := strings.Join(ctx.Warnings, " "); !strings.Contains(joined, tc.wantWarning) {
+				t.Fatalf("expected warning to mention %q, got %q", tc.wantWarning, joined)
+			}
+			if len(ctx.CausalChain) != 3 {
+				t.Fatalf("partial reconstruction should preserve causal chain, got %d events", len(ctx.CausalChain))
+			}
+			if ms.findCallCount != tc.wantFindCalls {
+				t.Fatalf("FindSimilar called %d times, want %d", ms.findCallCount, tc.wantFindCalls)
+			}
+			if remStore.listCalls != tc.wantListCalls {
+				t.Fatalf("remediation lookup called %d times, want %d", remStore.listCalls, tc.wantListCalls)
+			}
+		})
+	}
+}
+
+// TestReconstructFromSignalReportsEnrichmentFailure covers the reconstruct()
+// path (used by ReconstructFromSignal) in addition to reconstructAdaptive().
+func TestReconstructFromSignalReportsEnrichmentFailure(t *testing.T) {
+	ms := &fakeErrSignatureService{extractErr: errors.New("extractor down")}
+	remStore := &fakeReconRemediationStore{stats: map[string][]*models.RemediationStats{}}
+	recon := newReconWithFailingEnrichment(ms, remStore)
+
+	ctx, err := recon.ReconstructFromSignal(context.Background(), &models.IncidentSignal{
+		SignalID:  "inc-1",
+		Timestamp: time.Now(),
+		Service:   "svc-a",
+		Severity:  "high",
+	})
+	if err != nil {
+		t.Fatalf("enrichment failure should still return partial result, got error: %v", err)
+	}
+	if !ctx.Partial || len(ctx.Warnings) == 0 {
+		t.Fatalf("expected partial flag and warning, got Partial=%v Warnings=%v", ctx.Partial, ctx.Warnings)
+	}
+	if joined := strings.Join(ctx.Warnings, " "); !strings.Contains(joined, "signature extraction") {
+		t.Fatalf("expected signature extraction warning, got %q", joined)
+	}
+	if ms.findCallCount != 0 {
+		t.Fatalf("FindSimilar should be skipped after extraction failure, called %d times", ms.findCallCount)
+	}
+}
+
+// TestReconstructAdaptiveExcludesOwnSignature verifies that the adaptive
+// reconstruction path (used by ReconstructFast/ReconstructDeep) filters out the
+// current incident's own stored signature when the incident has a known
+// SignatureID that differs from its IncidentID. Without the override, the
+// stored signature scores ~1.0 and is returned as the most similar past incident.
+func TestReconstructAdaptiveExcludesOwnSignature(t *testing.T) {
+	graphStore := &fakeReconGraphStore{nodes: map[string]*models.Node{}, edges: map[string][]*models.Edge{}}
+	buildReconIncidentGraph(graphStore, "inc-1")
+	incidentStore := &fakeReconIncidentStore{
+		incidents: map[string]*models.Incident{
+			"inc-1": {ID: "inc-1", SignatureID: "sig-1", Status: "active", Severity: "high", PrimaryService: "svc-a"},
+		},
+	}
+	sigStore := &fakeReconSignatureStore{
+		sigs:    map[string]*models.IncidentSignature{},
+		similar: map[string][]*models.SimilarIncident{},
+	}
+	remStore := &fakeReconRemediationStore{stats: map[string][]*models.RemediationStats{}}
+	learnerSvc := learner.NewLearner(remStore, &fakeReconFeedbackStore{}, sigStore)
+
+	// First pass derives the exact signature the adaptive path extracts from
+	// this incident's context. Store it under the incident's known SignatureID
+	// so it would otherwise score ~1.0 against the query signature.
+	matcherSvc := matcher.NewSignatureMatcher(sigStore)
+	recon := NewIncidentReconstructor(graph.NewBuilder(graphStore), matcherSvc, learnerSvc, incidentStore)
+	baseCtx, err := recon.ReconstructFast(context.Background(), "inc-1")
+	if err != nil {
+		t.Fatalf("reconstruct fast (baseline): %v", err)
+	}
+	ownSig, err := matcherSvc.ExtractSignature(context.Background(), baseCtx)
+	if err != nil {
+		t.Fatalf("extract signature: %v", err)
+	}
+	ownSig.SignatureID = "sig-1"
+	sigStore.sigs["sig-1"] = ownSig
+
+	// A genuinely historical signature with the same shape should remain a
+	// valid "similar past incident" result.
+	sigStore.sigs["historic-1"] = &models.IncidentSignature{
+		SignatureID:   "historic-1",
+		Shape:         ownSig.Shape,
+		Symptoms:      ownSig.Symptoms,
+		FeatureVector: append([]float64(nil), ownSig.FeatureVector...),
+		Remediation:   []string{"rollback"},
+	}
+
+	// Fresh matcher so the candidate cache is rebuilt with the new signatures.
+	matcherSvc2 := matcher.NewSignatureMatcher(sigStore)
+	recon2 := NewIncidentReconstructor(graph.NewBuilder(graphStore), matcherSvc2, learnerSvc, incidentStore)
+	result, err := recon2.ReconstructFast(context.Background(), "inc-1")
+	if err != nil {
+		t.Fatalf("reconstruct fast: %v", err)
+	}
+
+	if len(result.SimilarIncidents) != 1 {
+		t.Fatalf("expected only the historical signature as similar, got %+v", result.SimilarIncidents)
+	}
+	if result.SimilarIncidents[0].IncidentID == "sig-1" {
+		t.Fatalf("current incident's own signature returned as similar past incident: %+v", result.SimilarIncidents)
+	}
+	if result.SimilarIncidents[0].IncidentID != "historic-1" {
+		t.Fatalf("expected historical signature as most similar, got %+v", result.SimilarIncidents[0])
 	}
 }

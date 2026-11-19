@@ -1,8 +1,11 @@
 package core
 
 import (
+	"math"
+	"math/big"
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 )
@@ -106,6 +109,52 @@ func TestParseSimpleYAML_InlineComments(t *testing.T) {
 	}
 	if fc.ServiceName != "my-svc" {
 		t.Errorf("ServiceName = %q, want %q", fc.ServiceName, "my-svc")
+	}
+}
+
+func TestParseSimpleYAML_HashInsideQuotedValue(t *testing.T) {
+	content := "tenant_id: \"team#1\"\nservice_name: 'svc#2'\n"
+	var fc FileConfig
+	if err := parseSimpleYAML(content, &fc); err != nil {
+		t.Fatalf("parseSimpleYAML() error = %v", err)
+	}
+	if fc.TenantID != "team#1" {
+		t.Errorf("TenantID = %q, want %q", fc.TenantID, "team#1")
+	}
+	if fc.ServiceName != "svc#2" {
+		t.Errorf("ServiceName = %q, want %q", fc.ServiceName, "svc#2")
+	}
+}
+
+func TestSplitKeyValue_HashHandling(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		key   string
+		value string
+	}{
+		{"hash inside double quotes", `tenant_id: "team#1"`, "tenant_id", "team#1"},
+		{"hash inside single quotes", `tenant_id: 'team#1'`, "tenant_id", "team#1"},
+		{"hash without preceding whitespace is data", "tenant_id: team#1", "tenant_id", "team#1"},
+		{"comment after quoted value", `tenant_id: "team#1" # comment`, "tenant_id", "team#1"},
+		{"comment after unquoted value", "tenant_id: team-1 # comment", "tenant_id", "team-1"},
+		{"comment at start of value", "tenant_id: # comment", "tenant_id", ""},
+		{"contains a colon", `collector_url: "http://host:9308#frag"`, "collector_url", "http://host:9308#frag"},
+		{"apostrophe in unquoted value before comment", "service_name: don't # comment", "service_name", "don't"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			key, value, ok := splitKeyValue(tt.input)
+			if !ok {
+				t.Fatalf("splitKeyValue(%q) returned ok = false", tt.input)
+			}
+			if key != tt.key {
+				t.Errorf("key = %q, want %q", key, tt.key)
+			}
+			if value != tt.value {
+				t.Errorf("value = %q, want %q", value, tt.value)
+			}
+		})
 	}
 }
 
@@ -519,5 +568,51 @@ func TestLoadFromEnv_IntegerParsing(t *testing.T) {
 	}
 	if cfg.MaxRetries != 10 {
 		t.Errorf("MaxRetries = %d, want 10", cfg.MaxRetries)
+	}
+}
+
+func TestParseIntOverflow(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		want    int
+		wantErr bool
+	}{
+		{"small", "42", 42, false},
+		{"max int", strconv.Itoa(math.MaxInt), math.MaxInt, false},
+		{"max int plus one", new(big.Int).Add(big.NewInt(math.MaxInt), big.NewInt(1)).String(), 0, true},
+		{"long digit string", "999999999999999999999999999999999999", 0, true},
+		{"negative sign rejected", "-1", 0, true},
+		{"non-digit rejected", "12a", 0, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := parseInt(tt.input)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("parseInt(%q) error = %v, wantErr %v", tt.input, err, tt.wantErr)
+			}
+			if !tt.wantErr && got != tt.want {
+				t.Errorf("parseInt(%q) = %d, want %d", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestParseSimpleYAML_OverflowingIntegersIgnored(t *testing.T) {
+	content := "batch_size: 999999999999999999999999999999999999\n" +
+		"max_buffer_size: 999999999999999999999999999999999999\n" +
+		"max_retries: 999999999999999999999999999999999999\n"
+	var fc FileConfig
+	if err := parseSimpleYAML(content, &fc); err != nil {
+		t.Fatalf("parseSimpleYAML() error = %v", err)
+	}
+	if fc.BatchSize != 0 {
+		t.Errorf("BatchSize = %d, want 0 (overflow must not be applied)", fc.BatchSize)
+	}
+	if fc.MaxBufferSize != 0 {
+		t.Errorf("MaxBufferSize = %d, want 0 (overflow must not be applied)", fc.MaxBufferSize)
+	}
+	if fc.MaxRetries != 0 {
+		t.Errorf("MaxRetries = %d, want 0 (overflow must not be applied)", fc.MaxRetries)
 	}
 }

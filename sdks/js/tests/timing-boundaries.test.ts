@@ -48,6 +48,34 @@ describe('Timing boundaries', () => {
     });
   });
 
+  it('records attrs passed to withProcess/withGroup/withTimer and phase/span/step', () => {
+    withClock(() => {
+      const event = new Event({ event: 'timed', service: 'svc' }, 'svc', 'test');
+      withProcess(event, 'p', () => {}, String('key', 'a'), Int('value', 1));
+      withGroup(event, 'g', () => {}, String('key', 'a'));
+      withTimer(event, 't', () => {}, String('key', 'a'));
+      phase(event, 'ph', String('key', 'a')).finish();
+      span(event, 'sp', String('key', 'a')).stop();
+      step(event, 'st', String('key', 'a')).finish();
+      assert.deepEqual(event.processes[0].attrs, { key: 'a', value: 1 });
+      assert.deepEqual(event.groups[0].attrs, { key: 'a' });
+      assert.deepEqual(event.timers[0].attrs, { key: 'a' });
+      assert.deepEqual(event.groups[1].attrs, { key: 'a' });
+      assert.deepEqual(event.timers[1].attrs, { key: 'a' });
+      assert.deepEqual(event.processes[1].attrs, { key: 'a' });
+    });
+  });
+
+  it('applies creation-time status codes and merges with finish-time attrs', () => {
+    withClock(() => {
+      const event = new Event({ event: 'timed', service: 'svc' }, 'svc', 'test');
+      event.startProcess('p', String('created', 'yes'), Int('status_code', 201))
+        .finish(String('finished', 'yes'));
+      assert.equal(event.processes[0].status_code, 201);
+      assert.deepEqual(event.processes[0].attrs, { created: 'yes', finished: 'yes' });
+    });
+  });
+
   it('records errors and supports timing aliases and standalone stopwatches', () => {
     withClock(setNow => {
       const event = new Event({ event: 'timed', service: 'svc' }, 'svc', 'test');
@@ -73,6 +101,21 @@ describe('Timing boundaries', () => {
       assert.equal(stopped.elapsed(), 10);
     });
   });
+  it('records a timer entry when the withTimer wrapped function throws', () => {
+    withClock(setNow => {
+      const event = new Event({ event: 'timed', service: 'svc' }, 'svc', 'test');
+      setNow(1010);
+      assert.throws(
+        () => withTimer(event, 'failing', () => { setNow(1025); throw new Error('timer exploded'); }),
+        /timer exploded/,
+      );
+      assert.equal(event.timers.length, 1);
+      assert.equal(event.timers[0].name, 'failing');
+      assert.equal(event.timers[0].duration_ms, 15);
+      assert.equal(event.timers[0].attrs?.error_message, 'Error: timer exploded');
+    });
+  });
+
   it('handles timing adapters with empty event state and omitted attrs', () => {
     withClock(setNow => {
       const processEvent: Record<string, any> = {};

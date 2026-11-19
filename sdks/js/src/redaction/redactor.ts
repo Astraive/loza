@@ -33,12 +33,22 @@ function matchesKey(key: string, keys: Set<string>): boolean {
   return false;
 }
 
+/** True for objects whose contents are represented by own enumerable string keys.
+ *  This covers plain objects (in any realm), Object.create(null) objects and class
+ *  instances, while leaving opaque built-ins (Date, Map, Set, RegExp, typed arrays,
+ *  ...) untouched so their internal data is not flattened into an empty object. */
+function isDictionaryObject(obj: any): boolean {
+  return obj !== null
+    && typeof obj === 'object'
+    && Object.prototype.toString.call(obj) === '[object Object]';
+}
+
 /** Walk a payload recursively, applying a transform to matching keys. */
 function walk(obj: any, keys: Set<string>, transform: (key: string, value: any) => [boolean, any]): any {
   if (Array.isArray(obj)) {
     return obj.map(item => walk(item, keys, transform));
   }
-  if (obj && typeof obj === 'object' && obj.constructor === Object) {
+  if (isDictionaryObject(obj)) {
     const out: Record<string, any> = {};
     for (const [k, v] of Object.entries(obj)) {
       const [keep, newVal] = transform(k, v);
@@ -85,13 +95,16 @@ export function dropKeys(...keys: string[]): Redactor {
   });
 }
 
-/** Redactor that masks matching key values (first 2 + last 2 chars visible). */
+/** Redactor that masks matching key values (first 2 + last 2 chars visible).
+ *  Non-string values are coerced with String(value) before masking so no typed
+ *  value escapes unmasked. */
 export function maskKeys(...keys: string[]): Redactor {
   const keySet = new Set(keys.map(k => k.toLowerCase()));
   return (payload) => walk(payload, keySet, (key, value) => {
-    if (matchesKey(key, keySet) && typeof value === 'string') {
-      if (value.length <= 4) return [true, '****'];
-      return [true, value.slice(0, 2) + '*'.repeat(value.length - 4) + value.slice(-2)];
+    if (matchesKey(key, keySet)) {
+      const str = String(value);
+      if (str.length <= 4) return [true, '****'];
+      return [true, str.slice(0, 2) + '*'.repeat(str.length - 4) + str.slice(-2)];
     }
     return [true, value];
   });

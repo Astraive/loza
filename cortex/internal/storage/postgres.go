@@ -6,6 +6,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"net"
+	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -19,11 +22,100 @@ type PostgresStorage struct {
 	db *sql.DB
 }
 
-func NewPostgresStorage(cfg config.PostgresConfig) (*PostgresStorage, error) {
-	dsn := fmt.Sprintf("host=%s port=%d user=%s password=%s dbname=%s sslmode=%s",
-		cfg.Host, cfg.Port, cfg.User, cfg.Password, cfg.Database, cfg.SSLMode)
+// isLocalPostgresHost reports whether host refers to the local machine (a
+// loopback address, an empty host, or a unix socket). Plaintext TLS modes are
+// only tolerated for these hosts so local development keeps working.
+func isLocalPostgresHost(host string) bool {
+	host = strings.TrimSpace(host)
+	switch strings.ToLower(host) {
+	case "", "localhost", "localhost.", "127.0.0.1", "::1", "[::1]":
+		return true
+	}
+	if strings.HasPrefix(host, "/") { // unix domain socket directory
+		return true
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		return ip.IsLoopback()
+	}
+	return false
+}
 
-	db, err := sql.Open("postgres", dsn)
+// buildPostgresDSN constructs an lib/pq DSN that never sends credentials or
+// event data in the clear for non-local hosts. Credentials are passed through
+// url.UserPassword so the password is structurally escaped instead of being
+// interpolated into a printable, loggable string with fmt.Sprintf. For remote
+// hosts insecure sslmodes are upgraded to verify-full and an explicit CA
+// certificate is required; otherwise an error is returned and no connection is
+// attempted.
+func buildPostgresDSN(cfg config.PostgresConfig) (string, error) {
+	host := strings.TrimSpace(cfg.Host)
+	sslMode := strings.ToLower(strings.TrimSpace(cfg.SSLMode))
+	sslRootCert := strings.TrimSpace(cfg.SSLRootCert)
+	local := isLocalPostgresHost(host)
+
+	if local {
+		if sslMode == "" {
+			sslMode = "disable"
+		}
+		switch sslMode {
+		case "disable", "allow", "prefer", "require", "verify-ca", "verify-full":
+			// Local connections may use any valid mode for development.
+		default:
+			return "", fmt.Errorf("invalid postgres sslmode %q", cfg.SSLMode)
+		}
+	} else {
+		switch sslMode {
+		case "verify-full":
+			// Already the strongest mode; nothing to upgrade.
+		case "", "disable", "allow", "prefer", "require", "verify-ca":
+			// Never allow plaintext or unauthenticated TLS to a remote database.
+			log.Warn().
+				Str("host", host).
+				Str("configured_sslmode", cfg.SSLMode).
+				Msg("upgrading insecure postgres sslmode to verify-full for non-local host")
+			sslMode = "verify-full"
+		default:
+			return "", fmt.Errorf("invalid postgres sslmode %q", cfg.SSLMode)
+		}
+		if sslRootCert == "" {
+			return "", fmt.Errorf("postgres sslrootcert (CA certificate) is required for non-local host %q with sslmode=verify-full", host)
+		}
+	}
+
+	port := cfg.Port
+	if port == 0 {
+		port = 5432
+	}
+	u := &url.URL{
+		Scheme: "postgres",
+		User:   url.UserPassword(cfg.User, cfg.Password),
+		Host:   net.JoinHostPort(host, strconv.Itoa(port)),
+		Path:   "/" + strings.TrimPrefix(cfg.Database, "/"),
+	}
+	query := u.Query()
+	query.Set("sslmode", sslMode)
+	if sslRootCert != "" {
+		query.Set("sslrootcert", sslRootCert)
+	}
+	u.RawQuery = query.Encode()
+
+	return u.String(), nil
+}
+
+func NewPostgresStorage(cfg config.PostgresConfig) (*PostgresStorage, error) {
+	dsn, err := buildPostgresDSN(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("invalid postgres configuration: %w", err)
+	}
+
+	return newPostgresStorage("postgres", dsn, cfg)
+}
+
+// newPostgresStorage opens and verifies a postgres connection pool. The driver
+// name is a parameter so the lifecycle, including cleanup when Ping fails, can
+// be exercised in tests with a fake driver.
+func newPostgresStorage(driverName, dsn string, cfg config.PostgresConfig) (*PostgresStorage, error) {
+	db, err := sql.Open(driverName, dsn)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open postgres: %w", err)
 	}
@@ -33,6 +125,10 @@ func NewPostgresStorage(cfg config.PostgresConfig) (*PostgresStorage, error) {
 	db.SetConnMaxLifetime(cfg.ConnMaxLifetime)
 
 	if err := db.Ping(); err != nil {
+		// sql.Open starts a connection-opener goroutine and Ping may leave a
+		// connection in the idle pool. Close the pool so neither is leaked when
+		// startup fails.
+		_ = db.Close()
 		return nil, fmt.Errorf("failed to ping postgres: %w", err)
 	}
 
@@ -218,11 +314,12 @@ type PostgresEventStore struct {
 func (s *PostgresEventStore) Save(ctx context.Context, event *models.Event, lifecycle *LifecycleData) error {
 	rawJSON, _ := json.Marshal(event.Raw)
 	attrsJSON, _ := json.Marshal(event.Attrs)
-	checkpointsJSON, _ := json.Marshal(event.Checkpoints)
-	processesJSON, _ := json.Marshal(event.Processes)
-	groupsJSON, _ := json.Marshal(event.Groups)
-	timersJSON, _ := json.Marshal(event.Timers)
-	linksJSON, _ := json.Marshal(event.Links)
+	checkpoints, processes, groups, timers, links := resolveLifecycleArrays(event, lifecycle)
+	checkpointsJSON, _ := json.Marshal(checkpoints)
+	processesJSON, _ := json.Marshal(processes)
+	groupsJSON, _ := json.Marshal(groups)
+	timersJSON, _ := json.Marshal(timers)
+	linksJSON, _ := json.Marshal(links)
 	httpJSON, _ := json.Marshal(event.HTTP)
 	userJSON, _ := json.Marshal(event.User)
 	tenantJSON, _ := json.Marshal(event.Tenant)
@@ -268,14 +365,20 @@ func (s *PostgresEventStore) SaveBatch(ctx context.Context, events []*models.Eve
 	}
 	defer stmt.Close()
 
-	for _, e := range events {
+	for i, e := range events {
+		var lifecycle *LifecycleData
+		if i < len(lifecycles) {
+			lifecycle = lifecycles[i]
+		}
+
 		rawJSON, _ := json.Marshal(e.Raw)
 		attrsJSON, _ := json.Marshal(e.Attrs)
-		checkpointsJSON, _ := json.Marshal(e.Checkpoints)
-		processesJSON, _ := json.Marshal(e.Processes)
-		groupsJSON, _ := json.Marshal(e.Groups)
-		timersJSON, _ := json.Marshal(e.Timers)
-		linksJSON, _ := json.Marshal(e.Links)
+		checkpoints, processes, groups, timers, links := resolveLifecycleArrays(e, lifecycle)
+		checkpointsJSON, _ := json.Marshal(checkpoints)
+		processesJSON, _ := json.Marshal(processes)
+		groupsJSON, _ := json.Marshal(groups)
+		timersJSON, _ := json.Marshal(timers)
+		linksJSON, _ := json.Marshal(links)
 		httpJSON, _ := json.Marshal(e.HTTP)
 		userJSON, _ := json.Marshal(e.User)
 		tenantJSON, _ := json.Marshal(e.Tenant)
@@ -291,7 +394,6 @@ func (s *PostgresEventStore) SaveBatch(ctx context.Context, events []*models.Eve
 			rawJSON, e.Provenance, e.IncidentID, time.Now()); err != nil {
 			return err
 		}
-		_ = lifecycles
 	}
 
 	return tx.Commit()
@@ -372,6 +474,9 @@ func (s *PostgresEventStore) List(ctx context.Context, limit, offset int) ([]*mo
 		}
 		events = append(events, event)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
 	return events, nil
 }
 
@@ -391,6 +496,9 @@ func (s *PostgresEventStore) FindByTraceID(ctx context.Context, traceID string) 
 		}
 		events = append(events, event)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
 	return events, nil
 }
 
@@ -409,6 +517,9 @@ func (s *PostgresEventStore) FindByIncidentID(ctx context.Context, incidentID st
 			return nil, err
 		}
 		events = append(events, event)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
 	}
 	return events, nil
 }
@@ -443,6 +554,9 @@ func (s *PostgresEventStore) FindByService(ctx context.Context, service string, 
 		}
 		events = append(events, event)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
 	return events, nil
 }
 
@@ -463,6 +577,9 @@ func (s *PostgresEventStore) FindByEventName(ctx context.Context, eventName stri
 		}
 		events = append(events, event)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
 	return events, nil
 }
 
@@ -481,6 +598,9 @@ func (s *PostgresEventStore) FindByOutcome(ctx context.Context, outcome string, 
 			return nil, err
 		}
 		events = append(events, event)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
 	}
 	return events, nil
 }
@@ -501,6 +621,9 @@ func (s *PostgresEventStore) FindByLevel(ctx context.Context, level string, limi
 		}
 		events = append(events, event)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
 	return events, nil
 }
 
@@ -519,6 +642,9 @@ func (s *PostgresEventStore) FindByDurationRange(ctx context.Context, minMs, max
 			return nil, err
 		}
 		events = append(events, event)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
 	}
 	return events, nil
 }
@@ -539,6 +665,9 @@ func (s *PostgresEventStore) FindByEnvironment(ctx context.Context, env string, 
 		}
 		events = append(events, event)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
 	return events, nil
 }
 
@@ -558,6 +687,9 @@ func (s *PostgresEventStore) FindByRelease(ctx context.Context, release string, 
 		}
 		events = append(events, event)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
 	return events, nil
 }
 
@@ -576,6 +708,9 @@ func (s *PostgresEventStore) CountByOutcome(ctx context.Context, service string,
 		}
 		result[outcome] = count
 	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
 	return result, nil
 }
 
@@ -593,6 +728,9 @@ func (s *PostgresEventStore) CountByEventName(ctx context.Context, service strin
 			return nil, err
 		}
 		result[eventName] = count
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
 	}
 	return result, nil
 }
@@ -629,6 +767,9 @@ func (s *PostgresEventStore) DistinctServices(ctx context.Context) ([]string, er
 		}
 		services = append(services, svc)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
 	return services, nil
 }
 
@@ -645,6 +786,9 @@ func (s *PostgresEventStore) DistinctEventNames(ctx context.Context) ([]string, 
 			return nil, err
 		}
 		names = append(names, name)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
 	}
 	return names, nil
 }
@@ -747,6 +891,9 @@ func (s *PostgresEventStore) ListLifecycleSummaries(ctx context.Context, filter 
 		}
 		summaries = append(summaries, &s)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, err
+	}
 	return summaries, total, nil
 }
 
@@ -786,6 +933,9 @@ func (s *PostgresTopologyStore) GetHistory(ctx context.Context, service string) 
 			return nil, err
 		}
 		aliases = append(aliases, &a)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
 	}
 	return aliases, nil
 }
@@ -844,6 +994,9 @@ func (s *PostgresGraphStore) ListNodes(ctx context.Context, nodeType string, lim
 	}
 		nodes = append(nodes, &node)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
 	return nodes, nil
 }
 
@@ -880,6 +1033,9 @@ func (s *PostgresGraphStore) GetEdges(ctx context.Context, nodeID string, edgeTy
 		log.Warn().Err(err).Msg("failed to unmarshal edge attributes")
 	}
 		edges = append(edges, &edge)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
 	}
 	return edges, nil
 }
@@ -943,6 +1099,9 @@ func (s *PostgresGraphStore) Traverse(ctx context.Context, startNodeID string, o
 				if !visited[edge.ToNodeID] {
 					queue = append(queue, edge.ToNodeID)
 				}
+			}
+			if err := edgeRows.Err(); err != nil {
+				return nil, err
 			}
 			edgeRows.Close()
 		}
@@ -1011,6 +1170,9 @@ func (s *PostgresIncidentStore) List(ctx context.Context, limit, offset int) ([]
 		log.Warn().Err(err).Msg("failed to unmarshal incident affected services")
 	}
 		incidents = append(incidents, &inc)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
 	}
 	return incidents, nil
 }
@@ -1103,6 +1265,9 @@ func (s *PostgresSignatureStore) List(ctx context.Context, limit int) ([]*models
 	}
 		sigs = append(sigs, &sig)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
 	return sigs, nil
 }
 
@@ -1139,6 +1304,9 @@ func (s *PostgresSignatureStore) FindByBehavioralHash(ctx context.Context, hash 
 		log.Warn().Err(err).Msg("failed to unmarshal signature feature weights")
 	}
 		sigs = append(sigs, &sig)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
 	}
 	return sigs, nil
 }
@@ -1207,6 +1375,9 @@ func (s *PostgresSignatureStore) FindSimilar(ctx context.Context, sig *models.In
 				ResolutionTime: candidate.AvgResolutionTime,
 			})
 		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
 	}
 
 	if len(results) > limit {
@@ -1321,6 +1492,9 @@ func (s *PostgresRemediationStore) ListByIncident(ctx context.Context, incidentI
 	}
 		remediations = append(remediations, &rem)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
 	return remediations, nil
 }
 
@@ -1356,6 +1530,9 @@ func (s *PostgresRemediationStore) ListBySignature(ctx context.Context, signatur
 		}
 		stats = append(stats, &s)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
 	return stats, nil
 }
 
@@ -1386,6 +1563,9 @@ func (s *PostgresFeedbackStore) GetByRemediation(ctx context.Context, remediatio
 		}
 		feedbacks = append(feedbacks, &fb)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
 	return feedbacks, nil
 }
 
@@ -1397,4 +1577,16 @@ func (s *PostgresFeedbackStore) GetSuccessRate(ctx context.Context, action strin
 		JOIN remediations r ON f.remediation_id = r.remediation_id
 		WHERE r.action = $1 AND r.signature_id = $2`, action, signatureID).Scan(&rate)
 	return rate, err
+}
+
+// GetAverageTimeToResolve returns the average time to resolve for feedback
+// attached to remediations with the given action and signature.
+func (s *PostgresFeedbackStore) GetAverageTimeToResolve(ctx context.Context, action string, signatureID string) (int64, error) {
+	var avgTime int64
+	err := s.db.QueryRowContext(ctx, `
+		SELECT COALESCE(CAST(AVG(f.time_to_resolve_seconds) AS BIGINT), 0)
+		FROM remediation_feedback f
+		JOIN remediations r ON f.remediation_id = r.remediation_id
+		WHERE r.action = $1 AND r.signature_id = $2`, action, signatureID).Scan(&avgTime)
+	return avgTime, err
 }

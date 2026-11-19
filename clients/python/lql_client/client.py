@@ -80,9 +80,9 @@ class ConnectionConfig:
     dsn: str = ""
     endpoint: str = ""
     collector: str = ""
-    api_key: str = ""
+    api_key: str = field(default="", repr=False)
     username: str = ""
-    password: str = ""
+    password: str = field(default="", repr=False)
     env: str = ""
     service: str = ""
     timeout: float = 30.0
@@ -93,9 +93,9 @@ class ConnectionConfig:
 class Client:
     _endpoint: str
     _collector: str
-    _api_key: str = ""
+    _api_key: str = field(default="", repr=False)
     _username: str = ""
-    _password: str = ""
+    _password: str = field(default="", repr=False)
     _env: str = ""
     _service: str = ""
     _timeout: float = 30.0
@@ -127,8 +127,8 @@ class Client:
             raise QueryError("invalid LQL connection configuration: collector slug is required", category=ErrorCategory.INVALID_CONFIGURATION)
         if config.username and not config.password and not config.username.startswith("lz_pub_"):
             raise QueryError("invalid LQL connection configuration: basic username requires a password", category=ErrorCategory.INVALID_CONFIGURATION)
-        if config.username and not config.api_key and parsed_endpoint.scheme == "http" and not _is_localhost(parsed_endpoint.hostname or ""):
-            raise QueryError("invalid LQL connection configuration: basic authentication requires TLS", category=ErrorCategory.INVALID_CONFIGURATION)
+        if (config.api_key or config.username) and parsed_endpoint.scheme == "http" and not _is_localhost(parsed_endpoint.hostname or ""):
+            raise QueryError("invalid LQL connection configuration: authentication requires TLS", category=ErrorCategory.INVALID_CONFIGURATION)
         self._endpoint = endpoint
         self._collector = config.collector
         self._api_key = config.api_key
@@ -209,8 +209,11 @@ def _parse_dsn(raw: str) -> dict[str, str]:
         raise ValueError("invalid tls")
     port = parsed.port or (9308 if parsed.hostname in {"localhost", "127.0.0.1", "::1"} else 443 if use_tls else 80)
     query = urllib.parse.parse_qs(parsed.query)
+    host = parsed.hostname
+    if ":" in host and not host.startswith("["):
+        host = f"[{host}]"
     return {
-        "endpoint": f"{'https' if use_tls else 'http'}://{parsed.hostname}:{port}",
+        "endpoint": f"{'https' if use_tls else 'http'}://{host}:{port}",
         "collector": collector,
         "env": query.get("env", ["default"])[0] or "default",
         "service": query.get("service", [""])[0],
@@ -251,6 +254,8 @@ def _http_error(status: int, raw: bytes) -> QueryError:
     try:
         payload = json.loads(raw)
     except (ValueError, json.JSONDecodeError):
+        payload = {}
+    if not isinstance(payload, dict):
         payload = {}
     message = str(payload.get("error") or payload.get("message") or f"LQL query failed with HTTP {status}")
     category = {

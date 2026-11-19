@@ -221,11 +221,12 @@ type DuckDBEventStore struct {
 func (s *DuckDBEventStore) Save(ctx context.Context, event *models.Event, lifecycle *LifecycleData) error {
 	rawJSON, _ := json.Marshal(event.Raw)
 	attrsJSON, _ := json.Marshal(event.Attrs)
-	checkpointsJSON, _ := json.Marshal(event.Checkpoints)
-	processesJSON, _ := json.Marshal(event.Processes)
-	groupsJSON, _ := json.Marshal(event.Groups)
-	timersJSON, _ := json.Marshal(event.Timers)
-	linksJSON, _ := json.Marshal(event.Links)
+	checkpoints, processes, groups, timers, links := resolveLifecycleArrays(event, lifecycle)
+	checkpointsJSON, _ := json.Marshal(checkpoints)
+	processesJSON, _ := json.Marshal(processes)
+	groupsJSON, _ := json.Marshal(groups)
+	timersJSON, _ := json.Marshal(timers)
+	linksJSON, _ := json.Marshal(links)
 	httpJSON, _ := json.Marshal(event.HTTP)
 	userJSON, _ := json.Marshal(event.User)
 	tenantJSON, _ := json.Marshal(event.Tenant)
@@ -271,14 +272,20 @@ func (s *DuckDBEventStore) SaveBatch(ctx context.Context, events []*models.Event
 	}
 	defer stmt.Close()
 
-	for _, e := range events {
+	for i, e := range events {
+		var lifecycle *LifecycleData
+		if i < len(lifecycles) {
+			lifecycle = lifecycles[i]
+		}
+
 		rawJSON, _ := json.Marshal(e.Raw)
 		attrsJSON, _ := json.Marshal(e.Attrs)
-		checkpointsJSON, _ := json.Marshal(e.Checkpoints)
-		processesJSON, _ := json.Marshal(e.Processes)
-		groupsJSON, _ := json.Marshal(e.Groups)
-		timersJSON, _ := json.Marshal(e.Timers)
-		linksJSON, _ := json.Marshal(e.Links)
+		checkpoints, processes, groups, timers, links := resolveLifecycleArrays(e, lifecycle)
+		checkpointsJSON, _ := json.Marshal(checkpoints)
+		processesJSON, _ := json.Marshal(processes)
+		groupsJSON, _ := json.Marshal(groups)
+		timersJSON, _ := json.Marshal(timers)
+		linksJSON, _ := json.Marshal(links)
 		httpJSON, _ := json.Marshal(e.HTTP)
 		userJSON, _ := json.Marshal(e.User)
 		tenantJSON, _ := json.Marshal(e.Tenant)
@@ -294,7 +301,6 @@ func (s *DuckDBEventStore) SaveBatch(ctx context.Context, events []*models.Event
 			rawJSON, e.Provenance, e.IncidentID, time.Now()); err != nil {
 			return err
 		}
-		_ = lifecycles // lifecycles are embedded in the event struct
 	}
 
 	return tx.Commit()
@@ -584,12 +590,19 @@ func (s *DuckDBEventStore) ListLifecycleSummaries(ctx context.Context, filter *L
 		}
 	}
 
+	// json_array_length returns a scalar, so it must be selected directly.
+	// json_extract_string(col, '$') normalizes values that DuckDB stored as a
+	// JSON string (rather than a JSON array) back into array text before the
+	// cast, so the count is correct for both storage representations.
+	childCount := func(col string) string {
+		return " COALESCE(json_array_length(try_cast(json_extract_string(" + col + ", '$') AS JSON)), 0)"
+	}
 	query := "SELECT id, event, service, outcome, duration_ms," +
-		" (SELECT COUNT(*) FROM json_array_length(COALESCE(checkpoints, '[]'))) as cp_count," +
-		" (SELECT COUNT(*) FROM json_array_length(COALESCE(processes, '[]'))) as pr_count," +
-		" (SELECT COUNT(*) FROM json_array_length(COALESCE(groups, '[]'))) as gr_count," +
-		" (SELECT COUNT(*) FROM json_array_length(COALESCE(timers, '[]'))) as ti_count," +
-		" (SELECT COUNT(*) FROM json_array_length(COALESCE(links, '[]'))) as li_count," +
+		childCount("checkpoints") + " as cp_count," +
+		childCount("processes") + " as pr_count," +
+		childCount("groups") + " as gr_count," +
+		childCount("timers") + " as ti_count," +
+		childCount("links") + " as li_count," +
 		" trace_id" +
 		" FROM events " + where + " ORDER BY timestamp DESC LIMIT ? OFFSET ?"
 	args = append(args, limit, offset)
@@ -1371,4 +1384,16 @@ func (s *DuckDBFeedbackStore) GetSuccessRate(ctx context.Context, action string,
 		JOIN remediations r ON f.remediation_id = r.remediation_id
 		WHERE r.action = ? AND r.signature_id = ?`, action, signatureID).Scan(&rate)
 	return rate, err
+}
+
+// GetAverageTimeToResolve returns the average time to resolve for feedback
+// attached to remediations with the given action and signature.
+func (s *DuckDBFeedbackStore) GetAverageTimeToResolve(ctx context.Context, action string, signatureID string) (int64, error) {
+	var avgTime int64
+	err := s.db.QueryRowContext(ctx, `
+		SELECT COALESCE(CAST(AVG(f.time_to_resolve_seconds) AS BIGINT), 0)
+		FROM remediation_feedback f
+		JOIN remediations r ON f.remediation_id = r.remediation_id
+		WHERE r.action = ? AND r.signature_id = ?`, action, signatureID).Scan(&avgTime)
+	return avgTime, err
 }

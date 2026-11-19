@@ -34,6 +34,14 @@ type IncidentContext struct {
 	Confidence    float64            `json:"confidence"`
 	Explain       string             `json:"explain"`
 	ExplainReport *ExplainReport     `json:"explain_report,omitempty"`
+
+	// Partial is true when one or more enrichment subsystems (signature
+	// extraction, similarity search or remediation lookup) failed. It lets
+	// callers distinguish a genuine low-signal reconstruction from one whose
+	// matcher/learner backend failed.
+	Partial bool `json:"partial,omitempty"`
+	// Warnings holds a human-readable diagnostic for every failed subsystem.
+	Warnings []string `json:"warnings,omitempty"`
 }
 
 type ExplainReport struct {

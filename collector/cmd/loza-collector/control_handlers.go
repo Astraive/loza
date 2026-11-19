@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/astraive/loza/collector/internal/auth"
 	publichttp "github.com/astraive/loza/collector/server/http"
 	"github.com/rs/zerolog/log"
 )
@@ -21,8 +22,8 @@ func (s *collectorState) handleVersion(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"version":            collectorVersion,
 		"ingest_api_version": "v1",
-		"schema_version":     s.cfg.schemaSchemaVersion,
-		"event_version":      s.cfg.schemaEventVersion,
+		"schema_version":     s.config().schemaSchemaVersion,
+		"event_version":      s.config().schemaEventVersion,
 	})
 }
 
@@ -32,7 +33,7 @@ func (s *collectorState) handleStatus(w http.ResponseWriter, r *http.Request) {
 		"status":           statusString(s.isReady()),
 		"version":          collectorVersion,
 		"uptime_seconds":   s.uptimeSeconds(time.Now()),
-		"reliability_mode": s.cfg.reliabilityMode,
+		"reliability_mode": s.config().reliabilityMode,
 		"ingest": map[string]any{
 			"accepted":   s.metrics.eventsAccepted.Load(),
 			"rejected":   s.metrics.eventsRejected.Load(),
@@ -40,7 +41,7 @@ func (s *collectorState) handleStatus(w http.ResponseWriter, r *http.Request) {
 			"duplicates": s.metrics.eventsDeduped.Load(),
 		},
 		"queue": map[string]any{
-			"mode":        s.cfg.reliabilityMode,
+			"mode":        s.config().reliabilityMode,
 			"depth":       deliveryQueueDepth(s.deliveryQueue),
 			"spool_bytes": s.metrics.spoolBytes.Load(),
 			"queue_bytes": s.metrics.queueBytes.Load(),
@@ -50,13 +51,13 @@ func (s *collectorState) handleStatus(w http.ResponseWriter, r *http.Request) {
 			"events":   s.metrics.inflightEvents.Load(),
 		},
 		"limits": map[string]any{
-			"max_event_bytes":       s.cfg.maxEventBytes,
-			"max_attr_count":        s.cfg.maxAttrCount,
-			"max_attr_depth":        s.cfg.maxAttrDepth,
-			"max_string_length":     s.cfg.maxStringLength,
-			"max_inflight_requests": s.cfg.maxInflightRequests,
-			"max_inflight_events":   s.cfg.maxInflightEvents,
-			"max_queue_bytes":       s.cfg.maxQueueBytes,
+			"max_event_bytes":       s.config().maxEventBytes,
+			"max_attr_count":        s.config().maxAttrCount,
+			"max_attr_depth":        s.config().maxAttrDepth,
+			"max_string_length":     s.config().maxStringLength,
+			"max_inflight_requests": s.config().maxInflightRequests,
+			"max_inflight_events":   s.config().maxInflightEvents,
+			"max_queue_bytes":       s.config().maxQueueBytes,
 		},
 	})
 }
@@ -172,116 +173,28 @@ func (s *collectorState) handleQuery(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "auth_failed"})
 		return
 	}
-	if isCanonicalCollectorRoute(r) {
-		s.handleScopedQuery(w, r)
-		return
-	}
-	requestID := fmt.Sprintf("q_%d", time.Now().UTC().UnixNano())
-	var req queryRequest
-	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_query_request", "message": err.Error()})
-		return
-	}
-	query := strings.TrimSpace(req.Query)
-	if query == "" {
-		query = strings.TrimSpace(req.SQL)
-	}
-	if !isReadOnlyQuery(query) {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "query_must_be_read_only"})
-		return
-	}
-	if !isSafeQuery(query) {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "query_contains_blocked_operations"})
-		return
-	}
-	if req.Limit <= 0 || req.Limit > 1000 {
-		req.Limit = 1000
-	}
-
-	db := s.queryDB
-	var closeDB func()
-	if db == nil {
-		var err error
-		db, err = sql.Open(s.cfg.duckDBDriver, s.cfg.duckDBPath)
-		if err != nil {
-			log.Error().Err(err).Str("request_id", requestID).Msg("query db open failed")
-			writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "query_unavailable", "request_id": requestID})
+	// isAuthorized only proves authentication; require the read permission here
+	// as defense in depth for direct handler calls. Router authorization differs
+	// by route family: legacy routes use RequirePermission (role-based), while
+	// canonical routes use AuthorizesCollector, which intentionally supports
+	// roleless collector grants. Accept either form so neither is broken.
+	if s.config().authEnabled {
+		ac := auth.GetAuthContext(r.Context())
+		scope, hasScope := publichttp.AuthorizedCollectorFromContext(r.Context())
+		allowed := ac != nil && ac.HasPermission(auth.PermEventsRead)
+		if !allowed && ac != nil && hasScope {
+			allowed = ac.AuthorizesCollector(scope.Name, scope.Environment, auth.PermEventsRead)
+		}
+		if !allowed {
+			writeJSON(w, http.StatusForbidden, map[string]any{"error": "query_permission_required"})
 			return
 		}
-		closeDB = func() { _ = db.Close() }
 	}
-	if closeDB != nil {
-		defer closeDB()
-	}
-
-	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
-	defer cancel()
-
-	// Use a dedicated connection so SET and query run on the same connection.
-	// DuckDB SET is connection-scoped; using the pool directly means the SET
-	// might apply to one connection while the query runs on another.
-	conn, err := db.Conn(ctx)
-	if err != nil {
-		log.Error().Err(err).Str("request_id", requestID).Msg("query conn acquire failed")
-		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "query_unavailable", "request_id": requestID})
-		return
-	}
-	defer conn.Close()
-
-	// Disable external access to block read_csv, read_json, etc.
-	// Reject the query if this fails — proceeding without the safety guard is unsafe.
-	if _, err := conn.ExecContext(ctx, "SET enable_external_access=false"); err != nil {
-		log.Error().Err(err).Str("request_id", requestID).Msg("failed to disable external access in DuckDB")
-		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "query_safety_check_failed", "request_id": requestID})
-		return
-	}
-
-	rows, err := conn.QueryContext(ctx, query)
-	if err != nil {
-		log.Error().Err(err).Str("request_id", requestID).Msg("query failed")
-		writeJSON(w, http.StatusUnprocessableEntity, map[string]any{"error": "query_failed", "request_id": requestID})
-		return
-	}
-	defer rows.Close()
-
-	columns, err := rows.Columns()
-	if err != nil {
-		log.Error().Err(err).Str("request_id", requestID).Msg("query columns failed")
-		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "query_failed", "request_id": requestID})
-		return
-	}
-	result := make([]map[string]any, 0)
-	for rows.Next() {
-		values := make([]any, len(columns))
-		ptrs := make([]any, len(columns))
-		for i := range values {
-			ptrs[i] = &values[i]
-		}
-		if err := rows.Scan(ptrs...); err != nil {
-			log.Error().Err(err).Str("request_id", requestID).Msg("query scan failed")
-			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "query_failed", "request_id": requestID})
-			return
-		}
-		row := make(map[string]any, len(columns))
-		for i, col := range columns {
-			switch v := values[i].(type) {
-			case []byte:
-				row[col] = string(v)
-			default:
-				row[col] = v
-			}
-		}
-		result = append(result, row)
-		if len(result) >= req.Limit {
-			break
-		}
-	}
-	if err := rows.Err(); err != nil {
-		log.Error().Err(err).Str("request_id", requestID).Msg("query rows iteration failed")
-		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "query_failed", "request_id": requestID})
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"columns": columns, "rows": result, "row_count": len(result)})
+	// Client-supplied SQL cannot prove collector/environment ownership. The
+	// router binds both canonical routes and legacy default-collector routes to
+	// an authorized collector scope, so every query uses the fixed,
+	// parameterized, ownership-filtered query rather than arbitrary SQL.
+	s.handleScopedQuery(w, r)
 }
 
 // handleScopedQuery exposes a fixed, parameterized event-listing query. Raw
@@ -305,7 +218,7 @@ func (s *collectorState) handleScopedQuery(w http.ResponseWriter, r *http.Reques
 	if req.Limit <= 0 || req.Limit > 1000 {
 		req.Limit = 1000
 	}
-	table, err := quoteSQLIdent(s.cfg.duckDBTable)
+	table, err := quoteSQLIdent(s.config().duckDBTable)
 	if err != nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "query_unavailable"})
 		return
@@ -313,7 +226,7 @@ func (s *collectorState) handleScopedQuery(w http.ResponseWriter, r *http.Reques
 	db := s.queryDB
 	var closeDB func()
 	if db == nil {
-		db, err = sql.Open(s.cfg.duckDBDriver, s.cfg.duckDBPath)
+		db, err = sql.Open(s.config().duckDBDriver, s.config().duckDBPath)
 		if err != nil {
 			writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "query_unavailable"})
 			return
@@ -387,6 +300,10 @@ func (s *collectorState) handleReplay(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_replay_request", "message": err.Error()})
 		return
 	}
+	if req.Filter != "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "unsupported_filter", "message": "filter is not supported for replay"})
+		return
+	}
 	if len(req.Events) == 0 {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "empty_events", "message": "events array required"})
 		return
@@ -409,7 +326,7 @@ func (s *collectorState) handleDLQList(w http.ResponseWriter, r *http.Request) {
 	}
 	events, err := s.readDLQRecords()
 	if err != nil {
-		writeJSON(w, http.StatusOK, map[string]any{"events": []any{}, "error": err.Error()})
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"events": []any{}, "error": err.Error()})
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"events": events, "count": len(events)})
@@ -480,7 +397,7 @@ func (s *collectorState) handleDLQReplayAll(w http.ResponseWriter, r *http.Reque
 	}
 	events, err := s.readDLQRecords()
 	if err != nil {
-		writeJSON(w, http.StatusOK, map[string]any{"accepted": 0, "replayed": 0, "error": err.Error()})
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"accepted": 0, "replayed": 0, "error": err.Error()})
 		return
 	}
 	rawEvents := make([][]byte, 0, len(events))
@@ -510,7 +427,11 @@ func (s *collectorState) handleDLQDelete(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	id := r.PathValue("id")
-	events, err := s.readDLQRecords()
+	// Serialize the whole read-modify-write so concurrent deletes cannot read
+	// stale records or clobber each other's rewritten DLQ.
+	s.dlqMu.Lock()
+	defer s.dlqMu.Unlock()
+	events, err := s.readDLQRecordsLocked()
 	if err != nil {
 		writeJSON(w, http.StatusNotFound, map[string]any{"error": err.Error()})
 		return
@@ -528,7 +449,7 @@ func (s *collectorState) handleDLQDelete(w http.ResponseWriter, r *http.Request)
 		writeJSON(w, http.StatusNotFound, map[string]any{"error": "dlq_event_not_found"})
 		return
 	}
-	if err := s.writeDLQRecords(remaining); err != nil {
+	if err := s.writeDLQRecordsLocked(remaining); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "dlq_delete_failed", "message": err.Error()})
 		return
 	}
@@ -536,10 +457,17 @@ func (s *collectorState) handleDLQDelete(w http.ResponseWriter, r *http.Request)
 }
 
 func (s *collectorState) readDLQRecords() ([]map[string]any, error) {
-	if strings.TrimSpace(s.cfg.dlqPath) == "" {
+	s.dlqMu.Lock()
+	defer s.dlqMu.Unlock()
+	return s.readDLQRecordsLocked()
+}
+
+// readDLQRecordsLocked reads DLQ records; the caller must hold s.dlqMu.
+func (s *collectorState) readDLQRecordsLocked() ([]map[string]any, error) {
+	if strings.TrimSpace(s.config().dlqPath) == "" {
 		return nil, os.ErrNotExist
 	}
-	file, err := os.Open(s.cfg.dlqPath)
+	file, err := os.Open(s.config().dlqPath)
 	if err != nil {
 		return nil, err
 	}
@@ -570,17 +498,29 @@ func (s *collectorState) readDLQRecords() ([]map[string]any, error) {
 }
 
 func (s *collectorState) writeDLQRecords(records []map[string]any) error {
-	if strings.TrimSpace(s.cfg.dlqPath) == "" {
+	s.dlqMu.Lock()
+	defer s.dlqMu.Unlock()
+	return s.writeDLQRecordsLocked(records)
+}
+
+// writeDLQRecordsLocked atomically rewrites the DLQ; the caller must hold s.dlqMu.
+// A unique temp file is used so concurrent writers can never race on a shared
+// path, and it is always cleaned up whether the rename succeeds or fails.
+func (s *collectorState) writeDLQRecordsLocked(records []map[string]any) error {
+	if strings.TrimSpace(s.config().dlqPath) == "" {
 		return os.ErrNotExist
 	}
-	if err := os.MkdirAll(filepath.Dir(s.cfg.dlqPath), 0o755); err != nil {
+	dir := filepath.Dir(s.config().dlqPath)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
-	tmp := s.cfg.dlqPath + ".tmp"
-	file, err := os.OpenFile(tmp, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
+	file, err := os.CreateTemp(dir, filepath.Base(s.config().dlqPath)+".tmp-*")
 	if err != nil {
 		return err
 	}
+	tmpName := file.Name()
+	defer os.Remove(tmpName)
+
 	for _, record := range records {
 		raw, err := json.Marshal(record)
 		if err != nil {
@@ -595,50 +535,7 @@ func (s *collectorState) writeDLQRecords(records []map[string]any) error {
 	if err := file.Close(); err != nil {
 		return err
 	}
-	return os.Rename(tmp, s.cfg.dlqPath)
-}
-
-func isReadOnlyQuery(query string) bool {
-	lower := strings.ToLower(strings.TrimSpace(query))
-	if lower == "" {
-		return false
-	}
-	if strings.Contains(lower, ";") || strings.Contains(lower, "--") || strings.Contains(lower, "/*") || strings.Contains(lower, "*/") {
-		return false
-	}
-	for _, prefix := range []string{"select", "with", "show", "describe", "pragma table_info", "pragma database_list"} {
-		if strings.HasPrefix(lower, prefix) {
-			return true
-		}
-	}
-	return false
-}
-
-// isSafeQuery performs a deeper check beyond isReadOnlyQuery, blocking dangerous
-// DuckDB functions and DML operations that can be hidden inside CTEs or subqueries.
-func isSafeQuery(query string) bool {
-	lower := strings.ToLower(strings.TrimSpace(query))
-	if strings.Contains(lower, ";") || strings.Contains(lower, "--") || strings.Contains(lower, "/*") || strings.Contains(lower, "*/") {
-		return false
-	}
-	// Block dangerous DuckDB functions and DDL/DML keywords
-	dangerous := []string{
-		"chr(", "unicode(",
-		"read_", "scan(", "glob(", "iceberg_scan", "delta_scan",
-		"httpfs", "spatial", "sqlite", "postgres", "mysql", "s3", "http://", "https://", "file:",
-		"install", "load ", "load\t", "attach", "copy ", "export",
-		"call ", "prepare", "execute",
-		"query(", "printf(", "format(",
-		"create ", "drop ", "alter ", "truncate",
-		"insert ", "update ", "delete ", "merge ",
-		"grant ", "revoke",
-	}
-	for _, d := range dangerous {
-		if strings.Contains(lower, d) {
-			return false
-		}
-	}
-	return true
+	return os.Rename(tmpName, s.config().dlqPath)
 }
 
 func deliveryQueueDepth(ch chan spoolDelivery) int {

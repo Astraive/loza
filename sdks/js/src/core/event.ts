@@ -412,6 +412,28 @@ export interface Params {
 
 // --- Event ---
 
+/**
+ * Recursively clone plain objects and arrays so a clone never shares mutable
+ * state with the original. Non-plain values (Date, Map, functions, class
+ * instances, ...) are returned as-is.
+ */
+function deepCloneValue<T>(value: T): T {
+  if (Array.isArray(value)) {
+    return value.map((item) => deepCloneValue(item)) as unknown as T;
+  }
+  if (value !== null && typeof value === 'object') {
+    const proto = Object.getPrototypeOf(value);
+    if (proto === Object.prototype || proto === null) {
+      const out: Record<string, any> = {};
+      for (const key of Object.keys(value as Record<string, any>)) {
+        out[key] = deepCloneValue((value as Record<string, any>)[key]);
+      }
+      return out as T;
+    }
+  }
+  return value;
+}
+
 export class Event {
   schemaVersion = 'v1';
   eventVersion = 'v1';
@@ -603,7 +625,7 @@ export class Event {
   startProcess(name: string, ...attrs: Attr[]): ProcessHandle {
     this.ensureMutable();
     this._processStep++;
-    return new ProcessHandle(this, name, this._processStep, _now());
+    return new ProcessHandle(this, name, this._processStep, _now(), attrs);
   }
   /** Compatibility alias for startProcess. */
   process(name: string, ...attrs: Attr[]): ProcessHandle {
@@ -613,7 +635,7 @@ export class Event {
   /** Start a named timer and return a handle to stop it. */
   startTimer(name: string, ...attrs: Attr[]): TimerHandle {
     this.ensureMutable();
-    return new TimerHandle(this, name, _now());
+    return new TimerHandle(this, name, _now(), attrs);
   }
   /** Compatibility alias for startTimer. */
   timer(name: string, ...attrs: Attr[]): TimerHandle {
@@ -623,7 +645,7 @@ export class Event {
   /** Start a named group phase and return a handle to finish it. */
   startGroup(name: string, ...attrs: Attr[]): GroupHandle {
     this.ensureMutable();
-    return new GroupHandle(this, name, _now());
+    return new GroupHandle(this, name, _now(), attrs);
   }
   /** Compatibility alias for startGroup. */
   group(name: string, ...attrs: Attr[]): GroupHandle {
@@ -687,7 +709,10 @@ export class Event {
     Object.defineProperties(ev, descriptors);
     // Deep-clone mutable collections so the clone is independent
     ev.attrs = { ...this.attrs };
-    ev.checkpoints = [...this.checkpoints];
+    ev.checkpoints = deepCloneValue(this.checkpoints);
+    ev.processes = deepCloneValue(this.processes);
+    ev.groups = deepCloneValue(this.groups);
+    ev.timers = deepCloneValue(this.timers);
     ev.error = this.error ? { ...this.error } : null;
     ev._state = this._state;
     ev._emitted = this._emitted;

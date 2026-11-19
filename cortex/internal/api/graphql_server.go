@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sort"
 
 	"github.com/astraive/loza/cortex/internal/config"
 	"github.com/astraive/loza/cortex/internal/graph"
@@ -23,7 +24,10 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-const maxGraphQLDepth = 10
+const (
+	maxGraphQLDepth     = 10
+	maxSimilarIncidents = 10
+)
 
 // Introspection fields are disabled on the externally exposed schema.
 
@@ -123,10 +127,19 @@ func (s *GraphQLServer) handleGraphQL(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Check query depth before executing
-	if queryDepth(req.Query) > maxGraphQLDepth {
-		s.writeError(w, http.StatusBadRequest, "query exceeds maximum depth")
-		return
+	// Analyse the parsed query before executing it. Counting literal braces in
+	// the request text misses alias fan-out and repeated fragment spreads, so
+	// enforce both effective depth and total field complexity on the AST.
+	cost, err := analyzeGraphQLQuery(req.Query, req.OperationName)
+	if err == nil {
+		if cost.depth > maxGraphQLDepth {
+			s.writeError(w, http.StatusBadRequest, "query exceeds maximum depth")
+			return
+		}
+		if cost.complexity > maxGraphQLComplexity {
+			s.writeError(w, http.StatusBadRequest, "query exceeds maximum complexity")
+			return
+		}
 	}
 
 	if s.schemaErr != nil {
@@ -147,24 +160,6 @@ func (s *GraphQLServer) writeError(w http.ResponseWriter, status int, message st
 	if err := json.NewEncoder(w).Encode(response); err != nil {
 		log.Error().Err(err).Msg("failed to encode error response")
 	}
-}
-
-// queryDepth counts the maximum nesting depth of curly braces in a GraphQL query.
-func queryDepth(query string) int {
-	maxDepth := 0
-	depth := 0
-	for _, c := range query {
-		switch c {
-		case '{':
-			depth++
-			if depth > maxDepth {
-				maxDepth = depth
-			}
-		case '}':
-			depth--
-		}
-	}
-	return maxDepth
 }
 
 // isIntrospectionQuery blocks the reserved GraphQL introspection fields.
@@ -569,33 +564,44 @@ func (s *GraphQLServer) handleRemediationSuggestions(ctx context.Context, vars m
 		return nil, newGraphQLClientError("incidentId required")
 	}
 
-	_, err := s.incidents.Get(ctx, incidentID)
+	incident, err := s.incidents.Get(ctx, incidentID)
 	if err != nil {
 		return nil, err
 	}
 
-	sigs, err := s.signatures.List(ctx, 10)
+	// Scope remediation to the signature of the incident being queried. Without a
+	// signature there is no incident-specific remediation to suggest.
+	if incident.SignatureID == "" {
+		return []map[string]interface{}{}, nil
+	}
+
+	incidentSignature, err := s.signatures.Get(ctx, incident.SignatureID)
 	if err != nil {
 		return nil, err
 	}
 
-	suggestions := make([]map[string]interface{}, 0)
-	for _, sig := range sigs {
-		similar, err := s.match.FindSimilar(ctx, sig, 5)
-		if err != nil {
+	similar, err := s.match.FindSimilar(ctx, incidentSignature, 5)
+	if err != nil {
+		return nil, err
+	}
+
+	suggestions := make([]map[string]interface{}, 0, len(similar))
+	for _, sim := range similar {
+		// SimilarIncident.Resolution is the remediation recorded on the matched
+		// signature. Fall back to the queried incident's own remediation when the
+		// match does not carry one.
+		action := sim.Resolution
+		if action == "" && len(incidentSignature.Remediation) > 0 {
+			action = incidentSignature.Remediation[0]
+		}
+		if action == "" {
 			continue
 		}
-		symptomType := ""
-		if len(sig.Symptoms) > 0 {
-			symptomType = string(sig.Symptoms[0])
-		}
-		for _, sim := range similar {
-			suggestions = append(suggestions, map[string]interface{}{
-				"action":     symptomType,
-				"confidence": sim.Similarity,
-				"signature":  sig,
-			})
-		}
+		suggestions = append(suggestions, map[string]interface{}{
+			"action":     action,
+			"confidence": sim.Similarity,
+			"signature":  incidentSignature,
+		})
 	}
 
 	return suggestions, nil
@@ -607,22 +613,45 @@ func (s *GraphQLServer) handleSimilarIncidents(ctx context.Context, vars map[str
 		return nil, newGraphQLClientError("incidentId required")
 	}
 
-	_, err := s.incidents.Get(ctx, incidentID)
+	target, err := s.incidents.Get(ctx, incidentID)
 	if err != nil {
 		return nil, err
 	}
 
-	sigs, err := s.signatures.List(ctx, 10)
-	if err != nil {
-		return nil, err
+	// Similarity is computed from the target incident's signature. Without one
+	// there is nothing to compare against, so there are no similar incidents.
+	if target.SignatureID == "" {
+		return []*models.Incident{}, nil
 	}
-
-	similar := make([]*models.Incident, 0)
-	for _, sig := range sigs {
-		inc, err := s.incidents.GetBySignature(ctx, sig.SignatureID)
-		if err == nil && inc != nil && inc.ID != incidentID {
-			similar = append(similar, inc)
+	targetSig, err := s.signatures.Get(ctx, target.SignatureID)
+	if err != nil {
+		if errors.Is(err, storage.ErrNotFound) {
+			return []*models.Incident{}, nil
 		}
+		return nil, err
+	}
+
+	matches, err := s.match.FindSimilar(ctx, targetSig, maxSimilarIncidents)
+	if err != nil {
+		return nil, err
+	}
+
+	// FindSimilar may return matches in an arbitrary order (notably from the
+	// storage fallback), so rank them by score before resolving to incidents.
+	sort.SliceStable(matches, func(i, j int) bool {
+		return matches[i].Similarity > matches[j].Similarity
+	})
+
+	similar := make([]*models.Incident, 0, len(matches))
+	seen := map[string]bool{incidentID: true}
+	for _, candidate := range matches {
+		// SimilarIncident.IncidentID carries the matched signature ID.
+		inc, err := s.incidents.GetBySignature(ctx, candidate.IncidentID)
+		if err != nil || inc == nil || seen[inc.ID] {
+			continue
+		}
+		seen[inc.ID] = true
+		similar = append(similar, inc)
 	}
 
 	return similar, nil

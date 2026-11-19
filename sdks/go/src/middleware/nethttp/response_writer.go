@@ -99,13 +99,18 @@ func (w *responseWriter) readFrom(r io.Reader) (int64, error) {
 	if rf, ok := w.ResponseWriter.(io.ReaderFrom); ok {
 		cr := &countingReader{r: r}
 		n, err := rf.ReadFrom(cr)
-		w.bytes += int(cr.n)
+		// Track the bytes the underlying writer reports writing to the
+		// response. cr.n counts bytes read from the source and can be larger
+		// (e.g. when the writer compresses data), which would inflate
+		// response_bytes. Fall back to the source count only when the writer
+		// reports no byte count of its own.
+		written := n
+		if written == 0 {
+			written = cr.n
+		}
+		w.bytes += int(written)
 		if !w.wroteHeader {
 			w.wroteHeader = true
-		}
-		if n > cr.n {
-			// Defensive: prefer underlying returned byte count when larger.
-			w.bytes += int(n - cr.n)
 		}
 		return n, err
 	}

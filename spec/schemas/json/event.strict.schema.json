@@ -5,9 +5,7 @@
   "allOf": [
     {
       "$ref": "./event.schema.json"
-    },
-    {
-      "unevaluatedProperties": false
     }
-  ]
+  ],
+  "unevaluatedProperties": false
 }

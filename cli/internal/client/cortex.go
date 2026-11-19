@@ -18,17 +18,32 @@ func RunCortexCommand(ctx context.Context, cortexRepoPath string, args []string)
 
 // CheckCortexHealth checks the cortex health endpoint.
 func CheckCortexHealth(baseURL string) error {
-	return expectStatus(strings.TrimRight(baseURL, "/")+"/healthz", http.StatusOK)
+	return CheckCortexHealthContext(context.Background(), baseURL)
+}
+
+// CheckCortexHealthContext checks the cortex health endpoint, honoring ctx.
+func CheckCortexHealthContext(ctx context.Context, baseURL string) error {
+	return expectStatusContext(ctx, strings.TrimRight(baseURL, "/")+"/healthz", http.StatusOK)
 }
 
 // CheckCortexReady checks the cortex ready endpoint.
 func CheckCortexReady(baseURL string) error {
-	return expectStatus(strings.TrimRight(baseURL, "/")+"/readyz", http.StatusOK)
+	return CheckCortexReadyContext(context.Background(), baseURL)
+}
+
+// CheckCortexReadyContext checks the cortex ready endpoint, honoring ctx.
+func CheckCortexReadyContext(ctx context.Context, baseURL string) error {
+	return expectStatusContext(ctx, strings.TrimRight(baseURL, "/")+"/readyz", http.StatusOK)
 }
 
 // FetchCortexMetrics fetches Prometheus metrics from cortex.
 func FetchCortexMetrics(baseURL string) ([]byte, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), defaultTimeout)
+	return FetchCortexMetricsContext(context.Background(), baseURL)
+}
+
+// FetchCortexMetricsContext fetches Prometheus metrics from cortex, honoring ctx.
+func FetchCortexMetricsContext(ctx context.Context, baseURL string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(ctx, defaultTimeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(baseURL, "/")+"/metrics", nil)
 	if err != nil {
@@ -40,7 +55,10 @@ func FetchCortexMetrics(baseURL string) ([]byte, error) {
 		return nil, err
 	}
 	defer resp.Body.Close()
-	body, _ := readResponseBody(resp.Body)
+	body, err := readResponseBody(resp.Body)
+	if err != nil {
+		return nil, err
+	}
 	if resp.StatusCode >= 300 {
 		return nil, fmt.Errorf("cortex returned %d: %s", resp.StatusCode, string(body))
 	}
@@ -64,7 +82,10 @@ func IngestCortexBatch(ctx context.Context, baseURL string, events []map[string]
 		return err
 	}
 	defer resp.Body.Close()
-	body, _ := readResponseBody(resp.Body)
+	body, err := readResponseBody(resp.Body)
+	if err != nil {
+		return err
+	}
 	if resp.StatusCode >= 300 {
 		return fmt.Errorf("cortex returned %d: %s", resp.StatusCode, string(body))
 	}
@@ -117,7 +138,10 @@ func getCortexJSON(ctx context.Context, baseURL, path string) ([]byte, error) {
 		return nil, err
 	}
 	defer resp.Body.Close()
-	body, _ := readResponseBody(resp.Body)
+	body, err := readResponseBody(resp.Body)
+	if err != nil {
+		return nil, err
+	}
 	if resp.StatusCode >= 300 {
 		return nil, fmt.Errorf("cortex returned %d: %s", resp.StatusCode, string(body))
 	}
@@ -176,7 +200,10 @@ func postCortexJSON(ctx context.Context, baseURL, path string, payload []byte) (
 		return nil, err
 	}
 	defer resp.Body.Close()
-	body, _ := readResponseBody(resp.Body)
+	body, err := readResponseBody(resp.Body)
+	if err != nil {
+		return nil, err
+	}
 	if resp.StatusCode >= 300 {
 		return nil, fmt.Errorf("cortex returned %d: %s", resp.StatusCode, string(body))
 	}

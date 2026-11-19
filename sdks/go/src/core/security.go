@@ -23,6 +23,15 @@ func applySecurity(attrs []Attr, cfg SecurityConfig) []Attr {
 		return attrs
 	}
 	for i := range attrs {
+		// Redact sensitive attrs before the group branch: a group keyed
+		// sensitive.* (e.g. MarkSensitive(Group(...))) must be redacted as a
+		// whole, otherwise its children are recursed with their own
+		// non-sensitive keys and the entire group leaks.
+		if cfg.RedactByDefault && strings.HasPrefix(attrs[i].Key, "sensitive.") && !cfg.AllowPII {
+			attrs[i].Value = "[REDACTED]"
+			attrs[i].Kind = KindString
+			continue
+		}
 		if attrs[i].Kind == KindGroup {
 			if children, ok := attrs[i].Value.([]Attr); ok {
 				attrs[i].Value = applySecurity(children, cfg)
@@ -39,10 +48,6 @@ func applySecurity(attrs []Attr, cfg SecurityConfig) []Attr {
 				end = cfg.MaxFieldBytes // fallback: truncate at byte boundary
 			}
 			attrs[i].Value = s[:end]
-		}
-		if cfg.RedactByDefault && strings.HasPrefix(attrs[i].Key, "sensitive.") && !cfg.AllowPII {
-			attrs[i].Value = "[REDACTED]"
-			attrs[i].Kind = KindString
 		}
 	}
 	return attrs

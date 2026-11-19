@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 from typing import Iterable
 
@@ -8,7 +9,7 @@ CONTROL_CHARS = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
 
 
 def quote(value: str) -> str:
-    return value.encode("unicode_escape").decode("ascii")
+    return json.dumps(value)
 
 
 def scrub_control_chars(value: str) -> str:

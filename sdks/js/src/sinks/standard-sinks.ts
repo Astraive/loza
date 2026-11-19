@@ -97,8 +97,16 @@ export class RotatingFileSink implements Sink {
   }
 
   private rotate(): void {
-    const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-    const backupPath = `${this.path}.${timestamp}`;
+    // Keep milliseconds and append a numeric suffix on collision so two
+    // rotations in the same second (or millisecond) cannot resolve to the
+    // same destination. `fs.renameSync` overwrites on POSIX, so reusing a
+    // name would silently discard the earlier backup.
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+    let backupPath = `${this.path}.${timestamp}`;
+    let suffix = 1;
+    while (fs.existsSync(backupPath)) {
+      backupPath = `${this.path}.${timestamp}.${suffix++}`;
+    }
     try {
       fs.renameSync(this.path, backupPath);
     } catch {
@@ -211,10 +219,10 @@ export class HTTPBatchSink implements Sink {
     if (this.username && !this.password && !isPublicDSNUsername(this.username)) {
       throw new Error('invalid HTTP sink options: Basic credentials require a password unless username is an lz_pub_ capability');
     }
-    if (!this.apiKey && this.username &&
+    if ((this.apiKey || this.username) &&
       endpoint.protocol === 'http:' &&
       !['localhost', '127.0.0.1', '::1'].includes(endpoint.hostname)) {
-      throw new Error('invalid HTTP sink options: Basic credentials require HTTPS (HTTP is allowed only for localhost)');
+      throw new Error('invalid HTTP sink options: credentials require HTTPS (HTTP is allowed only for localhost)');
     }
     this.authHeader = opts.authHeader || 'Authorization';
     this.sdkName = opts.sdkName || 'loza-js';
@@ -422,7 +430,7 @@ export class HTTPBatchSink implements Sink {
       const req = mod.request({
         hostname: url.hostname,
         port: url.port || (isHttps ? 443 : 80),
-        path: url.pathname,
+        path: url.pathname + url.search,
         method: 'POST',
         headers,
         timeout: this.timeout,

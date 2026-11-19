@@ -28,9 +28,25 @@ func TestMain(m *testing.M) {
 }
 
 func validFileConfig() fileConfig {
-	cfg := defaultFileConfig()
+	cfg, err := defaultFileConfig()
+	if err != nil {
+		panic(err)
+	}
 	cfg.Storage.EncryptionKey = "test-storage-encryption-key"
 	return cfg
+}
+
+func TestLoadCollectorConfigFromArgsReportsBrokenDefaults(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "missing-defaults.yaml")
+	t.Setenv("LOZA_COLLECTOR_DEFAULTS", missing)
+
+	_, err := loadCollectorConfigFromArgs(nil)
+	if err == nil {
+		t.Fatal("expected an error for a missing bundled defaults file")
+	}
+	if !strings.Contains(err.Error(), "collector defaults") {
+		t.Fatalf("expected a descriptive defaults error, got: %v", err)
+	}
 }
 
 func TestValidateNamedDatabaseConnections(t *testing.T) {
@@ -492,6 +508,85 @@ collector:
 	}
 }
 
+func TestMarshalPrintableConfigRedactsEveryCredential(t *testing.T) {
+	cfg := validFileConfig()
+
+	secrets := map[string]string{
+		"auth.value":                 "CANARY_AUTH_VALUE",
+		"auth.server_secret":         "CANARY_AUTH_SERVER_SECRET",
+		"fanout.clickhouse.password": "CANARY_CH_PASSWORD",
+		"fanout.postgres.dsn":        "CANARY_PG_DSN",
+		"fanout.s3.access_key":       "CANARY_S3_ACCESS_KEY",
+		"fanout.s3.secret_key":       "CANARY_S3_SECRET_KEY",
+		"dedupe.redis_password":      "CANARY_REDIS_PASSWORD",
+		"cortex_bridge.api_key":      "CANARY_CORTEX_API_KEY",
+		"eventbus.redis.password":    "CANARY_EB_REDIS_PASSWORD",
+		"eventbus.nats.password":     "CANARY_EB_NATS_PASSWORD",
+	}
+
+	cfg.Auth.Value = secrets["auth.value"]
+	cfg.Auth.ServerSecret = secrets["auth.server_secret"]
+	cfg.Fanout.Outputs = []collectorconfig.FanoutOutputConfig{{
+		Name:       "test",
+		Type:       "s3",
+		Enabled:    true,
+		ClickHouse: collectorconfig.FanoutClickHouseConfig{Password: secrets["fanout.clickhouse.password"]},
+		Postgres:   collectorconfig.FanoutPostgresConfig{DSN: secrets["fanout.postgres.dsn"]},
+		S3: collectorconfig.FanoutS3Config{
+			AccessKey: secrets["fanout.s3.access_key"],
+			SecretKey: secrets["fanout.s3.secret_key"],
+		},
+	}}
+	cfg.Dedupe.RedisPassword = secrets["dedupe.redis_password"]
+	cfg.CortexBridge.APIKey = secrets["cortex_bridge.api_key"]
+	cfg.EventBus.Redis.Password = secrets["eventbus.redis.password"]
+	cfg.EventBus.NATS.Password = secrets["eventbus.nats.password"]
+
+	out, err := marshalPrintableConfig(cfg)
+	if err != nil {
+		t.Fatalf("marshal printable config: %v", err)
+	}
+	printed := string(out)
+	for field, secret := range secrets {
+		if strings.Contains(printed, secret) {
+			t.Errorf("config print leaked %s value %q", field, secret)
+		}
+	}
+	if got := strings.Count(printed, redactedSecret); got < len(secrets) {
+		t.Errorf("expected at least %d redaction markers, got %d:\n%s", len(secrets), got, printed)
+	}
+
+	// Redaction must not mutate the caller's config (fanout outputs are a slice).
+	if cfg.Auth.Value != secrets["auth.value"] ||
+		cfg.Auth.ServerSecret != secrets["auth.server_secret"] ||
+		cfg.Fanout.Outputs[0].S3.SecretKey != secrets["fanout.s3.secret_key"] ||
+		cfg.EventBus.Redis.Password != secrets["eventbus.redis.password"] {
+		t.Fatalf("redaction mutated the source config")
+	}
+}
+
+func TestConfigCommandPrintRedactsEnvSecret(t *testing.T) {
+	const apiKey = "lz_sec_live_canary_secret_value"
+	t.Setenv("COLLECTOR_API_KEY", apiKey)
+
+	path := filepath.Join(t.TempDir(), "collector.yaml")
+	raw := `
+collector:
+  addr: ":9191"
+`
+	if err := os.WriteFile(path, []byte(raw), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	out := runConfigCommandCaptureOutput(t, []string{"print", "-c", path})
+	if strings.Contains(out, apiKey) {
+		t.Fatalf("config print leaked API key: %s", out)
+	}
+	if !strings.Contains(out, redactedSecret) {
+		t.Fatalf("expected redacted marker in config print output: %s", out)
+	}
+}
+
 func TestConfigCommandValidate(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "collector.yaml")
 	raw := `
@@ -520,6 +615,54 @@ collector:
 	err := configCommand([]string{"validate", "-c", path})
 	if err == nil || !strings.Contains(err.Error(), "invalid config: collector.max_body_bytes must be > 0") {
 		t.Fatalf("expected fail-fast validation error, got: %v", err)
+	}
+}
+
+func TestLoadCollectorConfigFromArgsExplicitMissingConfigFileFails(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "does-not-exist.yaml")
+	_, err := loadCollectorConfigFromArgs([]string{"-c", missing})
+	if err == nil {
+		t.Fatal("expected an explicit -c pointing at a missing file to fail")
+	}
+	if !strings.Contains(err.Error(), "config file") || !strings.Contains(err.Error(), missing) {
+		t.Fatalf("expected an error identifying the missing config file, got: %v", err)
+	}
+}
+
+func TestLoadCollectorConfigFromArgsNoConfigFileUsesDefaults(t *testing.T) {
+	// The package working directory has no loza.yaml. Without an explicit -c,
+	// the loader must keep falling back to built-in defaults instead of failing.
+	if _, err := os.Stat("loza.yaml"); err == nil {
+		t.Skip("loza.yaml present in package directory; cannot exercise a missing default")
+	}
+	cfg, err := loadCollectorConfigFromArgs(nil)
+	if err != nil {
+		t.Fatalf("missing default config file should fall back to defaults: %v", err)
+	}
+	if cfg.duckDBPath == "" {
+		t.Fatal("expected built-in defaults to be applied when no -c is supplied")
+	}
+}
+
+func TestConfigCommandValidateExplicitMissingConfigFileFails(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "does-not-exist.yaml")
+	err := configCommand([]string{"validate", "-c", missing})
+	if err == nil {
+		t.Fatal("config validate must fail when -c points at a missing file")
+	}
+	if !strings.Contains(err.Error(), missing) {
+		t.Fatalf("expected the error to name the missing config file, got: %v", err)
+	}
+}
+
+func TestConfigCommandPrintExplicitMissingConfigFileFails(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "does-not-exist.yaml")
+	err := configCommand([]string{"print", "-c", missing})
+	if err == nil {
+		t.Fatal("config print must fail when -c points at a missing file")
+	}
+	if !strings.Contains(err.Error(), "config file") {
+		t.Fatalf("expected a config file error, got: %v", err)
 	}
 }
 

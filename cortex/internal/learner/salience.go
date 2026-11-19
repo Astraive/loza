@@ -56,11 +56,22 @@ func (st *SalienceTracker) RecordOutcome(ctx context.Context, eventTypes []strin
 			persistenceErrors = append(persistenceErrors, fmt.Errorf("get salience for %q: %w", eventType, err))
 			continue
 		}
-		newScore := current + st.alpha*(reward-current)
+
+		// Start from the tracker default for a previously unseen event type, but
+		// carry over both the score and the observed sample count when present so
+		// each outcome accumulates rather than resetting the count to 1.
+		currentScore := st.defaultScore
+		sampleCount := 0
+		if current != nil {
+			currentScore = current.Score
+			sampleCount = current.SampleCount
+		}
+
+		newScore := currentScore + st.alpha*(reward-currentScore)
 		if err := st.store.Save(ctx, &models.SalienceScore{
 			EventType:   eventType,
 			Score:       newScore,
-			SampleCount: 1,
+			SampleCount: sampleCount + 1,
 			UpdatedAt:   time.Now(),
 		}); err != nil {
 			persistenceErrors = append(persistenceErrors, fmt.Errorf("save salience for %q: %w", eventType, err))
@@ -71,11 +82,11 @@ func (st *SalienceTracker) RecordOutcome(ctx context.Context, eventTypes []strin
 
 // GetSalience returns the salience score for an event type.
 func (st *SalienceTracker) GetSalience(ctx context.Context, eventType string) float64 {
-	score, err := st.store.Get(ctx, eventType)
-	if err != nil {
+	current, err := st.store.Get(ctx, eventType)
+	if err != nil || current == nil {
 		return st.defaultScore
 	}
-	return score
+	return current.Score
 }
 
 // GetTopSalient returns the most salient event types.

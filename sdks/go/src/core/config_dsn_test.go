@@ -1,7 +1,9 @@
 package core
 
 import (
+	"errors"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -82,6 +84,62 @@ func TestWithDSN(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestMalformedDSNSurfacesError reproduces MASS-0412: a malformed loza:// DSN
+// must produce an error rather than a live client silently pointed at a
+// defaults-file or environment collector URL.
+func TestMalformedDSNSurfacesError(t *testing.T) {
+	const badDSN = "https://collector.example.com/demo"
+
+	t.Run("WithDSN records parse error", func(t *testing.T) {
+		cfg := ApplyConfig(Config{}, WithDSN(badDSN))
+		if cfg.dsnErr == nil {
+			t.Fatal("expected WithDSN to record the DSN parse error")
+		}
+	})
+
+	t.Run("Validate surfaces DSN error", func(t *testing.T) {
+		cfg := ApplyConfig(Config{}, WithDSN(badDSN))
+		err := cfg.Validate()
+		var cfgErr *ConfigValidationError
+		if !errors.As(err, &cfgErr) {
+			t.Fatalf("Validate() error = %v, want *ConfigValidationError", err)
+		}
+		if cfgErr.Field != "DSN" {
+			t.Fatalf("ConfigValidationError.Field = %q, want DSN", cfgErr.Field)
+		}
+	})
+
+	t.Run("New returns error", func(t *testing.T) {
+		logger, err := New(ApplyConfig(Config{}, WithDSN(badDSN)))
+		if err == nil {
+			t.Fatal("New() expected error for malformed DSN, got nil")
+		}
+		if logger != nil {
+			t.Fatal("New() expected nil logger for malformed DSN")
+		}
+	})
+
+	t.Run("NewClient does not fall back to defaults-file collector URL", func(t *testing.T) {
+		defaults := "collector_url: \"http://collector.example:9308\"\nservice_name: \"checkout\"\n"
+		path := filepath.Join(t.TempDir(), "loza-go.defaults.yaml")
+		if err := os.WriteFile(path, []byte(defaults), 0o600); err != nil {
+			t.Fatalf("write defaults file: %v", err)
+		}
+		t.Setenv("LOZA_GO_DEFAULTS", path)
+
+		// Without the fix, mergeCodeConfig drops the empty CollectorURL sentinel,
+		// the defaults-file URL is used, and a live client is returned with no
+		// error. The DSN parse error must survive merging and be surfaced.
+		client, err := NewClient(ApplyConfig(Config{}, WithDSN(badDSN)))
+		if err == nil {
+			t.Fatal("NewClient() expected error for malformed DSN with defaults-file collector URL, got nil")
+		}
+		if client != nil {
+			t.Fatal("NewClient() expected nil client for malformed DSN")
+		}
+	})
 }
 
 func TestLoadFromEnv_DSN(t *testing.T) {

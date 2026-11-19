@@ -210,30 +210,42 @@ func (m *GoMatcher) ScoreTopologyIndependent(a, b *models.IncidentSignature) (fl
 }
 
 // serviceRole maps a service name to a generic role based on naming conventions.
+//
+// Patterns are held in an ordered slice rather than a map so classification is
+// deterministic: the first role whose pattern matches wins, and slice order
+// defines the explicit precedence. Several patterns overlap (for example
+// "redis" appears in both database and cache, and "event"/"app"/"processor"
+// appear in more than one group). With a map, Go randomizes iteration order, so
+// a name such as "redis-cache" could be classified differently on every call.
+// The order below preserves the original declaration order and must remain
+// stable because these roles are used as match/scoring keys in TopK.
 func serviceRole(name string) string {
 	lower := strings.ToLower(name)
 
-	rolePatterns := map[string][]string{
-		"database": {"db", "database", "postgres", "mysql", "mongo", "redis", "dynamodb", "cockroach"},
-		"cache":    {"cache", "redis", "memcached", "memcache"},
-		"queue":    {"queue", "kafka", "rabbit", "sqs", "pubsub", "broker", "event"},
-		"api":      {"api", "gateway", "proxy", "edge", "frontend", "web", "app"},
-		"worker":   {"worker", "job", "task", "cron", "scheduler", "processor"},
-		"storage":  {"storage", "s3", "blob", "file", "blob", "gcs"},
-		"auth":     {"auth", "login", "oauth", "identity", "iam"},
-		"search":   {"search", "elastic", "solr", "index"},
-		"analytics": {"analytics", "metric", "monitor", "telemetry", "trace"},
-		"notification": {"notification", "email", "sms", "push", "alert"},
-		"shipping": {"shipping", "delivery", "logistics", "tracking"},
-		"payment":  {"payment", "billing", "checkout", "stripe", "paypal"},
-		"inventory": {"inventory", "stock", "catalog", "product"},
-		"user":     {"user", "profile", "account", "member", "customer"},
+	rolePatterns := []struct {
+		role     string
+		patterns []string
+	}{
+		{"database", []string{"db", "database", "postgres", "mysql", "mongo", "redis", "dynamodb", "cockroach"}},
+		{"cache", []string{"cache", "redis", "memcached", "memcache"}},
+		{"queue", []string{"queue", "kafka", "rabbit", "sqs", "pubsub", "broker", "event"}},
+		{"api", []string{"api", "gateway", "proxy", "edge", "frontend", "web", "app"}},
+		{"worker", []string{"worker", "job", "task", "cron", "scheduler", "processor"}},
+		{"storage", []string{"storage", "s3", "blob", "file", "blob", "gcs"}},
+		{"auth", []string{"auth", "login", "oauth", "identity", "iam"}},
+		{"search", []string{"search", "elastic", "solr", "index"}},
+		{"analytics", []string{"analytics", "metric", "monitor", "telemetry", "trace"}},
+		{"notification", []string{"notification", "email", "sms", "push", "alert"}},
+		{"shipping", []string{"shipping", "delivery", "logistics", "tracking"}},
+		{"payment", []string{"payment", "billing", "checkout", "stripe", "paypal"}},
+		{"inventory", []string{"inventory", "stock", "catalog", "product"}},
+		{"user", []string{"user", "profile", "account", "member", "customer"}},
 	}
 
-	for role, patterns := range rolePatterns {
-		for _, pattern := range patterns {
+	for _, rp := range rolePatterns {
+		for _, pattern := range rp.patterns {
 			if strings.Contains(lower, pattern) {
-				return role
+				return rp.role
 			}
 		}
 	}
@@ -552,18 +564,19 @@ func (m *SignatureMatcher) UpdateSignature(ctx context.Context, signatureID stri
 		return fmt.Errorf("signature not found: %w", err)
 	}
 
-	if update.IncrementOccurrence {
+	// An occurrence increment and a new resolution-time measurement represent
+	// the same single event, so the count must advance exactly once and the
+	// running average must be based on the original count/sum.
+	if update.IncrementOccurrence || update.UpdateResolutionTime > 0 {
+		oldTotal := sig.AvgResolutionTime * int64(sig.OccurrenceCount)
 		sig.OccurrenceCount++
+		if update.UpdateResolutionTime > 0 {
+			sig.AvgResolutionTime = (oldTotal + update.UpdateResolutionTime) / int64(sig.OccurrenceCount)
+		}
 	}
 
 	if len(update.AddRemediation) > 0 {
 		sig.Remediation = append(sig.Remediation, update.AddRemediation...)
-	}
-
-	if update.UpdateResolutionTime > 0 {
-		oldTotal := sig.AvgResolutionTime * int64(sig.OccurrenceCount)
-		sig.OccurrenceCount++
-		sig.AvgResolutionTime = (oldTotal + update.UpdateResolutionTime) / int64(sig.OccurrenceCount)
 	}
 
 	sig.UpdatedAt = time.Now()

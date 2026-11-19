@@ -1,6 +1,8 @@
 package core
 
 import (
+	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha256"
 	"fmt"
 	"regexp"
@@ -53,25 +55,59 @@ func RedactKeys(keys ...string) Redactor {
 	return &keyRedactor{keys: m}
 }
 
-// hashRedactor replaces values of matching keys with their SHA-256 hex digest.
-type hashRedactor struct{ keys map[string]struct{} }
+// ephemeralHashKey is the process-wide secret used by HashKeys when no explicit
+// secret is supplied. A keyed MAC is required here: a bare SHA-256 digest of a
+// low-entropy value (email, SSN, user ID) can be reversed with a dictionary or
+// rainbow table, exposing the original PII to anyone holding the logs.
+var ephemeralHashKey = newEphemeralHashKey()
+
+func newEphemeralHashKey() []byte {
+	key := make([]byte, 32)
+	if _, err := rand.Read(key); err != nil {
+		panic("core: cannot generate redaction hash key: " + err.Error())
+	}
+	return key
+}
+
+// hashRedactor replaces values of matching keys with a keyed HMAC-SHA256 digest.
+type hashRedactor struct {
+	keys map[string]struct{}
+	key  []byte
+}
 
 func (r *hashRedactor) Redact(key string, value any) (any, bool) {
 	lower := strings.ToLower(key)
 	if _, ok := r.keys[lower]; !ok {
 		return noRedaction, true
 	}
-	h := sha256.Sum256([]byte(fmt.Sprintf("%v", value)))
-	return fmt.Sprintf("%x", h), true
+	mac := hmac.New(sha256.New, r.key)
+	_, _ = mac.Write([]byte(fmt.Sprintf("%v", value)))
+	return fmt.Sprintf("%x", mac.Sum(nil)), true
 }
 
-// HashKeys returns a Redactor that hashes values for the given keys.
+// HashKeys returns a Redactor that replaces values for the given keys with a
+// keyed HMAC-SHA256 digest. The MAC key is random per process, so digests are
+// stable within a running process but are not comparable across restarts or
+// replicas. Use HashKeysWithSecret when a stable cross-process pseudonym is
+// required.
 func HashKeys(keys ...string) Redactor {
+	return HashKeysWithSecret(ephemeralHashKey, keys...)
+}
+
+// HashKeysWithSecret returns a Redactor like HashKeys that uses secret as the
+// MAC key. Reusing the same secret produces the same digest for a given value,
+// while an attacker without the secret cannot dictionary-attack the output.
+// An empty secret falls back to the per-process ephemeral key.
+func HashKeysWithSecret(secret []byte, keys ...string) Redactor {
 	m := make(map[string]struct{}, len(keys))
 	for _, k := range keys {
 		m[strings.ToLower(k)] = struct{}{}
 	}
-	return &hashRedactor{keys: m}
+	key := ephemeralHashKey
+	if len(secret) > 0 {
+		key = append([]byte(nil), secret...)
+	}
+	return &hashRedactor{keys: m, key: key}
 }
 
 // maskRedactor partially masks values for configured keys.

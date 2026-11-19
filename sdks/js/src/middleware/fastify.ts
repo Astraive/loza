@@ -10,13 +10,18 @@ export function lozaFastifyPlugin(opts: FastifyPluginOptions = {}) {
 
   return async (request: any, reply: any) => {
     const startedAt = Date.now();
-    const route = request.routeOptions?.url || request.url || '';
+    // Fastify's request.url includes the query string. Strip it before recording
+    // so secrets/PII in query params never land in telemetry attributes.
+    const path = request.url?.split('?')[0] || '';
+    // Prefer Fastify's stable route pattern (e.g. /users/:id) over the raw URL;
+    // when it is unavailable, fall back to the query-stripped pathname.
+    const route = request.routeOptions?.url || path;
 
     const ev = loza.startHTTPEvent({
       event: `${request.method} ${route}`,
       kind: 'http',
       method: request.method,
-      path: request.url,
+      path,
       route,
       service: opts.service,
     });

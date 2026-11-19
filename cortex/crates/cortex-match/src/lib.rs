@@ -9,6 +9,7 @@
 //! - fast pattern comparison
 //! - approximate matching
 
+pub mod ffi;
 pub mod graph;
 pub mod signature;
 pub mod similarity;
@@ -46,7 +47,7 @@ impl Matcher {
 
     /// Score a query signature against a candidate
     pub fn score(&self, query: &Signature, candidate: &Signature) -> f64 {
-        similarity::score(query, candidate, "shape")
+        similarity::score(query, candidate, self.topk.metric())
     }
 
     /// Find top-k similar signatures to query
@@ -61,7 +62,9 @@ impl Matcher {
         candidates: &[Signature],
         metric: &str,
     ) -> Vec<ScoredMatch> {
-        let tk = TopK::new(self.topk.k()).with_metric(metric);
+        // Carry over the full configured state (notably the threshold) while
+        // allowing the caller to override the metric for this search.
+        let tk = self.topk.clone().with_metric(metric);
         tk.search(query, candidates)
     }
 }
@@ -118,7 +121,7 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 #[cfg(test)]
 mod tests {
     use super::*;
-    use signature::Signature;
+    use signature::{Signature, SymptomClass};
 
     #[test]
     fn test_matcher_interface() {
@@ -144,6 +147,74 @@ mod tests {
 
         let matches = matcher.top_k(&query, &candidates);
         assert_eq!(matches.len(), 10);
+    }
+
+    #[test]
+    fn test_score_respects_with_metric() {
+        // Identical symptoms, temporal order and feature vectors, but different
+        // remediation. "shape" weights the feature vectors and ignores
+        // remediation (1.0), while "topology" ignores the feature vectors and
+        // penalises the differing resolution pattern (0.8). This makes the two
+        // metrics observably distinct for the same pair of signatures.
+        let query = Signature {
+            shape: "Latency→Timeout".to_string(),
+            symptom_classes: vec![SymptomClass::Latency, SymptomClass::Timeout],
+            temporal_sequence: vec![0, 5000, 10000],
+            resolution_pattern: vec!["restart".to_string()],
+            feature_vector: vec![1.0, 0.0, 0.0],
+        };
+        let candidate = Signature {
+            shape: "Latency→Timeout".to_string(),
+            symptom_classes: vec![SymptomClass::Latency, SymptomClass::Timeout],
+            temporal_sequence: vec![0, 5000, 10000],
+            resolution_pattern: vec!["rollback".to_string()],
+            feature_vector: vec![1.0, 0.0, 0.0],
+        };
+
+        let shape_score = Matcher::new().with_metric("shape").score(&query, &candidate);
+        let topology_score = Matcher::new()
+            .with_metric("topology")
+            .score(&query, &candidate);
+
+        assert!((shape_score - 1.0).abs() < 1e-6);
+        assert!((topology_score - 0.8).abs() < 1e-6);
+        assert!((shape_score - topology_score).abs() > 1e-6);
+
+        // score() must honour the configured metric instead of hardcoding "shape".
+        assert!(
+            (topology_score - similarity::score(&query, &candidate, "topology")).abs() < 1e-6
+        );
+    }
+
+    #[test]
+    fn test_search_respects_configured_threshold() {
+        // A threshold configured on the matcher must also be honoured when
+        // searching via `search` with an explicit metric. The metric may be
+        // overridden, but the threshold must be carried over.
+        let matcher = Matcher::new().with_k(10).with_threshold(0.9);
+
+        let mut query = Signature::new();
+        query.feature_vector = vec![1.0, 0.0];
+
+        let mut high = Signature::new();
+        high.shape = "high".to_string();
+        high.feature_vector = vec![1.0, 0.0]; // cosine = 1.0
+
+        let mut medium = Signature::new();
+        medium.shape = "medium".to_string();
+        medium.feature_vector = vec![0.5, 0.5]; // cosine ~= 0.707
+
+        let mut low = Signature::new();
+        low.shape = "low".to_string();
+        low.feature_vector = vec![0.0, 1.0]; // cosine = 0.0
+
+        let candidates = vec![high, medium, low];
+
+        let matches = matcher.search(&query, &candidates, "cosine");
+
+        assert_eq!(matches.len(), 1, "low-similarity matches must be filtered");
+        assert_eq!(matches[0].signature_id, "high");
+        assert!(matches[0].similarity >= 0.9);
     }
 
     #[test]

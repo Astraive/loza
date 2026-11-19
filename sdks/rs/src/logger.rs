@@ -4,7 +4,7 @@ use crate::{
     internal::core::{duplicate::resolve_duplicate, duplicate_policy::DuplicatePolicy},
     internal::queue::ByteBatcher,
     metrics::MetricsCollector,
-    redaction, sampling, schema, sink, Attr, Config, EventContext, Params,
+    redaction, sampling, schema, sink, Attr, Config, EventContext, Params, StatsHandler,
 };
 use serde_json::Map;
 use serde_json::Value;
@@ -15,6 +15,25 @@ use std::time::Instant;
 
 const DEFAULT_ASYNC_QUEUE_SIZE: usize = 8192;
 const DEFAULT_ASYNC_MAX_BATCH_BYTES: usize = 256 * 1024;
+
+// An allowlist redactor redacts every key it is not told to keep. The raw
+// event carries the canonical envelope fields, which must survive redaction
+// for validation to succeed, so add them to the caller's allowlist before
+// applying the redactor to a raw event.
+fn with_envelope_allowlist(redactor: &crate::RedactorConfig) -> crate::RedactorConfig {
+    match redactor {
+        crate::RedactorConfig::AllowKeys(keys) => {
+            let mut allowed = keys.clone();
+            for field in spec_contract::ALLOWED_TOP_LEVEL_FIELDS {
+                if !allowed.iter().any(|key| key == field) {
+                    allowed.push((*field).to_string());
+                }
+            }
+            crate::RedactorConfig::AllowKeys(allowed)
+        }
+        other => other.clone(),
+    }
+}
 
 pub struct Logger {
     config: Config,
@@ -51,15 +70,23 @@ impl Logger {
         let mut config = config;
         config.validate_result()?;
         install_default_collector_sink(&mut config);
+        // The metrics handle is created before the worker so the worker can report
+        // asynchronous delivery failures through the same collector as the sync path.
+        let metrics = Arc::new(MetricsCollector::new());
         let async_runtime = if config.async_enabled {
-            Some(Arc::new(AsyncRuntime::new(config.sinks.clone())?))
+            Some(Arc::new(AsyncRuntime::new(
+                config.sinks.clone(),
+                metrics.clone(),
+                config.stats_handler.clone(),
+                DEFAULT_ASYNC_MAX_BATCH_BYTES,
+            )?))
         } else {
             None
         };
         Ok(Self {
             config,
             async_runtime,
-            metrics: Arc::new(MetricsCollector::new()),
+            metrics,
         })
     }
 
@@ -150,7 +177,9 @@ impl Logger {
         key: impl Into<String>,
         value: V,
     ) {
-        let _ = ctx.ensure_mutable();
+        if ctx.ensure_mutable().is_err() {
+            return;
+        }
         ctx.mark_active_if_created();
         let target = match group {
             "http" => &mut ctx.http,
@@ -276,7 +305,8 @@ impl Logger {
                 let raw = serde_json::to_value(ctx)
                     .unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
                 let raw = crate::event::apply_sensitive_to_value(raw, ctx);
-                let redacted = redaction::redact(raw, &self.config.redactor);
+                let redactor = with_envelope_allowlist(&self.config.redactor);
+                let redacted = redaction::redact(raw, &redactor);
                 schema::encode_schema_from_value(redacted, other)
             }
         };
@@ -450,12 +480,14 @@ impl Logger {
     pub fn link_event(&self, ctx: &mut EventContext, linked_id: impl Into<String>) {
         let mut link = serde_json::Map::new();
         link.insert(
-            "event_id".to_string(),
+            "type".to_string(),
+            serde_json::Value::String("event".to_string()),
+        );
+        link.insert(
+            "target".to_string(),
             serde_json::Value::String(linked_id.into()),
         );
-        if ctx.error.is_none() {
-            ctx.error = Some(serde_json::Map::new());
-        }
+        ctx.links.push(link);
     }
 
     pub fn bind_event(&self, ctx: &EventContext) -> EventContext {
@@ -589,7 +621,9 @@ impl Logger {
 
 impl Logger {
     fn apply_attr(&self, ctx: &mut EventContext, attr: Attr) {
-        let _ = ctx.ensure_mutable();
+        if ctx.ensure_mutable().is_err() {
+            return;
+        }
         ctx.mark_active_if_created();
         if attr.sensitive {
             ctx.sensitive_keys.push(attr.key.clone());
@@ -631,9 +665,20 @@ struct AsyncRuntime {
 }
 
 impl AsyncRuntime {
-    fn new(sinks: Vec<crate::SinkConfig>) -> Result<Self, LozaError> {
+    fn new(
+        sinks: Vec<crate::SinkConfig>,
+        metrics: Arc<MetricsCollector>,
+        stats_handler: Option<Arc<dyn StatsHandler>>,
+        max_batch_bytes: usize,
+    ) -> Result<Self, LozaError> {
         let (tx, rx) = mpsc::sync_channel(DEFAULT_ASYNC_QUEUE_SIZE);
-        let worker = thread::spawn(move || run_async_worker(rx, sinks));
+        let worker_ctx = AsyncWorker {
+            sinks,
+            metrics,
+            stats_handler,
+            max_batch_bytes,
+        };
+        let worker = thread::spawn(move || run_async_worker(rx, worker_ctx));
         Ok(Self {
             tx,
             worker: Mutex::new(Some(worker)),
@@ -673,26 +718,77 @@ impl AsyncRuntime {
     }
 }
 
-fn run_async_worker(rx: Receiver<AsyncCommand>, sinks: Vec<crate::SinkConfig>) {
-    let mut batcher = ByteBatcher::new(DEFAULT_ASYNC_MAX_BATCH_BYTES);
+/// State the async delivery worker needs in order to surface delivery failures.
+struct AsyncWorker {
+    sinks: Vec<crate::SinkConfig>,
+    metrics: Arc<MetricsCollector>,
+    stats_handler: Option<Arc<dyn StatsHandler>>,
+    max_batch_bytes: usize,
+}
+
+fn run_async_worker(rx: Receiver<AsyncCommand>, worker: AsyncWorker) {
+    let mut batcher = ByteBatcher::new(worker.max_batch_bytes);
     while let Ok(command) = rx.recv() {
         match command {
             AsyncCommand::Event(encoded) => {
                 if let Some(flushed) = batcher.push(encoded) {
-                    let _ = flush_batch(&sinks, &flushed);
+                    // `emit()` already acknowledged this event on enqueue, so there is
+                    // no caller waiting on this result. Report the failure here instead
+                    // of silently discarding it.
+                    deliver_batch(&worker, &flushed);
                 }
             }
             AsyncCommand::Flush(reply) => {
-                let result =
-                    flush_batch(&sinks, &batcher.drain()).and_then(|_| flush_sinks(&sinks));
+                let result = flush_batch_reported(&worker, &batcher.drain())
+                    .and_then(|_| flush_sinks(&worker.sinks));
                 let _ = reply.send(result);
             }
             AsyncCommand::Shutdown(reply) => {
-                let result = flush_batch(&sinks, &batcher.drain())
-                    .and_then(|_| flush_sinks(&sinks))
-                    .and_then(|_| close_sinks(&sinks));
+                let result = flush_batch_reported(&worker, &batcher.drain())
+                    .and_then(|_| flush_sinks(&worker.sinks))
+                    .and_then(|_| close_sinks(&worker.sinks));
                 let _ = reply.send(result);
                 break;
+            }
+        }
+    }
+}
+
+/// Fire-and-forget batch delivery for the `Event` path. Sink errors are recorded
+/// in metrics and reported to the stats handler because no caller can receive them.
+fn deliver_batch(worker: &AsyncWorker, encoded_events: &[String]) {
+    if let Err(err) = flush_batch(&worker.sinks, encoded_events) {
+        report_delivery_failure(worker, encoded_events, &err);
+    }
+}
+
+/// Caller-facing batch delivery (`flush`/`shutdown`): report telemetry for the
+/// failure while still returning the error to the waiting caller.
+fn flush_batch_reported(worker: &AsyncWorker, encoded_events: &[String]) -> Result<(), String> {
+    let result = flush_batch(&worker.sinks, encoded_events);
+    if let Err(err) = &result {
+        report_delivery_failure(worker, encoded_events, err);
+    }
+    result
+}
+
+/// Record and notify a failed asynchronous batch delivery, mirroring the
+/// synchronous transport-failure path in `emit_inner`.
+fn report_delivery_failure(worker: &AsyncWorker, encoded_events: &[String], error: &str) {
+    for _ in encoded_events {
+        worker.metrics.record_event_dropped("transport");
+        // These events were counted as emitted on enqueue; correct that signal
+        // now that the sink write has actually failed.
+        worker.metrics.record_event_emitted(false);
+    }
+    if let Some(handler) = &worker.stats_handler {
+        for encoded in encoded_events {
+            handler.on_drop("transport");
+            // Batch payloads are serialized EventContexts for the built-in
+            // schemas; custom schema payloads may not parse, in which case the
+            // metrics above still capture the failure.
+            if let Ok(ctx) = serde_json::from_str::<EventContext>(encoded) {
+                handler.on_delivery_failed(&ctx, error);
             }
         }
     }

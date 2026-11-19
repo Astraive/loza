@@ -37,6 +37,8 @@ class CheckResult:
     duration_s: float
     stdout: str
     stderr: str
+    skipped: bool = False
+    skip_reason: str = ""
 
 
 SDK_GROUPS: dict[str, list[Check]] = {
@@ -176,7 +178,7 @@ def _is_python_sdk_installed() -> bool:
 
 
 def _skip_result(check: Check, reason: str) -> CheckResult:
-    """Create a CheckResult representing a skipped check."""
+    """Create a CheckResult for a check that was not executed."""
     print(f"[{check.sdk}:{check.group}] SKIP ({reason})")
     return CheckResult(
         sdk=check.sdk,
@@ -184,11 +186,14 @@ def _skip_result(check: Check, reason: str) -> CheckResult:
         description=check.description,
         command=check.command,
         cwd=str(check.cwd),
-        passed=True,
+        # A skipped check never ran, so it is neither a pass nor a failure.
+        passed=False,
         returncode=0,
         duration_s=0.0,
         stdout="",
         stderr="",
+        skipped=True,
+        skip_reason=reason,
     )
 
 
@@ -226,6 +231,8 @@ def _print_json(results: list[CheckResult]) -> None:
                 "command": list(result.command),
                 "cwd": result.cwd,
                 "passed": result.passed,
+                "skipped": result.skipped,
+                "skip_reason": result.skip_reason,
                 "returncode": result.returncode,
                 "duration_s": result.duration_s,
                 "stdout": result.stdout,
@@ -236,8 +243,9 @@ def _print_json(results: list[CheckResult]) -> None:
     }
     payload["summary"] = {
         "total": len(results),
-        "passed": sum(1 for result in results if result.passed),
-        "failed": sum(1 for result in results if not result.passed),
+        "passed": sum(1 for result in results if result.passed and not result.skipped),
+        "failed": sum(1 for result in results if not result.passed and not result.skipped),
+        "skipped": sum(1 for result in results if result.skipped),
     }
     print(json.dumps(payload, indent=2))
 
@@ -283,7 +291,21 @@ def main() -> int:
         results.append(_run_check(check, args.verbose))
     if args.json:
         _print_json(results)
-    passed = all(result.passed for result in results)
+
+    skipped = [result for result in results if result.skipped]
+    executed = [result for result in results if not result.skipped]
+    if skipped:
+        print(
+            f"WARNING: {len(skipped)} check(s) were skipped and did not execute:",
+            file=sys.stderr,
+        )
+        for result in skipped:
+            print(f"  - [{result.sdk}:{result.group}] {result.skip_reason}", file=sys.stderr)
+
+    # Skipped checks are not passes. A run only succeeds if at least one check
+    # actually executed and every executed check passed; a fully skipped run
+    # must not report success with zero tests executed.
+    passed = bool(executed) and all(result.passed for result in executed)
     return 0 if passed else 1
 
 

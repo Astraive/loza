@@ -43,11 +43,22 @@ func saveSchemaRegistryFile(path string, entries []collectorconfig.SchemaRegistr
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o600); err != nil {
+	// Use a unique temporary file per save so concurrent writers never share
+	// (truncate or rename away) each other's staging file.
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".registry-*.tmp")
+	if err != nil {
 		return err
 	}
-	return os.Rename(tmp, path)
+	tmpPath := tmp.Name()
+	defer os.Remove(tmpPath)
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpPath, path)
 }
 
 func loadPersistedSchemaRegistry(path, encryptionKey string) ([]collectorconfig.SchemaRegistryEntry, error) {

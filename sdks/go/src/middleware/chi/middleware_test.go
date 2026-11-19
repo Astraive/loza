@@ -33,6 +33,32 @@ func TestMiddlewareExtractsChiRoutePattern(t *testing.T) {
 	}
 }
 
+func TestMiddlewareSetsRouteWhenDownstreamPanics(t *testing.T) {
+	store := configureMemoryStore(t)
+
+	r := chipkg.NewRouter()
+	r.Use(Middleware(Config{}))
+	r.Get("/users/{id}", func(http.ResponseWriter, *http.Request) {
+		panic("boom")
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/users/123", nil)
+	rr := httptest.NewRecorder()
+	r.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500, got %d", rr.Code)
+	}
+	ev := singleEvent(t, store)
+	if ev.Outcome != "error" {
+		t.Fatalf("expected error outcome, got %q", ev.Outcome)
+	}
+	route, ok := ev.Get("route")
+	if !ok || route != "/users/{id}" {
+		t.Fatalf("expected chi route pattern on panic event, got %v", route)
+	}
+}
+
 func TestMiddlewareUsesFallbackRouteExtractorWhenChiPatternUnavailable(t *testing.T) {
 	store := configureMemoryStore(t)
 

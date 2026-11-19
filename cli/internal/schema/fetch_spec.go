@@ -1,26 +1,24 @@
 package schema
 
-import (
-	"os"
-	"path/filepath"
-)
+import "path/filepath"
 
+// firstExistingPath delegates to firstExisting so both call sites share the same
+// guarded behaviour: no panic on empty input, and non-IsNotExist stat errors are
+// not mistaken for a missing path.
 func firstExistingPath(paths ...string) string {
-	for _, path := range paths {
-		if _, err := os.Stat(path); err == nil {
-			return path
-		}
-	}
-	return paths[0]
+	return firstExisting(paths...)
 }
 
 func EventSchemaPath(specRepoPath string) string {
-	return firstExistingPath(
+	return firstExisting(
 		filepath.Join(specRepoPath, "spec", "schemas", "json", "event.schema.json"),
 		filepath.Join(specRepoPath, "schema", "event.schema.json"),
 	)
 }
 
-func FetchSpec(specRepoPath string) error {
+// EnsureSpecAssets verifies that a local spec repository contains all of the
+// assets required by the CLI. It performs only local filesystem checks and does
+// not fetch or clone anything from the network.
+func EnsureSpecAssets(specRepoPath string) error {
 	return ValidateSpecAssets(specRepoPath)
 }

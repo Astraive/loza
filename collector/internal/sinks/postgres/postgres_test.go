@@ -2,9 +2,38 @@ package postgres
 
 import (
 	"context"
+	"reflect"
 	"strings"
 	"testing"
 )
+
+func TestNewRejectsBlankEncryptionKeyWhenRawEncryptionEnabled(t *testing.T) {
+	for _, key := range []string{"", "   ", "\t\n"} {
+		_, err := New(context.Background(), Config{
+			DSN:        "postgres://user:pass@localhost:5432/test?sslmode=disable",
+			EncryptRaw: true,
+			EncryptKey: key,
+		})
+		if err == nil || !strings.Contains(err.Error(), "encrypt_key") {
+			t.Fatalf("expected blank encryption key error for key %q, got %v", key, err)
+		}
+	}
+}
+
+func TestNewAllowsRawEncryptionWithKey(t *testing.T) {
+	sink, err := New(context.Background(), Config{
+		DSN:        "postgres://user:pass@localhost:5432/test?sslmode=disable",
+		EncryptRaw: true,
+		EncryptKey: "a-valid-encryption-key",
+	})
+	if err != nil {
+		t.Fatalf("expected no error with a valid encryption key, got %v", err)
+	}
+	if sink == nil {
+		t.Fatalf("expected a non-nil sink")
+	}
+	t.Cleanup(func() { _ = sink.Close(context.Background()) })
+}
 
 func TestNewRejectsInvalidTableIdentifier(t *testing.T) {
 	_, err := New(context.Background(), Config{
@@ -44,5 +73,36 @@ func TestNewRejectsRawColumnConflict(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "conflicts with schema column") {
 		t.Fatalf("expected raw-column conflict error, got: %v", err)
+	}
+}
+
+// Regression test for MASS-0249: sink must not carry a dead "table" field.
+// The quoted table name is consumed when building rawQuery/schemaQuery in New,
+// so storing it separately was unused state.
+func TestSinkHasNoUnusedTableField(t *testing.T) {
+	if _, ok := reflect.TypeOf(sink{}).FieldByName("table"); ok {
+		t.Fatalf("sink must not carry an unused 'table' field; queries use rawQuery/schemaQuery built from the quoted table name")
+	}
+}
+
+// Regression test confirming removing the field did not break query
+// construction: the quoted table name still flows into the raw query.
+func TestNewBuildsRawQueryFromQuotedTable(t *testing.T) {
+	got, err := New(context.Background(), Config{
+		DSN:   "postgres://user:pass@localhost:5432/test?sslmode=disable",
+		Table: "public.events",
+	})
+	if err != nil {
+		t.Fatalf("New() unexpected error: %v", err)
+	}
+	s, ok := got.(*sink)
+	if !ok {
+		t.Fatalf("New() returned %T, want *sink", got)
+	}
+	defer s.Close(context.Background())
+
+	want := `INSERT INTO "public"."events" ("raw") VALUES ($1)`
+	if s.rawQuery != want {
+		t.Fatalf("rawQuery = %q, want %q", s.rawQuery, want)
 	}
 }

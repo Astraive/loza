@@ -372,22 +372,22 @@ func (l *Logger) Checkpoint(ctx context.Context, name string, attrs ...Attr) err
 		return nil
 	}
 
+	atMS := cfg.Clock.Now().Sub(ev.StartedAt).Milliseconds()
+
+	// Check the limit and append under one locked critical section. Reading the
+	// count under the lock but appending afterwards lets concurrent calls all
+	// observe count < MaxCheckpoints and push the event past the limit (TOCTOU).
 	ev.MuLock()
-	count := len(ev.Checkpoints)
 	if err := ev.ensureMutableLocked(); err != nil {
 		ev.MuUnlock()
 		return err
 	}
-	ev.MuUnlock()
-
-	if count >= cfg.Checkpoints.MaxCheckpoints {
+	if len(ev.Checkpoints) >= cfg.Checkpoints.MaxCheckpoints {
+		ev.MuUnlock()
 		return nil
 	}
-
-	atMS := cfg.Clock.Now().Sub(ev.StartedAt).Milliseconds()
-	if err := ev.AddCheckpoint(EventCheckpoint{Name: name, AtMS: atMS, Attrs: attrs}); err != nil {
-		return err
-	}
+	ev.Checkpoints = append(ev.Checkpoints, EventCheckpoint{Name: name, AtMS: atMS, Attrs: attrs})
+	ev.MuUnlock()
 	if !cfg.Checkpoints.EmitImmediately {
 		return nil
 	}
@@ -478,12 +478,12 @@ func (l *Logger) FinishGroup(h *GroupHandle, attrs ...Attr) error {
 	return h.Finish(attrs...)
 }
 
-// FinishGroupError completes a group handle with error metadata.
-func (l *Logger) FinishGroupError(h *GroupHandle, err error, attrs ...Attr) error {
+// FinishGroupError completes a group handle with error metadata and status code.
+func (l *Logger) FinishGroupError(h *GroupHandle, err error, statusCode int, attrs ...Attr) error {
 	if h == nil {
 		return nil
 	}
-	return FinishGroupError(h, err, attrs...)
+	return FinishGroupError(h, err, statusCode, attrs...)
 }
 
 // Emit encodes and delivers the canonical event in ctx to all sinks.
@@ -496,7 +496,11 @@ func (l *Logger) Emit(ctx context.Context) error {
 	l.mu.RLock()
 	enricher := l.cfg.Enricher
 	l.mu.RUnlock()
-	if enricher != nil {
+	// Skip the enricher once the event is emitted: Emit is documented as
+	// idempotent (e.g. deferred + explicit calls), and AddAttrs on an emitted
+	// event fails with EventClosedError. EmitEventWithContext already treats an
+	// emitted event as a no-op, so repeated calls return nil without mutation.
+	if enricher != nil && !ev.IsEmitted() {
 		if err := ev.AddAttrs(enricher(ctx)); err != nil {
 			return err
 		}

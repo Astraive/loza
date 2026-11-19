@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -93,16 +94,27 @@ func RunCortexIngest(ctx context.Context, cfg config.Config, args []string) erro
 	if file == "" && url == "" {
 		return fmt.Errorf("specify --file <path> or --url <url>")
 	}
+	if file != "" && url != "" {
+		return fmt.Errorf("specify either --file <path> or --url <url>, not both")
+	}
 
 	cortexURL := getCortexURL(cfg)
 
 	var events []map[string]interface{}
 	if file != "" {
-		events = parseNDJSONFile(file)
+		var err error
+		events, err = parseNDJSONFile(file)
+		if err != nil {
+			return fmt.Errorf("parse NDJSON file: %w", err)
+		}
 	}
 
 	if url != "" {
-		events = fetchEventsFromURL(url)
+		fetched, err := fetchEventsFromURL(ctx, url)
+		if err != nil {
+			return err
+		}
+		events = fetched
 	}
 
 	if len(events) == 0 {
@@ -116,42 +128,90 @@ func RunCortexIngest(ctx context.Context, cfg config.Config, args []string) erro
 	return nil
 }
 
-func parseNDJSONFile(path string) []map[string]interface{} {
+// maxNDJSONLineSize bounds how large a single NDJSON event may be. bufio.Scanner's
+// 64 KiB default silently stops scanning on longer lines, which used to truncate
+// ingestion without any error, so allow substantially larger events.
+const maxNDJSONLineSize = 10 * 1024 * 1024 // 10 MiB
+
+// parseNDJSONFile reads one JSON object per line. Scanner failures (including lines
+// that exceed maxNDJSONLineSize) are returned as errors rather than silently
+// truncating the input. Unparseable lines are skipped but reported on stderr so the
+// ingested count is never quietly wrong.
+func parseNDJSONFile(path string) ([]map[string]interface{}, error) {
 	f, err := os.Open(path)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "failed to open file: %v\n", err)
-		return nil
+		return nil, fmt.Errorf("open file: %w", err)
 	}
 	defer f.Close()
 
 	var events []map[string]interface{}
+	var badLines []int
 	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 64*1024), maxNDJSONLineSize)
+	lineNo := 0
 	for scanner.Scan() {
+		lineNo++
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" {
 			continue
 		}
 		var event map[string]interface{}
 		if err := json.Unmarshal([]byte(line), &event); err != nil {
+			badLines = append(badLines, lineNo)
 			continue
 		}
 		events = append(events, event)
 	}
-	return events
+	if err := scanner.Err(); err != nil {
+		return nil, fmt.Errorf("scan %s: %w", path, err)
+	}
+	if len(badLines) > 0 {
+		fmt.Fprintln(os.Stderr, ndjsonSkippedWarning(path, badLines))
+	}
+	return events, nil
 }
 
-func fetchEventsFromURL(url string) []map[string]interface{} {
-	resp, err := http.Get(url)
+// ndjsonSkippedWarning formats a warning listing the (bounded) set of skipped line
+// numbers. It is kept separate so the reported count and line numbers are testable.
+func ndjsonSkippedWarning(path string, badLines []int) string {
+	const maxReported = 10
+	reported := make([]string, 0, len(badLines))
+	for i, lineNo := range badLines {
+		if i == maxReported {
+			reported = append(reported, "...")
+			break
+		}
+		reported = append(reported, strconv.Itoa(lineNo))
+	}
+	return fmt.Sprintf("warning: skipped %d unparseable line(s) in %s (lines: %s)",
+		len(badLines), path, strings.Join(reported, ", "))
+}
+
+// fetchEventsTimeout bounds how long a remote event fetch may take. It is a
+// variable so tests can shorten it without waiting for the production value.
+var fetchEventsTimeout = 30 * time.Second
+
+func fetchEventsFromURL(ctx context.Context, url string) ([]map[string]interface{}, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return nil
+		return nil, fmt.Errorf("build events request for %s: %w", url, err)
+	}
+	client := &http.Client{Timeout: fetchEventsTimeout}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("fetch events from %s: %w", url, err)
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		return nil, fmt.Errorf("fetch events from %s: unexpected status %d", url, resp.StatusCode)
+	}
+
 	var events []map[string]interface{}
 	if err := json.NewDecoder(resp.Body).Decode(&events); err != nil {
-		return nil
+		return nil, fmt.Errorf("decode events from %s: %w", url, err)
 	}
-	return events
+	return events, nil
 }
 
 func RunCortexReconstruct(ctx context.Context, cfg config.Config, args []string) error {
@@ -172,6 +232,9 @@ func RunCortexReconstruct(ctx context.Context, cfg config.Config, args []string)
 
 	if mode == "" {
 		mode = "fast"
+	}
+	if err := validateReconstructionMode(mode); err != nil {
+		return err
 	}
 
 	cortexURL := getCortexURL(cfg)
@@ -226,7 +289,11 @@ func outputIncidentContext(ctx map[string]interface{}) {
 		fmt.Println("\nSuggested Actions:")
 		for _, a := range actions {
 			if action, ok := a.(map[string]interface{}); ok {
-				fmt.Printf("  - %s (success rate: %.1f%%)\n", action["action"], action["success_rate"].(float64)*100)
+				if rate, ok := action["success_rate"].(float64); ok {
+					fmt.Printf("  - %s (success rate: %.1f%%)\n", action["action"], rate*100)
+				} else {
+					fmt.Printf("  - %s\n", action["action"])
+				}
 			}
 		}
 	}
@@ -393,8 +460,14 @@ func RunCortexGraph(ctx context.Context, cfg config.Config, args []string) error
 		return fmt.Errorf("decode graph: %w", err)
 	}
 
-	nodes := graph["nodes"].([]interface{})
-	edges := graph["edges"].([]interface{})
+	nodes, ok := graph["nodes"].([]interface{})
+	if !ok {
+		return fmt.Errorf("decode graph: missing or invalid 'nodes' field (expected an array)")
+	}
+	edges, ok := graph["edges"].([]interface{})
+	if !ok {
+		return fmt.Errorf("decode graph: missing or invalid 'edges' field (expected an array)")
+	}
 
 	fmt.Printf("Graph: %d nodes, %d edges\n", len(nodes), len(edges))
 	return nil

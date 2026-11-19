@@ -521,8 +521,13 @@ def validate_event_payload(payload: dict[str, Any], strict: bool) -> None:
         raise ValidationErrors(errors)
 
 def validate_event_payload_detailed(payload: dict[str, Any], strict: bool) -> list[ValidationError]:
-    normalized, _ = normalize_event_aliases(payload)
     errors: list[ValidationError] = []
+    # Strict mode forbids aliases (CONTRACT alias_policy.strict_mode =
+    # "reject_before_normalization"): reject `event_type` before it is
+    # normalized away, matching the other SDKs' `alias_not_allowed` error.
+    if strict and 'event_type' in payload:
+        errors.append(ValidationError(field='event_type', code='alias_not_allowed', message='field "event_type" is not allowed in strict mode; use "event" instead'))
+    normalized, _ = normalize_event_aliases(payload)
     if strict:
         for key in normalized:
             if key not in ALLOWED_TOP_LEVEL_FIELDS:
@@ -537,6 +542,7 @@ def validate_event_payload_detailed(payload: dict[str, Any], strict: bool) -> li
     if normalized.get('event_version') not in {LOZA_EVENT_VERSION}:
         errors.append(ValidationError(field='event_version', code='unsupported_event_version', message=f'field "event_version" has unsupported value "{normalized.get("event_version")}"'))
     _req_service(normalized, errors)
+    _req_str(normalized, 'kind', 'missing_kind', errors)
     _req_enum(normalized, 'kind', ALLOWED_KINDS, errors)
     _opt_enum(normalized, 'level', ALLOWED_LEVELS, errors)
     _opt_enum(normalized, 'outcome', ALLOWED_OUTCOMES, errors)
@@ -559,7 +565,7 @@ def validate_flexible_json_bytes(raw: bytes, strict: bool) -> None:
             if line.strip():
                 validate_event_payload(json.loads(line), strict)
         return
-    if isinstance(payload, dict) and 'events' in payload and 'api_version' not in payload:
+    if isinstance(payload, dict) and 'events' in payload:
         for event in payload['events']:
             validate_event_payload(event, strict)
         return

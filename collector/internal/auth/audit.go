@@ -42,6 +42,7 @@ func NewSlogAuditLogger(logger *slog.Logger) *SlogAuditLogger {
 // LogAudit emits an audit event as a structured log.
 func (l *SlogAuditLogger) LogAudit(ctx context.Context, event AuditEvent) {
 	attrs := []slog.Attr{
+		slog.Time("timestamp", event.Timestamp),
 		slog.String("audit_event", event.Event),
 		slog.String("key_id", event.KeyID),
 		slog.String("key_kind", string(event.KeyKind)),

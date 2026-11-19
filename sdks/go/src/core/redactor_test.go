@@ -1,6 +1,9 @@
 package core
 
 import (
+	"crypto/hmac"
+	"crypto/sha256"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -173,5 +176,73 @@ func TestHashKeysHashesValues(t *testing.T) {
 	}
 	if out[1].Value != "u_123" {
 		t.Fatalf("expected user.id unchanged, got %v", out[1].Value)
+	}
+}
+
+// Regression test for MASS-0442: a bare SHA-256 digest of a low-entropy value
+// is reversible via dictionary/rainbow lookup, so the redactor must use a
+// keyed MAC instead.
+func TestHashKeysUsesKeyedMACNotBareSHA256(t *testing.T) {
+	const plaintext = "alice@example.com"
+
+	bare := sha256.Sum256([]byte(plaintext))
+	bareHex := fmt.Sprintf("%x", bare)
+
+	got, keep := HashKeys("user.email").Redact("user.email", plaintext)
+	if !keep {
+		t.Fatal("expected matching key to be kept")
+	}
+	gotHex, ok := got.(string)
+	if !ok {
+		t.Fatalf("expected string digest, got %T", got)
+	}
+	if gotHex == plaintext {
+		t.Fatal("hashed value leaked the plaintext")
+	}
+	if gotHex == bareHex {
+		t.Fatalf("value hashed with unkeyed SHA-256 (%s); dictionary recovery is possible", bareHex)
+	}
+
+	mac := hmac.New(sha256.New, ephemeralHashKey)
+	_, _ = mac.Write([]byte(plaintext))
+	wantHex := fmt.Sprintf("%x", mac.Sum(nil))
+	if gotHex != wantHex {
+		t.Fatalf("digest = %q, want HMAC-SHA256 = %q", gotHex, wantHex)
+	}
+}
+
+func TestHashKeysWithSecretIsDeterministicAndKeyDependent(t *testing.T) {
+	const plaintext = "123-45-6789"
+
+	first, keep := HashKeysWithSecret([]byte("stable-secret"), "ssn").Redact("ssn", plaintext)
+	if !keep {
+		t.Fatal("expected matching key to be kept")
+	}
+	second, _ := HashKeysWithSecret([]byte("stable-secret"), "ssn").Redact("ssn", plaintext)
+	other, _ := HashKeysWithSecret([]byte("different-secret"), "ssn").Redact("ssn", plaintext)
+
+	if first != second {
+		t.Fatalf("same secret produced different digests: %q vs %q", first, second)
+	}
+	if first == other {
+		t.Fatal("different secrets produced the same digest")
+	}
+	bare := sha256.Sum256([]byte(plaintext))
+	if first == fmt.Sprintf("%x", bare) {
+		t.Fatal("explicit-secret hashing fell back to bare SHA-256")
+	}
+	mac := hmac.New(sha256.New, []byte("stable-secret"))
+	_, _ = mac.Write([]byte(plaintext))
+	if want := fmt.Sprintf("%x", mac.Sum(nil)); first != want {
+		t.Fatalf("digest = %q, want HMAC-SHA256 = %q", first, want)
+	}
+}
+
+func TestHashKeysWithEmptySecretUsesEphemeralKey(t *testing.T) {
+	const plaintext = "u_123"
+	got, _ := HashKeysWithSecret(nil, "user.id").Redact("user.id", plaintext)
+	want, _ := HashKeys("user.id").Redact("user.id", plaintext)
+	if got != want {
+		t.Fatalf("empty secret digest = %q, want ephemeral digest %q", got, want)
 	}
 }

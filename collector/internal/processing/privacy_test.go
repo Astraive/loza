@@ -141,6 +141,114 @@ func TestRedactPIIAllowlist(t *testing.T) {
 	}
 }
 
+func TestRedactPIIAllowlistNestedPaths(t *testing.T) {
+	tests := []struct {
+		name      string
+		allowlist []string
+		input     map[string]interface{}
+		expected  map[string]interface{}
+	}{
+		{
+			name:      "dotted nested path preserves allowlisted leaf and redacts siblings",
+			allowlist: []string{"user.email"},
+			input: map[string]interface{}{
+				"user": map[string]interface{}{
+					"name":  "Alice",
+					"email": "alice@example.com",
+					"ssn":   "123-45-6789",
+				},
+			},
+			expected: map[string]interface{}{
+				"user": map[string]interface{}{
+					"name":  "[REDACTED]",
+					"email": "alice@example.com",
+					"ssn":   "[REDACTED]",
+				},
+			},
+		},
+		{
+			name:      "dotted nested path traverses array containers",
+			allowlist: []string{"users.email"},
+			input: map[string]interface{}{
+				"users": []interface{}{
+					map[string]interface{}{
+						"name":  "Alice",
+						"email": "alice@example.com",
+					},
+					map[string]interface{}{
+						"name":  "Bob",
+						"email": "bob@example.com",
+					},
+				},
+			},
+			expected: map[string]interface{}{
+				"users": []interface{}{
+					map[string]interface{}{
+						"name":  "[REDACTED]",
+						"email": "alice@example.com",
+					},
+					map[string]interface{}{
+						"name":  "[REDACTED]",
+						"email": "bob@example.com",
+					},
+				},
+			},
+		},
+		{
+			name:      "deeply nested dotted path redacts non-allowlisted leaves",
+			allowlist: []string{"user.profile.email"},
+			input: map[string]interface{}{
+				"user": map[string]interface{}{
+					"profile": map[string]interface{}{
+						"email": "alice@example.com",
+						"phone": "555-1234",
+					},
+					"ssn": "123-45-6789",
+				},
+			},
+			expected: map[string]interface{}{
+				"user": map[string]interface{}{
+					"profile": map[string]interface{}{
+						"email": "alice@example.com",
+						"phone": "[REDACTED]",
+					},
+					"ssn": "[REDACTED]",
+				},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := &Processor{
+				cfg: Config{
+					Privacy: PrivacyConfig{
+						Mode:      "enforce",
+						Allowlist: tt.allowlist,
+					},
+				},
+			}
+
+			inputJSON, _ := json.Marshal(tt.input)
+			redacted, err := p.redactPII(inputJSON)
+			if err != nil {
+				t.Fatalf("redactPII failed: %v", err)
+			}
+
+			var result map[string]interface{}
+			if err := json.Unmarshal(redacted, &result); err != nil {
+				t.Fatalf("unmarshal result failed: %v", err)
+			}
+
+			if !structsEqual(result, tt.expected) {
+				resultJSON, _ := json.MarshalIndent(result, "", "  ")
+				expectedJSON, _ := json.MarshalIndent(tt.expected, "", "  ")
+				t.Errorf("redaction mismatch\nGot:\n%s\nExpected:\n%s", string(resultJSON), string(expectedJSON))
+			}
+		})
+	}
+}
+
 func TestRedactPIIDisabled(t *testing.T) {
 	p := &Processor{
 		cfg: Config{
@@ -234,6 +342,38 @@ func TestMatchesPattern(t *testing.T) {
 			t.Errorf("matchesPattern(%q, %q, %q) = %v, want %v",
 				tt.fieldPath, tt.keyLower, tt.pattern, result, tt.expected)
 		}
+	}
+}
+
+func TestMatchesPatternMetacharactersDoNotPanic(t *testing.T) {
+	tests := []struct {
+		name      string
+		fieldPath string
+		keyLower  string
+		pattern   string
+		expected  bool
+	}{
+		// A pattern with a wildcard plus an unbalanced "[" used to build the
+		// invalid regex "^password[.*$" and panic inside MustCompile.
+		{"unbalanced bracket", "password[.foo123", "password[.foo123", "password[.*", true},
+		// Same for an unbalanced "(" -> "^a(b.*$".
+		{"unbalanced paren", "a(bc", "a(bc", "a(b*", true},
+		// Wildcard semantics must still work.
+		{"wildcard preserved", "user.email", "email", "user.*", true},
+		// All other metacharacters are literal, not regex operators.
+		{"dot is literal", "axbfoo", "axbfoo", "a.b*", false},
+		{"dot matches literally", "a.bfoo", "a.bfoo", "a.b*", true},
+	}
+
+	p := &Processor{}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := p.matchesPattern(tt.fieldPath, tt.keyLower, tt.pattern)
+			if got != tt.expected {
+				t.Errorf("matchesPattern(%q, %q, %q) = %v, want %v",
+					tt.fieldPath, tt.keyLower, tt.pattern, got, tt.expected)
+			}
+		})
 	}
 }
 

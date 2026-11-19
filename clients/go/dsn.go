@@ -58,10 +58,14 @@ func parseLozaDSN(raw string) (*lozaDSN, error) {
 	default:
 		return nil, fmt.Errorf("invalid Loza DSN tls")
 	}
+	// This client only implements the HTTP LQL transport. The canonical DSN
+	// spec accepts otlp/grpc as hints for other transports, but accepting them
+	// here would silently discard them and mislead callers into believing the
+	// DSN changes the wire protocol. Reject them explicitly instead.
 	switch transport := u.Query().Get("transport"); transport {
-	case "", "http", "otlp", "grpc":
+	case "", "http":
 	default:
-		return nil, fmt.Errorf("invalid Loza DSN transport")
+		return nil, fmt.Errorf("invalid Loza DSN transport %q: only http is supported", transport)
 	}
 	port := 443
 	if !tls {

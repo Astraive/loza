@@ -1,18 +1,26 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
+	"errors"
 	"io"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/astraive/loza/collector/internal/auth"
+	lozav1 "github.com/astraive/loza/gen/go/loza/core"
 	"github.com/gorilla/websocket"
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
 )
 
@@ -71,6 +79,141 @@ func TestHTTPServerIngest(t *testing.T) {
 	require.True(t, srv.IsReady())
 
 	_ = srv.Stop(context.Background())
+}
+
+// Regression test for MASS-0213: auth must fail closed when the configured
+// secret or header name is empty. Previously an empty AuthValue made
+// ConstantTimeCompare("" , "") return 1, so a request with no credential was
+// granted unauthenticated ingest.
+func TestHTTPServerIngestAuthFailsClosedWithEmptyConfiguredSecret(t *testing.T) {
+	const (
+		authHeader = "X-API-Key"
+		secret     = "lz_sec_live_ksec1_testsecret"
+	)
+	body := `{"event_id":"evt-1","timestamp":"2026-08-24T00:00:00Z"}` + "\n"
+
+	tests := []struct {
+		name      string
+		authValue string
+		hdrName   string
+		presented string
+		wantCode  int
+	}{
+		{
+			name:      "empty secret with missing header is rejected",
+			authValue: "",
+			hdrName:   authHeader,
+			presented: "",
+			wantCode:  http.StatusUnauthorized,
+		},
+		{
+			name:      "empty secret with arbitrary header is rejected",
+			authValue: "",
+			hdrName:   authHeader,
+			presented: "anything",
+			wantCode:  http.StatusUnauthorized,
+		},
+		{
+			name:      "empty header name is rejected",
+			authValue: secret,
+			hdrName:   "",
+			presented: secret,
+			wantCode:  http.StatusUnauthorized,
+		},
+		{
+			name:      "configured secret with missing header is rejected",
+			authValue: secret,
+			hdrName:   authHeader,
+			presented: "",
+			wantCode:  http.StatusUnauthorized,
+		},
+		{
+			name:      "configured secret with wrong header is rejected",
+			authValue: secret,
+			hdrName:   authHeader,
+			presented: "wrong-secret",
+			wantCode:  http.StatusUnauthorized,
+		},
+		{
+			name:      "configured secret with matching header is accepted",
+			authValue: secret,
+			hdrName:   authHeader,
+			presented: secret,
+			wantCode:  http.StatusOK,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := HTTPConfig{
+				Enabled:      true,
+				IngestPath:   "/ingest",
+				MaxBodyBytes: 10 * 1024 * 1024,
+				AuthEnabled:  true,
+				AuthHeader:   tt.hdrName,
+				AuthValue:    tt.authValue,
+			}
+			state := &mockState{ready: true, healthy: true}
+			srv := NewHTTPServer(cfg, state)
+
+			req := httptest.NewRequest(http.MethodPost, "/ingest", strings.NewReader(body))
+			if tt.presented != "" && tt.hdrName != "" {
+				req.Header.Set(tt.hdrName, tt.presented)
+			}
+			rec := httptest.NewRecorder()
+
+			srv.handleIngest(rec, req)
+
+			require.Equal(t, tt.wantCode, rec.Code, "response body: %s", rec.Body.String())
+			if tt.wantCode == http.StatusUnauthorized {
+				assert.Zero(t, state.metrics.EventsAccepted, "unauthorized request must not ingest events")
+				assert.Contains(t, rec.Body.String(), "Unauthorized")
+			} else {
+				assert.Equal(t, int64(1), state.metrics.EventsAccepted)
+			}
+		})
+	}
+}
+
+// errReader simulates a failed body read (e.g. the scanner/reader errors
+// described in MASS-0215) so the ingest parse-error path can be exercised.
+type errReader struct{ err error }
+
+func (e errReader) Read(_ []byte) (int, error) { return 0, e.err }
+func (e errReader) Close() error               { return nil }
+
+func TestHTTPServerIngestDoesNotLeakInternalError(t *testing.T) {
+	cfg := HTTPConfig{
+		IngestPath:   "/ingest",
+		MaxBodyBytes: 1024,
+		AuthEnabled:  false,
+	}
+	srv := NewHTTPServer(cfg, &mockState{ready: true, healthy: true})
+
+	// Capture the server-side log to confirm the internal error is logged
+	// instead of being returned to the unauthenticated caller.
+	originalLogger := log.Logger
+	var logs bytes.Buffer
+	log.Logger = zerolog.New(&logs)
+	t.Cleanup(func() { log.Logger = originalLogger })
+
+	const internalDetail = "reader failure: internal detail"
+	req := httptest.NewRequest(http.MethodPost, "/ingest", nil)
+	req.Body = errReader{err: errors.New(internalDetail)}
+	req.ContentLength = -1 // unknown length, so the size pre-check is skipped
+	rec := httptest.NewRecorder()
+
+	srv.handleIngest(rec, req)
+
+	res := rec.Result()
+	defer res.Body.Close()
+	body, err := io.ReadAll(res.Body)
+	require.NoError(t, err)
+
+	assert.Equal(t, http.StatusBadRequest, res.StatusCode)
+	assert.Equal(t, "Bad Request\n", string(body))
+	assert.NotContains(t, string(body), internalDetail)
+	assert.Contains(t, logs.String(), internalDetail, "internal error should be logged server-side")
 }
 
 func TestHTTPServerHealthReady(t *testing.T) {
@@ -230,6 +373,88 @@ func TestLozaIngestServiceIngestStream(t *testing.T) {
 	assert.Equal(t, int64(3), state.metrics.EventsAccepted)
 }
 
+// partialIngestState accepts a fixed number of events so tests can exercise
+// the Rejected counter returned by ingestGRPCBatch.
+type partialIngestState struct {
+	mockState
+	accepted int
+}
+
+func (s *partialIngestState) Ingest(ctx context.Context, events [][]byte) (int, error) {
+	return s.accepted, nil
+}
+
+func TestGRPCIngestBatchReportsMalformedEventsAsInvalid(t *testing.T) {
+	state := &mockState{ready: true, healthy: true}
+	svc := &logIngestSvcServer{state: state}
+
+	batch := &EventBatch{
+		Events: []*Event{
+			nil,
+			{RawJson: ""},
+			{RawJson: `{"id":"1"}`},
+		},
+	}
+
+	resp, err := svc.Push(context.Background(), batch)
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), resp.Accepted)
+	assert.Equal(t, int64(2), resp.Invalid, "nil and empty-RawJson events must be reported as invalid")
+	assert.Equal(t, int64(0), resp.Rejected)
+	assert.Equal(t, int64(1), state.metrics.EventsAccepted, "only the valid event should reach Ingest")
+}
+
+func TestGRPCIngestBatchAllMalformedReportsInvalid(t *testing.T) {
+	state := &mockState{ready: true, healthy: true}
+	svc := &lozaIngestSvcServer{state: state}
+
+	resp, err := svc.Ingest(context.Background(), &EventBatch{
+		Events: []*Event{nil, {}, {RawJson: ""}},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, int64(0), resp.Accepted)
+	assert.Equal(t, int64(3), resp.Invalid, "an all-malformed batch must still report the dropped events")
+	assert.Equal(t, int64(0), resp.Rejected)
+	assert.Equal(t, int64(0), state.metrics.EventsAccepted)
+}
+
+func TestGRPCIngestBatchReportsRejected(t *testing.T) {
+	state := &partialIngestState{accepted: 1}
+	svc := &logIngestSvcServer{state: state}
+
+	resp, err := svc.Push(context.Background(), &EventBatch{
+		Events: []*Event{
+			{RawJson: `{"id":"1"}`},
+			{RawJson: `{"id":"2"}`},
+			{RawJson: `{"id":"3"}`},
+		},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), resp.Accepted)
+	assert.Equal(t, int64(2), resp.Rejected, "events passed to Ingest but not accepted must be reported as rejected")
+	assert.Equal(t, int64(0), resp.Invalid)
+}
+
+func TestLozaIngestServiceIngestStreamReportsDroppedEvents(t *testing.T) {
+	state := &mockState{ready: true, healthy: true}
+	svc := &lozaIngestSvcServer{state: state}
+	stream := &mockIngestStream{
+		ctx: context.Background(),
+		batches: []*EventBatch{
+			{Events: []*Event{nil, {RawJson: `{"id":"1"}`}}},
+			{Events: []*Event{{RawJson: ""}, {RawJson: `{"id":"2"}`}}},
+		},
+	}
+
+	err := svc.IngestStream(stream)
+	require.NoError(t, err)
+	require.NotNil(t, stream.closed)
+	assert.Equal(t, int64(2), stream.closed.Accepted)
+	assert.Equal(t, int64(2), stream.closed.Invalid, "stream must aggregate the Invalid counter across batches")
+	assert.Equal(t, int64(0), stream.closed.Rejected)
+	assert.Equal(t, int64(2), state.metrics.EventsAccepted)
+}
+
 func TestGraphQLServerDisabled(t *testing.T) {
 	cfg := GraphQLConfig{Enabled: false}
 	state := &mockState{ready: true, healthy: true}
@@ -349,15 +574,30 @@ func TestConfigStructs(t *testing.T) {
 	assert.Equal(t, ":9310", cfg.GraphQL.Port)
 }
 
+func TestParseTailFiltersCollectorAndEnvironment(t *testing.T) {
+	req := httptest.NewRequest("GET", "/tail?collector=orders&environment=production&service=checkout", nil)
+	filters, err := ParseTailFilters(req)
+	require.NoError(t, err)
+	require.Equal(t, "orders", filters.Collector)
+	require.Equal(t, "production", filters.Environment)
+	require.Equal(t, "checkout", filters.Service)
+
+	matching := []byte(`{"collector":"orders","environment":"production","service":"checkout"}`)
+	otherEnvironment := []byte(`{"collector":"orders","environment":"staging","service":"checkout"}`)
+	require.True(t, RawMatchesTailFilters(matching, filters))
+	require.False(t, RawMatchesTailFilters(otherEnvironment, filters))
+}
+
 type websocketTailState struct {
 	filters    chan TailFilters
 	subscriber chan chan []byte
 	removed    chan struct{}
+	history    [][]byte
 }
 
 func (s *websocketTailState) TailHistory(_ context.Context, filters TailFilters) ([][]byte, error) {
 	s.filters <- filters
-	return [][]byte{[]byte(`{"event_id":"evt-1","timestamp":"2026-08-24T00:00:00Z"}`)}, nil
+	return s.history, nil
 }
 
 func (*websocketTailState) TailMatches(_ context.Context, raw []byte, filters TailFilters) bool {
@@ -377,6 +617,7 @@ func TestTailWebSocketBrowserContract(t *testing.T) {
 		filters:    make(chan TailFilters, 1),
 		subscriber: make(chan chan []byte, 1),
 		removed:    make(chan struct{}),
+		history:    [][]byte{[]byte(`{"event_id":"evt-1","timestamp":"2026-08-24T00:00:00Z","service":"checkout"}`)},
 	}
 	credential := "lz_sec_live_ksec1_testsecret"
 	handler := NewTailWebSocketHandler(HTTPConfig{
@@ -411,6 +652,9 @@ func TestTailWebSocketBrowserContract(t *testing.T) {
 	if filters.Service != "checkout" {
 		t.Fatalf("service filter = %q, want checkout", filters.Service)
 	}
+	if filters.Environment != "production" {
+		t.Fatalf("environment filter = %q, want production", filters.Environment)
+	}
 
 	subscriber := <-state.subscriber
 	_ = conn.Close()
@@ -419,6 +663,61 @@ func TestTailWebSocketBrowserContract(t *testing.T) {
 	case <-state.removed:
 	case <-time.After(time.Second):
 		t.Fatal("tail subscriber was not removed after disconnect")
+	}
+}
+
+// TestTailWebSocketFiltersHistoryFrames verifies that initial history frames are
+// passed through TailMatches before being written, just like live events. A
+// history frame that does not match the requested service filter must never be
+// delivered to the client (regression for MASS-0218 / issue #537).
+func TestTailWebSocketFiltersHistoryFrames(t *testing.T) {
+	nonMatchingHistory := []byte(`{"event_id":"evt-hist-skip","timestamp":"2026-08-24T00:00:00Z","service":"payments"}`)
+	matchingHistory := []byte(`{"event_id":"evt-hist-ok","timestamp":"2026-08-24T00:00:01Z","service":"checkout"}`)
+	state := &websocketTailState{
+		filters:    make(chan TailFilters, 1),
+		subscriber: make(chan chan []byte, 1),
+		removed:    make(chan struct{}),
+		history:    [][]byte{nonMatchingHistory, matchingHistory},
+	}
+	handler := NewTailWebSocketHandler(HTTPConfig{}, state)
+	srv := httptest.NewServer(handler)
+	defer srv.Close()
+
+	dialer := websocket.Dialer{Subprotocols: []string{auth.WebSocketTailProtocol}}
+	conn, _, err := dialer.Dial("ws"+strings.TrimPrefix(srv.URL, "http")+"?service=checkout", nil)
+	if err != nil {
+		t.Fatalf("dial tail websocket: %v", err)
+	}
+	defer conn.Close()
+	if err := conn.SetReadDeadline(time.Now().Add(3 * time.Second)); err != nil {
+		t.Fatalf("set read deadline: %v", err)
+	}
+
+	filters := <-state.filters
+	if filters.Service != "checkout" {
+		t.Fatalf("service filter = %q, want checkout", filters.Service)
+	}
+	subscriber := <-state.subscriber
+
+	// The first delivered frame must be the matching history event. If history
+	// frames bypass TailMatches, the non-matching "payments" event is sent first.
+	_, first, err := conn.ReadMessage()
+	if err != nil {
+		t.Fatalf("read first frame: %v", err)
+	}
+	if !bytes.Contains(first, []byte(`"evt-hist-ok"`)) {
+		t.Fatalf("first frame = %s, want matching history event evt-hist-ok", first)
+	}
+
+	// A subsequent live event must be the next frame received. If the
+	// non-matching history event leaked through it would arrive here instead.
+	subscriber <- []byte(`{"event_id":"evt-live","service":"checkout"}`)
+	_, second, err := conn.ReadMessage()
+	if err != nil {
+		t.Fatalf("read second frame: %v", err)
+	}
+	if !bytes.Contains(second, []byte(`"evt-live"`)) {
+		t.Fatalf("second frame = %s, want live event (non-matching history frame leaked)", second)
 	}
 }
 
@@ -448,4 +747,171 @@ func (m *mockIngestStream) Recv() (*EventBatch, error) {
 	batch := m.batches[m.index]
 	m.index++
 	return batch, nil
+}
+
+// blockingIngestState blocks inside Ingest so a client stream is guaranteed to
+// be in flight on the server. The entered channel signals that the stream
+// reached the handler; Ingest returns only once the stream context is cancelled
+// by a forced stop, mirroring a hung long-lived client.
+type blockingIngestState struct {
+	*mockState
+	entered chan struct{}
+}
+
+func (s *blockingIngestState) Ingest(ctx context.Context, events [][]byte) (int, error) {
+	select {
+	case s.entered <- struct{}{}:
+	default:
+	}
+	// Hold the RPC open until the stream is actually cancelled by a forced
+	// stop, mirroring a real long-lived client stream.
+	<-ctx.Done()
+	return len(events), nil
+}
+
+func newBlockingState() *blockingIngestState {
+	return &blockingIngestState{
+		mockState: &mockState{ready: true, healthy: true},
+		entered:   make(chan struct{}, 1),
+	}
+}
+
+// startTestGRPCServer starts a GRPCServer on a random local port and opens a
+// client stream whose RPC is held open on the server via a blocking Ingest.
+func startTestGRPCServer(t *testing.T, state State) (*GRPCServer, context.CancelFunc, <-chan error) {
+	t.Helper()
+
+	srv := NewGRPCServer(GRPCConfig{
+		Enabled:              true,
+		Port:                 "127.0.0.1:0",
+		MaxConcurrentStreams: 100,
+		MaxRecvMsgSize:       1 << 20,
+		MaxSendMsgSize:       1 << 20,
+	}, state)
+	// Keep the graceful-stop fallback short so shutdown tests run quickly.
+	srv.shutdownGracePeriod = 200 * time.Millisecond
+
+	startCtx, startCancel := context.WithCancel(context.Background())
+	t.Cleanup(startCancel)
+	startErr := make(chan error, 1)
+	go func() { startErr <- srv.Start(startCtx) }()
+
+	require.Eventually(t, func() bool {
+		return srv.IsReady() && srv.lis != nil
+	}, 2*time.Second, 10*time.Millisecond)
+
+	conn, err := grpc.NewClient(srv.lis.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = conn.Close() })
+
+	stream, err := lozav1.NewLozaIngestClient(conn).IngestStream(context.Background())
+	require.NoError(t, err)
+	require.NoError(t, stream.Send(&lozav1.RawEventBatch{
+		Events: []*lozav1.RawEvent{{RawJson: `{"id":"1"}`}},
+	}))
+
+	blocking, ok := state.(*blockingIngestState)
+	require.True(t, ok)
+	select {
+	case <-blocking.entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("client stream did not reach the server handler")
+	}
+
+	return srv, startCancel, startErr
+}
+
+func TestGRPCServerStopHonorsDeadlineWithOpenStream(t *testing.T) {
+	state := newBlockingState()
+	srv, _, startErr := startTestGRPCServer(t, state)
+
+	// With an in-flight stream, a deadline-bounded Stop must force the server
+	// down instead of blocking forever inside GracefulStop.
+	stopCtx, stopCancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer stopCancel()
+
+	stopDone := make(chan error, 1)
+	go func() { stopDone <- srv.Stop(stopCtx) }()
+
+	select {
+	case err := <-stopDone:
+		require.NoError(t, err)
+	case <-time.After(3 * time.Second):
+		t.Fatal("Stop blocked despite ctx deadline while a stream was open")
+	}
+	assert.False(t, srv.IsReady())
+
+	select {
+	case <-startErr:
+	case <-time.After(3 * time.Second):
+		t.Fatal("Start did not return after forced stop")
+	}
+}
+
+func TestGRPCServerStartCtxCancelStopsWithOpenStream(t *testing.T) {
+	state := newBlockingState()
+	_, cancelStart, startErr := startTestGRPCServer(t, state)
+
+	// Cancelling the lifecycle context must stop the server even while a
+	// stream is open, without leaking a goroutine stuck in GracefulStop.
+	cancelStart()
+
+	select {
+	case <-startErr:
+	case <-time.After(3 * time.Second):
+		t.Fatal("Start did not return after lifecycle context cancellation with an open stream")
+	}
+}
+
+type stubServer struct {
+	ready bool
+}
+
+func (*stubServer) Name() string                { return "stub" }
+func (*stubServer) Addr() string                { return "127.0.0.1:0" }
+func (s *stubServer) IsReady() bool             { return s.ready }
+func (*stubServer) Start(context.Context) error { return nil }
+func (*stubServer) Stop(context.Context) error  { return nil }
+
+func TestMultiServerIsReady(t *testing.T) {
+	state := &mockState{ready: true, healthy: true}
+
+	t.Run("before run", func(t *testing.T) {
+		ms := NewMultiServer(Config{}, state)
+		assert.False(t, ms.IsReady(), "must not report ready before Run creates listeners")
+	})
+
+	t.Run("all servers disabled", func(t *testing.T) {
+		ms := NewMultiServer(Config{HTTP: HTTPConfig{Enabled: false}, GRPC: GRPCConfig{Enabled: false}, GraphQL: GraphQLConfig{Enabled: false}}, state)
+		require.NoError(t, ms.Run(context.Background()))
+		assert.False(t, ms.IsReady(), "must not report ready when no server is enabled")
+	})
+
+	t.Run("started and ready", func(t *testing.T) {
+		ms := NewMultiServer(Config{}, state)
+		ms.mu.Lock()
+		ms.started = true
+		ms.servers = []Server{&stubServer{ready: true}}
+		ms.mu.Unlock()
+		assert.True(t, ms.IsReady())
+	})
+
+	t.Run("server not ready", func(t *testing.T) {
+		ms := NewMultiServer(Config{}, state)
+		ms.mu.Lock()
+		ms.started = true
+		ms.servers = []Server{&stubServer{ready: false}}
+		ms.mu.Unlock()
+		assert.False(t, ms.IsReady())
+	})
+
+	t.Run("after stop", func(t *testing.T) {
+		ms := NewMultiServer(Config{}, state)
+		ms.mu.Lock()
+		ms.started = true
+		ms.stopped = true
+		ms.servers = []Server{&stubServer{ready: true}}
+		ms.mu.Unlock()
+		assert.False(t, ms.IsReady(), "must not report ready after shutdown")
+	})
 }

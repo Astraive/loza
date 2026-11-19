@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field, fields as dataclass_fields, replace
 from typing import Any, Callable, Protocol, runtime_checkable
 from urllib.parse import quote
 
@@ -46,6 +46,48 @@ SnakeCaseKeys = "snake_case_keys"
 CamelCaseKeys = "camel_case_keys"
 
 
+class _Unset:
+    """Sentinel for a config field the caller did not specify.
+
+    It behaves like the field's default for ordinary reads (truthiness,
+    equality, repr), so the public API is unchanged, but the config merge
+    layer can tell "not specified" apart from an explicit ``False``/default
+    value by identity. This lets higher-precedence layers explicitly disable
+    flags enabled by lower layers.
+    """
+
+    __slots__ = ("_default",)
+
+    def __init__(self, default: Any) -> None:
+        self._default = default
+
+    def __bool__(self) -> bool:
+        return bool(self._default)
+
+    def __eq__(self, other: object) -> bool:
+        if other is self:
+            return True
+        if isinstance(other, _Unset):
+            return self._default == other._default
+        return self._default == other
+
+    def __hash__(self) -> int:
+        return hash(self._default)
+
+    def __repr__(self) -> str:
+        return repr(self._default)
+
+    def __copy__(self) -> "_Unset":
+        return self
+
+    def __deepcopy__(self, memo: dict) -> "_Unset":
+        return self
+
+
+_UNSET_FALSE = _Unset(False)
+_UNSET_CANONICAL = _Unset(CanonicalWins)
+
+
 @runtime_checkable
 class StatsHandler(Protocol):
     """Receives logger pipeline telemetry callbacks."""
@@ -65,7 +107,7 @@ class DeliveryFailureHandler(StatsHandler, Protocol):
 
 @dataclass(slots=True)
 class AsyncConfig:
-    enabled: bool = False
+    enabled: bool = _UNSET_FALSE  # type: ignore[assignment]
     queue_size: int = 8192
     workers: int = 1
     max_batch_bytes: int = 256 * 1024
@@ -81,6 +123,9 @@ class SecurityConfig:
     max_event_bytes: int = 256 * 1024
     max_attr_count: int = 512
     drop_oversized_events: bool = True
+    # Secret salt for keyed pseudonymization of sensitive values. Kept out of
+    # repr() so it is never leaked by logging the config.
+    hash_salt: str = field(default="", repr=False)
 
 
 @dataclass(slots=True)
@@ -97,14 +142,14 @@ class Config:
     environment: str = "development"
     region: str = ""
     level: str = "info"
-    strict: bool = False
+    strict: bool = _UNSET_FALSE  # type: ignore[assignment]
     sinks: list[Any] = field(default_factory=list)
     collector_endpoint: str = ""
     collector_name: str = ""
-    api_key: str = ""
+    api_key: str = field(default="", repr=False)
     username: str = field(default="", repr=False)
     password: str = field(default="", repr=False)
-    duplicate_policy: str = "canonical_wins"
+    duplicate_policy: str = _UNSET_CANONICAL  # type: ignore[assignment]
     schema: Any = None
     sampler: Any = None
     redactor: Any = None
@@ -113,7 +158,7 @@ class Config:
     async_config: AsyncConfig = field(default_factory=AsyncConfig)
     security: SecurityConfig = field(default_factory=SecurityConfig)
     field_naming: FieldNamingConfig = field(default_factory=FieldNamingConfig)
-    checkpoint_emit_immediately: bool = False
+    checkpoint_emit_immediately: bool = _UNSET_FALSE  # type: ignore[assignment]
     deployment_id: str = ""
     include_host: bool = False
     max_checkpoints: int = 32
@@ -249,6 +294,11 @@ class Config:
             host = (urlparse(self.collector_endpoint).hostname or "").lower()
             if host not in {"localhost", "127.0.0.1", "::1"}:
                 raise ValueError("collector basic auth requires HTTPS except for local endpoints")
+        from .http_client import _validate_auth_requires_https
+
+        _validate_auth_requires_https(
+            self.collector_endpoint.strip(), api_key=self.api_key, username=self.username, password=self.password
+        )
 
 
 def load_layered_config() -> Config:
@@ -258,7 +308,20 @@ def load_layered_config() -> Config:
     user_path = _find_user_config_path()
     if user_path is not None and user_path.exists():
         raw = _merge_dicts(raw, _parse_simple_yaml(user_path.read_text(encoding="utf-8")))
-    return _config_from_mapping(raw)
+    return _resolve_unset(_config_from_mapping(raw))
+
+
+def _resolve_unset(cfg: Config) -> Config:
+    """Replace any still-unset sentinels with their concrete default values."""
+    if cfg.strict is _UNSET_FALSE:
+        cfg.strict = False
+    if cfg.duplicate_policy is _UNSET_CANONICAL:
+        cfg.duplicate_policy = CanonicalWins
+    if cfg.checkpoint_emit_immediately is _UNSET_FALSE:
+        cfg.checkpoint_emit_immediately = False
+    if cfg.async_config.enabled is _UNSET_FALSE:
+        cfg.async_config.enabled = False
+    return cfg
 
 
 def new_client(code_config: Config):  # -> Logger
@@ -285,7 +348,15 @@ def new_client(code_config: Config):  # -> Logger
     # Step 5: Apply code config (highest precedence)
     merged = _merge_code_config(merged, code_config)
 
-    # Step 6: Validate
+    # Step 5b: Install the configured pseudonymization secret, when provided.
+    # Without one, pseudonymize.py keeps its random-per-process default.
+    if merged.security.hash_salt:
+        from .pseudonymize import configure_hash_secret
+
+        configure_hash_secret(merged.security.hash_salt)
+
+    # Step 6: Collapse unset sentinels to concrete defaults, then validate
+    merged = _resolve_unset(merged)
     merged.validate()
 
     from .logger import Logger
@@ -382,7 +453,63 @@ def _apply_env_vars(cfg: Config) -> Config:
     if max_bytes_env.isdigit():
         cfg.security.max_event_bytes = int(max_bytes_env)
 
+    # Pseudonymization secret salt
+    hash_salt_env = os.getenv("LOZA_HASH_SALT", "").strip()
+    if hash_salt_env:
+        cfg.security.hash_salt = hash_salt_env
+
     return cfg
+
+
+_NESTED_CONFIG_TYPES = {
+    "async_config": AsyncConfig,
+    "security": SecurityConfig,
+    "field_naming": FieldNamingConfig,
+}
+
+
+def _overlay_missing_config_fields(base: Config, overlay: Config, names: tuple[str, ...]) -> None:
+    """Copy non-default values for *names* from *overlay* onto *base*.
+
+    The merge helpers used to rely on a hand-written whitelist that omitted the
+    nested security/naming objects and several scalar settings, so values set in
+    YAML or code were silently discarded. Nested objects are merged field by
+    field so values from a lower-precedence layer are preserved unless the
+    overlay explicitly changes them. Fields with dedicated handling (endpoints,
+    credentials, sinks, plugins, ...) are intentionally not passed in *names*.
+    """
+    defaults = Config()
+    for name in names:
+        value = getattr(overlay, name)
+        default_value = getattr(defaults, name)
+        nested_type = _NESTED_CONFIG_TYPES.get(name)
+        if nested_type is not None:
+            base_nested = getattr(base, name)
+            for nested_field in dataclass_fields(nested_type):
+                field_value = getattr(value, nested_field.name)
+                if field_value != getattr(default_value, nested_field.name):
+                    setattr(base_nested, nested_field.name, field_value)
+        elif value != default_value:
+            setattr(base, name, value)
+
+
+_MERGED_EXTRA_FIELDS = (
+    "async_config",
+    "security",
+    "field_naming",
+    "deployment_id",
+    "include_host",
+    "max_checkpoints",
+    "panic_recovery",
+    "alias",
+    "exit_on_fatal",
+    "release",
+    "namespace",
+    "otel_bridge",
+    "retry",
+    "timeout",
+    "logger",
+)
 
 
 def _merge_file_config(base: Config, file_cfg: Config) -> Config:
@@ -397,8 +524,8 @@ def _merge_file_config(base: Config, file_cfg: Config) -> Config:
         base.region = file_cfg.region
     if file_cfg.level and file_cfg.level != "info":
         base.level = file_cfg.level
-    if file_cfg.strict:
-        base.strict = file_cfg.strict
+    if file_cfg.strict is not _UNSET_FALSE:
+        base.strict = bool(file_cfg.strict)
     if file_cfg.collector_endpoint and not base.collector_endpoint:
         _resolve_endpoint_source(base, file_cfg.collector_endpoint, include_credentials=True)
     if file_cfg.collector_name and not base.collector_name:
@@ -408,17 +535,27 @@ def _merge_file_config(base: Config, file_cfg: Config) -> Config:
     if file_cfg.username and not base.username and not base.api_key:
         base.username = file_cfg.username
         base.password = file_cfg.password
-    if file_cfg.duplicate_policy and file_cfg.duplicate_policy != CanonicalWins:
+    if file_cfg.duplicate_policy is not _UNSET_CANONICAL:
         base.duplicate_policy = file_cfg.duplicate_policy
-    if file_cfg.checkpoint_emit_immediately:
-        base.checkpoint_emit_immediately = file_cfg.checkpoint_emit_immediately
+    if file_cfg.checkpoint_emit_immediately is not _UNSET_FALSE:
+        base.checkpoint_emit_immediately = bool(file_cfg.checkpoint_emit_immediately)
+    if file_cfg.security.hash_salt and not base.security.hash_salt:
+        base.security.hash_salt = file_cfg.security.hash_salt
+    _overlay_missing_config_fields(base, file_cfg, _MERGED_EXTRA_FIELDS)
     return base
 
 
 def _merge_code_config(base: Config, code: Config) -> Config:
-    """Apply code config values (highest precedence). Non-default values override."""
+    """Apply code config values (highest precedence). Non-default values override.
+
+    Nested config objects are merged a field at a time so that values supplied by
+    lower-precedence layers (file/env) are preserved for sub-fields the caller did
+    not explicitly override.
+    """
     if code.service:
         base.service = code.service
+    if code.alias:
+        base.alias = code.alias
     if code.version:
         base.version = code.version
     if code.environment and code.environment != "development":
@@ -427,8 +564,8 @@ def _merge_code_config(base: Config, code: Config) -> Config:
         base.region = code.region
     if code.level and code.level != "info":
         base.level = code.level
-    if code.strict:
-        base.strict = code.strict
+    if code.strict is not _UNSET_FALSE:
+        base.strict = bool(code.strict)
     if code.collector_endpoint:
         _resolve_endpoint_source(base, code.collector_endpoint, include_credentials=not bool(code.api_key))
     if code.api_key:
@@ -438,7 +575,7 @@ def _merge_code_config(base: Config, code: Config) -> Config:
     if code.username and not code.api_key:
         base.username = code.username
         base.password = code.password
-    if code.duplicate_policy and code.duplicate_policy != CanonicalWins:
+    if code.duplicate_policy is not _UNSET_CANONICAL:
         base.duplicate_policy = code.duplicate_policy
     if code.sinks:
         base.sinks = code.sinks
@@ -452,14 +589,64 @@ def _merge_code_config(base: Config, code: Config) -> Config:
         base.stats_handler = code.stats_handler
     if code.schema is not None:
         base.schema = code.schema
-    if code.checkpoint_emit_immediately:
-        base.checkpoint_emit_immediately = code.checkpoint_emit_immediately
-    if code.async_config.enabled:
-        base.async_config.enabled = code.async_config.enabled
+    if code.checkpoint_emit_immediately is not _UNSET_FALSE:
+        base.checkpoint_emit_immediately = bool(code.checkpoint_emit_immediately)
+    if code.deployment_id:
+        base.deployment_id = code.deployment_id
+    if code.include_host:
+        base.include_host = code.include_host
+    if code.max_checkpoints != 32:
+        base.max_checkpoints = code.max_checkpoints
+    if code.panic_recovery:
+        base.panic_recovery = code.panic_recovery
+    if code.exit_on_fatal:
+        base.exit_on_fatal = code.exit_on_fatal
+    if code.release:
+        base.release = code.release
+    if code.namespace:
+        base.namespace = code.namespace
+    if code.otel_bridge:
+        base.otel_bridge = code.otel_bridge
+    if code.retry:
+        base.retry = code.retry
+    if code.timeout != 0.0:
+        base.timeout = code.timeout
+    if code.logger is not None:
+        base.logger = code.logger
+
+    if code.async_config.enabled is not _UNSET_FALSE:
+        base.async_config.enabled = bool(code.async_config.enabled)
     if code.async_config.queue_size != 8192:
         base.async_config.queue_size = code.async_config.queue_size
     if code.async_config.workers != 1:
         base.async_config.workers = code.async_config.workers
+    if code.async_config.max_batch_bytes != 256 * 1024:
+        base.async_config.max_batch_bytes = code.async_config.max_batch_bytes
+    if code.async_config.flush_interval_ms != 5000:
+        base.async_config.flush_interval_ms = code.async_config.flush_interval_ms
+    if code.async_config.batch_size != 100:
+        base.async_config.batch_size = code.async_config.batch_size
+
+    if not code.security.redact_by_default:
+        base.security.redact_by_default = code.security.redact_by_default
+    if code.security.allow_pii:
+        base.security.allow_pii = code.security.allow_pii
+    if code.security.max_field_bytes != 4096:
+        base.security.max_field_bytes = code.security.max_field_bytes
+    if code.security.max_event_bytes != 256 * 1024:
+        base.security.max_event_bytes = code.security.max_event_bytes
+    if code.security.max_attr_count != 512:
+        base.security.max_attr_count = code.security.max_attr_count
+    if not code.security.drop_oversized_events:
+        base.security.drop_oversized_events = code.security.drop_oversized_events
+    if code.security.hash_salt:
+        base.security.hash_salt = code.security.hash_salt
+    _overlay_missing_config_fields(base, code, _MERGED_EXTRA_FIELDS)
+
+    if code.field_naming.policy != ExpandDotKeys:
+        base.field_naming.policy = code.field_naming.policy
+    if code.field_naming.custom_mapper is not None:
+        base.field_naming.custom_mapper = code.field_naming.custom_mapper
     return base
 
 
@@ -500,19 +687,34 @@ def _config_from_mapping(data: dict[str, Any]) -> Config:
         environment=str(data.get("environment", "development")),
         region=str(data.get("region", "")),
         level=str(data.get("level", "info")),
-        strict=bool(data.get("strict", False)),
+        strict=_UNSET_FALSE if "strict" not in data else bool(data["strict"]),
         collector_endpoint=str(data.get("collector_endpoint", "")),
         collector_name=str(data.get("collector_name", "")),
         api_key=str(data.get("api_key", "")),
         username=str(data.get("username", "")),
         password=str(data.get("password", "")),
-        duplicate_policy=str(data.get("duplicate_policy", CanonicalWins)),
-        checkpoint_emit_immediately=bool(data.get("checkpoint_emit_immediately", False)),
+        duplicate_policy=_UNSET_CANONICAL if "duplicate_policy" not in data else str(data["duplicate_policy"]),
+        checkpoint_emit_immediately=(
+            _UNSET_FALSE if "checkpoint_emit_immediately" not in data else bool(data["checkpoint_emit_immediately"])
+        ),
+        deployment_id=str(data.get("deployment_id", "")),
+        include_host=bool(data.get("include_host", False)),
+        max_checkpoints=int(data.get("max_checkpoints", 32)),
+        panic_recovery=bool(data.get("panic_recovery", False)),
+        alias=str(data.get("alias", "")),
+        exit_on_fatal=bool(data.get("exit_on_fatal", False)),
+        release=str(data.get("release", "")),
+        namespace=str(data.get("namespace", "")),
+        otel_bridge=bool(data.get("otel_bridge", False)),
+        retry=bool(data.get("retry", False)),
+        timeout=float(data.get("timeout", 0.0)),
         async_config=AsyncConfig(
-            enabled=bool(async_map.get("enabled", False)),
+            enabled=_UNSET_FALSE if "enabled" not in async_map else bool(async_map["enabled"]),
             queue_size=int(async_map.get("queue_size", 8192)),
             workers=int(async_map.get("workers", 1)),
             max_batch_bytes=int(async_map.get("max_batch_bytes", 256 * 1024)),
+            flush_interval_ms=int(async_map.get("flush_interval_ms", 5000)),
+            batch_size=int(async_map.get("batch_size", 100)),
         ),
         security=SecurityConfig(
             redact_by_default=bool(security_map.get("redact_by_default", True)),
@@ -521,6 +723,7 @@ def _config_from_mapping(data: dict[str, Any]) -> Config:
             max_event_bytes=int(security_map.get("max_event_bytes", 256 * 1024)),
             max_attr_count=int(security_map.get("max_attr_count", 512)),
             drop_oversized_events=bool(security_map.get("drop_oversized_events", True)),
+            hash_salt=str(security_map.get("hash_salt", "")),
         ),
         field_naming=FieldNamingConfig(
             policy=str(field_map.get("policy", ExpandDotKeys)),
@@ -539,6 +742,37 @@ def _merge_dicts(base: dict[str, Any], override: dict[str, Any]) -> dict[str, An
     return merged
 
 
+def _strip_inline_comment(line: str) -> str:
+    """Strip a trailing inline comment without corrupting quoted or token values.
+
+    A ``#`` opens a comment only when it is outside quotes and starts a token
+    (at the start of the line or preceded by whitespace). This preserves ``#``
+    inside quoted values such as URL fragments and inside unquoted tokens such
+    as ``ab#cd``.
+    """
+    quote: str | None = None
+    index = 0
+    length = len(line)
+    while index < length:
+        char = line[index]
+        if quote is not None:
+            if quote == '"' and char == "\\" and index + 1 < length:
+                index += 2  # skip a backslash-escaped character
+                continue
+            if char == quote:
+                # YAML escapes a single quote inside single quotes by doubling it.
+                if char == "'" and index + 1 < length and line[index + 1] == "'":
+                    index += 2
+                    continue
+                quote = None
+        elif char in ("'", '"'):
+            quote = char
+        elif char == "#" and (index == 0 or line[index - 1].isspace()):
+            return line[:index]
+        index += 1
+    return line
+
+
 def _parse_simple_yaml(content: str) -> dict[str, Any]:
     root: dict[str, Any] = {}
     stack: list[tuple[int, dict[str, Any]]] = [(-1, root)]
@@ -546,7 +780,7 @@ def _parse_simple_yaml(content: str) -> dict[str, Any]:
         if not raw_line.strip() or raw_line.lstrip().startswith("#"):
             continue
         indent = len(raw_line) - len(raw_line.lstrip(" "))
-        line = raw_line.split("#", 1)[0].rstrip()
+        line = _strip_inline_comment(raw_line).rstrip()
         if ":" not in line:
             continue
         key, raw_value = line.lstrip().split(":", 1)

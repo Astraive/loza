@@ -4,10 +4,10 @@ import json
 import os
 import time
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from queue import Empty, Full, Queue
-from threading import Event, Lock, Thread
+from threading import Event, Lock, RLock, Thread
 from typing import Callable, Iterable, Protocol
 
 from ..version import SDK_VERSION
@@ -41,17 +41,47 @@ class DeliveryStats:
     retried: int = 0
     batches: int = 0
     last_error: str = ""
+    _lock: RLock = field(default_factory=RLock, repr=False, compare=False)
+
+    # Callers must use these helpers: ``+=`` on a shared attribute is a
+    # non-atomic LOAD/ADD/STORE sequence and loses increments across threads.
+    def record_enqueued(self) -> None:
+        with self._lock:
+            self.enqueued += 1
+
+    def record_dropped(self) -> None:
+        with self._lock:
+            self.dropped += 1
+
+    def record_emitted(self, count: int) -> None:
+        with self._lock:
+            self.emitted += count
+
+    def record_failed(self, count: int, error: str) -> None:
+        with self._lock:
+            self.failed += count
+            self.last_error = error
+
+    def record_retried(self, count: int) -> None:
+        with self._lock:
+            self.retried += count
+
+    def record_batch(self) -> None:
+        with self._lock:
+            self.batches += 1
 
     def snapshot(self) -> dict[str, int | str]:
-        return {
-            "enqueued": self.enqueued,
-            "emitted": self.emitted,
-            "dropped": self.dropped,
-            "failed": self.failed,
-            "retried": self.retried,
-            "batches": self.batches,
-            "last_error": self.last_error,
-        }
+        """Return a consistent view taken while no mutation is in progress."""
+        with self._lock:
+            return {
+                "enqueued": self.enqueued,
+                "emitted": self.emitted,
+                "dropped": self.dropped,
+                "failed": self.failed,
+                "retried": self.retried,
+                "batches": self.batches,
+                "last_error": self.last_error,
+            }
 
 
 class ByteBatcher:
@@ -211,12 +241,12 @@ class Pipeline:
     def try_enqueue(self, encoded: str) -> bool:
         try:
             self.queue.put_nowait(encoded)
-            self.stats.enqueued += 1
+            self.stats.record_enqueued()
             if self._metrics is not None:
                 self._metrics.set_buffer_size(self.queue.qsize())
             return True
         except Full:
-            self.stats.dropped += 1
+            self.stats.record_dropped()
             if self._metrics is not None:
                 self._metrics.on_event_dropped("queue_full")
             if self.offline_buffer is not None:
@@ -312,8 +342,7 @@ class Pipeline:
             error for sink in self.sinks if (error := self._write_sink_with_retry(sink, encoded_events)) is not None
         ]
         if errors:
-            self.stats.failed += len(encoded_events)
-            self.stats.last_error = "; ".join(str(error) for error in errors)
+            self.stats.record_failed(len(encoded_events), "; ".join(str(error) for error in errors))
             if self._metrics is not None:
                 self._metrics.on_event_dropped("transport")
             if buffer_on_failure and self.offline_buffer is not None:
@@ -323,8 +352,8 @@ class Pipeline:
                 for error in errors:
                     self.error_handler(error)
         else:
-            self.stats.emitted += len(encoded_events)
-        self.stats.batches += 1
+            self.stats.record_emitted(len(encoded_events))
+        self.stats.record_batch()
         return not errors
 
     def _write_sink_with_retry(self, sink: object, encoded_events: list[str]) -> Exception | None:
@@ -340,7 +369,7 @@ class Pipeline:
                 return None
             except Exception as exc:
                 last_error = exc
-                self.stats.retried += int(attempt < self.retry_policy.max_attempts)
+                self.stats.record_retried(int(attempt < self.retry_policy.max_attempts))
                 if self._metrics is not None:
                     self._metrics.on_retry(attempt)
                 time.sleep(self.retry_policy.delay(attempt))

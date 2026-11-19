@@ -225,10 +225,20 @@ func (mc *MetricsCollector) incrementBufferSize() {
 // Requirement: 49.6
 func (mc *MetricsCollector) decrementBufferSize() {
 	if mc != nil && mc.bufferSize != nil {
-		newSize := mc.currentBufferSize.Add(-1)
-		if newSize < 0 {
-			newSize = 0
-			mc.currentBufferSize.Store(0)
+		// Decrement and clamp in a single compare-and-swap loop. A separate
+		// Add(-1) followed by Store(0) could overwrite a concurrent increment
+		// that landed between the two operations, losing buffer-size updates.
+		var newSize int64
+		for {
+			old := mc.currentBufferSize.Load()
+			if old > 0 {
+				newSize = old - 1
+			} else {
+				newSize = 0
+			}
+			if mc.currentBufferSize.CompareAndSwap(old, newSize) {
+				break
+			}
 		}
 		mc.bufferSize.Set(float64(newSize))
 	}
@@ -294,6 +304,15 @@ func (h *PrometheusStatsHandler) OnDrop(reason string) {
 // Requirement: 34.3, 34.4
 func (h *PrometheusStatsHandler) OnError(err error) {
 	_ = err
+	if h != nil && h.metrics != nil {
+		// Validation, duplicate-field and encoding failures terminate an
+		// event through OnError without a matching OnEmit/OnDrop callback.
+		// Release the buffer slot added by OnEventCreated so buffer_size does
+		// not drift upward forever. decrementBufferSize clamps at zero, which
+		// keeps paths that also report a drop/delivery failure from going
+		// negative.
+		h.metrics.decrementBufferSize()
+	}
 }
 
 // OnDeliveryFailed records an explicit delivery failure without counting it as a success emit.

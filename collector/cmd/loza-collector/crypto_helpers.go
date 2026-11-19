@@ -31,9 +31,20 @@ func encryptBlob(plain []byte, key string) ([]byte, error) {
 	return []byte(out), nil
 }
 
+// decryptBlob decrypts a blob written by encryptBlob.
+//
+// When an encryption key is configured, every stored blob is expected to carry
+// the encryptedBlobPrefix. Unprefixed data is rejected with an error: returning
+// it as plaintext would let anyone able to modify stored blobs downgrade an
+// encrypted value to arbitrary plaintext simply by stripping the (unauthenticated)
+// prefix. When no key is configured, data is treated as plaintext and returned
+// unchanged.
 func decryptBlob(data []byte, key string) ([]byte, error) {
 	raw := strings.TrimSpace(string(data))
 	if !strings.HasPrefix(raw, encryptedBlobPrefix) {
+		if encryptionEnabled(key) {
+			return nil, fmt.Errorf("stored blob is missing %q prefix while encryption is enabled", encryptedBlobPrefix)
+		}
 		return data, nil
 	}
 	payload, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(raw, encryptedBlobPrefix))

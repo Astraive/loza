@@ -7,10 +7,19 @@ import (
 	"github.com/astraive/loza/sdks/go"
 )
 
+// attrSegment is a batch of attributes captured together with the group stack
+// that was active when the corresponding WithAttrs call was made. slog applies
+// WithAttrs at the current group depth, so an attribute added before a
+// WithGroup must not be nested under that later group.
+type attrSegment struct {
+	groups []string
+	attrs  []slog.Attr
+}
+
 // SlogHandler is a slog.Handler that forwards records to loza.
 type SlogHandler struct {
-	attrs  []slog.Attr
-	groups []string
+	segments []attrSegment
+	groups   []string
 }
 
 // Handler creates a slog handler backed by the default loza logger.
@@ -25,16 +34,75 @@ func (h *SlogHandler) Enabled(_ context.Context, level slog.Level) bool {
 	return mapLevel(level) >= loza.LevelDebug
 }
 
-func (h *SlogHandler) Handle(ctx context.Context, rec slog.Record) error {
-	attrs := make([]loza.Attr, 0, rec.NumAttrs()+len(h.attrs))
-	for _, a := range h.attrs {
-		attrs = append(attrs, h.toAttr(a))
+// groupNode is a node of the temporary tree assembled in Handle. Keeping
+// attributes and child groups in insertion order lets the emitted attribute
+// list preserve the original WithAttrs/WithGroup call order while merging
+// attributes that belong to the same nested group.
+type groupNode struct {
+	attrs    []loza.Attr
+	children []groupChild
+	byName   map[string]*groupNode
+}
+
+type groupChild struct {
+	name string
+	node *groupNode
+}
+
+func newGroupNode() *groupNode {
+	return &groupNode{byName: make(map[string]*groupNode)}
+}
+
+func (n *groupNode) child(name string) *groupNode {
+	if existing, ok := n.byName[name]; ok {
+		return existing
 	}
+	child := newGroupNode()
+	n.byName[name] = child
+	n.children = append(n.children, groupChild{name: name, node: child})
+	return child
+}
+
+func (n *groupNode) nodeAt(groups []string) *groupNode {
+	node := n
+	for _, name := range groups {
+		node = node.child(name)
+	}
+	return node
+}
+
+func (n *groupNode) flatten() []loza.Attr {
+	out := make([]loza.Attr, 0, len(n.attrs)+len(n.children))
+	out = append(out, n.attrs...)
+	for _, c := range n.children {
+		out = append(out, loza.Group(c.name, c.node.flatten()...))
+	}
+	return out
+}
+
+func (h *SlogHandler) Handle(ctx context.Context, rec slog.Record) error {
+	root := newGroupNode()
+	for _, seg := range h.segments {
+		node := root.nodeAt(seg.groups)
+		for _, a := range seg.attrs {
+			node.attrs = append(node.attrs, h.toAttr(a))
+		}
+	}
+
+	var recordAttrs []slog.Attr
 	rec.Attrs(func(a slog.Attr) bool {
-		attrs = append(attrs, h.toAttr(a))
+		recordAttrs = append(recordAttrs, a)
 		return true
 	})
-	attrs = wrapAttrsWithGroups(attrs, h.groups)
+	if len(recordAttrs) > 0 {
+		// Record attributes are applied at the group depth reached by the
+		// chain of WithGroup calls, i.e. the handler's current stack.
+		node := root.nodeAt(h.groups)
+		for _, a := range recordAttrs {
+			node.attrs = append(node.attrs, h.toAttr(a))
+		}
+	}
+	attrs := root.flatten()
 
 	if ev, ok := loza.FromContext(ctx); ok && ev != nil {
 		loza.Enrich(ctx, attrs...)
@@ -57,7 +125,13 @@ func (h *SlogHandler) Handle(ctx context.Context, rec slog.Record) error {
 
 func (h *SlogHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
 	out := *h
-	out.attrs = append(append([]slog.Attr(nil), h.attrs...), attrs...)
+	if len(attrs) == 0 {
+		return &out
+	}
+	out.segments = append(append([]attrSegment(nil), h.segments...), attrSegment{
+		groups: append([]string(nil), h.groups...),
+		attrs:  append([]slog.Attr(nil), attrs...),
+	})
 	return &out
 }
 

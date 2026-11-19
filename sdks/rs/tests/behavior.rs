@@ -1,7 +1,7 @@
 use loza::{
-    ComposeRedactors, Config, ContextCarrier, ContextSource, HTTPClient, HTTPRequest,
-    InjectHTTPHeadersFromCarrier, New, Params, RedactKeys, SampleErrors, SampleNone, SchemaConfig,
-    String as LozaString,
+    ComposeRedactors, Config, ContextCarrier, ContextSource, DefaultRedactor, HTTPClient,
+    HTTPRequest, InjectHTTPHeadersFromCarrier, New, Params, RedactKeys, SampleErrors, SampleNone,
+    SchemaConfig, String as LozaString,
 };
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -27,6 +27,24 @@ fn flat_schema_and_redaction_are_real() {
 
     assert_eq!(payload["user_id"], "u1");
     assert_eq!(payload["attrs_password"], "[REDACTED]");
+}
+
+#[test]
+fn redactor_matches_sensitive_keys_with_suffixes() {
+    // A field like `password_hash` must not bypass redaction just because its
+    // last segment is not itself a sensitive key.
+    let logger = New(Config::test("checkout").with_redactor(DefaultRedactor()));
+    let mut ctx = logger.start_event(Params::new("redaction.suffix"));
+    logger.append(&mut ctx, LozaString("message", "keep me"));
+    logger.append(&mut ctx, LozaString("password_hash", "hunter2"));
+    logger.append(&mut ctx, LozaString("token_value", "abc123"));
+    let _ = logger.finish(&mut ctx, "success");
+
+    let payload: Value = serde_json::from_str(&logger.emit(&ctx).unwrap()).unwrap();
+
+    assert_eq!(payload["attrs"]["message"], "keep me");
+    assert_eq!(payload["attrs"]["password_hash"], "[REDACTED]");
+    assert_eq!(payload["attrs"]["token_value"], "[REDACTED]");
 }
 
 #[test]
@@ -68,6 +86,22 @@ fn composite_redactors_are_real() {
     let redactor = ComposeRedactors(&[RedactKeys(&["token"]), RedactKeys(&["password"])]);
     let logger = New(Config::test("checkout").with_redactor(redactor));
     let mut ctx = logger.start_event(Params::new("redaction.compose"));
+    logger.append(&mut ctx, LozaString("message", "hello world"));
+    logger.append(&mut ctx, LozaString("token", "abc123"));
+    logger.append(&mut ctx, LozaString("password", "secret456"));
+    let _ = logger.finish(&mut ctx, "success");
+
+    let payload: Value = serde_json::from_str(&logger.emit(&ctx).unwrap()).unwrap();
+
+    assert_eq!(payload["attrs"]["message"], "hello world");
+    assert_eq!(payload["attrs"]["token"], "[REDACTED]");
+    assert_eq!(payload["attrs"]["password"], "[REDACTED]");
+}
+
+#[test]
+fn allow_fields_redacts_every_field_not_in_the_allowlist() {
+    let logger = New(Config::test("checkout").with_redactor(loza::AllowFields(&["message"])));
+    let mut ctx = logger.start_event(Params::new("redaction.allow_fields"));
     logger.append(&mut ctx, LozaString("message", "hello world"));
     logger.append(&mut ctx, LozaString("token", "abc123"));
     logger.append(&mut ctx, LozaString("password", "secret456"));

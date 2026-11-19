@@ -89,7 +89,14 @@ impl Transport {
         } else {
             req.call()
         };
-        let response = response.map_err(io::Error::other)?;
+        // ureq 2.x reports HTTP status codes >= 400 as `Err(Error::Status(_, response))`.
+        // The response still carries the status, headers and body, so return it as a
+        // successful `HttpResponse` rather than collapsing it into a transport error.
+        let response = match response {
+            Ok(response) => response,
+            Err(ureq::Error::Status(_, response)) => response,
+            Err(err) => return Err(io::Error::other(err)),
+        };
         let status_code = response.status();
         let mut headers = BTreeMap::new();
         for name in &["content-type", "x-request-id", "x-deduped"] {

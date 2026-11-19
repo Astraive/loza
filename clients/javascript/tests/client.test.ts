@@ -73,6 +73,27 @@ test('query encodes inferred parameter types and basic authorization', async () 
   });
 });
 
+test('query preserves a parameter literally named __proto__ without prototype pollution', async () => {
+  let body: Record<string, unknown> | undefined;
+  const client = new Client({
+    endpoint: 'https://api.example',
+    collector: 'demo',
+    apiKey: 'key',
+    fetch: async (_url, init) => {
+      body = JSON.parse(String(init?.body));
+      return new Response(JSON.stringify({ columns: [], rows: [] }));
+    },
+  });
+  // JSON.parse creates "__proto__" as an own enumerable property, unlike an object literal.
+  const parameters = JSON.parse('{"__proto__": "polluted", "safe": "ok"}');
+  await client.query('from events', parameters);
+  assert.ok(body);
+  const encoded = body.parameters as Record<string, unknown>;
+  assert.ok(Object.prototype.hasOwnProperty.call(encoded, '__proto__'));
+  assert.deepEqual(encoded['__proto__'], { type: 'string', value: 'polluted' });
+  assert.deepEqual(encoded.safe, { type: 'string', value: 'ok' });
+});
+
 test('query decodes columns and applies result defaults', async () => {
   const client = new Client({
     endpoint: 'https://api.example',
@@ -143,6 +164,32 @@ test('rejects invalid endpoint and authentication configurations', () => {
   }
 });
 
+test('rejects credentials sent as Bearer over plaintext HTTP to non-local endpoints', () => {
+  const insecureConfigurations = [
+    { endpoint: 'http://remote.example', collector: 'demo', apiKey: 'secret' },
+    { endpoint: 'http://203.0.113.10', collector: 'demo', apiKey: 'secret' },
+    { endpoint: 'http://remote.example', collector: 'demo', apiKey: 'secret', username: 'user', password: 'pass' },
+  ];
+  for (const config of insecureConfigurations) {
+    assert.throws(() => new Client(config), error => error instanceof QueryError && error.category === ErrorCategory.InvalidConfiguration);
+  }
+});
+
+test('allows API-key auth over plaintext HTTP only for localhost endpoints', async () => {
+  let authorization = '';
+  const client = new Client({
+    endpoint: 'http://127.0.0.1:9308',
+    collector: 'demo',
+    apiKey: 'secret',
+    fetch: async (_url, init) => {
+      authorization = (init.headers as Record<string, string>).Authorization;
+      return new Response(JSON.stringify({ columns: [], rows: [] }));
+    },
+  });
+  await client.query('from events');
+  assert.equal(authorization, 'Bearer secret');
+});
+
 test('rejects an empty query source before making a request', async () => {
   const client = new Client({ endpoint: 'http://localhost', collector: 'demo', fetch: async () => {
     throw new Error('request should not be made');
@@ -194,6 +241,70 @@ test('rejects oversized responses and malformed result envelopes', async () => {
   }
 });
 
+test('streams the response body and cancels once the size limit is exceeded', async () => {
+  const encoder = new TextEncoder();
+  let pulls = 0;
+  let cancelled = false;
+  const body = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      pulls += 1;
+      controller.enqueue(encoder.encode('x'.repeat(1024)));
+      if (pulls >= 64) controller.close();
+    },
+    cancel() { cancelled = true; },
+  });
+  const client = new Client({
+    endpoint: 'https://api.example',
+    collector: 'demo',
+    maxResponseBytes: 4096,
+    fetch: async () => new Response(body),
+  });
+  await assert.rejects(client.query('from events'), error => error instanceof QueryError && error.category === ErrorCategory.MalformedResponse);
+  assert.equal(cancelled, true, 'the body stream must be cancelled when the limit is exceeded');
+  assert.ok(pulls < 64, 'reading must stop before the whole body is pulled into memory');
+});
+
+test('rejects an oversized Content-Length before consuming the body', async () => {
+  let pulls = 0;
+  const body = new ReadableStream<Uint8Array>({
+    pull(controller) { pulls += 1; controller.enqueue(new TextEncoder().encode('x')); },
+  }, { highWaterMark: 0 });
+  const client = new Client({
+    endpoint: 'https://api.example',
+    collector: 'demo',
+    maxResponseBytes: 16,
+    fetch: async () => new Response(body, { headers: { 'Content-Length': '1024' } }),
+  });
+  await assert.rejects(client.query('from events'), error => error instanceof QueryError && error.category === ErrorCategory.MalformedResponse);
+  assert.equal(pulls, 0, 'the body must not be read when Content-Length already exceeds the limit');
+});
+
+test('reassembles a chunked streamed body and handles an empty body', async () => {
+  const payload = JSON.stringify({ columns: ['name'], rows: [{ name: 'caf\u00e9' }] });
+  const bytes = new TextEncoder().encode(payload);
+  const body = new ReadableStream<Uint8Array>({
+    start(controller) {
+      for (let offset = 0; offset < bytes.byteLength; offset += 3) {
+        controller.enqueue(bytes.subarray(offset, offset + 3));
+      }
+      controller.close();
+    },
+  });
+  const chunked = new Client({
+    endpoint: 'https://api.example',
+    collector: 'demo',
+    fetch: async () => new Response(body),
+  });
+  assert.deepEqual((await chunked.query('from events')).rows, [{ name: 'caf\u00e9' }]);
+
+  const empty = new Client({
+    endpoint: 'https://api.example',
+    collector: 'demo',
+    fetch: async () => new Response(null),
+  });
+  await assert.rejects(empty.query('from events'), error => error instanceof QueryError && error.category === ErrorCategory.MalformedResponse);
+});
+
 test('maps transport failures and aborts to transport and timeout errors', async () => {
   const transportClient = new Client({
     endpoint: 'https://api.example',
@@ -221,4 +332,49 @@ test('exposes QueryError metadata', () => {
   assert.equal(error.category, ErrorCategory.Scope);
   assert.equal(error.status, 403);
   assert.deepEqual(error.diagnostics, [{ field: 'scope' }]);
+});
+
+test('clears the timeout timer when basic-auth setup throws before the request', async () => {
+  const originalBtoa = globalThis.btoa;
+  const originalSetTimeout = globalThis.setTimeout;
+  const originalClearTimeout = globalThis.clearTimeout;
+  let createdTimer: ReturnType<typeof setTimeout> | undefined;
+  let clearedTimer: ReturnType<typeof setTimeout> | undefined;
+  let tracking = false;
+
+  globalThis.setTimeout = ((...args: Parameters<typeof setTimeout>) => {
+    const handle = originalSetTimeout(...args);
+    if (tracking) createdTimer = handle;
+    return handle;
+  }) as typeof setTimeout;
+  globalThis.clearTimeout = ((handle: ReturnType<typeof setTimeout>) => {
+    if (tracking) clearedTimer = handle;
+    return originalClearTimeout(handle);
+  }) as typeof clearTimeout;
+  // Simulate a runtime without btoa so base64() throws during setup.
+  globalThis.btoa = undefined as unknown as typeof globalThis.btoa;
+
+  try {
+    const client = new Client({
+      endpoint: 'https://api.example',
+      collector: 'demo',
+      username: 'user',
+      password: 'pass',
+      timeoutMs: 50,
+      fetch: async () => {
+        throw new Error('request should not be made');
+      },
+    });
+    tracking = true;
+    const pending = client.query('from events');
+    tracking = false;
+    await assert.rejects(pending, error => error instanceof QueryError && error.category === ErrorCategory.InvalidConfiguration);
+
+    assert.ok(createdTimer, 'the query should have created a timeout timer');
+    assert.equal(clearedTimer, createdTimer, 'the timeout timer must be cleared even when setup throws');
+  } finally {
+    globalThis.btoa = originalBtoa;
+    globalThis.setTimeout = originalSetTimeout;
+    globalThis.clearTimeout = originalClearTimeout;
+  }
 });

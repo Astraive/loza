@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import gzip as gzip_mod
+import json
 import time
 import urllib.request
 from dataclasses import dataclass, field
@@ -17,9 +18,11 @@ except NameError:
 from ...core.http_client import (
     _build_ingest_body,
     _collector_response_outcome,
+    _open_with_redirect_guard,
     _parse_collector_response_body,
     _parse_retry_after,
     _retry_delay,
+    _validate_auth_requires_https,
     _validate_basic_auth_endpoint,
     _validate_collector_endpoint,
 )
@@ -55,6 +58,9 @@ class HTTPBatchSink:
     def __post_init__(self) -> None:
         _validate_collector_endpoint(self.endpoint)
         _validate_basic_auth_endpoint(self.endpoint, self.username, self.password)
+        _validate_auth_requires_https(
+            self.endpoint, api_key=self.api_key, username=self.username, password=self.password
+        )
 
     def _auth_headers(self) -> dict[str, str]:
         if self.api_key:
@@ -91,7 +97,7 @@ class HTTPBatchSink:
         for attempt in range(self.retries + 1):
             try:
                 try:
-                    with urllib.request.urlopen(req, timeout=self.timeout) as response:
+                    with _open_with_redirect_guard(req, self.timeout, self.endpoint) as response:
                         status = getattr(response, "status", response.getcode())
                         headers_obj = getattr(response, "headers", None)
                         raw = response.read()
@@ -113,7 +119,7 @@ class HTTPBatchSink:
                     time.sleep(_retry_delay(attempt, self.base_delay, self.max_delay, retry_after))
                     continue
                 raise last_error
-            except (URLError, TimeoutError) as exc:
+            except (URLError, TimeoutError, json.JSONDecodeError, ValueError) as exc:
                 last_error = exc
                 if attempt < self.retries:
                     time.sleep(_retry_delay(attempt, self.base_delay, self.max_delay))

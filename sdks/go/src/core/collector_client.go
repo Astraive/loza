@@ -46,6 +46,7 @@ func NewCollectorClient(cfg CollectorClientConfig) *CollectorClient {
 		cfg.Endpoint,
 		cfg.BasicUsername,
 		cfg.BasicPassword,
+		cfg.APIKey,
 		cfg.Insecure,
 	)
 	if cfg.Client == nil {
@@ -72,8 +73,16 @@ func (c *CollectorClient) collectorPath(route string) string {
 }
 
 func (c *CollectorClient) do(ctx context.Context, method, path string, body []byte) ([]byte, error) {
+	raw, _, err := c.doWithStatus(ctx, method, path, body)
+	return raw, err
+}
+
+// doWithStatus performs a collector request and also returns the HTTP status
+// code. A zero status means no HTTP response was received (e.g. an init or
+// transport error).
+func (c *CollectorClient) doWithStatus(ctx context.Context, method, path string, body []byte) ([]byte, int, error) {
 	if c.initErr != nil {
-		return nil, c.initErr
+		return nil, 0, c.initErr
 	}
 	endpoint := c.endpoint + path
 	var req *http.Request
@@ -84,7 +93,7 @@ func (c *CollectorClient) do(ctx context.Context, method, path string, body []by
 		req, err = http.NewRequestWithContext(ctx, method, endpoint, nil)
 	}
 	if err != nil {
-		return nil, fmt.Errorf("collector: request: %w", err)
+		return nil, 0, fmt.Errorf("collector: request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	if c.apiKey != "" {
@@ -100,17 +109,17 @@ func (c *CollectorClient) do(ctx context.Context, method, path string, body []by
 	}
 	resp, err := c.client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("collector: do: %w", err)
+		return nil, 0, fmt.Errorf("collector: do: %w", err)
 	}
 	defer resp.Body.Close()
 	raw, err := readCollectorResponse(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("collector: read: %w", err)
+		return nil, resp.StatusCode, fmt.Errorf("collector: read: %w", err)
 	}
 	if resp.StatusCode >= 300 {
-		return raw, fmt.Errorf("collector: status %d: %s", resp.StatusCode, truncateErrorBody(string(raw)))
+		return raw, resp.StatusCode, fmt.Errorf("collector: status %d: %s", resp.StatusCode, truncateErrorBody(string(raw)))
 	}
-	return raw, nil
+	return raw, resp.StatusCode, nil
 }
 
 // Validate sends an event to the collector for validation without ingesting it.

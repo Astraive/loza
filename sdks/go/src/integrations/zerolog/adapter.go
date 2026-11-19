@@ -1,8 +1,6 @@
 package zerolog
 
 import (
-	"context"
-
 	"github.com/astraive/loza/sdks/go"
 	"github.com/rs/zerolog"
 )
@@ -15,7 +13,7 @@ func Hook() AdapterHook { return AdapterHook{} }
 
 // Run implements zerolog.Hook.
 func (AdapterHook) Run(e *zerolog.Event, level zerolog.Level, msg string) {
-	ctx := context.Background()
+	ctx := e.GetCtx()
 	switch level {
 	case zerolog.DebugLevel, zerolog.TraceLevel:
 		loza.DebugContext(ctx, msg, "zerolog.event")
@@ -26,5 +24,4 @@ func (AdapterHook) Run(e *zerolog.Event, level zerolog.Level, msg string) {
 	default:
 		loza.ErrorContext(ctx, msg, nil, "zerolog.event")
 	}
-	_ = e
 }

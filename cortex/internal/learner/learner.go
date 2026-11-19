@@ -2,6 +2,8 @@ package learner
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 
@@ -13,10 +15,10 @@ import (
 type Learner struct {
 	remediationStore storage.RemediationStore
 	feedbackStore    storage.FeedbackStore
-	signatureStore  storage.SignatureStore
-	learningRate    float64
-	weightMin       float64
-	weightMax       float64
+	signatureStore   storage.SignatureStore
+	learningRate     float64
+	weightMin        float64
+	weightMax        float64
 }
 
 func NewLearner(
@@ -26,11 +28,11 @@ func NewLearner(
 ) *Learner {
 	return &Learner{
 		remediationStore: remediationStore,
-		feedbackStore:   feedbackStore,
-		signatureStore:  signatureStore,
-		learningRate:    0.1,
-		weightMin:       0.1,
-		weightMax:       2.0,
+		feedbackStore:    feedbackStore,
+		signatureStore:   signatureStore,
+		learningRate:     0.1,
+		weightMin:        0.1,
+		weightMax:        2.0,
 	}
 }
 
@@ -64,11 +66,14 @@ func (l *Learner) RecordFeedback(ctx context.Context, feedback *models.Remediati
 
 	remediation, err := l.remediationStore.Get(ctx, feedback.RemediationID)
 	if err != nil {
-		return nil
+		return fmt.Errorf("failed to get remediation %q: %w", feedback.RemediationID, err)
 	}
 
 	allFeedback, err := l.feedbackStore.GetByRemediation(ctx, feedback.RemediationID)
-	if err != nil || len(allFeedback) == 0 {
+	if err != nil {
+		return fmt.Errorf("failed to get feedback for remediation %q: %w", feedback.RemediationID, err)
+	}
+	if len(allFeedback) == 0 {
 		return nil
 	}
 
@@ -125,21 +130,7 @@ func (l *Learner) GetTopRemediations(ctx context.Context, signatureID string, li
 }
 
 func (l *Learner) GetAverageTimeToResolve(ctx context.Context, action string, signatureID string) (int64, error) {
-	feedbacks, err := l.feedbackStore.GetByRemediation(ctx, action)
-	if err != nil {
-		return 0, err
-	}
-
-	if len(feedbacks) == 0 {
-		return 0, nil
-	}
-
-	var totalTime int64
-	for _, fb := range feedbacks {
-		totalTime += fb.TimeToResolve
-	}
-
-	return totalTime / int64(len(feedbacks)), nil
+	return l.feedbackStore.GetAverageTimeToResolve(ctx, action, signatureID)
 }
 
 // UpdateFeatureWeights adjusts feature vector weights based on feedback outcome.
@@ -147,7 +138,10 @@ func (l *Learner) GetAverageTimeToResolve(ctx context.Context, action string, si
 func (l *Learner) UpdateFeatureWeights(ctx context.Context, signatureID string, outcomeCode int) error {
 	sig, err := l.signatureStore.Get(ctx, signatureID)
 	if err != nil {
-		return nil // signature not found, skip
+		if isSignatureNotFound(err) {
+			return nil // signature not found, skip
+		}
+		return fmt.Errorf("get signature %q: %w", signatureID, err)
 	}
 
 	if len(sig.FeatureVector) == 0 {
@@ -188,7 +182,10 @@ func (l *Learner) UpdateFeatureWeights(ctx context.Context, signatureID string, 
 func (l *Learner) ReinforcePattern(ctx context.Context, signatureID string, remediationAction string, resolutionTime int64) error {
 	sig, err := l.signatureStore.Get(ctx, signatureID)
 	if err != nil {
-		return nil
+		if isSignatureNotFound(err) {
+			return nil // signature not found, skip
+		}
+		return fmt.Errorf("get signature %q: %w", signatureID, err)
 	}
 
 	sig.OccurrenceCount++
@@ -220,6 +217,15 @@ func (l *Learner) ReinforcePattern(ctx context.Context, signatureID string, reme
 	sig.UpdatedAt = now
 
 	return l.signatureStore.Save(ctx, sig)
+}
+
+// isSignatureNotFound reports whether err represents a genuinely missing
+// signature. The concrete stores return sql.ErrNoRows for a missing row while
+// other implementations use the storage.ErrNotFound sentinel; wrapped forms of
+// either are also treated as not found so transient failures are never
+// mistaken for an absent signature.
+func isSignatureNotFound(err error) bool {
+	return errors.Is(err, storage.ErrNotFound) || errors.Is(err, sql.ErrNoRows)
 }
 
 func average(v []float64) float64 {

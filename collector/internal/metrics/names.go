@@ -32,5 +32,6 @@ const (
 	CortexBridgeFlushesName    = "loza_collector_cortex_bridge_flushes_total"
 	CortexBridgeEventsName     = "loza_collector_cortex_bridge_events_total"
 	CortexBridgeErrorsName     = "loza_collector_cortex_bridge_errors_total"
+	CortexBridgeDroppedName    = "loza_collector_cortex_bridge_dropped_total"
 	CortexBridgeQueueDepthName = "loza_collector_cortex_bridge_queue_depth"
 )

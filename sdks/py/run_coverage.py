@@ -1,9 +1,13 @@
-"""Run the deterministic SDK coverage gate from this package directory."""
+"""Run the deterministic SDK coverage gate for this package."""
 
 from __future__ import annotations
 
 import subprocess
 import sys
+from pathlib import Path
+
+PACKAGE_DIR = Path(__file__).resolve().parent
+SOURCE_DIR = PACKAGE_DIR / "src" / "loza"
 
 
 def main() -> int:
@@ -15,7 +19,7 @@ def main() -> int:
             "coverage",
             "run",
             "--branch",
-            "--source=src/loza",
+            f"--source={SOURCE_DIR}",
             "-m",
             "pytest",
             "--ignore=tests/test_e2e_live.py",
@@ -42,7 +46,7 @@ def main() -> int:
         ],
     )
     for command in commands:
-        completed = subprocess.run(command, check=False)
+        completed = subprocess.run(command, check=False, cwd=PACKAGE_DIR)
         if completed.returncode:
             return completed.returncode
     return 0

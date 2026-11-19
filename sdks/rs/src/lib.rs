@@ -177,7 +177,12 @@ fn default_logger() -> Logger {
 
 pub fn set_global_logger(logger: Logger) {
     let lock = GLOBAL_LOGGER.get_or_init(|| RwLock::new(Logger::new(Config::dev("loza"))));
-    *write_global_logger(lock) = logger;
+    let mut guard = write_global_logger(lock);
+    // Shut down the previous logger before replacing it so a buffered async
+    // worker flushes its pending events instead of losing them when the old
+    // AsyncRuntime's sender is dropped. Mirrors `configure`.
+    let _ = guard.shutdown();
+    *guard = logger;
 }
 
 fn read_global_logger(lock: &RwLock<Logger>) -> RwLockReadGuard<'_, Logger> {
@@ -733,7 +738,14 @@ pub fn HTTPPath(path: impl Into<String>) -> Attr {
 pub fn HTTPUserAgent(ua: impl Into<String>) -> Attr {
     let mut value = ua.into();
     if value.len() > 512 {
-        value.truncate(512);
+        // String::truncate panics if the byte index splits a UTF-8 code point.
+        // Floor to the last valid char boundary at or before byte 512 so a
+        // multibyte character straddling the limit is cut whole (or dropped).
+        let mut end = 512;
+        while !value.is_char_boundary(end) {
+            end -= 1;
+        }
+        value.truncate(end);
     }
     Attr::new("http.user_agent", Value::String(value))
 }
@@ -950,10 +962,9 @@ pub fn CloneEvent(event: &EventContext) -> EventContext {
 
 pub fn LinkEvent(event: &mut EventContext, linked_id: impl Into<String>) {
     let mut link = serde_json::Map::new();
-    link.insert("event_id".to_string(), Value::String(linked_id.into()));
-    if event.error.is_none() {
-        event.error = Some(serde_json::Map::new());
-    }
+    link.insert("type".to_string(), Value::String("event".to_string()));
+    link.insert("target".to_string(), Value::String(linked_id.into()));
+    event.links.push(link);
 }
 
 thread_local! {
@@ -1308,8 +1319,14 @@ pub fn OtlpSink(endpoint: impl Into<String>) -> SinkConfig {
     }
 }
 
-pub fn Drain(sink: &SinkConfig) {
-    let _ = crate::sink::flush_sink(sink);
+/// Flush a sink, propagating any I/O error (see [`crate::sinks::drain`]).
+///
+/// # Migration note
+/// Previously returned `()` and discarded the flush result; now returns
+/// `std::io::Result<()>` so failures are observable. Use `let _ = Drain(sink);`
+/// to keep the old fire-and-forget behaviour.
+pub fn Drain(sink: &SinkConfig) -> std::io::Result<()> {
+    crate::sinks::drain(sink)
 }
 
 pub fn Pause(sink: &SinkConfig) {
@@ -2760,7 +2777,12 @@ pub fn multi_sink(sinks: &[SinkConfig]) -> Vec<SinkConfig> {
 pub fn otlp_sink(endpoint: impl Into<String>) -> SinkConfig {
     OtlpSink(endpoint)
 }
-pub fn drain(sink: &SinkConfig) {
+/// Flush a sink, propagating any I/O error (see [`Drain`]).
+///
+/// # Migration note
+/// Previously returned `()`; now returns `std::io::Result<()>` so flush
+/// failures are observable. Use `let _ = drain(sink);` for the old behaviour.
+pub fn drain(sink: &SinkConfig) -> std::io::Result<()> {
     Drain(sink)
 }
 pub fn pause(sink: &SinkConfig) {

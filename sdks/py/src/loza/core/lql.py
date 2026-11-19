@@ -67,8 +67,18 @@ def _decode_query_error(error: urllib.error.HTTPError) -> LQLCompilationError:
         data = json.loads(error.read().decode("utf-8"))
     except (OSError, ValueError):
         return LQLCompilationError(f"lql query failed with HTTP {error.code}", status=error.code)
+    if not isinstance(data, dict):
+        return LQLCompilationError(f"lql query failed with HTTP {error.code}", status=error.code)
     message = str(data.get("error") or f"lql query failed with HTTP {error.code}")
     return LQLCompilationError(message, status=error.code, diagnostics=data.get("diagnostics", []))
+
+
+def _coerce_int(value: Any, default: int) -> int:
+    """Coerce ``value`` to int, falling back to ``default`` when it is not numeric."""
+    try:
+        return int(value)
+    except (TypeError, ValueError, OverflowError):
+        return default
 
 
 def query_lql(
@@ -113,16 +123,25 @@ def query_lql(
         raise _decode_query_error(error) from error
     except (OSError, ValueError) as error:
         raise LQLCompilationError("lql query transport or response decoding failed") from error
-    columns = [column if isinstance(column, str) else column.get("name", "") for column in data.get("columns", [])]
-    rows = data.get("rows", [])
-    if not isinstance(columns, list) or not isinstance(rows, list):
+
+    if not isinstance(data, dict):
         raise LQLCompilationError("lql response has an invalid result envelope")
-    return QueryResult(
-        columns=columns,
-        rows=rows,
-        duration_ms=int(data.get("duration_ms", 0)),
-        row_count=int(data.get("row_count", len(rows))),
-    )
+    raw_columns = data.get("columns", [])
+    rows = data.get("rows", [])
+    if not isinstance(raw_columns, list) or not isinstance(rows, list):
+        raise LQLCompilationError("lql response has an invalid result envelope")
+    try:
+        columns = [column if isinstance(column, str) else column.get("name", "") for column in raw_columns]
+        if not all(isinstance(column, str) for column in columns):
+            raise LQLCompilationError("lql response has an invalid result envelope")
+        return QueryResult(
+            columns=columns,
+            rows=rows,
+            duration_ms=_coerce_int(data.get("duration_ms", 0), 0),
+            row_count=_coerce_int(data.get("row_count", len(rows)), len(rows)),
+        )
+    except (AttributeError, TypeError, ValueError) as error:
+        raise LQLCompilationError("lql response has an invalid result envelope") from error
 
 
 def query_sql(
@@ -137,4 +156,6 @@ def query_sql(
     req = urllib.request.Request(url, data=body, headers=headers, method="POST")
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         data = json.loads(resp.read().decode("utf-8"))
+    if not isinstance(data, dict):
+        raise LQLCompilationError("lql response has an invalid result envelope")
     return QueryResult(columns=data.get("columns", []), rows=data.get("rows", []))

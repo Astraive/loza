@@ -15,6 +15,7 @@ time = { version = "0.3", features = ["formatting", "parsing"] }
 fastrand = "2"
 flate2 = "1"
 ureq = { version = "2", features = ["gzip", "json"] }
+url = "2"
 regex = "1"
 sha2 = "0.10"
 base64 = "0.22"
@@ -24,6 +25,9 @@ actix-web = { version = "4", optional = true }
 axum = { version = "0.7", optional = true }
 tower = { version = "0.4", optional = true }
 hyper = { version = "1", optional = true }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt"] }
 
 [features]
 default = []

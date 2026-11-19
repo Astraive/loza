@@ -153,20 +153,22 @@ func grpcAuthenticate(ctx context.Context, store KeyStore, cache *MemoryKeyCache
 	// Build context
 	permissions := ExpandRoles(record.Roles)
 	ac := &AuthContext{
-		OrgID:               record.OrgID,
-		ProjectID:           record.ProjectID,
-		APIKeyID:            record.KeyID,
-		KeyKind:             record.Kind,
-		Roles:               record.Roles,
-		Permissions:         permissions,
-		AllowedEnvs:         record.AllowedEnvs,
-		AllowedServices:     record.AllowedServices,
-		MaxPayloadBytes:     record.MaxPayloadBytes,
+		OrgID:                record.OrgID,
+		ProjectID:            record.ProjectID,
+		APIKeyID:             record.KeyID,
+		KeyKind:              record.Kind,
+		Roles:                record.Roles,
+		Permissions:          permissions,
+		CollectorGrants:      cloneCollectorGrants(record.CollectorGrants),
+		AllowedEnvs:          record.AllowedEnvs,
+		AllowedServices:      record.AllowedServices,
+		AllowedIPs:           record.AllowedIPs,
+		MaxPayloadBytes:      record.MaxPayloadBytes,
 		MaxRequestsPerMinute: record.MaxRequestsPerMinute,
-		MaxEventsPerMinute:  record.MaxEventsPerMinute,
-		SamplingRate:        record.SamplingRate,
-		AllowPII:            record.AllowPII,
-		AllowAttachments:    record.AllowAttachments,
+		MaxEventsPerMinute:   record.MaxEventsPerMinute,
+		SamplingRate:         record.SamplingRate,
+		AllowPII:             record.AllowPII,
+		AllowAttachments:     record.AllowAttachments,
 	}
 
 	if record.Kind == KeyKindPublic {
@@ -256,7 +258,9 @@ func extractIPFromPeer(ctx context.Context, trustedProxies []*net.IPNet) string 
 				}
 			}
 			if xri := getMetadataValue(md, "x-real-ip"); xri != "" {
-				return strings.TrimSpace(xri)
+				if ip := net.ParseIP(strings.TrimSpace(xri)); ip != nil {
+					return ip.String()
+				}
 			}
 		}
 	}

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -21,6 +22,53 @@ type sequenceSink struct {
 	mu     sync.Mutex
 	errs   []error
 	writes int
+}
+
+// Regression for MASS-0143: multiple fallback outputs must be rejected before
+// any sink is created, so an earlier fallback cannot be silently overwritten
+// and leak its background flush loop/resources.
+func TestValidateFanoutRolesRejectsMultipleEnabledFallbacks(t *testing.T) {
+	outputs := []collectorFanoutOutput{
+		{name: "fb-a", role: fanoutRoleFallback, enabled: true},
+		{name: "fb-b", role: fanoutRoleFallback, enabled: true},
+	}
+	err := validateFanoutRoles(outputs)
+	if err == nil {
+		t.Fatal("expected an error for multiple enabled fallback outputs")
+	}
+	if !strings.Contains(err.Error(), "at most one") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestValidateFanoutRolesAllowsSingleEnabledFallback(t *testing.T) {
+	outputs := []collectorFanoutOutput{
+		{name: "fb-a", role: fanoutRoleFallback, enabled: true},
+		{name: "fb-disabled", role: fanoutRoleFallback, enabled: false},
+		{name: "sec", role: fanoutRoleSecondary, enabled: true},
+	}
+	if err := validateFanoutRoles(outputs); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestCreateFanoutSinksRejectsMultipleFallbacks(t *testing.T) {
+	cfg := collectorConfig{
+		fanoutOutputs: []collectorFanoutOutput{
+			{name: "fb-a", role: fanoutRoleFallback, enabled: true},
+			{name: "fb-b", role: fanoutRoleFallback, enabled: true},
+		},
+	}
+	secondary, fallback, dbs, err := createFanoutSinks(cfg)
+	if err == nil {
+		t.Fatal("expected createFanoutSinks to reject multiple fallback outputs")
+	}
+	if !strings.Contains(err.Error(), "at most one") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if secondary != nil || fallback != nil || dbs != nil {
+		t.Fatalf("expected no sinks on validation failure, got secondary=%v fallback=%v dbs=%v", secondary, fallback, dbs)
+	}
 }
 
 func (s *sequenceSink) Name() string { return "sequence" }
@@ -262,4 +310,119 @@ func waitForDLQLine(t *testing.T, path string) string {
 	}
 	t.Fatalf("timed out waiting for dlq entry in %s", path)
 	return ""
+}
+
+// closeTrackingSink records how many times Close is called so tests can
+// assert that sinks created before a fanout failure are released.
+type closeTrackingSink struct {
+	mu     sync.Mutex
+	name   string
+	closes int
+}
+
+func (s *closeTrackingSink) Name() string { return s.name }
+
+func (s *closeTrackingSink) WriteEvent(context.Context, []byte, *collectorevent.Event) error {
+	return nil
+}
+
+func (s *closeTrackingSink) Flush(context.Context) error { return nil }
+
+func (s *closeTrackingSink) Close(context.Context) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.closes++
+	return nil
+}
+
+func (s *closeTrackingSink) CloseCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.closes
+}
+
+func TestCreateFanoutSinksClosesSinksOnLaterFactoryError(t *testing.T) {
+	originalFactory := fanoutSinkFactory
+	t.Cleanup(func() { fanoutSinkFactory = originalFactory })
+
+	first := &closeTrackingSink{name: "first"}
+	wantErr := errors.New("second sink failed")
+	calls := 0
+	fanoutSinkFactory = func(_ collectorConfig, _ collectorFanoutOutput, _ string) (collectorevent.Sink, *sql.DB, error) {
+		calls++
+		if calls == 1 {
+			return first, nil, nil
+		}
+		return nil, nil, wantErr
+	}
+
+	cfg := testCollectorConfig()
+	cfg.fanoutOutputs = []collectorFanoutOutput{
+		{name: "first", enabled: true, sinkType: fanoutSinkLoki},
+		{name: "second", enabled: true, sinkType: fanoutSinkOTLP},
+	}
+
+	secondary, fallback, dbs, err := createFanoutSinks(cfg)
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("expected factory error, got %v", err)
+	}
+	if secondary != nil || fallback != nil || dbs != nil {
+		t.Fatalf("expected no sinks on failure, got secondary=%v fallback=%v dbs=%v", secondary, fallback, dbs)
+	}
+	if got := first.CloseCount(); got != 1 {
+		t.Fatalf("expected first sink to be closed once, got %d", got)
+	}
+}
+
+func TestCreateFanoutSinksClosesSinksOnConnectionError(t *testing.T) {
+	originalFactory := fanoutSinkFactory
+	t.Cleanup(func() { fanoutSinkFactory = originalFactory })
+
+	first := &closeTrackingSink{name: "first"}
+	fanoutSinkFactory = func(_ collectorConfig, _ collectorFanoutOutput, _ string) (collectorevent.Sink, *sql.DB, error) {
+		return first, nil, nil
+	}
+
+	cfg := testCollectorConfig()
+	cfg.fanoutOutputs = []collectorFanoutOutput{
+		{name: "first", enabled: true, sinkType: fanoutSinkLoki},
+		{name: "second", enabled: true, sinkType: fanoutSinkLoki, connection: "missing"},
+	}
+
+	_, _, _, err := createFanoutSinks(cfg)
+	if err == nil || !strings.Contains(err.Error(), "unknown database connection") {
+		t.Fatalf("expected unknown connection error, got %v", err)
+	}
+	if got := first.CloseCount(); got != 1 {
+		t.Fatalf("expected first sink to be closed once, got %d", got)
+	}
+}
+
+func TestCreateFanoutSinksClosesSinksOnUnsupportedType(t *testing.T) {
+	originalFactory := fanoutSinkFactory
+	t.Cleanup(func() { fanoutSinkFactory = originalFactory })
+
+	first := &closeTrackingSink{name: "first"}
+	calls := 0
+	fanoutSinkFactory = func(cfg collectorConfig, output collectorFanoutOutput, sinkType string) (collectorevent.Sink, *sql.DB, error) {
+		calls++
+		if calls == 1 {
+			return first, nil, nil
+		}
+		return originalFactory(cfg, output, sinkType)
+	}
+
+	cfg := testCollectorConfig()
+	cfg.fanoutOutputs = []collectorFanoutOutput{
+		{name: "first", enabled: true, sinkType: fanoutSinkLoki},
+		{name: "second", enabled: true, sinkType: "bogus"},
+	}
+
+	_, _, _, err := createFanoutSinks(cfg)
+	if err == nil || !strings.Contains(err.Error(), "unsupported type") {
+		t.Fatalf("expected unsupported type error, got %v", err)
+	}
+	if got := first.CloseCount(); got != 1 {
+		t.Fatalf("expected first sink to be closed once, got %d", got)
+	}
 }

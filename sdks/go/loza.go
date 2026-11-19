@@ -576,9 +576,9 @@ func WithTimer(ctx context.Context, name string, fn func() error, attrs ...Attr)
 	return core.WithTimer(ctx, name, fn, attrs...)
 }
 
-// FinishGroupError completes a group handle with an error.
-func FinishGroupError(h *GroupHandle, err error, attrs ...Attr) error {
-	return core.FinishGroupError(h, err, attrs...)
+// FinishGroupError completes a group handle with an error and status code.
+func FinishGroupError(h *GroupHandle, err error, statusCode int, attrs ...Attr) error {
+	return core.FinishGroupError(h, err, statusCode, attrs...)
 }
 
 // Flush drains the queue.
@@ -1051,12 +1051,20 @@ func SetIDGenerator(cfg Config, gen IDGenerator) Config {
 func NoopSink() Sink                                      { return core.NoopSink() }
 func CollectorSink(cfg CollectorSinkConfig) (Sink, error) { return core.CollectorSink(cfg) }
 
+// KafkaTopicHeader is the HTTP header KafkaSink uses to attach Kafka routing
+// metadata (the target topic) to each batch sent to the collector.
+const KafkaTopicHeader = "X-Loza-Kafka-Topic"
+
 // KafkaSink sends events to the collector with Kafka routing metadata.
+// The topic is attached as the KafkaTopicHeader request header so the
+// collector can route the batch to the configured Kafka sink.
 // The collector must have a Kafka sink configured to handle these events.
 func KafkaSink(endpoint, topic string) (Sink, error) {
-	return core.HTTPBatchSink(core.HTTPBatchSinkConfig{
-		Endpoint: endpoint,
-	})
+	cfg := core.HTTPBatchSinkConfig{Endpoint: endpoint}
+	if strings.TrimSpace(topic) != "" {
+		cfg.Headers = map[string]string{KafkaTopicHeader: topic}
+	}
+	return core.HTTPBatchSink(cfg)
 }
 
 // HTTPBatchSink creates a sink that batches events as NDJSON and flushes
@@ -1216,6 +1224,10 @@ func Redact(keys ...string) Redactor             { return core.RedactKeys(keys..
 func RedactKeys(keys ...string) Redactor         { return core.RedactKeys(keys...) }
 func DropKeys(keys ...string) Redactor           { return core.DropKeys(keys...) }
 func RedactPatterns(patterns ...string) Redactor { return core.RedactPatterns(patterns...) }
+
+func HashKeysWithSecret(secret []byte, keys ...string) Redactor {
+	return core.HashKeysWithSecret(secret, keys...)
+}
 
 // ── Schemas ────────────────────────────────────────────────────────────────────
 

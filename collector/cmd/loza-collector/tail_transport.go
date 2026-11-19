@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -68,7 +69,7 @@ func (s *collectorState) handleTailWebSocket(w http.ResponseWriter, r *http.Requ
 			if !ok {
 				return
 			}
-			if !rawMatchesTailFilters(raw, filters) {
+			if !s.TailMatches(r.Context(), raw, filters) {
 				continue
 			}
 			if err := s.writeTailWebSocketEvent(conn, raw); err != nil {
@@ -97,20 +98,23 @@ func (s *collectorState) queryTailHistory(ctx context.Context, filters serverrun
 	if s.queryDB == nil {
 		return nil, nil
 	}
-	rawIdent, err := quoteSQLIdent(s.cfg.duckDBRawColumn)
+	rawIdent, err := quoteSQLIdent(s.config().duckDBRawColumn)
 	if err != nil {
 		return nil, err
 	}
-	tableIdent, err := quoteSQLIdent(s.cfg.duckDBTable)
+	tableIdent, err := quoteSQLIdent(s.config().duckDBTable)
 	if err != nil {
 		return nil, err
 	}
-	tsColumn := s.tailTimestampColumn()
+	tsColumn, err := s.tailTimestampColumn()
+	if err != nil {
+		return nil, err
+	}
 	tsIdent, err := quoteSQLIdent(tsColumn)
 	if err != nil {
 		return nil, err
 	}
-	if encryptionEnabled(s.cfg.storageEncryptionKey) {
+	if encryptionEnabled(s.config().storageEncryptionKey) {
 		return s.queryEncryptedTailHistory(ctx, filters, rawIdent, tableIdent, tsIdent)
 	}
 	idExpr := fmt.Sprintf("coalesce(json_extract_string(%s, '$.event_id'), json_extract_string(%s, '$.id'), '')", rawIdent, rawIdent)
@@ -187,7 +191,7 @@ func (s *collectorState) queryEncryptedTailHistory(
 		if err != nil {
 			return nil, err
 		}
-		raw, err := duckdbsink.DecryptRaw(encrypted, s.cfg.storageEncryptionKey)
+		raw, err := duckdbsink.DecryptRaw(encrypted, s.config().storageEncryptionKey)
 		if err != nil {
 			return nil, fmt.Errorf("decrypt tail history: %w", err)
 		}
@@ -224,13 +228,27 @@ func rawMatchesTailCursor(raw []byte, filters serverruntime.TailFilters) bool {
 	return !eventTime.Equal(filters.Since) || filters.AfterEventID == "" || eventID > filters.AfterEventID
 }
 
-func (s *collectorState) tailTimestampColumn() string {
-	for col, path := range s.cfg.duckDBSchema {
+// tailTimestampColumn resolves the single column projected from the "timestamp"
+// path. Map iteration order in Go is randomized, so returning the first match
+// makes ORDER BY/WHERE selection nondeterministic when a (mis)configuration maps
+// more than one column to that path. Resolve deterministically and surface the
+// ambiguity as an error instead of silently picking a varying column.
+func (s *collectorState) tailTimestampColumn() (string, error) {
+	var candidates []string
+	for col, path := range s.config().duckDBSchema {
 		if path == "timestamp" {
-			return col
+			candidates = append(candidates, col)
 		}
 	}
-	return "timestamp"
+	switch len(candidates) {
+	case 0:
+		return "timestamp", nil
+	case 1:
+		return candidates[0], nil
+	default:
+		sort.Strings(candidates)
+		return "", fmt.Errorf("ambiguous timestamp column: %d columns map to the timestamp path (%s)", len(candidates), strings.Join(candidates, ", "))
+	}
 }
 
 func scanRawRow(rows *sql.Rows) ([]byte, error) {

@@ -1,0 +1,364 @@
+package cli
+
+import (
+	"os"
+	"path/filepath"
+	"reflect"
+	"strings"
+	"testing"
+
+	"github.com/astraive/loza/cli/internal/commands"
+	"github.com/astraive/loza/cli/internal/config"
+)
+
+func TestSplitGlobalFlags(t *testing.T) {
+	tests := []struct {
+		name        string
+		args        []string
+		wantArgs    []string
+		wantVerbose bool
+		wantFormat  string
+	}{
+		{
+			name:       "emit sample output path is preserved",
+			args:       []string{"emit", "sample", "--output", "/tmp/x.json", "--print"},
+			wantArgs:   []string{"emit", "sample", "--output", "/tmp/x.json", "--print"},
+			wantFormat: "text",
+		},
+		{
+			name:       "schema fetch output path is preserved",
+			args:       []string{"schema", "fetch", "--output", "schema.json"},
+			wantArgs:   []string{"schema", "fetch", "--output", "schema.json"},
+			wantFormat: "text",
+		},
+		{
+			name:       "export output path is preserved",
+			args:       []string{"export", "--output", "events.json", "--format", "json"},
+			wantArgs:   []string{"export", "--output", "events.json", "--format", "json"},
+			wantFormat: "text",
+		},
+		{
+			name:       "dangling output flag is preserved",
+			args:       []string{"emit", "sample", "--output"},
+			wantArgs:   []string{"emit", "sample", "--output"},
+			wantFormat: "text",
+		},
+		{
+			name:       "global format after command is still consumed",
+			args:       []string{"status", "--output", "json"},
+			wantArgs:   []string{"status"},
+			wantFormat: "json",
+		},
+		{
+			name:       "global format before command is consumed",
+			args:       []string{"--output", "table", "query", "-q", "SELECT 1"},
+			wantArgs:   []string{"query", "-q", "SELECT 1"},
+			wantFormat: "table",
+		},
+		{
+			name:       "output equals format is still consumed",
+			args:       []string{"--output=json", "status"},
+			wantArgs:   []string{"status"},
+			wantFormat: "json",
+		},
+		{
+			name:        "verbose is consumed anywhere",
+			args:        []string{"--verbose", "status", "--output", "text"},
+			wantArgs:    []string{"status"},
+			wantVerbose: true,
+			wantFormat:  "text",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotArgs, gotVerbose, gotFormat := splitGlobalFlags(tt.args)
+			if !reflect.DeepEqual(gotArgs, tt.wantArgs) {
+				t.Fatalf("remaining args = %q, want %q", gotArgs, tt.wantArgs)
+			}
+			if gotVerbose != tt.wantVerbose {
+				t.Fatalf("verbose = %v, want %v", gotVerbose, tt.wantVerbose)
+			}
+			if gotFormat != tt.wantFormat {
+				t.Fatalf("format = %q, want %q", gotFormat, tt.wantFormat)
+			}
+		})
+	}
+}
+
+// TestEmitOutputPathSurvivesGlobalFlagParsing reproduces the reported bug:
+// through the real CLI the global parser removes the --output file-path
+// argument before EmitCommand can see it.
+func TestEmitOutputPathSurvivesGlobalFlagParsing(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "sample.json")
+	args, _, _ := splitGlobalFlags([]string{"emit", "sample", "--output", path, "--print"})
+	if !reflect.DeepEqual(args, []string{"emit", "sample", "--output", path, "--print"}) {
+		t.Fatalf("global parser altered args: %q", args)
+	}
+
+	cfg := config.Config{CollectorURL: "http://127.0.0.1:9308"}
+	if err := commands.EmitCommand(cfg, args[1:]); err != nil {
+		t.Fatalf("emit sample: %v", err)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("sample output file was not written: %v", err)
+	}
+	if !strings.Contains(string(raw), `"api_version": "v1"`) {
+		t.Fatalf("unexpected sample output: %s", raw)
+	}
+}
+
+func TestExtractGlobalFlagsOutputForms(t *testing.T) {
+	tests := []struct {
+		name        string
+		args        []string
+		wantFmt     string
+		wantArgs    []string
+		wantVerbose bool
+	}{
+		{
+			name:     "equals form with documented literal",
+			args:     []string{"--output=json", "query"},
+			wantFmt:  "json",
+			wantArgs: []string{"query"},
+		},
+		{
+			name:     "equals form with yaml is consumed as a flag",
+			args:     []string{"--output=yaml", "config"},
+			wantFmt:  "yaml",
+			wantArgs: []string{"config"},
+		},
+		{
+			name:     "equals form with csv is consumed as a flag",
+			args:     []string{"--output=csv", "query"},
+			wantFmt:  "csv",
+			wantArgs: []string{"query"},
+		},
+		{
+			name:     "equals form with an arbitrary value",
+			args:     []string{"--output=anything"},
+			wantFmt:  "anything",
+			wantArgs: nil,
+		},
+		{
+			name:     "space form accepts any value",
+			args:     []string{"--output", "yaml", "config"},
+			wantFmt:  "yaml",
+			wantArgs: []string{"config"},
+		},
+		{
+			name:     "last output flag wins across both forms",
+			args:     []string{"--output=json", "--output", "csv", "query"},
+			wantFmt:  "csv",
+			wantArgs: []string{"query"},
+		},
+		{
+			name:        "verbose is preserved alongside equals form",
+			args:        []string{"--verbose", "--output=yaml", "version"},
+			wantFmt:     "yaml",
+			wantArgs:    []string{"version"},
+			wantVerbose: true,
+		},
+		{
+			name:     "no output flag keeps the default",
+			args:     []string{"status"},
+			wantFmt:  "text",
+			wantArgs: []string{"status"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			verbose, gotFmt, gotArgs := extractGlobalFlags(tt.args)
+			if gotFmt != tt.wantFmt {
+				t.Errorf("output format = %q, want %q", gotFmt, tt.wantFmt)
+			}
+			if !reflect.DeepEqual(gotArgs, tt.wantArgs) {
+				t.Errorf("filtered args = %#v, want %#v", gotArgs, tt.wantArgs)
+			}
+			if verbose != tt.wantVerbose {
+				t.Errorf("verbose = %v, want %v", verbose, tt.wantVerbose)
+			}
+		})
+	}
+}
+
+// TestRunEqualsOutputIsNotPositional reproduces the reported behavior: an
+// --output=<fmt> value other than json/table/text used to fall through to the
+// default case and become the first positional argument, yielding
+// "unknown command: --output=yaml". It must now be consumed as a global flag.
+func TestRunEqualsOutputIsNotPositional(t *testing.T) {
+	for _, value := range []string{"yaml", "csv", "anything"} {
+		flag := "--output=" + value
+		if err := Run([]string{flag, "version"}); err != nil {
+			t.Errorf("Run([%q, \"version\"]) = %v, want nil", flag, err)
+		}
+	}
+}
+
+const testDefaults = "" +
+	"collector_repo_path: ./collector\n" +
+	"cortex_repo_path: ./cortex\n" +
+	"spec_repo_path: ./spec\n" +
+	"collector_url: http://127.0.0.1:9308\n" +
+	"duckdb_path: loza.db\n" +
+	"spool_dir: loza-spool\n" +
+	"spool_file: spool.ndjson\n" +
+	"dlq_path: loza-dlq.ndjson\n"
+
+func writeTestDefaults(t *testing.T, dir, extra string) string {
+	t.Helper()
+	path := filepath.Join(dir, "loza-cli.defaults.yaml")
+	if err := os.WriteFile(path, []byte(testDefaults+extra), 0o600); err != nil {
+		t.Fatalf("write defaults: %v", err)
+	}
+	return path
+}
+
+// An invalid config must surface as a fatal error for init, just like every
+// other command, instead of being silently replaced by an empty Config{} that
+// generates a broken config file.
+func TestInitPropagatesConfigLoadError(t *testing.T) {
+	dir := t.TempDir()
+	defaultsPath := writeTestDefaults(t, dir, "validation_mode: bogus\n")
+
+	t.Setenv("LOZA_CLI_DEFAULTS", defaultsPath)
+	t.Setenv("LOZA_CLI_CONFIG", filepath.Join(dir, "no-user-config.yaml"))
+
+	target := filepath.Join(dir, "generated.yaml")
+	err := Run([]string{"init", target})
+	if err == nil {
+		t.Fatal("init with invalid config: expected an error, got nil")
+	}
+	if !strings.Contains(err.Error(), "load cli config") {
+		t.Fatalf("error = %q, want it to wrap the config load error", err)
+	}
+	if _, statErr := os.Stat(target); !os.IsNotExist(statErr) {
+		t.Fatalf("config must not be generated on load error; stat err = %v", statErr)
+	}
+}
+
+// init must continue to generate a config when the existing config is valid.
+func TestInitWithValidConfigStillGenerates(t *testing.T) {
+	dir := t.TempDir()
+	defaultsPath := writeTestDefaults(t, dir, "")
+
+	t.Setenv("LOZA_CLI_DEFAULTS", defaultsPath)
+	t.Setenv("LOZA_CLI_CONFIG", filepath.Join(dir, "no-user-config.yaml"))
+
+	target := filepath.Join(dir, "generated.yaml")
+	if err := Run([]string{"init", target}); err != nil {
+		t.Fatalf("init with valid config: %v", err)
+	}
+	if _, statErr := os.Stat(target); statErr != nil {
+		t.Fatalf("expected generated config file: %v", statErr)
+	}
+}
+
+func TestParseGlobalFlagsValid(t *testing.T) {
+	tests := []struct {
+		name             string
+		args             []string
+		wantArgs         []string
+		wantVerbose      bool
+		wantOutputFormat string
+	}{
+		{
+			name:             "bare output format after command",
+			args:             []string{"status", "--output", "json"},
+			wantArgs:         []string{"status"},
+			wantOutputFormat: "json",
+		},
+		{
+			name:             "bare output format before command with verbose",
+			args:             []string{"--verbose", "--output", "table", "status", "--limit", "5"},
+			wantArgs:         []string{"status", "--limit", "5"},
+			wantVerbose:      true,
+			wantOutputFormat: "table",
+		},
+		{
+			name:             "equals form",
+			args:             []string{"--output=text", "status"},
+			wantArgs:         []string{"status"},
+			wantOutputFormat: "text",
+		},
+		{
+			name:             "csv is supported by query",
+			args:             []string{"query", "--output", "csv", "-q", "SELECT 1"},
+			wantArgs:         []string{"query", "-q", "SELECT 1"},
+			wantOutputFormat: "csv",
+		},
+		{
+			name:             "no output flag defaults to text",
+			args:             []string{"status"},
+			wantArgs:         []string{"status"},
+			wantOutputFormat: "text",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotArgs, gotVerbose, gotFormat, err := parseGlobalFlags(tt.args)
+			if err != nil {
+				t.Fatalf("parseGlobalFlags() unexpected error: %v", err)
+			}
+			if strings.Join(gotArgs, " ") != strings.Join(tt.wantArgs, " ") {
+				t.Errorf("args = %v, want %v", gotArgs, tt.wantArgs)
+			}
+			if gotVerbose != tt.wantVerbose {
+				t.Errorf("verbose = %v, want %v", gotVerbose, tt.wantVerbose)
+			}
+			if gotFormat != tt.wantOutputFormat {
+				t.Errorf("format = %q, want %q", gotFormat, tt.wantOutputFormat)
+			}
+		})
+	}
+}
+
+func TestParseGlobalFlagsMissingValue(t *testing.T) {
+	_, _, _, err := parseGlobalFlags([]string{"status", "--output"})
+	if err == nil {
+		t.Fatal("parseGlobalFlags() accepted --output with no value")
+	}
+	if !strings.Contains(err.Error(), "--output requires a value") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestParseGlobalFlagsRejectsFlagAsValue(t *testing.T) {
+	_, _, _, err := parseGlobalFlags([]string{"--output", "--verbose", "status"})
+	if err == nil {
+		t.Fatal("parseGlobalFlags() accepted --verbose as the --output value")
+	}
+	if !strings.Contains(err.Error(), "--verbose") {
+		t.Fatalf("error should name the swallowed flag, got: %v", err)
+	}
+}
+
+func TestParseGlobalFlagsRejectsInvalidFormat(t *testing.T) {
+	for _, args := range [][]string{
+		{"status", "--output", "bogus"},
+		{"status", "--output=bogus"},
+	} {
+		_, _, _, err := parseGlobalFlags(args)
+		if err == nil {
+			t.Fatalf("parseGlobalFlags(%q) accepted an unsupported format", args)
+		}
+		if !strings.Contains(err.Error(), "invalid output format") {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	}
+}
+
+func TestRunRejectsInvalidOutputFlag(t *testing.T) {
+	for _, args := range [][]string{
+		{"status", "--output"},
+		{"--output", "--verbose", "status"},
+		{"status", "--output", "bogus"},
+	} {
+		if err := Run(args); err == nil {
+			t.Fatalf("Run(%q) returned nil, want an error", args)
+		}
+	}
+}

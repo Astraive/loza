@@ -93,26 +93,27 @@ func debugPipeline(ctx context.Context, cfg config.Config) error {
 	output.PrintKeyValue(pairs)
 
 	sinks, err := client.FetchSinks(cfg.CollectorURL)
-	if err == nil {
-		fmt.Println()
-		output.PrintSection("Sinks")
-		var sk map[string]any
-		if err := json.Unmarshal(sinks, &sk); err != nil {
-			return fmt.Errorf("decode sinks: %w", err)
-		}
-		if sinkList, ok := sk["sinks"].([]any); ok {
-			rows := [][]string{}
-			for _, s := range sinkList {
-				if m, ok := s.(map[string]any); ok {
-					rows = append(rows, []string{
-						fmt.Sprintf("%v", m["name"]),
-						fmt.Sprintf("%v", m["type"]),
-						fmt.Sprintf("%v", m["health"]),
-					})
-				}
+	if err != nil {
+		return fmt.Errorf("fetch sinks: %w", err)
+	}
+	fmt.Println()
+	output.PrintSection("Sinks")
+	var sk map[string]any
+	if err := json.Unmarshal(sinks, &sk); err != nil {
+		return fmt.Errorf("decode sinks: %w", err)
+	}
+	if sinkList, ok := sk["sinks"].([]any); ok {
+		rows := [][]string{}
+		for _, s := range sinkList {
+			if m, ok := s.(map[string]any); ok {
+				rows = append(rows, []string{
+					fmt.Sprintf("%v", m["name"]),
+					fmt.Sprintf("%v", m["type"]),
+					fmt.Sprintf("%v", m["health"]),
+				})
 			}
-			output.PrintTable([]string{"Name", "Type", "Health"}, rows)
 		}
+		output.PrintTable([]string{"Name", "Type", "Health"}, rows)
 	}
 
 	fmt.Println()
@@ -157,6 +158,8 @@ func debugCortex(ctx context.Context, cfg config.Config) error {
 				}
 			}
 		}
+	} else {
+		fmt.Printf("  %s: %v\n", output.Warning("Key Metrics unavailable"), err)
 	}
 
 	fmt.Println()

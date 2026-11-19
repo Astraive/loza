@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"strings"
 	"sync"
 	"time"
@@ -27,6 +28,12 @@ type Config struct {
 	BatchSize     int
 	FlushInterval time.Duration
 	EncryptKey    string
+
+	// ErrorHandler, when set, receives errors from background (ticker-driven)
+	// flushes, which have no caller to return an error to. It is invoked from
+	// the sink's background goroutine, so it should return promptly and must
+	// not call back into the sink. When nil, such errors are logged instead.
+	ErrorHandler func(error)
 }
 
 type sink struct {
@@ -38,8 +45,11 @@ type sink struct {
 	count     int
 	closed    bool
 	stop      chan struct{}
-	closeOnce sync.Once
+	closeMu   sync.Mutex
 	wg        sync.WaitGroup
+	// putObjectFn is the upload primitive. It is a field so tests can inject
+	// failures; production sinks always use (*sink).putObject.
+	putObjectFn func(context.Context, []byte) error
 }
 
 // New creates a GCS sink.
@@ -67,6 +77,7 @@ func New(cfg Config) (collectorevent.Sink, error) {
 		batchSize: cfg.BatchSize,
 		stop:      make(chan struct{}),
 	}
+	s.putObjectFn = s.putObject
 	if len(cfg.Schema) > 0 {
 		s.cfg.Schema = make(map[string]string, len(cfg.Schema))
 		for col, path := range cfg.Schema {
@@ -107,7 +118,7 @@ func (s *sink) WriteEvent(ctx context.Context, encoded []byte, _ *collectorevent
 	if len(payload) == 0 {
 		return nil
 	}
-	if err := s.putObject(ctx, payload); err != nil {
+	if err := s.putObjectFn(ctx, payload); err != nil {
 		s.restore(payload, n)
 		return err
 	}
@@ -117,18 +128,23 @@ func (s *sink) WriteEvent(ctx context.Context, encoded []byte, _ *collectorevent
 func (s *sink) Flush(ctx context.Context) error { return s.flushBatch(ctx) }
 
 func (s *sink) Close(ctx context.Context) error {
-	var closeErr error
-	s.closeOnce.Do(func() {
-		s.mu.Lock()
-		s.closed = true
-		s.mu.Unlock()
+	s.closeMu.Lock()
+	defer s.closeMu.Unlock()
+
+	// Stop the background flush loop only once.
+	s.mu.Lock()
+	alreadyStopping := s.closed
+	s.closed = true
+	s.mu.Unlock()
+	if !alreadyStopping {
 		close(s.stop)
 		s.wg.Wait()
-		if err := s.flushBatch(ctx); err != nil {
-			closeErr = err
-		}
-	})
-	return closeErr
+	}
+
+	// Always attempt a final flush. A failed upload restores the batch to the
+	// buffer, so a subsequent Close retries it instead of reporting success
+	// while data is still stranded. Once the buffer is empty, Close is a no-op.
+	return s.flushBatch(ctx)
 }
 
 func (s *sink) flushLoop() {
@@ -138,11 +154,27 @@ func (s *sink) flushLoop() {
 	for {
 		select {
 		case <-t.C:
-			_ = s.flushBatch(context.Background())
+			if err := s.flushBatch(context.Background()); err != nil {
+				s.reportFlushError(err)
+			}
 		case <-s.stop:
 			return
 		}
 	}
+}
+
+// reportFlushError makes a background flush failure observable. Without this,
+// a persistent putObject failure (for example an auth or quota error) is
+// silently discarded by the ticker path and only accumulates in the buffer.
+func (s *sink) reportFlushError(err error) {
+	if err == nil {
+		return
+	}
+	if s.cfg.ErrorHandler != nil {
+		s.cfg.ErrorHandler(err)
+		return
+	}
+	log.Printf("gcs: background flush error: %v", err)
 }
 
 func (s *sink) appendLocked(encoded []byte) ([]byte, int, error) {
@@ -171,7 +203,7 @@ func (s *sink) flushBatch(ctx context.Context) error {
 	if len(payload) == 0 {
 		return nil
 	}
-	if err := s.putObject(ctx, payload); err != nil {
+	if err := s.putObjectFn(ctx, payload); err != nil {
 		s.restore(payload, n)
 		return err
 	}

@@ -1,67 +1,41 @@
+"""Backward-compatible re-export of the canonical samplers.
+
+This module used to contain a second, byte-for-byte copy of the sampler
+factories defined in :mod:`loza.core.sampler`.  Keeping the implementation in a
+single place prevents the two copies from drifting, so every public name here
+is imported directly from ``loza.core.sampler``.
+"""
+
 from __future__ import annotations
 
-import random
-from datetime import timedelta
-from typing import Callable, Any
+from ..core.sampler import *  # noqa: F401,F403
 
-from ..core.event import EventContext
-
-Sampler = Callable[[EventContext], bool]
-
-
-def sample_all() -> Sampler:
-    return lambda event: True
-
-
-def sample_none() -> Sampler:
-    return lambda event: False
-
-
-def sample_random(rate: float) -> Sampler:
-    bounded = max(0.0, min(1.0, rate))
-    return lambda event: random.random() < bounded
-
-
-def sample_errors() -> Sampler:
-    return lambda event: event.outcome == "error" or event.error is not None
-
-
-def sample_slow_requests(duration: timedelta) -> Sampler:
-    threshold = int(duration.total_seconds() * 1000)
-    return lambda event: event.duration_ms() >= threshold
-
-
-def sample_status_codes(*codes: int) -> Sampler:
-    wanted = set(codes)
-    return lambda event: event.params.status_code in wanted
-
-
-def sample_routes(*routes: str) -> Sampler:
-    wanted = set(routes)
-    return lambda event: event.params.route in wanted or event.params.path in wanted
-
-
-def sample_users(*ids: str) -> Sampler:
-    wanted = set(ids)
-    return lambda event: str(event.user.get("id", "")) in wanted
-
-
-def sample_tenants(*ids: str) -> Sampler:
-    wanted = set(ids)
-    return lambda event: str(event.tenant.get("id", "")) in wanted
-
-
-def sample_feature_flag(name: str, value: Any) -> Sampler:
-    return lambda event: isinstance(event.attrs.get("feature"), dict) and event.attrs["feature"].get(name) == value
-
-
-def any_sampler(*samplers: Sampler) -> Sampler:
-    return lambda event: any(s(event) for s in samplers)
-
-
-def all_sampler(*samplers: Sampler) -> Sampler:
-    return lambda event: all(s(event) for s in samplers)
-
-
-def not_sampler(sampler: Sampler) -> Sampler:
-    return lambda event: not sampler(event)
+__all__ = [
+    "Sampler",
+    "sample_all",
+    "sample_none",
+    "sample_random",
+    "sample_rate",
+    "sample_errors",
+    "sample_slow_requests",
+    "sample_status_codes",
+    "sample_routes",
+    "sample_users",
+    "sample_tenants",
+    "sample_feature_flag",
+    "sample_by_header",
+    "any_sampler",
+    "all_sampler",
+    "not_sampler",
+    "sample_rate_limited",
+    "sample_by_event",
+    "sample_by_outcome",
+    "should_sample",
+    "allow_fields",
+    "block_fields",
+    "SampleByEvent",
+    "SampleByOutcome",
+    "ShouldSample",
+    "AllowFields",
+    "BlockFields",
+]

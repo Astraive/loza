@@ -8,18 +8,18 @@ import (
 )
 
 var (
-	emailRegex  = regexp.MustCompile(`[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}`)
-	ipRegex     = regexp.MustCompile(`\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b`)
-	ccRegex     = regexp.MustCompile(`\b\d{4}[\- ]?\d{4}[\- ]?\d{4}[\- ]?\d{4}\b`)
-	ssnRegex    = regexp.MustCompile(`\b\d{3}-\d{2}-\d{4}\b`)
-	phoneRegex  = regexp.MustCompile(`\b\+?1?[\- ]?\(?\d{3}\)?[\- ]?\d{3}[\- ]?\d{4}\b`)
+	emailRegex = regexp.MustCompile(`[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}`)
+	ipRegex    = regexp.MustCompile(`\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b`)
+	ccRegex    = regexp.MustCompile(`\b\d{4}[\- ]?\d{4}[\- ]?\d{4}[\- ]?\d{4}\b`)
+	ssnRegex   = regexp.MustCompile(`\b\d{3}-\d{2}-\d{4}\b`)
+	phoneRegex = regexp.MustCompile(`\b\+?1?[\- ]?\(?\d{3}\)?[\- ]?\d{3}[\- ]?\d{4}\b`)
 )
 
 // Config defines PII redaction settings.
 type Config struct {
-	Mode       Mode     `yaml:"mode"`
-	Blocklist  []string `yaml:"blocklist"`
-	Allowlist  []string `yaml:"allowlist"`
+	Mode      Mode     `yaml:"mode"`
+	Blocklist []string `yaml:"blocklist"`
+	Allowlist []string `yaml:"allowlist"`
 }
 
 // Mode controls redaction behavior.
@@ -30,6 +30,19 @@ const (
 	ModeLog     Mode = "log"
 )
 
+// normalizeMode maps a configured mode to an effective one. Empty and
+// unrecognized values fail closed to ModeEnforce so that a misconfiguration
+// can never turn redaction into a silent pass-through.
+func normalizeMode(mode Mode) Mode {
+	switch mode {
+	case ModeEnforce, ModeLog:
+		return mode
+	default:
+		log.Warn().Str("mode", string(mode)).Msg("unknown redaction mode, defaulting to enforce")
+		return ModeEnforce
+	}
+}
+
 // Redactor detects and optionally redacts PII from event data.
 type Redactor struct {
 	mode      Mode
@@ -38,10 +51,17 @@ type Redactor struct {
 	allowlist map[string]bool
 }
 
+// enforcing reports whether detected PII must be rewritten. Only the explicit
+// ModeLog mode is observe-only; every other value (including the zero value of
+// a manually constructed Redactor) redacts.
+func (r *Redactor) enforcing() bool {
+	return r.mode != ModeLog
+}
+
 // New creates a PII redactor with the given mode.
 func New(mode Mode) *Redactor {
 	return &Redactor{
-		mode: mode,
+		mode: normalizeMode(mode),
 		patterns: []*regexp.Regexp{
 			emailRegex,
 			ccRegex,
@@ -53,7 +73,7 @@ func New(mode Mode) *Redactor {
 // NewStrict creates a PII redactor that catches all patterns including IPs and phone numbers.
 func NewStrict(mode Mode) *Redactor {
 	return &Redactor{
-		mode: mode,
+		mode: normalizeMode(mode),
 		patterns: []*regexp.Regexp{
 			emailRegex,
 			ipRegex,
@@ -70,21 +90,29 @@ func NewWithConfig(cfg Config) *Redactor {
 	for _, k := range cfg.Allowlist {
 		allowlist[strings.ToLower(k)] = true
 	}
+	mode := normalizeMode(cfg.Mode)
+
+	// Normalize blocklist entries once so they match the lowercased key in
+	// redactString. Build a new slice to avoid mutating the caller's config.
+	blocklist := make([]string, len(cfg.Blocklist))
+	for i, k := range cfg.Blocklist {
+		blocklist[i] = strings.ToLower(k)
+	}
 	patterns := []*regexp.Regexp{emailRegex, ccRegex, ssnRegex}
-	if cfg.Mode == ModeEnforce {
+	if mode == ModeEnforce {
 		patterns = append(patterns, ipRegex, phoneRegex)
 	}
 	return &Redactor{
-		mode:      cfg.Mode,
+		mode:      mode,
 		patterns:  patterns,
-		blocklist: cfg.Blocklist,
+		blocklist: blocklist,
 		allowlist: allowlist,
 	}
 }
 
 // RedactMap walks a map and redacts PII in string values.
 func (r *Redactor) RedactMap(data map[string]interface{}) map[string]interface{} {
-	if r == nil || r.mode == "" {
+	if r == nil {
 		return data
 	}
 	return r.walkMap(data)
@@ -137,7 +165,7 @@ func (r *Redactor) redactString(key, value string) string {
 
 	for _, sk := range sensitiveKeys {
 		if strings.Contains(lowerKey, sk) {
-			if r.mode == ModeEnforce {
+			if r.enforcing() {
 				return "[REDACTED]"
 			}
 			log.Warn().Str("key", key).Msg("PII detected in sensitive field")
@@ -148,7 +176,7 @@ func (r *Redactor) redactString(key, value string) string {
 	// Check patterns
 	for _, pattern := range r.patterns {
 		if pattern.MatchString(value) {
-			if r.mode == ModeEnforce {
+			if r.enforcing() {
 				return pattern.ReplaceAllString(value, "[REDACTED]")
 			}
 			log.Warn().Str("key", key).Str("pattern", pattern.String()).Msg("PII pattern detected")

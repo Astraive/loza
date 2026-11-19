@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import copy
-import hashlib
 import json
 import sys
 import time
@@ -19,7 +18,9 @@ from .config import (
     UserWins,
     _collector_ingest_endpoint,
 )
+from .duplicate_policy import apply_duplicate
 from .errors import EventClosedError, EventValidationError
+from .hashing import hash_sensitive_value
 from .event import (
     EVENT_DELIVERY_FAILED,
     EVENT_EMITTED,
@@ -166,14 +167,21 @@ class Logger:
     def append(self, ctx: EventContext, *attrs: Attr, **named: Any) -> None:
         self.enrich(ctx, *attrs, **named)
 
-    def _apply_attr(self, ctx: EventContext, attr: Attr) -> None:
+    @staticmethod
+    def _register_policy_keys(ctx: EventContext, attr: Attr) -> bool:
+        """Register drop/hash/sensitive flags for a key. Returns True when the attr is dropped."""
         if attr.drop:
             ctx._drop_keys.add(attr.key)
-            return
+            return True
         if attr.hash_value:
             ctx._hash_keys.add(attr.key)
         if attr.sensitive:
             ctx._sensitive_keys.add(attr.key)
+        return False
+
+    def _apply_attr(self, ctx: EventContext, attr: Attr) -> None:
+        if self._register_policy_keys(ctx, attr):
+            return
         if attr.key.startswith("user."):
             self._set_path(ctx.user, attr.key.removeprefix("user."), attr.value, self._config.duplicate_policy)
             return
@@ -190,6 +198,8 @@ class Logger:
 
     def checkpoint(self, ctx: EventContext, name: str, *attrs: Attr, **named: Any) -> None:
         data = {a.key: a.value for a in attrs}
+        for attr in attrs:
+            self._register_policy_keys(ctx, attr)
         data.update(named)
         ctx.checkpoint(name, **data)
 
@@ -501,9 +511,28 @@ class Logger:
         ctx.finish("abandoned")
 
     def retry(self, ctx: EventContext, *attrs: Attr, **named: Any) -> None:
+        """Reopen a closed emission so the event can be delivered again.
+
+        A sink failure leaves an event in ``EVENT_DELIVERY_FAILED`` with
+        ``emitted=False``. Such an event is otherwise permanently closed:
+        ``enrich``/``finish`` reject it via ``_ensure_mutable`` and ``emit``
+        raises ``EventClosedError``, so the payload can never be re-sent.
+        Reopen that state here so a subsequent ``emit()`` re-delivers it, and
+        record the ``retried`` outcome without failing on an already finished
+        event.
+        """
+        if ctx.event_state in {EVENT_DELIVERY_FAILED, EVENT_EMITTED}:
+            ctx.event_state = EVENT_FINISHED
+            ctx.emitted = False
+            ctx.emitted_payload = ""
         if attrs or named:
             self.enrich(ctx, *attrs, **named)
-        ctx.finish("retried")
+        if ctx.finished_at is None:
+            ctx.finish("retried")
+        else:
+            # A previously finished event cannot be finished twice; the reopen
+            # above still makes it emittable, so just update the outcome.
+            ctx.outcome = "retried"
 
     def partial(self, ctx: EventContext, reason: str = "partial", *attrs: Attr, **named: Any) -> None:
         if attrs or named:
@@ -557,6 +586,9 @@ class Logger:
             snapshot.started_at = ctx.started_at
             snapshot.finished_at = now
             snapshot.event_state = EVENT_FINISHED
+            snapshot._drop_keys = set(ctx._drop_keys)
+            snapshot._hash_keys = set(ctx._hash_keys)
+            snapshot._sensitive_keys = set(ctx._sensitive_keys)
             snapshot.attrs = {key: value for key, value in checkpoint.items() if key not in {"name", "at_ms"}}
             safe_snapshot = self._sanitize_event(snapshot)
             payload = self._config.schema.encode(EventView(safe_snapshot))
@@ -661,27 +693,51 @@ class Logger:
             return
 
         buckets: list[dict[str, Any]] = [ctx.attrs, ctx.user, ctx.tenant, ctx.resource, ctx.http]
-        total = sum(len(bucket) for bucket in buckets)
+        total = sum(Logger._attr_leaf_count(value) for bucket in buckets for value in bucket.values())
         if total <= max_attr_count:
             return
 
-        remaining = max_attr_count
+        remaining = [max_attr_count]
         truncated = False
         for bucket in buckets:
-            if remaining <= 0:
-                if bucket:
-                    bucket.clear()
-                    truncated = True
-                continue
-            if len(bucket) > remaining:
-                kept = list(bucket.items())[:remaining]
-                bucket.clear()
-                bucket.update(kept)
+            if Logger._keep_attr_leaves(bucket, remaining):
                 truncated = True
-            remaining -= len(bucket)
 
         if truncated and "_truncated" not in ctx.attrs:
             ctx.attrs["_truncated"] = True
+
+    @staticmethod
+    def _attr_leaf_count(value: Any) -> int:
+        """Count attribute leaves, descending into nested (dotted-key) dicts."""
+        if isinstance(value, dict) and value:
+            return sum(Logger._attr_leaf_count(child) for child in value.values())
+        return 1
+
+    @staticmethod
+    def _keep_attr_leaves(target: dict[str, Any], budget: list[int]) -> bool:
+        """Keep at most ``budget[0]`` leaves in ``target`` in insertion order.
+
+        Nested dicts are descended into so dotted keys are accounted for, and
+        parent dicts left empty by truncation are removed. ``budget`` is a
+        one-element list so the shared cross-bucket allowance can be decremented
+        in place. Returns True when any leaf was removed.
+        """
+        removed = False
+        for key in list(target.keys()):
+            if budget[0] <= 0:
+                del target[key]
+                removed = True
+                continue
+            value = target[key]
+            if isinstance(value, dict) and value:
+                if Logger._keep_attr_leaves(value, budget):
+                    removed = True
+                if not value:
+                    del target[key]
+                    removed = True
+            else:
+                budget[0] -= 1
+        return removed
 
     @staticmethod
     def _resolve_bucket(ctx: EventContext, key: str) -> tuple[dict[str, Any], str]:
@@ -710,14 +766,34 @@ class Logger:
         for key in ctx._sensitive_keys:
             bucket, local = self._resolve_bucket(safe, key)
             self._redact_at_path(bucket, local)
+        for checkpoint in safe.checkpoints:
+            self._sanitize_checkpoint(checkpoint, ctx._drop_keys, ctx._hash_keys, ctx._sensitive_keys)
         return safe
+
+    @staticmethod
+    def _sanitize_checkpoint(
+        checkpoint: dict[str, object],
+        drop_keys: set[str],
+        hash_keys: set[str],
+        sensitive_keys: set[str],
+    ) -> None:
+        """Apply the same drop/hash/sensitive policies to a checkpoint payload."""
+        for key in drop_keys:
+            checkpoint.pop(key, None)
+        for key in hash_keys:
+            value = checkpoint.get(key)
+            if value is not None:
+                checkpoint[key] = hashlib.sha256(str(value).encode("utf-8")).hexdigest()
+        for key in sensitive_keys:
+            if checkpoint.get(key) is not None:
+                checkpoint[key] = "[REDACTED]"
 
     @staticmethod
     def _hash_at_path(target: dict[str, Any], key: str) -> None:
         value = Logger._get_path(target, key)
         if value is None:
             return
-        hashed = hashlib.sha256(str(value).encode("utf-8")).hexdigest()
+        hashed = hash_sensitive_value(value)
         Logger._set_path_direct(target, key, hashed)
 
     @staticmethod
@@ -769,21 +845,7 @@ class Logger:
 
     @staticmethod
     def _apply_duplicate(target: dict[str, Any], key: str, value: Any, policy: str) -> None:
-        if key not in target:
-            target[key] = value
-            return
-        if policy in {CanonicalWins, FirstWins}:
-            return
-        if policy in {UserWins, LastWins}:
-            target[key] = value
-            return
-        if policy == KeepBoth:
-            old = target[key]
-            target[key] = old + [value] if isinstance(old, list) else [old, value]
-            return
-        if policy == ErrorOnDuplicate:
-            raise ValueError(f"duplicate field: {key}")
-        target[key] = value
+        apply_duplicate(target, key, value, policy)
 
     @staticmethod
     def _delete_path(target: dict[str, Any], key: str) -> None:

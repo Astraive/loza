@@ -61,7 +61,9 @@ func run(args []string) error {
 	batchSize := fs.Int("batch", cfg.BatchSize, "batch size per request")
 	apiKey := fs.String("api-key", cfg.APIKey, "API key for auth")
 	bodySize := fs.Int("body-size", cfg.BodySize, "average body size in bytes")
-	_ = fs.Parse(args)
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
 
 	cfg.URL = *url
 	cfg.Events = *events
@@ -70,12 +72,28 @@ func run(args []string) error {
 	cfg.APIKey = *apiKey
 	cfg.BodySize = *bodySize
 
+	if err := validateConfig(cfg); err != nil {
+		return err
+	}
+
 	fmt.Printf("LOZA Load Generator v%s\n", version)
 	fmt.Printf("Target: %s\n", cfg.URL)
 	fmt.Printf("Events: %d, Workers: %d, Batch: %d\n", cfg.Events, cfg.Workers, cfg.BatchSize)
 	fmt.Println()
 
 	return runLoadTest(cfg)
+}
+
+// validateConfig rejects flag combinations that would otherwise cause the
+// load generator to panic (e.g. dividing the event count by zero workers).
+func validateConfig(cfg Config) error {
+	if cfg.Workers <= 0 {
+		return fmt.Errorf("workers must be greater than 0, got %d", cfg.Workers)
+	}
+	if cfg.Events < 0 {
+		return fmt.Errorf("events must be non-negative, got %d", cfg.Events)
+	}
+	return nil
 }
 
 func runLoadTest(cfg Config) error {
@@ -97,13 +115,12 @@ func runLoadTest(cfg Config) error {
 	start := time.Now()
 
 	var wg sync.WaitGroup
-	eventsPerWorker := cfg.Events / cfg.Workers
 
 	for w := 0; w < cfg.Workers; w++ {
 		wg.Add(1)
 		go func(workerID int) {
 			defer wg.Done()
-			runWorker(ctx, client, cfg, workerID, eventsPerWorker, stats)
+			runWorker(ctx, client, cfg, workerID, workerEventCount(cfg.Events, cfg.Workers, workerID), stats)
 		}(w)
 	}
 
@@ -123,6 +140,22 @@ func runLoadTest(cfg Config) error {
 	fmt.Printf("Throughput:  %.2f events/sec\n", float64(stats.accepted)/stats.duration.Seconds())
 
 	return nil
+}
+
+// workerEventCount returns the number of events assigned to the worker with the
+// given index. Events are split evenly across workers, and any remainder from
+// events/workers is handed out one apiece to the first workers, so the counts
+// across all workers always sum to exactly events. This also covers the case
+// where events < workers (some workers receive zero events).
+func workerEventCount(events, workers, workerID int) int {
+	if workers <= 0 {
+		return 0
+	}
+	count := events / workers
+	if workerID < events%workers {
+		count++
+	}
+	return count
 }
 
 func runWorker(ctx context.Context, client *http.Client, cfg Config, workerID, count int, stats *Stats) {
@@ -172,7 +205,11 @@ func sendBatch(ctx context.Context, client *http.Client, cfg Config, batch [][]b
 	}
 
 	body, _ := json.Marshal(map[string]any{"events": batch})
-	req, _ := http.NewRequestWithContext(ctx, "POST", cfg.URL, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, cfg.URL, bytes.NewReader(body))
+	if err != nil {
+		atomic.AddInt64(&stats.errors, int64(len(batch)))
+		return
+	}
 	req.Header.Set("Content-Type", "application/json")
 	if cfg.APIKey != "" {
 		req.Header.Set("X-API-Key", cfg.APIKey)

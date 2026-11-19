@@ -19,7 +19,7 @@ except ImportError:  # pragma: no cover
 
 
 ROOT = Path(__file__).resolve().parents[2]
-SEMVER_RE = re.compile(r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:[-+][0-9A-Za-z.-]+)?$")
+SEMVER_RE = re.compile(r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$")
 REQUIRED_FIELDS = ("name", "kind", "version", "description", "license", "repository", "module")
 KNOWN_KINDS = {"spec", "docker", "cli", "sdk", "package", "release"}
 KNOWN_LANGUAGES = {"go", "javascript", "python", "rust"}
@@ -110,7 +110,8 @@ def validate_publish_metadata(component: str, manifest: dict[str, Any], manifest
             images = docker.get("images")
             if not isinstance(images, list) or not all(isinstance(item, str) and item for item in images):
                 errors.append(f"{component}: publish.docker.images must be a non-empty string list")
-            dockerfile = manifest.get("paths", {}).get("dockerfile") or docker.get("dockerfile")
+            paths = manifest.get("paths") if isinstance(manifest.get("paths"), dict) else {}
+            dockerfile = paths.get("dockerfile") or docker.get("dockerfile")
             if not dockerfile:
                 errors.append(f"{component}: paths.dockerfile or publish.docker.dockerfile is required")
             elif not (ROOT / str(dockerfile)).exists():

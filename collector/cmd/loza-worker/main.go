@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -32,6 +33,22 @@ type queueRecord struct {
 type queueReader interface {
 	Poll(context.Context, time.Duration) ([]queueRecord, error)
 	Close() error
+}
+
+// closeOnceReader guarantees the wrapped reader is closed at most once. Both
+// the deferred cleanup and the explicit graceful-shutdown call invoke Close on
+// this wrapper; without the guard the Kafka reader would call kgo.Client.Close
+// twice, which is not idempotent. The guard also keeps the deferred cleanup
+// effective on early error returns while preserving shutdown ordering.
+type closeOnceReader struct {
+	queueReader
+	once sync.Once
+	err  error
+}
+
+func (r *closeOnceReader) Close() error {
+	r.once.Do(func() { r.err = r.queueReader.Close() })
+	return r.err
 }
 
 type kafkaQueueReader struct {
@@ -249,6 +266,7 @@ func runWorker(cfg workerConfig) error {
 			return fmt.Errorf("failed to create kafka reader: %w", kErr)
 		}
 	}
+	reader = &closeOnceReader{queueReader: reader}
 	defer func() { _ = reader.Close() }()
 
 	state := &workerState{cfg: cfg, processor: processor}
@@ -256,13 +274,8 @@ func runWorker(cfg workerConfig) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	quit := make(chan os.Signal, 1)
-	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
-	defer signal.Stop(quit)
-	go func() {
-		<-quit
-		cancel()
-	}()
+	stopSignals, _ := watchSignals(ctx, cancel, syscall.SIGINT, syscall.SIGTERM)
+	defer stopSignals()
 
 	logJSON("info", "worker_start", map[string]any{
 		"eventbus_type":  busType,
@@ -294,6 +307,32 @@ func runWorker(cfg workerConfig) error {
 	}
 	logJSON("info", "worker_shutdown_complete", nil)
 	return nil
+}
+
+// watchSignals calls cancel when one of signals is delivered. The returned stop
+// function unregisters signal delivery and blocks until the watching goroutine
+// has exited. The goroutine also exits when ctx is canceled by another path or
+// when stop is called, so it cannot be leaked when shutdown happens without a
+// signal being delivered.
+func watchSignals(ctx context.Context, cancel context.CancelFunc, signals ...os.Signal) (stop func(), exited <-chan struct{}) {
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, signals...)
+	done := make(chan struct{})
+	exitedCh := make(chan struct{})
+	go func() {
+		defer close(exitedCh)
+		select {
+		case <-quit:
+			cancel()
+		case <-ctx.Done():
+		case <-done:
+		}
+	}()
+	return func() {
+		signal.Stop(quit)
+		close(done)
+		<-exitedCh
+	}, exitedCh
 }
 
 func (s *workerState) run(ctx context.Context, reader queueReader) error {

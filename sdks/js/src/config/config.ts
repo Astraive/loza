@@ -8,6 +8,7 @@ import type { Schema } from '../core/schema.ts';
 import { DefaultSchema } from '../core/schema.ts';
 import type { Level } from '../core/level.ts';
 import { loadFileConfig, mergeFileConfig } from './config-file.ts';
+import { applyDSN } from './dsn-config.ts';
 import { isPublicDSNUsername, parse as parseDSN } from './dsn.ts';
 
 function isLocalhost(host: string): boolean {
@@ -16,6 +17,10 @@ function isLocalhost(host: string): boolean {
 
 function hasBasicCredentials(cfg: Pick<Config, 'apiKey' | 'username' | 'password'>): boolean {
   return !cfg.apiKey && !!cfg.username && (!!cfg.password || isPublicDSNUsername(cfg.username));
+}
+
+function hasCredentials(cfg: Pick<Config, 'apiKey' | 'username' | 'password'>): boolean {
+  return !!cfg.apiKey || hasBasicCredentials(cfg);
 }
 
 export function collectorRouteURL(baseURL: string, collectorName: string, route: string): string {
@@ -29,15 +34,7 @@ function applyCollectorURL(cfg: Config, raw: string): void {
     cfg.collectorUrl = raw;
     return;
   }
-  const dsn = parseDSN(raw);
-  cfg.collectorUrl = dsn.baseURL;
-  cfg.collectorName = dsn.collectorName;
-  if (dsn.username !== undefined) {
-    cfg.username = dsn.username;
-    cfg.password = dsn.password ?? '';
-  }
-  if (dsn.env && dsn.env !== 'default') cfg.environment = dsn.env;
-  if (dsn.service) cfg.service = dsn.service;
+  applyDSN(cfg, parseDSN(raw));
 }
 
 /** Reject credentialed non-local plaintext HTTP before any request is made. */
@@ -53,8 +50,8 @@ export function validateConfig(cfg: Config): Config {
   if (cfg.username && !cfg.password && !isPublicDSNUsername(cfg.username)) {
     throw new Error('invalid Loza config: Basic credentials require a password unless username is an lz_pub_ capability');
   }
-  if (hasBasicCredentials(cfg) && endpoint.protocol === 'http:' && !isLocalhost(endpoint.hostname)) {
-    throw new Error('invalid Loza config: Basic credentials require HTTPS (HTTP is allowed only for localhost)');
+  if (hasCredentials(cfg) && endpoint.protocol === 'http:' && !isLocalhost(endpoint.hostname)) {
+    throw new Error('invalid Loza config: credentials require HTTPS (HTTP is allowed only for localhost)');
   }
   return cfg;
 }
@@ -110,6 +107,9 @@ export interface Config {
   includeRuntime: boolean;
   duplicatePolicy: string;
   logger: Logger | null;
+  statsHandler?: unknown;
+  deploymentId?: string;
+  panicRecovery?: boolean;
 }
 
 /** Default configuration. */
@@ -213,6 +213,9 @@ export function defaultConfig(): Config {
     includeRuntime: true,
     duplicatePolicy: 'canonical_wins',
     logger: null,
+    statsHandler: undefined,
+    deploymentId: '',
+    panicRecovery: false,
   };
 }
 
@@ -272,6 +275,7 @@ export interface ConfigOptions {
   deploymentId?: string;
   includeHost?: boolean;
   panicRecovery?: boolean;
+  logger?: Logger;
 }
 
 /** Fluent config builder. Implements Config so it can be passed directly to Logger/configure(). */
@@ -306,6 +310,9 @@ export class ConfigBuilder implements Config {
   includeRuntime: boolean;
   duplicatePolicy: string;
   logger: Logger | null;
+  statsHandler?: unknown;
+  deploymentId?: string;
+  panicRecovery?: boolean;
 
   constructor(base: Config) {
     this.service = base.service;
@@ -338,6 +345,9 @@ export class ConfigBuilder implements Config {
     this.includeRuntime = base.includeRuntime;
     this.duplicatePolicy = base.duplicatePolicy;
     this.logger = base.logger;
+    this.statsHandler = base.statsHandler;
+    this.deploymentId = base.deploymentId;
+    this.panicRecovery = base.panicRecovery;
   }
 
   withService(service: string): this { this.service = service; return this; }
@@ -365,10 +375,10 @@ export class ConfigBuilder implements Config {
   withDuplicatePolicy(policy: string): this { this.duplicatePolicy = policy; return this; }
   withAsync(enabled: boolean): this { this.async.enabled = enabled; return this; }
   withCollectorEndpoint(url: string): this { return this.withCollectorUrl(url); }
-  withStatsHandler(_handler: unknown): this { return this; }
-  withDeploymentID(_deploymentId: string): this { return this; }
+  withStatsHandler(statsHandler: unknown): this { this.statsHandler = statsHandler; return this; }
+  withDeploymentID(deploymentId: string): this { this.deploymentId = deploymentId; return this; }
   withIncludeHost(includeHost: boolean): this { this.includeHost = includeHost; return this; }
-  withPanicRecovery(_panicRecovery: boolean): this { return this; }
+  withPanicRecovery(panicRecovery: boolean): this { this.panicRecovery = panicRecovery; return this; }
   withBatchSize(n: number): this { this.batchSize = n; return this; }
   withFlushInterval(ms: number): this { this.flushIntervalMs = ms; return this; }
   withEnableCompression(enabled: boolean): this { this.enableCompression = enabled; return this; }
@@ -389,13 +399,14 @@ export class ConfigBuilder implements Config {
 /** Create a config from a base config and options. */
 export function withOptions(base: Config, opts: ConfigOptions): Config {
   const cfg = { ...base };
+  // Apply the DSN first so explicit options below override DSN-derived values.
+  if (opts.collectorUrl !== undefined) applyCollectorURL(cfg, opts.collectorUrl);
   if (opts.service !== undefined) cfg.service = opts.service;
   if (opts.alias !== undefined) cfg.alias = opts.alias;
   if (opts.version !== undefined) cfg.version = opts.version;
   if (opts.environment !== undefined) cfg.environment = opts.environment;
   if (opts.release !== undefined) cfg.release = opts.release;
   if (opts.namespace !== undefined) cfg.namespace = opts.namespace;
-  if (opts.collectorUrl !== undefined) applyCollectorURL(cfg, opts.collectorUrl);
   if (opts.collectorName !== undefined) cfg.collectorName = opts.collectorName;
   if (opts.apiKey !== undefined) cfg.apiKey = opts.apiKey.trim();
   if (opts.username !== undefined) cfg.username = opts.username;
@@ -413,6 +424,11 @@ export function withOptions(base: Config, opts: ConfigOptions): Config {
   if (opts.enableCompression !== undefined) cfg.enableCompression = opts.enableCompression;
   if (opts.duplicatePolicy !== undefined) cfg.duplicatePolicy = opts.duplicatePolicy;
   if (opts.includeHost !== undefined) cfg.includeHost = opts.includeHost;
+  if (opts.sink !== undefined) cfg.sink = opts.sink;
+  if (opts.logger !== undefined) cfg.logger = opts.logger;
+  if (opts.statsHandler !== undefined) cfg.statsHandler = opts.statsHandler;
+  if (opts.deploymentId !== undefined) cfg.deploymentId = opts.deploymentId;
+  if (opts.panicRecovery !== undefined) cfg.panicRecovery = opts.panicRecovery;
   return validateConfig(cfg);
 }
 
@@ -439,12 +455,12 @@ export function WithDeploymentID(deploymentId: string): ConfigOption { return cf
 export function WithIncludeHost(includeHost: boolean): ConfigOption { return cfg => withOptions(cfg, { includeHost }); }
 export function WithPanicRecovery(panicRecovery: boolean): ConfigOption { return cfg => withOptions(cfg, { panicRecovery }); }
 export function WithApiKey(apiKey: string): ConfigOption { return cfg => { cfg.apiKey = apiKey.trim(); return cfg; }; }
-export function WithRelease(_release: string): ConfigOption { return cfg => cfg; }
-export function WithNamespace(_ns: string): ConfigOption { return cfg => cfg; }
+export function WithRelease(release: string): ConfigOption { return cfg => withOptions(cfg, { release }); }
+export function WithNamespace(ns: string): ConfigOption { return cfg => withOptions(cfg, { namespace: ns }); }
 export function WithOtelBridge(enabled: boolean): ConfigOption {
   return cfg => enabled ? { ...cfg, async: { ...cfg.async, enabled: true } } : cfg;
 }
 export function WithRetry(retries: number): ConfigOption { return cfg => { cfg.maxRetries = retries; return cfg; }; }
 export function WithTimeout(ms: number): ConfigOption { return cfg => { cfg.timeoutMs = ms; return cfg; }; }
 export function WithQueueSize(size: number): ConfigOption { return cfg => { cfg.async.queueSize = size; return cfg; }; }
-export function WithLogger(_logger: Logger): ConfigOption { return cfg => cfg; }
+export function WithLogger(logger: Logger): ConfigOption { return cfg => withOptions(cfg, { logger }); }

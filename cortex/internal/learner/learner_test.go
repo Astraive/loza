@@ -2,16 +2,20 @@ package learner
 
 import (
 	"context"
+	"database/sql"
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/astraive/loza/cortex/internal/models"
+	"github.com/astraive/loza/cortex/internal/storage"
 )
 
 type fakeRemediationStore struct {
 	remediations map[string]*models.Remediation
 	stats        map[string][]*models.RemediationStats
 	saved        []*models.Remediation
+	getErr       error
 }
 
 func (f *fakeRemediationStore) Save(_ context.Context, rem *models.Remediation) error {
@@ -21,6 +25,9 @@ func (f *fakeRemediationStore) Save(_ context.Context, rem *models.Remediation) 
 }
 
 func (f *fakeRemediationStore) Get(_ context.Context, id string) (*models.Remediation, error) {
+	if f.getErr != nil {
+		return nil, f.getErr
+	}
 	if rem, ok := f.remediations[id]; ok {
 		return rem, nil
 	}
@@ -42,7 +49,9 @@ func (f *fakeRemediationStore) ListBySignature(_ context.Context, signatureID st
 type fakeFeedbackStore struct {
 	feedbackByRemediation map[string][]*models.RemediationFeedback
 	successRates          map[string]float64
+	averageTimes          map[string]int64
 	saved                 []*models.RemediationFeedback
+	getByRemediationErr   error
 }
 
 func (f *fakeFeedbackStore) Save(_ context.Context, fb *models.RemediationFeedback) error {
@@ -52,6 +61,9 @@ func (f *fakeFeedbackStore) Save(_ context.Context, fb *models.RemediationFeedba
 }
 
 func (f *fakeFeedbackStore) GetByRemediation(_ context.Context, remediationID string) ([]*models.RemediationFeedback, error) {
+	if f.getByRemediationErr != nil {
+		return nil, f.getByRemediationErr
+	}
 	return f.feedbackByRemediation[remediationID], nil
 }
 
@@ -59,9 +71,14 @@ func (f *fakeFeedbackStore) GetSuccessRate(_ context.Context, action string, sig
 	return f.successRates[action+"|"+signatureID], nil
 }
 
+func (f *fakeFeedbackStore) GetAverageTimeToResolve(_ context.Context, action string, signatureID string) (int64, error) {
+	return f.averageTimes[action+"|"+signatureID], nil
+}
+
 type fakeSignatureStoreForLearner struct {
-	sigs  map[string]*models.IncidentSignature
-	saved []*models.IncidentSignature
+	sigs   map[string]*models.IncidentSignature
+	saved  []*models.IncidentSignature
+	getErr error
 }
 
 func (f *fakeSignatureStoreForLearner) Save(_ context.Context, sig *models.IncidentSignature) error {
@@ -71,10 +88,13 @@ func (f *fakeSignatureStoreForLearner) Save(_ context.Context, sig *models.Incid
 }
 
 func (f *fakeSignatureStoreForLearner) Get(_ context.Context, id string) (*models.IncidentSignature, error) {
+	if f.getErr != nil {
+		return nil, f.getErr
+	}
 	if sig, ok := f.sigs[id]; ok {
 		return sig, nil
 	}
-	return nil, errors.New("not found")
+	return nil, storage.ErrNotFound
 }
 
 func (f *fakeSignatureStoreForLearner) List(context.Context, int) ([]*models.IncidentSignature, error) {
@@ -109,8 +129,8 @@ func (s *failingSalienceStore) Save(context.Context, *models.SalienceScore) erro
 	return s.saveErr
 }
 
-func (*failingSalienceStore) Get(context.Context, string) (float64, error) {
-	return 0.5, nil
+func (*failingSalienceStore) Get(context.Context, string) (*models.SalienceScore, error) {
+	return &models.SalienceScore{Score: 0.5}, nil
 }
 
 func (*failingSalienceStore) List(context.Context, int) ([]*models.SalienceScore, error) {
@@ -191,5 +211,168 @@ func TestRecordRemediationAndFeedback(t *testing.T) {
 	}
 	if rate != 0.9 {
 		t.Fatalf("unexpected success rate: %v", rate)
+	}
+}
+
+func TestGetAverageTimeToResolveUsesActionAndSignature(t *testing.T) {
+	fbStore := &fakeFeedbackStore{
+		// The previous implementation passed the action string to
+		// GetByRemediation (which expects a remediation ID) and ignored
+		// signatureID, yielding this unrelated value instead of the scoped one.
+		feedbackByRemediation: map[string][]*models.RemediationFeedback{
+			"restart": {{RemediationID: "restart", TimeToResolve: 999}},
+		},
+		averageTimes: map[string]int64{
+			"restart|sig-1":  42,
+			"restart|sig-2":  99,
+			"rollback|sig-1": 7,
+		},
+	}
+	l := NewLearner(&fakeRemediationStore{}, fbStore, &fakeSignatureStoreForLearner{})
+
+	tests := []struct {
+		name        string
+		action      string
+		signatureID string
+		want        int64
+	}{
+		{"action and signature", "restart", "sig-1", 42},
+		{"scoped by signature", "restart", "sig-2", 99},
+		{"scoped by action", "rollback", "sig-1", 7},
+		{"unknown combination", "restart", "sig-404", 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := l.GetAverageTimeToResolve(context.Background(), tt.action, tt.signatureID)
+			if err != nil {
+				t.Fatalf("GetAverageTimeToResolve: %v", err)
+			}
+			if got != tt.want {
+				t.Fatalf("GetAverageTimeToResolve(%q, %q) = %d, want %d", tt.action, tt.signatureID, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestRecordFeedbackReturnsRemediationLookupError(t *testing.T) {
+	lookupErr := errors.New("remediation store unavailable")
+	remStore := &fakeRemediationStore{
+		remediations: map[string]*models.Remediation{},
+		getErr:       lookupErr,
+	}
+	fbStore := &fakeFeedbackStore{
+		feedbackByRemediation: map[string][]*models.RemediationFeedback{},
+	}
+	sigStore := &fakeSignatureStoreForLearner{sigs: map[string]*models.IncidentSignature{}}
+
+	l := NewLearner(remStore, fbStore, sigStore)
+	feedback := &models.RemediationFeedback{RemediationID: "rem-1", IncidentID: "inc-1", OutcomeCode: 200, OutcomeCategory: "success"}
+
+	err := l.RecordFeedback(context.Background(), feedback)
+	if !errors.Is(err, lookupErr) {
+		t.Fatalf("expected remediation lookup error, got %v", err)
+	}
+}
+
+func TestRecordFeedbackReturnsFeedbackLookupError(t *testing.T) {
+	lookupErr := errors.New("feedback store unavailable")
+	remStore := &fakeRemediationStore{
+		remediations: map[string]*models.Remediation{
+			"rem-1": {RemediationID: "rem-1", SignatureID: "sig-1"},
+		},
+	}
+	fbStore := &fakeFeedbackStore{
+		feedbackByRemediation: map[string][]*models.RemediationFeedback{},
+		getByRemediationErr:   lookupErr,
+	}
+	sigStore := &fakeSignatureStoreForLearner{sigs: map[string]*models.IncidentSignature{}}
+
+	l := NewLearner(remStore, fbStore, sigStore)
+	feedback := &models.RemediationFeedback{RemediationID: "rem-1", IncidentID: "inc-1", OutcomeCode: 200, OutcomeCategory: "success"}
+
+	err := l.RecordFeedback(context.Background(), feedback)
+	if !errors.Is(err, lookupErr) {
+		t.Fatalf("expected feedback lookup error, got %v", err)
+	}
+}
+
+func TestRecordFeedbackEmptyFeedbackIsNotAnError(t *testing.T) {
+	remStore := &fakeRemediationStore{
+		remediations: map[string]*models.Remediation{
+			"rem-1": {RemediationID: "rem-1", SignatureID: "sig-1"},
+		},
+	}
+	fbStore := &fakeFeedbackStore{
+		feedbackByRemediation: map[string][]*models.RemediationFeedback{},
+	}
+	sigStore := &fakeSignatureStoreForLearner{sigs: map[string]*models.IncidentSignature{}}
+
+	l := NewLearner(remStore, fbStore, sigStore)
+	feedback := &models.RemediationFeedback{RemediationID: "rem-1", IncidentID: "inc-1", OutcomeCode: 200, OutcomeCategory: "success"}
+
+	if err := l.RecordFeedback(context.Background(), feedback); err != nil {
+		t.Fatalf("expected no error for empty feedback, got %v", err)
+	}
+}
+
+// TestSignatureGetErrorHandling verifies that signature lookup failures are
+// only treated as "not found" for genuine missing-signature results. Transient
+// failures (DB outage, timeout, etc.) must be propagated so learning does not
+// silently stop.
+func TestSignatureGetErrorHandling(t *testing.T) {
+	transientErr := errors.New("db connection lost")
+
+	tests := []struct {
+		name      string
+		getErr    error
+		wantError bool
+	}{
+		{"transient error is returned", transientErr, true},
+		{"wrapped transient error is returned", fmt.Errorf("lookup: %w", transientErr), true},
+		{"not found sentinel is skipped", storage.ErrNotFound, false},
+		{"wrapped not found sentinel is skipped", fmt.Errorf("lookup: %w", storage.ErrNotFound), false},
+		{"sql no rows is skipped", sql.ErrNoRows, false},
+		{"wrapped sql no rows is skipped", fmt.Errorf("query: %w", sql.ErrNoRows), false},
+	}
+
+	operations := []struct {
+		name string
+		call func(*Learner) error
+	}{
+		{
+			name: "UpdateFeatureWeights",
+			call: func(l *Learner) error {
+				return l.UpdateFeatureWeights(context.Background(), "sig-1", 200)
+			},
+		},
+		{
+			name: "ReinforcePattern",
+			call: func(l *Learner) error {
+				return l.ReinforcePattern(context.Background(), "sig-1", "restart", 42)
+			},
+		},
+	}
+
+	for _, op := range operations {
+		t.Run(op.name, func(t *testing.T) {
+			for _, tt := range tests {
+				t.Run(tt.name, func(t *testing.T) {
+					l := NewLearner(nil, nil, &fakeSignatureStoreForLearner{getErr: tt.getErr})
+					err := op.call(l)
+					if tt.wantError {
+						if err == nil {
+							t.Fatal("expected transient error to be returned, got nil")
+						}
+						if !errors.Is(err, tt.getErr) {
+							t.Fatalf("expected error to wrap %v, got %v", tt.getErr, err)
+						}
+						return
+					}
+					if err != nil {
+						t.Fatalf("expected missing signature to be skipped, got %v", err)
+					}
+				})
+			}
+		})
 	}
 }

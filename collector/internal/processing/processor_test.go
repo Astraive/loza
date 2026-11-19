@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,7 +13,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/alicebob/miniredis/v2"
 	collectorevent "github.com/astraive/loza/collector/internal/event"
+	"github.com/redis/go-redis/v9"
 )
 
 type fakeSink struct {
@@ -162,5 +166,122 @@ func TestProcessorBestEffortUsesSecondarySuccess(t *testing.T) {
 	}
 	if res.Outcome.FailureCount() != 1 {
 		t.Fatalf("expected one tracked failure, got %d", res.Outcome.FailureCount())
+	}
+}
+
+// TestNewRedisDedupeClientHonorsContextTimeouts verifies that the Redis client
+// built in New is configured to respect the deadlines of the contexts passed
+// to its commands (go-redis disables this by default).
+func TestNewRedisDedupeClientHonorsContextTimeouts(t *testing.T) {
+	mr := miniredis.RunT(t)
+	p, err := New(Config{
+		DedupeBackend:   "redis",
+		DedupeRedisAddr: mr.Addr(),
+	}, &fakeSink{}, nil, nil, nil)
+	if err != nil {
+		t.Fatalf("new processor: %v", err)
+	}
+	defer func() { _ = p.Close() }()
+
+	if p.redisClient == nil {
+		t.Fatal("expected a redis dedupe client")
+	}
+	if !p.redisClient.Options().ContextTimeoutEnabled {
+		t.Fatal("redis dedupe client does not honor context timeouts")
+	}
+}
+
+// TestProcessorRedisDedupeHonorsCanceledContext verifies that the Redis
+// dedupe SetNX call is derived from the caller's context. A canceled caller
+// must abort the dedupe check instead of silently using context.Background()
+// and writing the key anyway.
+func TestProcessorRedisDedupeHonorsCanceledContext(t *testing.T) {
+	mr := miniredis.RunT(t)
+	client := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	defer func() { _ = client.Close() }()
+
+	p := &Processor{
+		cfg: Config{
+			DedupeEnabled: true,
+			DedupeKey:     "event_id",
+			DedupeWindow:  time.Minute,
+		},
+		primarySink:  &fakeSink{},
+		redisClient:  client,
+		dedupeSeenAt: make(map[string]time.Time),
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	dup, err := p.isDuplicate(ctx, "evt-canceled")
+	if err == nil {
+		t.Fatalf("expected dedupe error for canceled context, got duplicate=%v err=%v", dup, err)
+	}
+	if dup {
+		t.Fatal("expected duplicate=false when the dedupe check fails")
+	}
+	if mr.Exists("evt-canceled") {
+		t.Fatal("dedupe key was written despite a canceled caller context")
+	}
+}
+
+// TestProcessorRedisDedupeUsesCallerDeadline verifies that a caller deadline
+// bounds a Redis dedupe operation against a hung Redis server. Without the
+// derived timeout, Process would block until Redis's own (long) read timeout.
+func TestProcessorRedisDedupeUsesCallerDeadline(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer func() { _ = ln.Close() }()
+
+	// Accept connections but never reply, simulating a hung Redis server.
+	go func() {
+		for {
+			conn, acceptErr := ln.Accept()
+			if acceptErr != nil {
+				return
+			}
+			go func(c net.Conn) {
+				defer func() { _ = c.Close() }()
+				_, _ = io.Copy(io.Discard, c)
+			}(conn)
+		}
+	}()
+
+	client := redis.NewClient(&redis.Options{
+		Addr:                  ln.Addr().String(),
+		DialTimeout:           time.Second,
+		ReadTimeout:           30 * time.Second,
+		WriteTimeout:          time.Second,
+		MaxRetries:            -1,
+		ContextTimeoutEnabled: true,
+	})
+	defer func() { _ = client.Close() }()
+
+	p := &Processor{
+		cfg: Config{
+			DedupeEnabled: true,
+			DedupeKey:     "event_id",
+			DedupeWindow:  time.Minute,
+		},
+		primarySink:  &fakeSink{},
+		redisClient:  client,
+		dedupeSeenAt: make(map[string]time.Time),
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+
+	start := time.Now()
+	res := p.Process(ctx, []byte(`{"event_id":"evt-timeout"}`))
+	elapsed := time.Since(start)
+
+	if !errors.Is(res.Err, ErrDedupeUnavailable) {
+		t.Fatalf("expected ErrDedupeUnavailable, got %+v", res)
+	}
+	if elapsed > 2*time.Second {
+		t.Fatalf("Process blocked for %v despite a 200ms caller deadline", elapsed)
 	}
 }

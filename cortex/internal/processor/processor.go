@@ -171,7 +171,8 @@ func (p *EventProcessor) extractLifecycle(event *models.Event) *storage.Lifecycl
 	}
 }
 
-func (p *EventProcessor) createLinkEdges(ctx context.Context, event *models.Event) {
+func (p *EventProcessor) createLinkEdges(ctx context.Context, event *models.Event) error {
+	var errs []error
 	for _, link := range event.Links {
 		edge := &models.Edge{
 			ID:         fmt.Sprintf("%s->%s:%s", event.ID, link.Target, link.Type),
@@ -183,13 +184,18 @@ func (p *EventProcessor) createLinkEdges(ctx context.Context, event *models.Even
 		}
 		if saveErr := p.graph.SaveEdge(ctx, edge); saveErr != nil {
 			log.Warn().Err(saveErr).Str("edge_id", edge.ID).Msg("failed to save link edge")
+			errs = append(errs, fmt.Errorf("failed to save link edge %s: %w", edge.ID, saveErr))
 		}
 	}
+	return errors.Join(errs...)
 }
 
 func (p *EventProcessor) createGraphNodes(ctx context.Context, event *models.Event) error {
 	canonicalService := event.Service
 
+	// A service without a registered alias is the common case; GetAlias reports
+	// that as a not-found error, so keep the raw service name as the fallback
+	// rather than failing the whole event.
 	if alias, err := p.topology.GetAlias(ctx, event.Service, event.Timestamp.Format(time.RFC3339)); err == nil {
 		canonicalService = alias.Canonical
 	}
@@ -197,50 +203,76 @@ func (p *EventProcessor) createGraphNodes(ctx context.Context, event *models.Eve
 	if err := p.saveCoreGraphArtifacts(ctx, event, canonicalService); err != nil {
 		return err
 	}
+
+	seen := make(map[string]struct{})
 	if event.TraceID != "" {
 		relatedEvents, err := p.eventStore.FindByTraceID(ctx, event.TraceID)
-		if err == nil {
-			for _, related := range relatedEvents {
-				if related.ID != event.ID {
-					edge := &models.Edge{
-						ID:         fmt.Sprintf("%s->%s", event.ID, related.ID),
-						FromNodeID: event.ID,
-						ToNodeID:   related.ID,
-						Type:       models.EdgeTypeSameTrace,
-						Weight:     1.0,
-						CreatedAt:  time.Now(),
-					}
-					if saveErr := p.graph.SaveEdge(ctx, edge); saveErr != nil {
-						log.Warn().Err(saveErr).Str("edge_id", edge.ID).Msg("failed to save trace edge")
-					}
+		if err != nil {
+			return fmt.Errorf("failed to find events for trace %s: %w", event.TraceID, err)
+		}
+		var errs []error
+		for _, related := range relatedEvents {
+			if related.ID != event.ID {
+				edgeID := fmt.Sprintf("%s->%s:%s", event.ID, related.ID, models.EdgeTypeSameTrace)
+				if _, ok := seen[edgeID]; ok {
+					continue
+				}
+				seen[edgeID] = struct{}{}
+				edge := &models.Edge{
+					ID:         edgeID,
+					FromNodeID: event.ID,
+					ToNodeID:   related.ID,
+					Type:       models.EdgeTypeSameTrace,
+					Weight:     1.0,
+					CreatedAt:  time.Now(),
+				}
+				if saveErr := p.graph.SaveEdge(ctx, edge); saveErr != nil {
+					log.Warn().Err(saveErr).Str("edge_id", edge.ID).Msg("failed to save trace edge")
+					errs = append(errs, fmt.Errorf("failed to save trace edge %s: %w", edge.ID, saveErr))
 				}
 			}
+		}
+		if err := errors.Join(errs...); err != nil {
+			return err
 		}
 	}
 
 	if event.IncidentID != "" {
 		relatedEvents, err := p.eventStore.FindByIncidentID(ctx, event.IncidentID)
-		if err == nil {
-			for _, related := range relatedEvents {
-				if related.ID != event.ID {
-					edge := &models.Edge{
-						ID:         fmt.Sprintf("%s->%s", event.ID, related.ID),
-						FromNodeID: event.ID,
-						ToNodeID:   related.ID,
-						Type:       models.EdgeTypeSameIncident,
-						Weight:     1.0,
-						CreatedAt:  time.Now(),
-					}
-					if saveErr := p.graph.SaveEdge(ctx, edge); saveErr != nil {
-						log.Warn().Err(saveErr).Str("edge_id", edge.ID).Msg("failed to save incident edge")
-					}
+		if err != nil {
+			return fmt.Errorf("failed to find events for incident %s: %w", event.IncidentID, err)
+		}
+		var errs []error
+		for _, related := range relatedEvents {
+			if related.ID != event.ID {
+				edgeID := fmt.Sprintf("%s->%s:%s", event.ID, related.ID, models.EdgeTypeSameIncident)
+				if _, ok := seen[edgeID]; ok {
+					continue
+				}
+				seen[edgeID] = struct{}{}
+				edge := &models.Edge{
+					ID:         edgeID,
+					FromNodeID: event.ID,
+					ToNodeID:   related.ID,
+					Type:       models.EdgeTypeSameIncident,
+					Weight:     1.0,
+					CreatedAt:  time.Now(),
+				}
+				if saveErr := p.graph.SaveEdge(ctx, edge); saveErr != nil {
+					log.Warn().Err(saveErr).Str("edge_id", edge.ID).Msg("failed to save incident edge")
+					errs = append(errs, fmt.Errorf("failed to save incident edge %s: %w", edge.ID, saveErr))
 				}
 			}
+		}
+		if err := errors.Join(errs...); err != nil {
+			return err
 		}
 	}
 
 	if event.Links != nil {
-		p.createLinkEdges(ctx, event)
+		if err := p.createLinkEdges(ctx, event); err != nil {
+			return err
+		}
 	}
 
 	return nil
@@ -254,6 +286,8 @@ func (p *EventProcessor) createGraphNodesBatch(ctx context.Context, events []*mo
 
 	for _, event := range events {
 		canonicalService := event.Service
+		// GetAlias reports services without a registered alias as not found;
+		// that is expected, so keep the raw service name as the fallback.
 		if alias, err := p.topology.GetAlias(ctx, event.Service, event.Timestamp.Format(time.RFC3339)); err == nil {
 			canonicalService = alias.Canonical
 		}
@@ -271,7 +305,9 @@ func (p *EventProcessor) createGraphNodesBatch(ctx context.Context, events []*mo
 		}
 
 		if event.Links != nil {
-			p.createLinkEdges(ctx, event)
+			if err := p.createLinkEdges(ctx, event); err != nil {
+				return err
+			}
 		}
 	}
 
@@ -279,14 +315,13 @@ func (p *EventProcessor) createGraphNodesBatch(ctx context.Context, events []*mo
 		if err := p.linkGroupedEvents(ctx, group, seenEdges, models.EdgeTypeSameTrace); err != nil {
 			return err
 		}
-		if len(group) <= 1 {
-			relatedEvents, err := p.eventStore.FindByTraceID(ctx, traceID)
-			if err == nil {
-				for _, event := range group {
-					if err := p.linkExternalEvents(ctx, event, relatedEvents, seenEdges, models.EdgeTypeSameTrace); err != nil {
-						return err
-					}
-				}
+		relatedEvents, err := p.eventStore.FindByTraceID(ctx, traceID)
+		if err != nil {
+			return fmt.Errorf("failed to find events for trace %s: %w", traceID, err)
+		}
+		for _, event := range group {
+			if err := p.linkExternalEvents(ctx, event, relatedEvents, seenEdges, models.EdgeTypeSameTrace); err != nil {
+				return err
 			}
 		}
 	}
@@ -295,14 +330,13 @@ func (p *EventProcessor) createGraphNodesBatch(ctx context.Context, events []*mo
 		if err := p.linkGroupedEvents(ctx, group, seenEdges, models.EdgeTypeSameIncident); err != nil {
 			return err
 		}
-		if len(group) <= 1 {
-			relatedEvents, err := p.eventStore.FindByIncidentID(ctx, incidentID)
-			if err == nil {
-				for _, event := range group {
-					if err := p.linkExternalEvents(ctx, event, relatedEvents, seenEdges, models.EdgeTypeSameIncident); err != nil {
-						return err
-					}
-				}
+		relatedEvents, err := p.eventStore.FindByIncidentID(ctx, incidentID)
+		if err != nil {
+			return fmt.Errorf("failed to find events for incident %s: %w", incidentID, err)
+		}
+		for _, event := range group {
+			if err := p.linkExternalEvents(ctx, event, relatedEvents, seenEdges, models.EdgeTypeSameIncident); err != nil {
+				return err
 			}
 		}
 	}

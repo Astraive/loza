@@ -10,8 +10,17 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// mustDefault loads the bundled defaults via the error-returning loader. It is
+// a test-only helper so regressions in the loader are reported with context.
+func mustDefault(t *testing.T) Config {
+	t.Helper()
+	cfg, err := LoadDefaults()
+	require.NoError(t, err)
+	return cfg
+}
+
 func TestServerConfigDefaults(t *testing.T) {
-	cfg := Default()
+	cfg := mustDefault(t)
 
 	assert.True(t, cfg.Collector.Server.HTTP.Enabled)
 	assert.Equal(t, ":9308", cfg.Collector.Server.HTTP.Addr)
@@ -58,7 +67,7 @@ collector:
 	err := os.WriteFile(configFile, []byte(yaml), 0644)
 	require.NoError(t, err)
 
-	cfg := Default()
+	cfg := mustDefault(t)
 	err = LoadFile(&cfg, configFile)
 	require.NoError(t, err)
 
@@ -83,17 +92,40 @@ collector:
 func TestLoadFileRejectsUnknownFieldsAndAcceptsVersion(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "loza.yaml")
 	require.NoError(t, os.WriteFile(path, []byte("version: \"1.0\"\ncollector:\n  unknown: true\n"), 0o600))
-	cfg := Default()
+	cfg := mustDefault(t)
 	err := LoadFile(&cfg, path)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unknown")
 
 	require.NoError(t, os.WriteFile(path, []byte("version: \"1.0\"\nauth:\n  server_secret: \"${COLLECTOR_AUTH_SERVER_SECRET}\"\n  cache_ttl: 1m\n  negative_cache_ttl: 5s\n  keys:\n    - name: ingest\n      key_id: kingest\n      secret_env: COLLECTOR_INGEST_KEY_SECRET\n      kind: sec\n      roles: [collector_ingest_server]\n"), 0o600))
-	cfg = Default()
+	cfg = mustDefault(t)
 	require.NoError(t, LoadFile(&cfg, path))
 	assert.Equal(t, "1.0", cfg.Version)
 	require.Len(t, cfg.Auth.Keys, 1)
 	assert.Equal(t, "kingest", cfg.Auth.Keys[0].KeyID)
+}
+
+func TestLoadRejectsUnknownFields(t *testing.T) {
+	// A misspelled security setting must not be silently ignored.
+	data := []byte("version: \"1.0\"\ncollector:\n  unkown: true\n")
+	cfg := Default()
+	err := Load(data, &cfg)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unkown")
+	assert.Contains(t, err.Error(), "not found")
+
+	// A valid document still loads.
+	cfg = Default()
+	require.NoError(t, Load([]byte("version: \"1.0\"\n"), &cfg))
+	assert.Equal(t, "1.0", cfg.Version)
+}
+
+func TestLoadRejectsMultipleDocuments(t *testing.T) {
+	data := []byte("version: \"1.0\"\n---\nversion: \"2.0\"\n")
+	cfg := Default()
+	err := Load(data, &cfg)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "single YAML document")
 }
 
 func TestServerConfigTLS(t *testing.T) {
@@ -114,7 +146,7 @@ collector:
 	err := os.WriteFile(configFile, []byte(yaml), 0644)
 	require.NoError(t, err)
 
-	cfg := Default()
+	cfg := mustDefault(t)
 	err = LoadFile(&cfg, configFile)
 	require.NoError(t, err)
 
@@ -224,8 +256,104 @@ schema_governance:
 	require.NoError(t, os.WriteFile(defaultsPath, []byte(yaml), 0o644))
 	t.Setenv("LOZA_COLLECTOR_DEFAULTS", defaultsPath)
 
-	cfg := Default()
+	cfg := mustDefault(t)
 	assert.Equal(t, ":9191", cfg.Collector.Addr)
 	assert.Equal(t, 7*time.Second, cfg.Collector.ReadHeaderTimeout)
 	assert.Equal(t, int64(4), cfg.Limits.MaxEventBytes)
+}
+
+func TestFindDefaultsFileRejectsRelativeOverride(t *testing.T) {
+	t.Setenv(defaultsEnvVar, filepath.Join("..", "planted", defaultsFileName))
+
+	_, err := findDefaultsFile()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "must be absolute")
+}
+
+func TestFindDefaultsFileRejectsTraversalOverride(t *testing.T) {
+	dir := t.TempDir()
+	plant := filepath.Join(dir, "planted.yaml")
+	require.NoError(t, os.WriteFile(plant, []byte("auth:\n  enabled: false\n"), 0o644))
+
+	t.Setenv(defaultsEnvVar, dir+string(filepath.Separator)+"safe"+string(filepath.Separator)+".."+string(filepath.Separator)+"planted.yaml")
+	_, err := findDefaultsFile()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "traversal")
+}
+
+func TestFindDefaultsFileRejectsWorldWritableOverride(t *testing.T) {
+	dir := t.TempDir()
+	plant := filepath.Join(dir, "planted.yaml")
+	require.NoError(t, os.WriteFile(plant, []byte("auth:\n  enabled: false\n"), 0o644))
+	require.NoError(t, os.Chmod(plant, 0o666))
+
+	t.Setenv(defaultsEnvVar, plant)
+	_, err := findDefaultsFile()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "insecure permissions")
+}
+
+func TestFindDefaultsFilePrefersTrustedPathOverCWD(t *testing.T) {
+	dir := t.TempDir()
+	trusted := filepath.Join(dir, "trusted.yaml")
+	planted := filepath.Join(dir, defaultsFileName)
+	require.NoError(t, os.WriteFile(trusted, []byte("collector:\n  addr: \":10001\"\n"), 0o600))
+	require.NoError(t, os.WriteFile(planted, []byte("collector:\n  addr: \":10002\"\nauth:\n  enabled: false\n"), 0o600))
+
+	origTrusted, origCWD := defaultsTrustedPaths, defaultsCWDCandidates
+	t.Cleanup(func() {
+		defaultsTrustedPaths, defaultsCWDCandidates = origTrusted, origCWD
+	})
+	defaultsTrustedPaths = []string{trusted}
+	defaultsCWDCandidates = []string{planted}
+
+	t.Setenv(defaultsEnvVar, "")
+	got, err := findDefaultsFile()
+	require.NoError(t, err)
+	assert.Equal(t, trusted, got, "a trusted absolute path must win over a CWD-relative planted file")
+}
+
+func TestDefaultDoesNotLoadInsecureOverride(t *testing.T) {
+	dir := t.TempDir()
+	plant := filepath.Join(dir, "planted.yaml")
+	require.NoError(t, os.WriteFile(plant, []byte("auth:\n  enabled: false\n"), 0o644))
+	require.NoError(t, os.Chmod(plant, 0o666))
+
+	t.Setenv(defaultsEnvVar, plant)
+	require.NotPanics(t, func() {
+		assert.Equal(t, Config{}, Default(), "Default must fail closed on an unsafe defaults source")
+	})
+}
+
+func TestLoadDefaultsReturnsErrorForMissingFile(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "does-not-exist.yaml")
+	t.Setenv(defaultsEnvVar, missing)
+
+	cfg, err := LoadDefaults()
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "collector defaults")
+	assert.Contains(t, err.Error(), missing)
+	assert.Equal(t, Config{}, cfg)
+}
+
+func TestLoadDefaultsReturnsErrorForMalformedFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "malformed.yaml")
+	require.NoError(t, os.WriteFile(path, []byte("collector: [unterminated"), 0o600))
+	t.Setenv(defaultsEnvVar, path)
+
+	cfg, err := LoadDefaults()
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "parse collector defaults")
+	assert.Contains(t, err.Error(), path)
+	assert.Equal(t, Config{}, cfg)
+}
+
+func TestDefaultDoesNotPanicOnBrokenDefaults(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "malformed.yaml")
+	require.NoError(t, os.WriteFile(path, []byte("collector: [unterminated"), 0o600))
+	t.Setenv(defaultsEnvVar, path)
+
+	require.NotPanics(t, func() { _ = Default() })
 }

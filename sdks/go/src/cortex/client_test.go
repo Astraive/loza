@@ -13,7 +13,8 @@ func TestClientHealth(t *testing.T) {
 		if r.URL.Path != "/healthz" {
 			t.Errorf("unexpected path: %s", r.URL.Path)
 		}
-		w.WriteHeader(http.StatusOK)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"status":"ok"}`))
 	}))
 	defer srv.Close()
 
@@ -28,7 +29,8 @@ func TestClientReady(t *testing.T) {
 		if r.URL.Path != "/readyz" {
 			t.Errorf("unexpected path: %s", r.URL.Path)
 		}
-		w.WriteHeader(http.StatusOK)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"status":"ok"}`))
 	}))
 	defer srv.Close()
 
@@ -305,5 +307,33 @@ func TestClientReadyDegraded(t *testing.T) {
 	c := NewClient(srv.URL)
 	if c.Ready(context.Background()) {
 		t.Fatal("expected ready=false with status:degraded body")
+	}
+}
+
+func TestClientHealthReadyFailClosedOnDecodeError(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+	}{
+		{"truncated JSON", `{"status":"degraded"`},
+		{"empty body", ""},
+		{"invalid JSON", `not-json`},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(tc.body))
+			}))
+			defer srv.Close()
+
+			c := NewClient(srv.URL)
+			if c.Health(context.Background()) {
+				t.Fatal("expected health=false when response body cannot be decoded")
+			}
+			if c.Ready(context.Background()) {
+				t.Fatal("expected ready=false when response body cannot be decoded")
+			}
+		})
 	}
 }

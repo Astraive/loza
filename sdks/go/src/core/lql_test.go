@@ -3,6 +3,7 @@ package core
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -29,5 +30,38 @@ func TestQueryLQLUsesScopedRouteAndScopeHeaders(t *testing.T) {
 	}
 	if result.RowCount != 1 {
 		t.Fatalf("row count = %d", result.RowCount)
+	}
+}
+
+func TestQueryLQLCompilationErrorPopulatesStatus(t *testing.T) {
+	for _, status := range []int{http.StatusBadRequest, http.StatusInternalServerError} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(status)
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"error":       "invalid lql",
+					"diagnostics": []map[string]any{{"code": "E001", "message": "unknown table"}},
+				})
+			}))
+			defer server.Close()
+			client := NewCollectorClient(CollectorClientConfig{Endpoint: server.URL, Insecure: true, Client: server.Client()})
+
+			_, err := client.QueryLQL(context.Background(), "from nope")
+
+			var compileErr *LQLCompilationError
+			if !errors.As(err, &compileErr) {
+				t.Fatalf("error = %T %v, want *LQLCompilationError", err, err)
+			}
+			if compileErr.Status != status {
+				t.Fatalf("Status = %d, want %d", compileErr.Status, status)
+			}
+			if compileErr.Message != "invalid lql" {
+				t.Fatalf("Message = %q, want %q", compileErr.Message, "invalid lql")
+			}
+			if len(compileErr.Diagnostics) != 1 || compileErr.Diagnostics[0].Code != "E001" {
+				t.Fatalf("Diagnostics = %+v", compileErr.Diagnostics)
+			}
+		})
 	}
 }

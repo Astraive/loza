@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import hashlib
+import hmac
 
 import loza
+
+_SECRET = b"typed-helper-test-secret"
 
 
 def test_typed_attribute_helpers_snake_case():
@@ -16,8 +19,10 @@ def test_typed_attribute_helpers_snake_case():
     assert loza.tags("env", "prod", "staging").key == "env"
     assert loza.masked("card", "4111111111111111").value == "41************11"
     assert loza.url("https://example.com").key == "url"
-    assert loza.email_hash("User@Example.COM").value == hashlib.sha256(b"user@example.com").hexdigest()
-    assert loza.ip_hash("192.168.1.1").value == hashlib.sha256(b"192.168.1.1").hexdigest()
+    expected_email = hmac.new(_SECRET, b"user@example.com", hashlib.sha256).hexdigest()
+    expected_ip = hmac.new(_SECRET, b"192.168.1.1", hashlib.sha256).hexdigest()
+    assert loza.email_hash("User@Example.COM", secret=_SECRET).value == expected_email
+    assert loza.ip_hash("192.168.1.1", secret=_SECRET).value == expected_ip
 
 
 def test_typed_attribute_helpers_pascal_case():
@@ -32,3 +37,15 @@ def test_typed_attribute_helpers_pascal_case():
     assert loza.URL("https://loza.dev").key == "url"
     assert loza.EmailHash("test@test.com").key == "email.hash"
     assert loza.IPHash("10.0.0.1").key == "ip.hash"
+
+
+def test_masked_zero_suffix_does_not_leak_value():
+    # Regression: text[-0:] is the whole string, which previously appended the
+    # entire plaintext after the stars and defeated masking.
+    assert loza.masked("k", "abcdef", 2, 0).value == "ab****"
+    assert loza.Masked("k", "abcdef", 2, 0).value == "ab****"
+
+
+def test_masked_zero_prefix_does_not_leak_value():
+    assert loza.masked("k", "abcdef", 0, 2).value == "****ef"
+    assert loza.masked("k", "abcdef", 0, 0).value == "******"

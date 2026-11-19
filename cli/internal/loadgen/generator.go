@@ -26,6 +26,9 @@ func GenerateEvent(rng *rand.Rand, bodySize int) ([]byte, error) {
 
 func randomString(rng *rand.Rand, n int) string {
 	const letters = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+	if n < 0 {
+		n = 0
+	}
 	buf := make([]byte, n)
 	for i := range buf {
 		buf[i] = letters[rng.Intn(len(letters))]

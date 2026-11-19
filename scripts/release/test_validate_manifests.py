@@ -13,6 +13,35 @@ assert SPEC is not None and SPEC.loader is not None
 validate_manifests = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(validate_manifests)
 
+CHANGED_COMPONENTS_PATH = Path(__file__).with_name("changed-components.py")
+CHANGED_SPEC = importlib.util.spec_from_file_location("changed_components", CHANGED_COMPONENTS_PATH)
+assert CHANGED_SPEC is not None and CHANGED_SPEC.loader is not None
+changed_components = importlib.util.module_from_spec(CHANGED_SPEC)
+CHANGED_SPEC.loader.exec_module(changed_components)
+
+
+def write_release_manifest(directory: Path, version: str) -> Path:
+    manifest_path = directory / "release.yaml"
+    manifest_path.write_text(
+        "\n".join(
+            [
+                "name: loza",
+                "kind: release",
+                f"version: {version}",
+                "description: test manifest",
+                "license: Apache-2.0",
+                "repository: https://github.com/Astraive/loza",
+                "module: github.com/Astraive/loza",
+                "publish:",
+                "  github_release:",
+                "    tag_prefix: v",
+                "    owner: astraive",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    return manifest_path
+
 
 class JavaScriptPackageIdentityTests(unittest.TestCase):
     def test_scoped_package_metadata_matches_native_manifest(self) -> None:
@@ -35,6 +64,56 @@ class JavaScriptPackageIdentityTests(unittest.TestCase):
 
         self.assertEqual(native_errors, [])
         self.assertEqual(publish_errors, [])
+
+
+class NonDictPathsTests(unittest.TestCase):
+    def test_docker_publish_metadata_does_not_crash_on_non_dict_paths(self) -> None:
+        manifest = {
+            "kind": "docker",
+            "version": "0.3.0",
+            "paths": "not-a-mapping",
+            "publish": {"docker": {"owner": "astraive", "images": ["repo/img"], "dockerfile": "Dockerfile"}},
+        }
+
+        errors = validate_manifests.validate_publish_metadata("docker", manifest, Path("fake.yaml"))
+
+        self.assertEqual(errors, ["docker: dockerfile does not exist: Dockerfile"])
+
+    def test_component_validation_reports_error_instead_of_crashing(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            manifest_path = Path(temporary_directory) / "manifest.yaml"
+            manifest_path.write_text(
+                "name: img\nkind: docker\nversion: 0.3.0\ndescription: d\nlicense: MIT\n"
+                "repository: r\nmodule: m\npaths: not-a-mapping\n"
+                "publish:\n  docker:\n    owner: astraive\n    images: [repo/img]\n    dockerfile: Dockerfile\n",
+                encoding="utf-8",
+            )
+
+            errors = validate_manifests.validate_component("docker", str(manifest_path))
+
+        self.assertIn("docker: paths must be a mapping when present", errors)
+
+
+class SemverValidationTests(unittest.TestCase):
+    def test_prerelease_and_build_version_validates(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            manifest_path = write_release_manifest(Path(temporary_directory), "1.2.3-rc.1+build.5")
+            errors = validate_manifests.validate_component("loza", manifest_path.as_posix())
+
+        self.assertEqual(errors, [])
+
+    def test_semver_regex_accepts_prerelease_and_build(self) -> None:
+        pattern = validate_manifests.SEMVER_RE
+        self.assertTrue(pattern.match("1.2.3"))
+        self.assertTrue(pattern.match("1.2.3-rc.1"))
+        self.assertTrue(pattern.match("1.2.3+build.5"))
+        self.assertTrue(pattern.match("1.2.3-rc.1+build.5"))
+        self.assertFalse(pattern.match("v1.2.3"))
+        self.assertFalse(pattern.match("01.2.3"))
+
+    def test_changed_components_parses_prerelease_and_build(self) -> None:
+        version = "1.2.3-rc.1+build.5"
+        self.assertEqual(changed_components.parse_semver(version, "loza"), (1, 2, 3, version))
 
 
 if __name__ == "__main__":
