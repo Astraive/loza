@@ -101,6 +101,8 @@ func NewServer(cfg *config.Config, stor storage.Storage) *Server {
 		cfg.Correlation.CoOccurrenceWindow,
 		cfg.Correlation.DeploymentAdjacencyWindow,
 		cfg.Correlation.MinCoOccurrenceCount,
+		cfg.Correlation.ListPageSize,
+		cfg.Correlation.MaxEvents,
 	)
 	analyzer := correlation.NewAnalyzer(corrCfg, stor.Events(), stor.Graph())
 
