@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"math"
+	"strings"
 	"testing"
 	"time"
 
@@ -272,5 +273,137 @@ func TestFromConfigNormalizesNonPositiveDecayPeriod(t *testing.T) {
 		if cfg.DecayPeriod <= 0 {
 			t.Fatalf("FromConfig(%v) produced non-positive DecayPeriod %v", period, cfg.DecayPeriod)
 		}
+	}
+}
+
+// configurableSignatureStore is a SignatureStore fake that can inject errors
+// from the read paths used by Evolve and record calls to Save.
+type configurableSignatureStore struct {
+	saved             []*models.IncidentSignature
+	findByHashResults []*models.IncidentSignature
+	findByHashErr     error
+	listResults       []*models.IncidentSignature
+	listErr           error
+}
+
+func (f *configurableSignatureStore) Save(_ context.Context, sig *models.IncidentSignature) error {
+	f.saved = append(f.saved, sig)
+	return nil
+}
+
+func (*configurableSignatureStore) Get(context.Context, string) (*models.IncidentSignature, error) {
+	return nil, nil
+}
+
+func (f *configurableSignatureStore) List(context.Context, int) ([]*models.IncidentSignature, error) {
+	return f.listResults, f.listErr
+}
+
+func (*configurableSignatureStore) FindSimilar(context.Context, *models.IncidentSignature, int) ([]*models.SimilarIncident, error) {
+	return nil, nil
+}
+
+func (f *configurableSignatureStore) FindByBehavioralHash(context.Context, string) ([]*models.IncidentSignature, error) {
+	return f.findByHashResults, f.findByHashErr
+}
+
+func (*configurableSignatureStore) UpdateDecay(context.Context, string, float64) error {
+	return nil
+}
+
+func (*configurableSignatureStore) ArchiveStale(context.Context, float64) (int, error) {
+	return 0, nil
+}
+
+func (*configurableSignatureStore) UpdateLastMatched(context.Context, string) error {
+	return nil
+}
+
+func TestEvolveReturnsBehavioralHashStoreError(t *testing.T) {
+	storeErr := errors.New("behavioral hash query failed")
+	store := &configurableSignatureStore{findByHashErr: storeErr}
+	ev := NewSignatureEvolver(DefaultConfig(), store, nil)
+
+	got, err := ev.Evolve(context.Background(), &models.IncidentSignature{SignatureID: "sig-1"})
+	if !errors.Is(err, storeErr) {
+		t.Fatalf("expected wrapped behavioral-hash store error, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "behavioral hash") {
+		t.Fatalf("expected error to carry context, got %q", err.Error())
+	}
+	if got != nil {
+		t.Fatalf("expected nil signature on store error, got %+v", got)
+	}
+	if len(store.saved) != 0 {
+		t.Fatalf("expected no Save calls on store error, got %d", len(store.saved))
+	}
+}
+
+func TestEvolveReturnsListStoreError(t *testing.T) {
+	storeErr := errors.New("list query failed")
+	store := &configurableSignatureStore{listErr: storeErr}
+	ev := NewSignatureEvolver(DefaultConfig(), store, nil)
+
+	got, err := ev.Evolve(context.Background(), &models.IncidentSignature{SignatureID: "sig-1"})
+	if !errors.Is(err, storeErr) {
+		t.Fatalf("expected wrapped list store error, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "list signatures") {
+		t.Fatalf("expected error to carry context, got %q", err.Error())
+	}
+	if got != nil {
+		t.Fatalf("expected nil signature on store error, got %+v", got)
+	}
+	if len(store.saved) != 0 {
+		t.Fatalf("expected no Save calls on store error, got %d", len(store.saved))
+	}
+}
+
+func TestEvolveCreatesNewSignatureWhenNoMatches(t *testing.T) {
+	store := &configurableSignatureStore{}
+	ev := NewSignatureEvolver(DefaultConfig(), store, nil)
+
+	sig := &models.IncidentSignature{SignatureID: "sig-new", Shape: "cascade"}
+	got, err := ev.Evolve(context.Background(), sig)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got == nil || got.SignatureID != "sig-new" {
+		t.Fatalf("expected new signature to be returned, got %+v", got)
+	}
+	if got.Version != 1 || got.DecayFactor != 1.0 {
+		t.Fatalf("expected initialized version/decay factor, got version=%d decay=%v", got.Version, got.DecayFactor)
+	}
+	if len(store.saved) != 1 {
+		t.Fatalf("expected exactly one Save call, got %d", len(store.saved))
+	}
+}
+
+func TestEvolveMergesBehavioralMatch(t *testing.T) {
+	existing := &models.IncidentSignature{
+		SignatureID:     "sig-existing",
+		Shape:           "cascade",
+		DecayFactor:     0.8,
+		OccurrenceCount: 3,
+		BehavioralHash:  "hash",
+	}
+	store := &configurableSignatureStore{
+		findByHashResults: []*models.IncidentSignature{existing},
+	}
+	ev := NewSignatureEvolver(DefaultConfig(), store, nil)
+
+	incoming := &models.IncidentSignature{SignatureID: "sig-incoming", Shape: "cascade"}
+	got, err := ev.Evolve(context.Background(), incoming)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.SignatureID != "sig-existing" {
+		t.Fatalf("expected merge into existing signature, got %q", got.SignatureID)
+	}
+	if got.OccurrenceCount != 4 {
+		t.Fatalf("expected incremented occurrence count, got %d", got.OccurrenceCount)
+	}
+	if len(store.saved) != 1 {
+		t.Fatalf("expected exactly one Save call, got %d", len(store.saved))
 	}
 }
