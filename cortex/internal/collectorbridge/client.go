@@ -773,7 +773,10 @@ func (c *Client) tailURL(path string, websocketScheme bool) string {
 	}
 	q := u.Query()
 	cursor, err := c.LoadCursor()
-	if err == nil && !cursor.Timestamp.IsZero() {
+	if err != nil && !errors.Is(err, ErrCursorRecovered) {
+		cursor = Cursor{}
+	}
+	if !cursor.Timestamp.IsZero() {
 		q.Set("since", cursor.Timestamp.UTC().Format(time.RFC3339Nano))
 	}
 	if strings.TrimSpace(cursor.EventID) != "" {
