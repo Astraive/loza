@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -14,9 +15,11 @@ import (
 type HTTPServer struct {
 	cfg     HTTPConfig
 	state   State
+	mu      sync.Mutex // guards server
 	server  *http.Server
 	ready   atomic.Bool
 	limiter *rate.Limiter
+	done    chan struct{} // closed when Start returns, releasing the shutdown watcher
 }
 
 func NewHTTPServer(cfg HTTPConfig, state State) *HTTPServer {
@@ -70,7 +73,7 @@ func (s *HTTPServer) Start(ctx context.Context) error {
 		writeTimeout = s.cfg.WriteTimeout
 	}
 
-	s.server = &http.Server{
+	srv := &http.Server{
 		Addr:              s.cfg.Addr,
 		Handler:           mux,
 		ReadHeaderTimeout: s.cfg.ReadHeaderTimeout,
@@ -80,23 +83,39 @@ func (s *HTTPServer) Start(ctx context.Context) error {
 		IdleTimeout:       s.cfg.IdleTimeout,
 	}
 
+	done := make(chan struct{})
+	s.mu.Lock()
+	s.server = srv
+	s.done = done
+	s.mu.Unlock()
+	// Always release the shutdown watcher when Start returns, including when
+	// ListenAndServe fails immediately (e.g. the address is already in use).
+	defer close(done)
+
 	go func() {
-		<-ctx.Done()
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		_ = s.server.Shutdown(shutdownCtx)
+		select {
+		case <-ctx.Done():
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			_ = srv.Shutdown(shutdownCtx)
+		case <-done:
+			// Start has returned; the watcher must not outlive the server.
+		}
 	}()
 
 	s.ready.Store(true)
-	return s.server.ListenAndServe()
+	return srv.ListenAndServe()
 }
 
 func (s *HTTPServer) Stop(ctx context.Context) error {
 	s.ready.Store(false)
-	if s.server == nil {
+	s.mu.Lock()
+	srv := s.server
+	s.mu.Unlock()
+	if srv == nil {
 		return nil
 	}
-	return s.server.Shutdown(ctx)
+	return srv.Shutdown(ctx)
 }
 
 func (s *HTTPServer) handleIngest(w http.ResponseWriter, r *http.Request) {
