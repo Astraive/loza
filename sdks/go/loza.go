@@ -1189,13 +1189,65 @@ func MaxEventBytes(bytes int) SecurityConfig {
 func MaxAttrs(count int) SecurityConfig {
 	return SecurityConfig{MaxAttrCount: count}
 }
-func CardinalityPolicy(policy map[string]any) map[string]any { return policy }
-func SampleErrors() Sampler                                  { return core.SampleErrors() }
-func SampleSlowRequests(d time.Duration) Sampler             { return core.SampleSlowRequests(d) }
-func SampleStatusCodes(codes ...int) Sampler                 { return core.SampleStatusCodes(codes...) }
-func SampleRoutes(routes ...string) Sampler                  { return core.SampleRoutes(routes...) }
-func SampleUsers(ids ...string) Sampler                      { return core.SampleUsers(ids...) }
-func SampleTenants(ids ...string) Sampler                    { return core.SampleTenants(ids...) }
+
+// defaultCardinalityLimit is the maximum number of distinct attribute values
+// tracked per key when a cardinality policy does not supply a positive limit.
+const defaultCardinalityLimit = 1000
+
+// cardinalityModes are the recognized overflow behaviours for a cardinality
+// policy. Any other mode is replaced with the safe "drop" default.
+var cardinalityModes = map[string]struct{}{
+	"drop":   {},
+	"sample": {},
+	"hash":   {},
+}
+
+// CardinalityPolicy validates and normalizes a cardinality control policy and
+// returns the resulting configuration. Unlike a pass-through, it enforces a
+// valid overflow mode and a positive per-key limit so the returned policy
+// actually constrains cardinality. Unknown keys are preserved for forward
+// compatibility with the collector's cardinality_limit processor, and the
+// returned map is a defensive copy so callers cannot mutate shared state.
+func CardinalityPolicy(policy map[string]any) map[string]any {
+	out := make(map[string]any, len(policy)+2)
+	for key, value := range policy {
+		out[key] = value
+	}
+
+	if mode, ok := out["mode"].(string); ok {
+		if _, valid := cardinalityModes[mode]; !valid {
+			out["mode"] = "drop"
+		}
+	} else {
+		out["mode"] = "drop"
+	}
+
+	limit := defaultCardinalityLimit
+	switch value := out["limit"].(type) {
+	case int:
+		if value > 0 {
+			limit = value
+		}
+	case int64:
+		if value > 0 && value <= int64(^uint(0)>>1) {
+			limit = int(value)
+		}
+	case float64:
+		if value > 0 && value <= float64(^uint(0)>>1) {
+			limit = int(value)
+		}
+	}
+	out["limit"] = limit
+
+	return out
+}
+
+func SampleErrors() Sampler                      { return core.SampleErrors() }
+func SampleSlowRequests(d time.Duration) Sampler { return core.SampleSlowRequests(d) }
+func SampleStatusCodes(codes ...int) Sampler     { return core.SampleStatusCodes(codes...) }
+func SampleRoutes(routes ...string) Sampler      { return core.SampleRoutes(routes...) }
+func SampleUsers(ids ...string) Sampler          { return core.SampleUsers(ids...) }
+func SampleTenants(ids ...string) Sampler        { return core.SampleTenants(ids...) }
 func SampleFeatureFlag(name string, value any) Sampler {
 	return core.SampleFeatureFlag(name, value)
 }
