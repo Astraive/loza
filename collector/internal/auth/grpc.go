@@ -163,6 +163,8 @@ func grpcAuthenticate(ctx context.Context, store KeyStore, cache *MemoryKeyCache
 		AllowedEnvs:          record.AllowedEnvs,
 		AllowedServices:      record.AllowedServices,
 		AllowedIPs:           record.AllowedIPs,
+		AllowedEnvs:          record.AllowedEnvs,
+		AllowedServices:      record.AllowedServices,
 		MaxPayloadBytes:      record.MaxPayloadBytes,
 		MaxRequestsPerMinute: record.MaxRequestsPerMinute,
 		MaxEventsPerMinute:   record.MaxEventsPerMinute,

@@ -83,7 +83,6 @@ func TestParseKey_RejectsLegacyPrefix(t *testing.T) {
 	}
 }
 
-
 func TestParseKey_InvalidKind(t *testing.T) {
 	_, err := ParseKey("lz_bad_live_k_xxx_yyy")
 	if err == nil {

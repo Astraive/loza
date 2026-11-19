@@ -990,8 +990,8 @@ func (s *PostgresGraphStore) ListNodes(ctx context.Context, nodeType string, lim
 			return nil, err
 		}
 		if err := json.Unmarshal(attrsJSON, &node.Attributes); err != nil {
-		log.Warn().Err(err).Msg("failed to unmarshal node attributes")
-	}
+			log.Warn().Err(err).Msg("failed to unmarshal node attributes")
+		}
 		nodes = append(nodes, &node)
 	}
 	if err := rows.Err(); err != nil {
@@ -1030,8 +1030,8 @@ func (s *PostgresGraphStore) GetEdges(ctx context.Context, nodeID string, edgeTy
 			return nil, err
 		}
 		if err := json.Unmarshal(attrsJSON, &edge.Attributes); err != nil {
-		log.Warn().Err(err).Msg("failed to unmarshal edge attributes")
-	}
+			log.Warn().Err(err).Msg("failed to unmarshal edge attributes")
+		}
 		edges = append(edges, &edge)
 	}
 	if err := rows.Err(); err != nil {
@@ -1167,8 +1167,8 @@ func (s *PostgresIncidentStore) List(ctx context.Context, limit, offset int) ([]
 			return nil, err
 		}
 		if err := json.Unmarshal(servicesJSON, &inc.AffectedServices); err != nil {
-		log.Warn().Err(err).Msg("failed to unmarshal incident affected services")
-	}
+			log.Warn().Err(err).Msg("failed to unmarshal incident affected services")
+		}
 		incidents = append(incidents, &inc)
 	}
 	if err := rows.Err(); err != nil {
@@ -1246,23 +1246,23 @@ func (s *PostgresSignatureStore) List(ctx context.Context, limit int) ([]*models
 			return nil, err
 		}
 		if err := json.Unmarshal(rolesJSON, &sig.ServiceRoles); err != nil {
-		log.Warn().Err(err).Msg("failed to unmarshal signature service roles")
-	}
-	if err := json.Unmarshal(symptomsJSON, &sig.Symptoms); err != nil {
-		log.Warn().Err(err).Msg("failed to unmarshal signature symptoms")
-	}
-	if err := json.Unmarshal(patternJSON, &sig.TemporalPattern); err != nil {
-		log.Warn().Err(err).Msg("failed to unmarshal signature temporal pattern")
-	}
-	if err := json.Unmarshal(remediationJSON, &sig.Remediation); err != nil {
-		log.Warn().Err(err).Msg("failed to unmarshal signature remediation")
-	}
-	if err := json.Unmarshal(vectorJSON, &sig.FeatureVector); err != nil {
-		log.Warn().Err(err).Msg("failed to unmarshal signature feature vector")
-	}
-	if err := json.Unmarshal(weightsJSON, &sig.FeatureWeights); err != nil {
-		log.Warn().Err(err).Msg("failed to unmarshal signature feature weights")
-	}
+			log.Warn().Err(err).Msg("failed to unmarshal signature service roles")
+		}
+		if err := json.Unmarshal(symptomsJSON, &sig.Symptoms); err != nil {
+			log.Warn().Err(err).Msg("failed to unmarshal signature symptoms")
+		}
+		if err := json.Unmarshal(patternJSON, &sig.TemporalPattern); err != nil {
+			log.Warn().Err(err).Msg("failed to unmarshal signature temporal pattern")
+		}
+		if err := json.Unmarshal(remediationJSON, &sig.Remediation); err != nil {
+			log.Warn().Err(err).Msg("failed to unmarshal signature remediation")
+		}
+		if err := json.Unmarshal(vectorJSON, &sig.FeatureVector); err != nil {
+			log.Warn().Err(err).Msg("failed to unmarshal signature feature vector")
+		}
+		if err := json.Unmarshal(weightsJSON, &sig.FeatureWeights); err != nil {
+			log.Warn().Err(err).Msg("failed to unmarshal signature feature weights")
+		}
 		sigs = append(sigs, &sig)
 	}
 	if err := rows.Err(); err != nil {
@@ -1286,23 +1286,23 @@ func (s *PostgresSignatureStore) FindByBehavioralHash(ctx context.Context, hash 
 			continue
 		}
 		if err := json.Unmarshal(rolesJSON, &sig.ServiceRoles); err != nil {
-		log.Warn().Err(err).Msg("failed to unmarshal signature service roles")
-	}
-	if err := json.Unmarshal(symptomsJSON, &sig.Symptoms); err != nil {
-		log.Warn().Err(err).Msg("failed to unmarshal signature symptoms")
-	}
-	if err := json.Unmarshal(patternJSON, &sig.TemporalPattern); err != nil {
-		log.Warn().Err(err).Msg("failed to unmarshal signature temporal pattern")
-	}
-	if err := json.Unmarshal(remediationJSON, &sig.Remediation); err != nil {
-		log.Warn().Err(err).Msg("failed to unmarshal signature remediation")
-	}
-	if err := json.Unmarshal(vectorJSON, &sig.FeatureVector); err != nil {
-		log.Warn().Err(err).Msg("failed to unmarshal signature feature vector")
-	}
-	if err := json.Unmarshal(weightsJSON, &sig.FeatureWeights); err != nil {
-		log.Warn().Err(err).Msg("failed to unmarshal signature feature weights")
-	}
+			log.Warn().Err(err).Msg("failed to unmarshal signature service roles")
+		}
+		if err := json.Unmarshal(symptomsJSON, &sig.Symptoms); err != nil {
+			log.Warn().Err(err).Msg("failed to unmarshal signature symptoms")
+		}
+		if err := json.Unmarshal(patternJSON, &sig.TemporalPattern); err != nil {
+			log.Warn().Err(err).Msg("failed to unmarshal signature temporal pattern")
+		}
+		if err := json.Unmarshal(remediationJSON, &sig.Remediation); err != nil {
+			log.Warn().Err(err).Msg("failed to unmarshal signature remediation")
+		}
+		if err := json.Unmarshal(vectorJSON, &sig.FeatureVector); err != nil {
+			log.Warn().Err(err).Msg("failed to unmarshal signature feature vector")
+		}
+		if err := json.Unmarshal(weightsJSON, &sig.FeatureWeights); err != nil {
+			log.Warn().Err(err).Msg("failed to unmarshal signature feature weights")
+		}
 		sigs = append(sigs, &sig)
 	}
 	if err := rows.Err(); err != nil {
@@ -1346,20 +1346,20 @@ func (s *PostgresSignatureStore) FindSimilar(ctx context.Context, sig *models.In
 			continue
 		}
 		if err := json.Unmarshal(rolesJSON, &candidate.ServiceRoles); err != nil {
-		log.Warn().Err(err).Msg("failed to unmarshal candidate service roles")
-	}
-	if err := json.Unmarshal(symptomsJSON, &candidate.Symptoms); err != nil {
-		log.Warn().Err(err).Msg("failed to unmarshal candidate symptoms")
-	}
-	if err := json.Unmarshal(patternJSON, &candidate.TemporalPattern); err != nil {
-		log.Warn().Err(err).Msg("failed to unmarshal candidate temporal pattern")
-	}
-	if err := json.Unmarshal(remediationJSON, &candidate.Remediation); err != nil {
-		log.Warn().Err(err).Msg("failed to unmarshal candidate remediation")
-	}
-	if err := json.Unmarshal(vectorJSON, &candidate.FeatureVector); err != nil {
-		log.Warn().Err(err).Msg("failed to unmarshal candidate feature vector")
-	}
+			log.Warn().Err(err).Msg("failed to unmarshal candidate service roles")
+		}
+		if err := json.Unmarshal(symptomsJSON, &candidate.Symptoms); err != nil {
+			log.Warn().Err(err).Msg("failed to unmarshal candidate symptoms")
+		}
+		if err := json.Unmarshal(patternJSON, &candidate.TemporalPattern); err != nil {
+			log.Warn().Err(err).Msg("failed to unmarshal candidate temporal pattern")
+		}
+		if err := json.Unmarshal(remediationJSON, &candidate.Remediation); err != nil {
+			log.Warn().Err(err).Msg("failed to unmarshal candidate remediation")
+		}
+		if err := json.Unmarshal(vectorJSON, &candidate.FeatureVector); err != nil {
+			log.Warn().Err(err).Msg("failed to unmarshal candidate feature vector")
+		}
 
 		similarity := computeSimilarityPostgres(sig, &candidate)
 		if similarity >= 0.5 {
@@ -1485,8 +1485,8 @@ func (s *PostgresRemediationStore) ListByIncident(ctx context.Context, incidentI
 			return nil, err
 		}
 		if err := json.Unmarshal(attrsJSON, &rem.Attributes); err != nil {
-		log.Warn().Err(err).Msg("failed to unmarshal remediation attributes")
-	}
+			log.Warn().Err(err).Msg("failed to unmarshal remediation attributes")
+		}
 		remediations = append(remediations, &rem)
 	}
 	if err := rows.Err(); err != nil {

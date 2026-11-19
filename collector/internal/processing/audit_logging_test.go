@@ -330,10 +330,10 @@ func TestAuditLoggingWithNestedStructures(t *testing.T) {
 	defer mu.Unlock()
 
 	expectedPaths := map[string]bool{
-		"user.password":            false,
-		"user.profile.ssn":         false,
-		"user.profile.phone":       false,
-		"settings.password":        false,
+		"user.password":      false,
+		"user.profile.ssn":   false,
+		"user.profile.phone": false,
+		"settings.password":  false,
 	}
 
 	for _, logged := range logCalls {

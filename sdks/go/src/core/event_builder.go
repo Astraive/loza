@@ -28,13 +28,13 @@ func buildEvent(params Params, cfg *Config) *Event {
 	} else {
 		ev.RequestID = cfg.IDGen.NewID()
 	}
-	
+
 	// Trace context propagation (Requirements: 39.3, 39.4, 39.5, 39.6)
 	// Store caller-provided values; defer generation to ensureTraceContext()
 	// which runs after sampling, so sampled-out events skip the PRNG cost.
 	ev.TraceID = params.TraceID
 	ev.SpanID = params.SpanID
-	
+
 	// Parent span ID is optional and only set if provided (Requirement 39.5)
 	ev.ParentID = params.ParentID
 	ev.IncidentID = params.IncidentID

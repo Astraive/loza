@@ -29,12 +29,12 @@ func IsValidOutcomeCode(code int) bool {
 
 type Remediation struct {
 	RemediationID string                 `json:"remediation_id" db:"remediation_id"`
-	IncidentID  string                 `json:"incident_id" db:"incident_id"`
-	SignatureID string                 `json:"signature_id,omitempty" db:"signature_id"`
-	Action     string                 `json:"action" db:"action"`
-	Timestamp  time.Time              `json:"timestamp" db:"timestamp"`
-	Operator  string                 `json:"operator,omitempty" db:"operator"`
-	Attributes map[string]interface{} `json:"attributes" db:"attributes"`
+	IncidentID    string                 `json:"incident_id" db:"incident_id"`
+	SignatureID   string                 `json:"signature_id,omitempty" db:"signature_id"`
+	Action        string                 `json:"action" db:"action"`
+	Timestamp     time.Time              `json:"timestamp" db:"timestamp"`
+	Operator      string                 `json:"operator,omitempty" db:"operator"`
+	Attributes    map[string]interface{} `json:"attributes" db:"attributes"`
 }
 
 type RemediationFeedback struct {
@@ -57,8 +57,8 @@ func (f *RemediationFeedback) Validate() error {
 
 type RemediationStats struct {
 	Action           string  `json:"action"`
-	SuccessRate     float64 `json:"success_rate"`
-	TotalAttempts   int     `json:"total_attempts"`
-	SuccessfulCount int     `json:"successful_count"`
+	SuccessRate      float64 `json:"success_rate"`
+	TotalAttempts    int     `json:"total_attempts"`
+	SuccessfulCount  int     `json:"successful_count"`
 	AvgTimeToResolve int64   `json:"avg_time_to_resolve_seconds"`
 }

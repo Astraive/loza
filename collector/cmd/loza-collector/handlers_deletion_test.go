@@ -282,9 +282,9 @@ func TestDeleteWithoutAuth(t *testing.T) {
 
 	state := &collectorState{
 		cfg: collectorConfig{
-			duckDBTable: "events",
-			authEnabled: true,
-			apiKey:      "test-key",
+			duckDBTable:  "events",
+			authEnabled:  true,
+			apiKey:       "test-key",
 			apiKeyHeader: "X-API-Key",
 		},
 		queryDB: db,
@@ -329,10 +329,10 @@ func TestDeleteWithAuth(t *testing.T) {
 
 	state := &collectorState{
 		cfg: collectorConfig{
-			duckDBTable:   "events",
-			authEnabled:   true,
-			apiKey:        "test-key",
-			apiKeyHeader:  "X-API-Key",
+			duckDBTable:  "events",
+			authEnabled:  true,
+			apiKey:       "test-key",
+			apiKeyHeader: "X-API-Key",
 		},
 		queryDB: db,
 	}

@@ -9,8 +9,8 @@ import (
 
 	"github.com/astraive/loza/cli/internal/client"
 	"github.com/astraive/loza/cli/internal/config"
-	speccontract "github.com/astraive/loza/spec/generated/go/contract"
 	"github.com/astraive/loza/cli/internal/version"
+	speccontract "github.com/astraive/loza/spec/generated/go/contract"
 )
 
 func EmitCommand(cfg config.Config, args []string) error {

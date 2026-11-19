@@ -47,26 +47,26 @@ func TestBuildEventPreservesProvidedTraceContext(t *testing.T) {
 	providedTraceID := "0af7651916cd43dd8448eb211c80319c"
 	providedSpanID := "00f067aa0ba902b7"
 	providedParentID := "00f067aa0ba902b6"
-	
+
 	params := Params{
 		Event:    "test.event",
 		TraceID:  providedTraceID,
 		SpanID:   providedSpanID,
 		ParentID: providedParentID,
 	}
-	
+
 	ev := buildEvent(params, &cfg)
-	
+
 	// Verify trace_id is preserved
 	if ev.TraceID != providedTraceID {
 		t.Errorf("expected trace_id %s, got %s", providedTraceID, ev.TraceID)
 	}
-	
+
 	// Verify span_id is preserved
 	if ev.SpanID != providedSpanID {
 		t.Errorf("expected span_id %s, got %s", providedSpanID, ev.SpanID)
 	}
-	
+
 	// Verify parent_span_id is preserved
 	if ev.ParentID != providedParentID {
 		t.Errorf("expected parent_span_id %s, got %s", providedParentID, ev.ParentID)
@@ -151,9 +151,9 @@ func TestBuildEventParentIDOptional(t *testing.T) {
 	params := Params{
 		Event: "test.event",
 	}
-	
+
 	ev := buildEvent(params, &cfg)
-	
+
 	// Verify parent_span_id is empty when not provided
 	if ev.ParentID != "" {
 		t.Errorf("expected parent_span_id to be empty, got %s", ev.ParentID)

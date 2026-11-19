@@ -90,6 +90,9 @@ jobs:
         with:
           go-version: "1.25"
 
+      - name: Check Go formatting
+        run: bash scripts/fmt-check.sh
+
       - name: Install protoc
         run: |
           PROTOC_VERSION=34.1

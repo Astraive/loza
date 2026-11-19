@@ -3,11 +3,11 @@ package processing
 import "testing"
 
 func TestExtractTenantID(t *testing.T) {
-	cases := []struct{
+	cases := []struct {
 		name string
-		raw string
-		exp string
-		ok bool
+		raw  string
+		exp  string
+		ok   bool
 	}{
 		{"top-level", `{"tenant_id":"tenant-123"}`, "tenant-123", true},
 		{"nested", `{"tenant":{"id":"tenant-456"}}`, "tenant-456", true},

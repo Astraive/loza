@@ -13,16 +13,16 @@ import (
 // sampleEvent returns a realistic JSON event payload.
 func sampleEvent() map[string]any {
 	return map[string]any{
-		"event_id":     "evt_bench_001",
-		"event_name":   "payment.completed",
-		"event_version": "v1",
-		"timestamp":    time.Now().UTC().Format(time.RFC3339Nano),
-		"service":      "checkout-api",
-		"level":        "info",
-		"outcome":      "success",
-		"kind":         "event",
+		"event_id":       "evt_bench_001",
+		"event_name":     "payment.completed",
+		"event_version":  "v1",
+		"timestamp":      time.Now().UTC().Format(time.RFC3339Nano),
+		"service":        "checkout-api",
+		"level":          "info",
+		"outcome":        "success",
+		"kind":           "event",
 		"schema_version": "v1",
-		"duration_ms":  142,
+		"duration_ms":    142,
 		"http": map[string]any{
 			"method": "POST",
 			"path":   "/api/payments",

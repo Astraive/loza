@@ -38,4 +38,3 @@ func boolMetric(v bool) int {
 	}
 	return 0
 }
-

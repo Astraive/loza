@@ -11,8 +11,8 @@ import (
 
 	"github.com/astraive/loza/cli/internal/client"
 	"github.com/astraive/loza/cli/internal/config"
-	speccontract "github.com/astraive/loza/spec/generated/go/contract"
 	"github.com/astraive/loza/cli/internal/version"
+	speccontract "github.com/astraive/loza/spec/generated/go/contract"
 	_ "github.com/marcboeker/go-duckdb"
 )
 

@@ -84,7 +84,9 @@ func TestQueryClampsLargeLimitAndRejectsEmptySourceAndUnmarshalableParameters(t 
 
 	var gotLimit float64
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var body struct{ Limit int `json:"limit"` }
+		var body struct {
+			Limit int `json:"limit"`
+		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			t.Fatal(err)
 		}
@@ -203,7 +205,7 @@ func TestQueryMapsHTTPErrorCategoriesAndMessages(t *testing.T) {
 
 func TestQueryMapsTransportFailure(t *testing.T) {
 	client, err := New(ConnectionConfig{
-		Endpoint: "http://example.com",
+		Endpoint:  "http://example.com",
 		Collector: "demo",
 		HTTPClient: &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
 			return nil, errors.New("connection refused")
@@ -220,7 +222,7 @@ func TestQueryMapsTransportFailure(t *testing.T) {
 
 func TestQueryMapsCanceledContext(t *testing.T) {
 	client, err := New(ConnectionConfig{
-		Endpoint: "http://example.com",
+		Endpoint:  "http://example.com",
 		Collector: "demo",
 		HTTPClient: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 			<-req.Context().Done()
@@ -240,7 +242,7 @@ func TestQueryMapsCanceledContext(t *testing.T) {
 
 func TestQueryMapsResponseReadFailure(t *testing.T) {
 	client, err := New(ConnectionConfig{
-		Endpoint: "http://example.com",
+		Endpoint:  "http://example.com",
 		Collector: "demo",
 		HTTPClient: &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
 			return &http.Response{StatusCode: http.StatusOK, Body: errorBody{}, Header: make(http.Header)}, nil
@@ -275,9 +277,9 @@ func (errorBody) Read([]byte) (int, error) { return 0, errors.New("read failed")
 func (errorBody) Close() error             { return nil }
 func TestQueryJSONEncodesSpecialParameterValues(t *testing.T) {
 	var gotBody struct {
-		Query      string `json:"query"`
+		Query      string                `json:"query"`
 		Parameters map[string]QueryValue `json:"parameters"`
-		Limit      int `json:"limit"`
+		Limit      int                   `json:"limit"`
 	}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {

@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"os"
 
-	speccontract "github.com/astraive/loza/spec/generated/go/contract"
 	"github.com/astraive/loza/cli/internal/cli"
 	"github.com/astraive/loza/cli/internal/version"
+	speccontract "github.com/astraive/loza/spec/generated/go/contract"
 )
 
 func main() {

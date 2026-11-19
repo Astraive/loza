@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	lozav1 "github.com/astraive/loza/gen/go/loza/core"
 	"github.com/astraive/loza/collector/internal/ingest"
+	lozav1 "github.com/astraive/loza/gen/go/loza/core"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/time/rate"
 )
