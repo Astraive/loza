@@ -1002,6 +1002,7 @@ dependencies = [
  "hostname",
  "http 1.5.0",
  "hyper",
+ "libc",
  "regex",
  "ring",
  "serde",
