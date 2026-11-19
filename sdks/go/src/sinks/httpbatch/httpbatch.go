@@ -112,6 +112,7 @@ func (s *sink) notifyDropped(dropped int) {
 }
 
 func (s *sink) WriteEvent(_ context.Context, encoded []byte, _ *loza.Event) error {
+func (s *sink) WriteEvent(ctx context.Context, encoded []byte, _ *loza.Event) error {
 	s.mu.Lock()
 	cp := make([]byte, len(encoded))
 	copy(cp, encoded)
@@ -121,7 +122,7 @@ func (s *sink) WriteEvent(_ context.Context, encoded []byte, _ *loza.Event) erro
 	s.mu.Unlock()
 	s.notifyDropped(dropped)
 	if flush {
-		return s.Flush(context.Background())
+		return s.Flush(ctx)
 	}
 	return nil
 }
