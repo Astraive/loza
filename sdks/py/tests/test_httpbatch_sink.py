@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import threading
+import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
@@ -52,6 +53,42 @@ def test_httpbatch_sink_accepts_clean_batch() -> None:
     finally:
         server.shutdown()
         server.server_close()
+
+
+def test_httpbatch_sink_negative_retries_still_sends_batch(monkeypatch: pytest.MonkeyPatch) -> None:
+    attempts: list[object] = []
+
+    class _FakeResponse:
+        status = 202
+        headers = None
+
+        def __enter__(self) -> "_FakeResponse":
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def read(self) -> bytes:
+            return b'{"status":"accepted","accepted":1}'
+
+        def getcode(self) -> int:
+            return 202
+
+    def fake_urlopen(request: object, **_kwargs: object) -> _FakeResponse:
+        attempts.append(request)
+        return _FakeResponse()
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+
+    sink = HTTPBatchSink("https://collector.example/events", retries=-1, enable_compression=False)
+    sink.write_batch(
+        [
+            '{"schema_version":"v1","event_version":"v1","timestamp":"2026-05-12T00:00:00Z","event_id":"evt_neg","service":"checkout","event":"negative.retries","kind":"http"}'
+        ]
+    )
+
+    assert len(attempts) == 1
+    assert sink.retries == 0
 
 
 def test_httpbatch_sink_fails_on_partial_invalid_batch() -> None:

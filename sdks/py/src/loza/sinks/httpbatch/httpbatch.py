@@ -61,6 +61,9 @@ class HTTPBatchSink:
         _validate_auth_requires_https(
             self.endpoint, api_key=self.api_key, username=self.username, password=self.password
         )
+        # A negative count makes range(retries + 1) empty, sending no request and
+        # silently dropping the batch. Treat it as "no retries" instead.
+        self.retries = max(0, self.retries)
 
     def _auth_headers(self) -> dict[str, str]:
         if self.api_key:
