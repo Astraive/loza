@@ -87,7 +87,10 @@ export class Client {
     const timeout = setTimeout(() => controller.abort(), this.config.timeoutMs);
     try {
       const normalizedLimit = Math.max(1, Math.min(Math.trunc(limit), 1000));
-      const encodedParameters: Record<string, QueryValue> = {};
+      // Use a null-prototype map so arbitrary names (e.g. "__proto__") become own
+      // properties instead of triggering Object.prototype's inherited setter, which
+      // would silently drop the parameter and reassign the map's prototype.
+      const encodedParameters: Record<string, QueryValue> = Object.create(null) as Record<string, QueryValue>;
       for (const [name, value] of Object.entries(parameters)) {
         encodedParameters[name] = isQueryValue(value)
           ? value

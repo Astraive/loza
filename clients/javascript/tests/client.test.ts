@@ -73,6 +73,27 @@ test('query encodes inferred parameter types and basic authorization', async () 
   });
 });
 
+test('query preserves a parameter literally named __proto__ without prototype pollution', async () => {
+  let body: Record<string, unknown> | undefined;
+  const client = new Client({
+    endpoint: 'https://api.example',
+    collector: 'demo',
+    apiKey: 'key',
+    fetch: async (_url, init) => {
+      body = JSON.parse(String(init?.body));
+      return new Response(JSON.stringify({ columns: [], rows: [] }));
+    },
+  });
+  // JSON.parse creates "__proto__" as an own enumerable property, unlike an object literal.
+  const parameters = JSON.parse('{"__proto__": "polluted", "safe": "ok"}');
+  await client.query('from events', parameters);
+  assert.ok(body);
+  const encoded = body.parameters as Record<string, unknown>;
+  assert.ok(Object.prototype.hasOwnProperty.call(encoded, '__proto__'));
+  assert.deepEqual(encoded['__proto__'], { type: 'string', value: 'polluted' });
+  assert.deepEqual(encoded.safe, { type: 'string', value: 'ok' });
+});
+
 test('query decodes columns and applies result defaults', async () => {
   const client = new Client({
     endpoint: 'https://api.example',
