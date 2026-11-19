@@ -22,6 +22,10 @@ func nextBackoffDelay(delay time.Duration) time.Duration {
 }
 
 func RetryWithBackoff(ctx context.Context, maxAttempts int, initialDelay time.Duration, fn func() error) error {
+	if maxAttempts <= 0 {
+		return fmt.Errorf("retry: maxAttempts must be greater than 0, got %d", maxAttempts)
+	}
+
 	delay := initialDelay
 	var lastErr error
 

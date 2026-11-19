@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"strings"
 	"testing"
 	"time"
 )
@@ -78,6 +79,30 @@ func TestRetryWithBackoffHonorsCancellation(t *testing.T) {
 	})
 	if err != context.Canceled {
 		t.Fatalf("expected context.Canceled, got %v", err)
+	}
+}
+
+func TestRetryWithBackoffRejectsNonPositiveMaxAttempts(t *testing.T) {
+	for _, maxAttempts := range []int{0, -1} {
+		t.Run(fmt.Sprintf("maxAttempts=%d", maxAttempts), func(t *testing.T) {
+			called := false
+			err := RetryWithBackoff(context.Background(), maxAttempts, time.Millisecond, func() error {
+				called = true
+				return fmt.Errorf("fail")
+			})
+			if err == nil {
+				t.Fatalf("expected an error for maxAttempts=%d, got nil", maxAttempts)
+			}
+			if called {
+				t.Fatalf("fn should not be called when maxAttempts=%d", maxAttempts)
+			}
+			if msg := err.Error(); strings.Contains(msg, "%!w(<nil>)") {
+				t.Fatalf("error message contains a mangled nil wrap: %q", msg)
+			}
+			if !strings.Contains(err.Error(), "maxAttempts") {
+				t.Fatalf("expected error to explain the invalid maxAttempts, got %q", err.Error())
+			}
+		})
 	}
 }
 
