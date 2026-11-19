@@ -230,9 +230,11 @@ func SetIDGenerator(cfg Config, gen IDGenerator) Config {
 }
 
 // ResetForTest clears all global mutable state: global logger, clock, and ID generator.
+// It is safe to call concurrently with ID generation: the global generator swap is
+// guarded by the same lock that protects readers.
 func ResetForTest() {
 	defaultLoggerMu.Lock()
 	defaultLog = nil
 	defaultLoggerMu.Unlock()
-	globalIDGen = &uuidV7Gen{}
+	setGlobalIDGen(&uuidV7Gen{})
 }
