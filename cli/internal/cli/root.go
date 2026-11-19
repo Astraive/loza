@@ -140,7 +140,7 @@ func Run(args []string) error {
 	case "init":
 		cfg, err := config.Load()
 		if err != nil {
-			cfg = config.Config{}
+			return fmt.Errorf("load cli config: %w", err)
 		}
 		return commands.InitCommand(cfg, args[1:])
 	}
