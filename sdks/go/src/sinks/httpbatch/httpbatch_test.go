@@ -17,6 +17,33 @@ type roundTripperFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripperFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
+// drainTrackingBody records whether the HTTP client consumed the response to
+// EOF and closed it, which is what http.Transport requires to reuse a
+// connection.
+type drainTrackingBody struct {
+	reader  io.Reader
+	mu      sync.Mutex
+	drained bool
+	closed  bool
+}
+
+func (b *drainTrackingBody) Read(p []byte) (int, error) {
+	n, err := b.reader.Read(p)
+	if err == io.EOF {
+		b.mu.Lock()
+		b.drained = true
+		b.mu.Unlock()
+	}
+	return n, err
+}
+
+func (b *drainTrackingBody) Close() error {
+	b.mu.Lock()
+	b.closed = true
+	b.mu.Unlock()
+	return nil
+}
+
 func TestNewRejectsMissingURL(t *testing.T) {
 	if _, err := New(Config{}); err == nil || !strings.Contains(err.Error(), "URL is required") {
 		t.Fatalf("New empty URL error = %v", err)
@@ -275,5 +302,56 @@ func TestBatchSinkReportsTimerFailures(t *testing.T) {
 	}
 	if err := got.Close(context.Background()); err == nil {
 		t.Fatal("Close should report the retained failed batch")
+	}
+}
+
+func TestBatchSinkDrainsResponseBodyForConnectionReuse(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		statusCode int
+		wantErr    bool
+	}{
+		{name: "success", statusCode: http.StatusNoContent},
+		{name: "error status", statusCode: http.StatusBadGateway, wantErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			body := &drainTrackingBody{reader: strings.NewReader("collector response payload")}
+			client := &http.Client{Transport: roundTripperFunc(func(*http.Request) (*http.Response, error) {
+				return &http.Response{
+					StatusCode: tc.statusCode,
+					Body:       body,
+					Header:     make(http.Header),
+				}, nil
+			})}
+			got, err := New(Config{
+				URL:           "http://collector.invalid/ingest",
+				BatchSize:     1,
+				FlushInterval: time.Hour,
+				Client:        client,
+			})
+			if err != nil {
+				t.Fatalf("New: %v", err)
+			}
+
+			sendErr := got.(*sink).WriteBatch(context.Background(), [][]byte{[]byte("event\n")}, nil)
+			if tc.wantErr && sendErr == nil {
+				t.Fatal("error status did not return an error")
+			}
+			if !tc.wantErr && sendErr != nil {
+				t.Fatalf("WriteBatch: %v", sendErr)
+			}
+			if err := got.Close(context.Background()); err != nil {
+				t.Fatalf("Close: %v", err)
+			}
+
+			body.mu.Lock()
+			defer body.mu.Unlock()
+			if !body.drained {
+				t.Fatal("response body was not read to EOF; connection cannot be reused")
+			}
+			if !body.closed {
+				t.Fatal("response body was not closed")
+			}
+		})
 	}
 }
