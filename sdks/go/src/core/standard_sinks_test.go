@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -501,6 +502,23 @@ func TestHTTPBatchSink_OnErrorReceivesCollectorResponseFailure(t *testing.T) {
 			default:
 			}
 		},
+type contextCaptureRoundTripper struct {
+	requestContexts chan context.Context
+}
+
+func (rt *contextCaptureRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	rt.requestContexts <- req.Context()
+	<-req.Context().Done()
+	return nil, req.Context().Err()
+}
+
+func TestHTTPBatchSink_WriteEventPropagatesContextCancellation(t *testing.T) {
+	rt := &contextCaptureRoundTripper{requestContexts: make(chan context.Context, 1)}
+	sink, err := HTTPBatchSink(HTTPBatchSinkConfig{
+		Endpoint:      "http://collector.example.com/ingest",
+		BatchSize:     1,
+		FlushInterval: time.Hour,
+		Client:        &http.Client{Transport: rt},
 	})
 	if err != nil {
 		t.Fatalf("HTTPBatchSink() error = %v", err)
@@ -518,5 +536,33 @@ func TestHTTPBatchSink_OnErrorReceivesCollectorResponseFailure(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("OnError was not called for the rejected batch")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer sink.Close(ctx) // canceled by the time it runs, so cleanup cannot re-send
+	defer cancel()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- sink.WriteEvent(ctx, []byte(`{"event":"test"}`), nil)
+	}()
+
+	var requestCtx context.Context
+	select {
+	case requestCtx = <-rt.requestContexts:
+	case <-time.After(2 * time.Second):
+		t.Fatal("batch request was never sent")
+	}
+	if requestCtx != ctx {
+		t.Fatalf("batch request context = %v, want the caller's context", requestCtx)
+	}
+
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("WriteEvent() error = %v, want context.Canceled", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("WriteEvent did not return after the caller context was canceled")
 	}
 }

@@ -632,7 +632,7 @@ func HTTPBatchSink(cfg HTTPBatchSinkConfig) (Sink, error) {
 
 func (s *httpBatchSink) Name() string { return "httpbatch" }
 
-func (s *httpBatchSink) WriteEvent(_ context.Context, encoded []byte, _ *Event) error {
+func (s *httpBatchSink) WriteEvent(ctx context.Context, encoded []byte, _ *Event) error {
 	s.mu.Lock()
 	cp := make([]byte, len(encoded))
 	copy(cp, encoded)
@@ -640,7 +640,7 @@ func (s *httpBatchSink) WriteEvent(_ context.Context, encoded []byte, _ *Event) 
 	flush := len(s.buf) >= s.cfg.BatchSize
 	s.mu.Unlock()
 	if flush {
-		return s.Flush(context.Background())
+		return s.Flush(ctx)
 	}
 	return nil
 }
