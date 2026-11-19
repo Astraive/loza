@@ -86,7 +86,16 @@ describe('Testkit boundaries', () => {
   it('handles missing checkpoint collections and non-object nested paths', () => {
     assert.throws(() => assertHasCheckpoint('{}', 'missing'), /not found/);
     assert.throws(() => assertEvent('{"value":1}', 'value.child', true), /not found/);
-    const clock = setClock({} as never);
-    assert.deepEqual(clock, {});
+  });
+
+  it('rejects invalid clock values instead of silently ignoring them', () => {
+    for (const invalid of [{}, { now: 123 }, null, undefined, 42, 'clock'] as never[]) {
+      assert.throws(() => setClock(invalid), /expected a function or an object with a now\(\) method/);
+    }
+    // Valid clocks are still accepted and returned.
+    const clock = new FakeClock(10);
+    assert.equal(setClock(clock), clock);
+    assert.equal(setClock(() => 20)(), 20);
+    resetForTest();
   });
 });
