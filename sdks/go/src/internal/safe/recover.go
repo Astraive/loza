@@ -18,11 +18,6 @@ func Go(fn func()) {
 	}()
 }
 
-// SafeGo runs fn in a goroutine and recovers panics.
-func SafeGo(fn func()) {
-	Go(fn)
-}
-
 // Call runs fn and recovers any panic, returning it as an error.
 func Call(fn func()) (err error) {
 	defer func() {

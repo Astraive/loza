@@ -22,13 +22,20 @@ func TestCallConvertsPanicsToErrors(t *testing.T) {
 	}
 }
 
-func TestGoAndSafeGoRunFunctionsAndRecoverPanics(t *testing.T) {
+func TestGoRunsFunctionsAndRecoversPanics(t *testing.T) {
 	done := make(chan struct{}, 2)
+
+	// A normal function runs to completion.
 	Go(func() { done <- struct{}{} })
-	SafeGo(func() {
+
+	// A panic is recovered: the deferred signal still fires and the goroutine
+	// does not crash the process. This is why a separate "safe" alias of Go is
+	// unnecessary -- Go already provides this behavior.
+	Go(func() {
 		defer func() { done <- struct{}{} }()
 		panic("recovered")
 	})
+
 	for i := 0; i < 2; i++ {
 		select {
 		case <-done:
