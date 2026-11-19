@@ -37,6 +37,12 @@ func TestComputeSimilarityUsesNormalizedCosine(t *testing.T) {
 // symptom similarity is the only contributor, scaled by its 0.3 weight) to guard
 // against that logic being dropped or corrupted when the dead code is removed.
 func TestComputeSimilaritySymptomUnionIntersection(t *testing.T) {
+// TestComputeSimilaritySymptomOverlap guards the symptom-set similarity
+// computation where a redundant `bSymptoms[k] = true` loop used to sit. With
+// shape and feature vectors left empty, the overall score reduces to
+// 0.3 * Jaccard(aSymptoms, bSymptoms), so any change to how the symptom maps,
+// union, or intersection are built is caught here.
+func TestComputeSimilaritySymptomOverlap(t *testing.T) {
 	tests := []struct {
 		name      string
 		aSymptoms []models.SymptomType
@@ -66,6 +72,34 @@ func TestComputeSimilaritySymptomUnionIntersection(t *testing.T) {
 			aSymptoms: []models.SymptomType{models.SymptomTypeTimeout, models.SymptomTypeTimeout, models.SymptomTypeErrorRate},
 			bSymptoms: []models.SymptomType{models.SymptomTypeTimeout, models.SymptomTypeLatencySpike},
 			want:      0.3 * (1.0 / 3.0),
+			name:      "identical symptom sets",
+			aSymptoms: []models.SymptomType{models.SymptomTypeTimeout, models.SymptomTypeLatencySpike},
+			bSymptoms: []models.SymptomType{models.SymptomTypeTimeout, models.SymptomTypeLatencySpike},
+			want:      0.3,
+		},
+		{
+			name:      "partial overlap",
+			aSymptoms: []models.SymptomType{models.SymptomTypeTimeout, models.SymptomTypeLatencySpike},
+			bSymptoms: []models.SymptomType{models.SymptomTypeLatencySpike, models.SymptomTypeErrorRate},
+			want:      0.1, // intersection 1 / union 3 => 0.3 * (1/3)
+		},
+		{
+			name:      "disjoint symptom sets",
+			aSymptoms: []models.SymptomType{models.SymptomTypeTimeout},
+			bSymptoms: []models.SymptomType{models.SymptomTypeMemoryLeak},
+			want:      0,
+		},
+		{
+			name:      "empty b symptom set",
+			aSymptoms: []models.SymptomType{models.SymptomTypeTimeout},
+			bSymptoms: nil,
+			want:      0,
+		},
+		{
+			name:      "duplicate symptoms are deduplicated",
+			aSymptoms: []models.SymptomType{models.SymptomTypeTimeout},
+			bSymptoms: []models.SymptomType{models.SymptomTypeTimeout, models.SymptomTypeTimeout},
+			want:      0.3,
 		},
 	}
 
@@ -82,6 +116,13 @@ func TestComputeSimilaritySymptomUnionIntersection(t *testing.T) {
 			gotDuckDB := computeSimilarity(a, b)
 			if math.Abs(gotDuckDB-tt.want) > 1e-9 {
 				t.Errorf("computeSimilarity() = %v, want %v", gotDuckDB, tt.want)
+			for name, got := range map[string]float64{
+				"duckdb":   computeSimilarity(a, b),
+				"postgres": computeSimilarityPostgres(a, b),
+			} {
+				if math.Abs(got-tt.want) > 0.0001 {
+					t.Errorf("%s similarity: got %v, want %v", name, got, tt.want)
+				}
 			}
 		})
 	}
