@@ -34,17 +34,28 @@ func loadVersion() string {
 		if err != nil {
 			continue
 		}
-		for _, line := range strings.Split(string(data), "\n") {
-			trimmed := strings.TrimSpace(line)
-			if strings.HasPrefix(trimmed, "version:") {
-				value := strings.TrimSpace(strings.TrimPrefix(trimmed, "version:"))
-				value = strings.Trim(value, "\"'")
-				if value != "" {
-					return value
-				}
-			}
+		if version := versionFromYAML(data); version != "" {
+			return version
 		}
 	}
 
 	return fallbackVersion
+}
+
+// versionFromYAML extracts the SDK version from a loza-go.yaml document.
+// Only an unindented, top-level "version:" key is considered. Indented
+// "version:" keys belong to nested sections (for example, a dependency's
+// version) and must not be mistaken for the SDK's own version.
+func versionFromYAML(data []byte) string {
+	for _, line := range strings.Split(string(data), "\n") {
+		if !strings.HasPrefix(line, "version:") {
+			continue
+		}
+		value := strings.TrimSpace(strings.TrimPrefix(line, "version:"))
+		value = strings.Trim(value, "\"'")
+		if value != "" {
+			return value
+		}
+	}
+	return ""
 }
