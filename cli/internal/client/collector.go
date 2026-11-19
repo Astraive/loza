@@ -78,7 +78,7 @@ func PostIngest(baseURL, contentType string, payload []byte) error {
 				time.Sleep(backoffDelay(attempt, ""))
 				continue
 			}
-			return err
+			break
 		}
 
 		body, readErr := readResponseBody(resp.Body)
@@ -89,7 +89,7 @@ func PostIngest(baseURL, contentType string, payload []byte) error {
 				time.Sleep(backoffDelay(attempt, ""))
 				continue
 			}
-			return readErr
+			break
 		}
 
 		outcome, reason := collectorResponseOutcome(resp.StatusCode, body)
@@ -102,7 +102,7 @@ func PostIngest(baseURL, contentType string, payload []byte) error {
 				time.Sleep(backoffDelay(attempt, resp.Header.Get("Retry-After")))
 				continue
 			}
-			return lastErr
+			// Exhausted retries fall through so the post-loop return wraps lastErr.
 		default:
 			if resp.StatusCode >= 300 {
 				return fmt.Errorf("collector returned %d: %s", resp.StatusCode, string(body))
