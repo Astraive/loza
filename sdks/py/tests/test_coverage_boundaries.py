@@ -960,7 +960,7 @@ def test_testkit_lifecycle_helpers_and_non_live_integrations() -> None:
     from loza.testkit import helpers as testkit
     from loza.integrations.logging.handler import LozaHandler
     from loza.integrations.loguru.adapter import LoguruSink
-    from loza.integrations.structlog.adapter import StructlogProcessor, bind_loza, processor
+    from loza.integrations.structlog.adapter import StructlogProcessor, processor
 
     logger, sink = testkit.TestLogger("testkit")
     ctx = logger.start_event(loza.Params(event="test"))
@@ -1000,7 +1000,9 @@ def test_testkit_lifecycle_helpers_and_non_live_integrations() -> None:
     structlog = StructlogProcessor()
     event_dict = {"event": "info", "key": "value"}
     assert structlog(None, "info", event_dict)["key"] == "value"
-    assert bind_loza(logger) is logger and processor(emit_immediate=False)
+    # ``bind_loza`` is covered by test_structlog_bind_loza.py, which injects a
+    # fake ``structlog`` module (structlog is an optional, undeclared dependency).
+    assert processor(emit_immediate=False)
 
 
 def test_structlog_processor_does_not_mutate_event_dict(monkeypatch: pytest.MonkeyPatch) -> None:
