@@ -77,9 +77,13 @@ type State struct {
 type Queue struct {
 	cfg    QueueConfig
 	events []Event
-	mu     sync.Mutex
-	cond   *sync.Cond
-	closed bool
+	// queueBytes is the cumulative payload size of the buffered events in
+	// q.events. It is guarded by mu and kept in sync with q.events so that
+	// MaxSizeBytes backpressure can be enforced alongside MaxEvents.
+	queueBytes int64
+	mu         sync.Mutex
+	cond       *sync.Cond
+	closed     bool
 
 	inflight   map[string]Event
 	inflightMu sync.Mutex
@@ -151,6 +155,18 @@ func NewQueue(cfg QueueConfig) (*Queue, error) {
 	return q, nil
 }
 
+// exceedsSizeLimit reports whether buffering an event with the given payload
+// size would push the queue past its MaxSizeBytes limit. A non-positive limit
+// disables byte-based backpressure. Callers must hold q.mu.
+func (q *Queue) exceedsSizeLimit(payloadBytes int64) bool {
+	if q.cfg.MaxSizeBytes <= 0 {
+		return false
+	}
+	// queueBytes never exceeds MaxSizeBytes (additions that would do so are
+	// rejected), so this subtraction cannot underflow.
+	return payloadBytes > q.cfg.MaxSizeBytes-q.queueBytes
+}
+
 func (q *Queue) Enqueue(ctx context.Context, event Event) error {
 	if event.ID == "" {
 		event.ID = q.generateEventID()
@@ -180,7 +196,16 @@ func (q *Queue) Enqueue(ctx context.Context, event Event) error {
 		return ErrQueueFull
 	}
 
+	payloadBytes := int64(len(event.Payload))
+	if q.exceedsSizeLimit(payloadBytes) {
+		q.stateMu.Lock()
+		q.state.Backpressured++
+		q.stateMu.Unlock()
+		return ErrQueueFull
+	}
+
 	q.events = append(q.events, event)
+	q.queueBytes += payloadBytes
 	q.stateMu.Lock()
 	q.state.Enqueued++
 	q.state.InFlight++
@@ -234,7 +259,17 @@ func (q *Queue) EnqueueBatch(ctx context.Context, events []Event) []error {
 			continue
 		}
 
+		payloadBytes := int64(len(event.Payload))
+		if q.exceedsSizeLimit(payloadBytes) {
+			errors[i] = ErrQueueFull
+			q.stateMu.Lock()
+			q.state.Backpressured++
+			q.stateMu.Unlock()
+			continue
+		}
+
 		q.events = append(q.events, event)
+		q.queueBytes += payloadBytes
 		errors[i] = nil
 
 		q.inflightMu.Lock()
@@ -321,6 +356,12 @@ func (q *Queue) doFlush() error {
 		return nil
 	}
 	q.events = deferred
+	// Only the ready events leave the queue; deferred events remain buffered,
+	// so subtract just the bytes of the events taken into this batch to keep
+	// queueBytes in sync with q.events for MaxSizeBytes backpressure.
+	for _, e := range events {
+		q.queueBytes -= int64(len(e.Payload))
+	}
 	q.mu.Unlock()
 
 	batch := make([][]byte, len(events))
@@ -388,6 +429,9 @@ func (q *Queue) doFlush() error {
 	if len(retryEvents) > 0 {
 		q.mu.Lock()
 		q.events = append(q.events, retryEvents...)
+		for _, e := range retryEvents {
+			q.queueBytes += int64(len(e.Payload))
+		}
 		earliest := q.earliestRetry()
 		q.mu.Unlock()
 		if !earliest.IsZero() {
