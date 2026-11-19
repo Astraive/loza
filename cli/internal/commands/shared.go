@@ -38,6 +38,16 @@ func isValidEventID(s string) bool {
 	return validEventID.MatchString(s)
 }
 
+// validateReconstructionMode checks that a cortex reconstruction mode is one of
+// the documented values. An empty mode is allowed so the server default is used.
+func validateReconstructionMode(mode string) error {
+	switch mode {
+	case "", "fast", "deep":
+		return nil
+	default:
+		return fmt.Errorf("invalid --mode %q: must be fast or deep", mode)
+	}
+}
 
 func runCollectorConfigCommand(ctx context.Context, cfg config.Config, args []string) error {
 	if len(args) == 0 {
@@ -46,7 +56,6 @@ func runCollectorConfigCommand(ctx context.Context, cfg config.Config, args []st
 	cmdArgs := append([]string{"config"}, args...)
 	return client.RunCollectorCommand(ctx, cfg.CollectorRepoPath, cmdArgs)
 }
-
 
 func readFileBytes(path string) ([]byte, error) {
 	return os.ReadFile(path)

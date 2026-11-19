@@ -25,6 +25,10 @@ func IncidentCommand(ctx context.Context, cfg config.Config, args []string) erro
 	}
 	incidentID := fs.Arg(0)
 
+	if err := validateReconstructionMode(*mode); err != nil {
+		return err
+	}
+
 	cortexURL := getCortexURL(cfg)
 
 	recon, err := client.ReconstructCortexIncident(ctx, cortexURL, incidentID, *mode, 0)
@@ -46,11 +50,11 @@ func IncidentCommand(ctx context.Context, cfg config.Config, args []string) erro
 	output.PrintSection("Incident: " + incidentID)
 
 	pairs := map[string]string{
-		"Incident ID":    fmt.Sprintf("%v", result["incident_id"]),
-		"Timestamp":      fmt.Sprintf("%v", result["timestamp"]),
-		"Confidence":     fmt.Sprintf("%v", result["confidence"]),
-		"Primary Svc":    fmt.Sprintf("%v", result["primary_service"]),
-		"Severity":       fmt.Sprintf("%v", result["severity"]),
+		"Incident ID": fmt.Sprintf("%v", result["incident_id"]),
+		"Timestamp":   fmt.Sprintf("%v", result["timestamp"]),
+		"Confidence":  fmt.Sprintf("%v", result["confidence"]),
+		"Primary Svc": fmt.Sprintf("%v", result["primary_service"]),
+		"Severity":    fmt.Sprintf("%v", result["severity"]),
 	}
 	output.PrintKeyValue(pairs)
 

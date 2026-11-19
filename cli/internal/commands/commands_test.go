@@ -1345,3 +1345,38 @@ func TestExportHelpDoesNotAdvertiseParquet(t *testing.T) {
 		t.Fatalf("export help must not advertise unsupported parquet format, got %s", help)
 	}
 }
+
+func TestValidateReconstructionMode(t *testing.T) {
+	for _, mode := range []string{"", "fast", "deep"} {
+		if err := validateReconstructionMode(mode); err != nil {
+			t.Errorf("expected mode %q to be accepted, got %v", mode, err)
+		}
+	}
+	for _, mode := range []string{"typo", "FAST", "fast ", "invalid"} {
+		if err := validateReconstructionMode(mode); err == nil {
+			t.Errorf("expected mode %q to be rejected", mode)
+		}
+	}
+}
+
+func TestIncidentCommandRejectsInvalidMode(t *testing.T) {
+	cfg := config.Config{Cortex: &config.CortexConfig{URL: "http://127.0.0.1:1"}}
+	err := IncidentCommand(context.Background(), cfg, []string{"--mode", "typo", "inc_1"})
+	if err == nil {
+		t.Fatal("expected an error for an invalid --mode value")
+	}
+	if !strings.Contains(err.Error(), "--mode") {
+		t.Fatalf("expected a usage error naming --mode, got %v", err)
+	}
+}
+
+func TestRunCortexReconstructRejectsInvalidMode(t *testing.T) {
+	cfg := config.Config{Cortex: &config.CortexConfig{URL: "http://127.0.0.1:1"}}
+	err := RunCortexReconstruct(context.Background(), cfg, []string{"--incident", "inc_1", "--mode", "typo"})
+	if err == nil {
+		t.Fatal("expected an error for an invalid --mode value")
+	}
+	if !strings.Contains(err.Error(), "--mode") {
+		t.Fatalf("expected a usage error naming --mode, got %v", err)
+	}
+}
