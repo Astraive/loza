@@ -49,6 +49,20 @@ func (s *collectorState) handleTailWebSocket(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	defer conn.Close()
+	conn.SetReadLimit(1 * 1024 * 1024) // 1MB max frame
+
+	// The connection is hijacked, so r.Context() is not reliably cancelled when
+	// the client disconnects. Read from the connection to observe close frames
+	// and read errors, and signal the main loop to release its subscriber.
+	clientClosed := make(chan struct{})
+	go func() {
+		defer close(clientClosed)
+		for {
+			if _, _, err := conn.NextReader(); err != nil {
+				return
+			}
+		}
+	}()
 
 	if err := s.streamHistoricalTail(r.Context(), filters, func(raw []byte) error {
 		return s.writeTailWebSocketEvent(conn, raw)
@@ -64,6 +78,8 @@ func (s *collectorState) handleTailWebSocket(w http.ResponseWriter, r *http.Requ
 	for {
 		select {
 		case <-r.Context().Done():
+			return
+		case <-clientClosed:
 			return
 		case raw, ok := <-ch:
 			if !ok {

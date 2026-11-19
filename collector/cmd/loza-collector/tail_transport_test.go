@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -265,4 +266,52 @@ func TestQueryTailHistoryReportsAmbiguousTimestampColumn(t *testing.T) {
 	if !strings.Contains(err.Error(), "ambiguous timestamp column") {
 		t.Fatalf("error = %q, want it to mention ambiguous timestamp column", err.Error())
 	}
+func waitForTailSubscriberCount(t *testing.T, s *collectorState, want int) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		s.tailMu.Lock()
+		got := len(s.tailSubscribers)
+		s.tailMu.Unlock()
+		if got == want {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	s.tailMu.Lock()
+	got := len(s.tailSubscribers)
+	s.tailMu.Unlock()
+	t.Fatalf("tail subscriber count = %d, want %d", got, want)
+}
+
+// TestHandleTailWebSocketRemovesSubscriberOnClientDisconnect reproduces the
+// finding that this handler never reads from the hijacked connection. Without a
+// reader goroutine, a client disconnect is never observed (r.Context() is not
+// cancelled for hijacked connections) and the subscriber registered by the
+// handler leaks indefinitely.
+func TestHandleTailWebSocketRemovesSubscriberOnClientDisconnect(t *testing.T) {
+	state := &collectorState{}
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	go func() {
+		_ = http.Serve(ln, http.HandlerFunc(state.handleTailWebSocket))
+	}()
+	defer ln.Close()
+
+	conn, _, err := websocket.DefaultDialer.Dial("ws://"+ln.Addr().String()+"/tail", nil)
+	if err != nil {
+		t.Fatalf("dial tail websocket: %v", err)
+	}
+
+	// The handler registers a subscriber after upgrading the connection.
+	waitForTailSubscriberCount(t, state, 1)
+
+	// A disconnected client must not leak the subscriber. The handler can only
+	// notice the disconnect by reading from the connection (close frame / read
+	// error), since r.Context() is unreliable once the connection is hijacked.
+	_ = conn.Close()
+	waitForTailSubscriberCount(t, state, 0)
 }
