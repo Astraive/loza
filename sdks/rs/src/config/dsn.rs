@@ -194,7 +194,7 @@ pub fn parse(raw: &str) -> Result<LozaDSN, DsnError> {
         None => (path_query, ""),
     };
 
-    let collector_name = path_part.trim_start_matches('/');
+    let collector_name = percent_decode(path_part.trim_start_matches('/'), "collector path")?;
     if collector_name.is_empty() {
         return Err(DsnError(
             "collector path is required, e.g. loza://host/my-collector".into(),
@@ -261,12 +261,15 @@ pub fn parse(raw: &str) -> Result<LozaDSN, DsnError> {
         }
     };
 
-    // Env and service.
+    // Env and service metadata: decode and validate escaped values.
     let env = match env_param {
-        Some(v) if !v.is_empty() => v.to_string(),
+        Some(v) if !v.is_empty() => percent_decode(v, "env")?,
         _ => "default".to_string(),
     };
-    let service = service_param.unwrap_or("").to_string();
+    let service = match service_param {
+        Some(v) if !v.is_empty() => percent_decode(v, "service")?,
+        _ => String::new(),
+    };
 
     // Build resolved URLs.
     let scheme = if tls { "https" } else { "http" };
@@ -281,9 +284,12 @@ pub fn parse(raw: &str) -> Result<LozaDSN, DsnError> {
 
     let base_url = format!("{scheme}://{host_part}:{port}");
 
-    let collector_base_url = format!("{base_url}/collectors/{collector_name}");
+    // collector_name is decoded for identity metadata; re-encode it as a single
+    // path segment so resolved URLs never contain raw reserved/space bytes.
+    let collector_path = percent_encode_path_segment(&collector_name);
+    let collector_base_url = format!("{base_url}/collectors/{collector_path}");
     let collector_tail_base_url =
-        format!("{ws_scheme}://{host_part}:{port}/collectors/{collector_name}");
+        format!("{ws_scheme}://{host_part}:{port}/collectors/{collector_path}");
 
     Ok(LozaDSN {
         scheme: "loza".to_string(),
@@ -307,7 +313,12 @@ pub fn parse(raw: &str) -> Result<LozaDSN, DsnError> {
     })
 }
 
-fn percent_decode_userinfo(value: &str, field: &str) -> Result<String, DsnError> {
+/// Decode percent escapes in a DSN component, preserving unescaped bytes.
+///
+/// Malformed or incomplete escapes and non-UTF-8 output are rejected. Raw
+/// bytes are kept as-is so that path and query values behave like the other
+/// SDK parsers (which decode escapes but do not reject unescaped characters).
+fn percent_decode(value: &str, field: &str) -> Result<String, DsnError> {
     let bytes = value.as_bytes();
     let mut decoded = Vec::with_capacity(bytes.len());
     let mut index = 0;
@@ -315,31 +326,51 @@ fn percent_decode_userinfo(value: &str, field: &str) -> Result<String, DsnError>
         match bytes[index] {
             b'%' => {
                 if index + 2 >= bytes.len() {
-                    return Err(DsnError(format!(
-                        "userinfo {field} has an incomplete percent escape"
-                    )));
+                    return Err(DsnError(format!("{field} has an incomplete percent escape")));
                 }
-                let high = hex_value(bytes[index + 1]).ok_or_else(|| {
-                    DsnError(format!("userinfo {field} has an invalid percent escape"))
-                })?;
-                let low = hex_value(bytes[index + 2]).ok_or_else(|| {
-                    DsnError(format!("userinfo {field} has an invalid percent escape"))
-                })?;
+                let high = hex_value(bytes[index + 1])
+                    .ok_or_else(|| DsnError(format!("{field} has an invalid percent escape")))?;
+                let low = hex_value(bytes[index + 2])
+                    .ok_or_else(|| DsnError(format!("{field} has an invalid percent escape")))?;
                 decoded.push((high << 4) | low);
                 index += 3;
             }
-            byte if is_unreserved(byte) => {
+            byte => {
                 decoded.push(byte);
                 index += 1;
             }
-            _ => {
-                return Err(DsnError(format!(
-                    "userinfo {field} contains a character that must be percent-encoded"
-                )))
-            }
         }
     }
-    String::from_utf8(decoded).map_err(|_| DsnError(format!("userinfo {field} is not valid UTF-8")))
+    String::from_utf8(decoded).map_err(|_| DsnError(format!("{field} is not valid UTF-8")))
+}
+
+/// Strict decoder for userinfo: reserved bytes must be percent-encoded so
+/// credential delimiters can never be introduced through a raw character.
+fn percent_decode_userinfo(value: &str, field: &str) -> Result<String, DsnError> {
+    for &byte in value.as_bytes() {
+        if byte != b'%' && !is_unreserved(byte) {
+            return Err(DsnError(format!(
+                "userinfo {field} contains a character that must be percent-encoded"
+            )));
+        }
+    }
+    percent_decode(value, &format!("userinfo {field}"))
+}
+
+/// Percent-encode a decoded collector name as a single URL path segment.
+fn percent_encode_path_segment(value: &str) -> String {
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+    let mut encoded = String::with_capacity(value.len());
+    for &byte in value.as_bytes() {
+        if is_unreserved(byte) {
+            encoded.push(byte as char);
+        } else {
+            encoded.push('%');
+            encoded.push(HEX[(byte >> 4) as usize] as char);
+            encoded.push(HEX[(byte & 0x0f) as usize] as char);
+        }
+    }
+    encoded
 }
 
 fn is_unreserved(byte: u8) -> bool {
@@ -414,5 +445,31 @@ mod tests {
     #[test]
     fn reject_no_project() {
         assert!(parse("loza://host").is_err());
+    }
+
+    #[test]
+    fn decodes_percent_encoded_path_and_query_values() {
+        let dsn = parse("loza://h/p%20c?env=pr%2Fod&service=my%2Dsvc").unwrap();
+        assert_eq!(dsn.collector_name, "p c");
+        assert_eq!(dsn.project, "p c");
+        assert_eq!(dsn.env, "pr/od");
+        assert_eq!(dsn.service, "my-svc");
+        // Decoded metadata must not leak raw reserved bytes into resolved URLs.
+        assert_eq!(dsn.events_url, "https://h:443/collectors/p%20c/events");
+        assert_eq!(dsn.base_url, "https://h:443");
+    }
+
+    #[test]
+    fn decodes_utf8_percent_escapes_in_metadata() {
+        let dsn = parse("loza://h/collector?env=caf%C3%A9").unwrap();
+        assert_eq!(dsn.env, "café");
+    }
+
+    #[test]
+    fn rejects_malformed_escapes_in_path_and_query() {
+        assert!(parse("loza://h/p%2").is_err());
+        assert!(parse("loza://h/p%ZZ").is_err());
+        assert!(parse("loza://h/p?env=pr%2").is_err());
+        assert!(parse("loza://h/p?service=s%GG").is_err());
     }
 }
