@@ -23,6 +23,19 @@ func BenchCommand(ctx context.Context, cfg config.Config, args []string) error {
 		return err
 	}
 
+	if *rate <= 0 {
+		return fmt.Errorf("--rate must be positive, got %d", *rate)
+	}
+	if *duration <= 0 {
+		return fmt.Errorf("--duration must be positive, got %v", *duration)
+	}
+	if *size <= 0 {
+		return fmt.Errorf("--size must be positive, got %d", *size)
+	}
+	if *batchSize <= 0 {
+		return fmt.Errorf("--batch-size must be positive, got %d", *batchSize)
+	}
+
 	totalEvents := benchTotalEvents(*rate, *duration)
 	workers := 4
 	if *rate < workers {

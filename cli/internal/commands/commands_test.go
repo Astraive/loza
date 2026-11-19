@@ -893,3 +893,32 @@ func TestTailCommandPropagatesStreamError(t *testing.T) {
 		t.Fatalf("TailCommand error = %v, want io.ErrUnexpectedEOF", err)
 	}
 }
+
+func TestBenchCommandRejectsNonPositiveNumericFlags(t *testing.T) {
+	cfg := config.Config{CollectorURL: "http://127.0.0.1:9308"}
+	tests := []struct {
+		name string
+		args []string
+		want string
+	}{
+		{"negative rate", []string{"--rate", "-1"}, "--rate must be positive"},
+		{"zero rate", []string{"--rate", "0"}, "--rate must be positive"},
+		{"negative size", []string{"--size", "-1"}, "--size must be positive"},
+		{"zero size", []string{"--size", "0"}, "--size must be positive"},
+		{"negative batch size", []string{"--batch-size", "-1"}, "--batch-size must be positive"},
+		{"zero batch size", []string{"--batch-size", "0"}, "--batch-size must be positive"},
+		{"negative duration", []string{"--duration", "-1s"}, "--duration must be positive"},
+		{"zero duration", []string{"--duration", "0s"}, "--duration must be positive"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := BenchCommand(context.Background(), cfg, tc.args)
+			if err == nil {
+				t.Fatalf("BenchCommand(%v) succeeded; expected validation error", tc.args)
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("BenchCommand(%v) error = %q; want it to contain %q", tc.args, err, tc.want)
+			}
+		})
+	}
+}
