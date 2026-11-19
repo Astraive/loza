@@ -215,3 +215,60 @@ func TestWatchStreamEscapesFilterParameters(t *testing.T) {
 		t.Fatalf("escaped key param = %q, want %q", v, "info")
 	}
 }
+
+func TestDLQItemHelpersEscapeIDInPath(t *testing.T) {
+	tests := []struct {
+		name   string
+		method string
+		suffix string
+		call   func(baseURL, id string) ([]byte, error)
+	}{
+		{"fetch", http.MethodGet, "", func(baseURL, id string) ([]byte, error) {
+			return FetchDLQItem(baseURL, id)
+		}},
+		{"delete", http.MethodDelete, "", func(baseURL, id string) ([]byte, error) {
+			return DeleteDLQItem(context.Background(), baseURL, id)
+		}},
+		{"replay", http.MethodPost, "/replay", func(baseURL, id string) ([]byte, error) {
+			return ReplayDLQItem(context.Background(), baseURL, id)
+		}},
+	}
+
+	// A raw id containing path traversal, query and fragment delimiters must be
+	// escaped into a single path segment instead of altering the request target.
+	ids := []string{
+		"../../events/by-tenant/x",
+		"evil?x=1#frag/../y",
+		"dlq_0",
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, id := range ids {
+				var gotPath, gotRawQuery string
+				srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					gotPath = r.URL.EscapedPath()
+					gotRawQuery = r.URL.RawQuery
+					if r.Method != tc.method {
+						t.Errorf("method = %s, want %s", r.Method, tc.method)
+					}
+					_, _ = w.Write([]byte(`{"ok":true}`))
+				}))
+
+				if _, err := tc.call(srv.URL, id); err != nil {
+					srv.Close()
+					t.Fatalf("call with id %q: %v", id, err)
+				}
+				srv.Close()
+
+				wantPath := "/dlq/" + url.PathEscape(id) + tc.suffix
+				if gotPath != wantPath {
+					t.Errorf("id %q: escaped path = %q, want %q", id, gotPath, wantPath)
+				}
+				if gotRawQuery != "" {
+					t.Errorf("id %q: raw query = %q, want empty", id, gotRawQuery)
+				}
+			}
+		})
+	}
+}
