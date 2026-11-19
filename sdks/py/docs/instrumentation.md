@@ -418,7 +418,7 @@ from loza import StdoutSink, StderrSink, FileSink, MemorySink, NoopSink, HTTPBat
 
 StdoutSink()                                      # stdout
 StderrSink()                                      # stderr
-FileSink("/var/log/app.log")                      # file
+FileSink("logs/app.log")                          # file
 MemorySink()                                      # testing
 NoopSink()                                        # discard
 HTTPBatchSink("http://collector:9308/events")  # HTTP batch
