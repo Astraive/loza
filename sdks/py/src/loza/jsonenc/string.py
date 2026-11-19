@@ -17,6 +17,9 @@ def scrub_control_chars(value: str) -> str:
 
 
 def truncate_utf8(value: str, max_bytes: int) -> str:
+    """Truncate *value* to at most *max_bytes* bytes of its UTF-8 encoding."""
+    if max_bytes < 0:
+        raise ValueError("max_bytes must be non-negative")
     encoded = value.encode("utf-8")
     if len(encoded) <= max_bytes:
         return value
