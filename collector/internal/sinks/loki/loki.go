@@ -51,6 +51,11 @@ type sink struct {
 	// inflight tracks pushes whose batches have already been handed out of
 	// s.batch by appendEntry. Close waits on it so every in-flight push has
 	// settled (and any failed push has been restored) before the final flush.
+
+	// inflight tracks WriteEvent calls that have pulled a batch off s.batch
+	// and are about to push it. Close waits on inflight before its final
+	// Flush so that a failed push's restore() is included in that Flush
+	// instead of being stranded after it.
 	inflight sync.WaitGroup
 }
 
@@ -140,6 +145,9 @@ func (s *sink) WriteEvent(ctx context.Context, encoded []byte, ev *collectoreven
 	}
 	// appendEntry registered this batch as in-flight under s.mu. Balance it
 	// once the push (and any restore) has completed.
+	// appendEntry registered this push while holding s.mu, after confirming
+	// the sink was not closed. Pair that registration here so Close can wait
+	// for the push (and any restore) to finish before its final Flush.
 	defer s.inflight.Done()
 
 	if ctx == nil {
@@ -183,6 +191,11 @@ func (s *sink) Close(ctx context.Context) error {
 		s.wg.Wait()
 		s.inflight.Wait()
 		closeErr = s.finalFlush(ctx)
+		// A WriteEvent that passed appendEntry's closed check may still be
+		// pushing its batch. Wait for it (including a failed push's restore)
+		// so the final Flush below actually drains those entries.
+		s.inflight.Wait()
+		closeErr = s.Flush(ctx)
 	})
 	return closeErr
 }
@@ -245,6 +258,10 @@ func (s *sink) appendEntry(entry lokiEntry) ([]lokiEntry, error) {
 	if len(s.batch) < s.cfg.BatchSize {
 		return nil, nil
 	}
+	// Register the in-flight push while still holding s.mu and after the
+	// closed check. Close sets closed under the same lock before it waits,
+	// so no Add can race with (or follow) that Wait.
+	s.inflight.Add(1)
 	batch := make([]lokiEntry, len(s.batch))
 	copy(batch, s.batch)
 	s.batch = s.batch[:0]
