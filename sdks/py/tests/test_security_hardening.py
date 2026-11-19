@@ -1,6 +1,9 @@
+import socket
+
 import pytest
 
 import loza
+from loza.core import http_client
 from loza.core.client import Logger as ClientLogger
 from loza.core.config import Config
 from loza.core.http_client import CollectorClient
@@ -48,6 +51,10 @@ def _assert_nested_dotted_attrs_respect_limit(logger_cls) -> None:
     assert sum(_attr_leaf_count(bucket) for bucket in buckets) <= max_attrs + 1
     assert ctx.attrs.get("_truncated") is True
     assert len(ctx.attrs["payload"]) <= max_attrs
+
+
+def _addrinfo(ip: str):
+    return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (ip, 443))]
 
 
 def test_collector_client_rejects_metadata_endpoint():
@@ -133,3 +140,50 @@ def test_drop_oversized_events_true_drops_events_over_any_limit(config_kwargs, p
     decision = SecurityLimiter(loza.SecurityConfig(**config_kwargs)).check_payload(payload)
     assert decision.allowed is False
     assert decision.reason == reason
+def test_collector_client_rejects_dns_rebinding_at_connection_time(monkeypatch):
+    """A host that validates as public must not connect to a later private answer."""
+    answers = iter([_addrinfo("93.184.216.34"), _addrinfo("127.0.0.1")])
+    monkeypatch.setattr(http_client.socket, "getaddrinfo", lambda *_args, **_kwargs: next(answers))
+
+    client = CollectorClient("https://rebind.example/events")
+
+    with pytest.raises(ValueError, match="non-public"):
+        client.version()
+
+
+def test_collector_client_pins_connection_to_validated_ip(monkeypatch):
+    """The socket must use the IP that was validated, not a fresh DNS lookup."""
+    captured = {}
+
+    class _Stop(Exception):
+        pass
+
+    def fake_create_connection(address, timeout=None, source_address=None):
+        captured["address"] = address
+        raise _Stop
+
+    monkeypatch.setattr(
+        http_client.socket,
+        "getaddrinfo",
+        lambda *_args, **_kwargs: _addrinfo("93.184.216.34"),
+    )
+    monkeypatch.setattr(http_client.socket, "create_connection", fake_create_connection)
+
+    client = CollectorClient("https://pinned.example/events")
+    with pytest.raises(_Stop):
+        client.version()
+
+    assert captured["address"][0] == "93.184.216.34"
+
+
+def test_collector_client_allows_private_endpoint_only_when_explicitly_configured(monkeypatch):
+    monkeypatch.setattr(
+        http_client.socket,
+        "getaddrinfo",
+        lambda *_args, **_kwargs: _addrinfo("169.254.169.254"),
+    )
+    with pytest.raises(ValueError, match="non-public"):
+        CollectorClient("http://metadata.example/latest/meta-data")
+
+    monkeypatch.setenv("LOZA_ALLOW_PRIVATE_COLLECTOR_ENDPOINTS", "1")
+    CollectorClient("http://metadata.example/latest/meta-data")
