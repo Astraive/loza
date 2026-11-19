@@ -2,6 +2,7 @@ package processor
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -94,40 +95,62 @@ func (p *EventProcessor) ProcessBatch(ctx context.Context, events []*models.Even
 	return nil
 }
 
+// jsonlBatchSize bounds the number of parsed events kept in memory before a
+// JSONL batch is written, so ingestion memory does not scale with input size.
+const jsonlBatchSize = 500
+
 func (p *EventProcessor) ProcessJSONL(ctx context.Context, reader io.Reader) error {
-	scanner := bufio.NewScanner(reader)
+	// bufio.Reader grows its buffer as needed, avoiding bufio.Scanner's default
+	// 64KB token limit while still parsing one JSON object at a time.
+	bufReader := bufio.NewReaderSize(reader, 64*1024)
 	lineNum := 0
-	var events []*models.Event
+	batch := make([]*models.Event, 0, jsonlBatchSize)
 
-	for scanner.Scan() {
-		lineNum++
-		line := scanner.Bytes()
-		if len(line) == 0 {
-			continue
+	flush := func() error {
+		if len(batch) == 0 {
+			return nil
 		}
-
-		var rawEvent map[string]interface{}
-		if err := json.Unmarshal(line, &rawEvent); err != nil {
-			return fmt.Errorf("%w at line %d: failed to parse JSON: %w", ErrInvalidEvent, lineNum, err)
+		if err := p.ProcessBatch(ctx, batch); err != nil {
+			return err
 		}
-
-		event, err := eventconv.FromRawMap(rawEvent, "jsonl")
-		if err != nil {
-			return fmt.Errorf("%w at line %d: %w", ErrInvalidEvent, lineNum, err)
-		}
-
-		events = append(events, event)
+		batch = make([]*models.Event, 0, jsonlBatchSize)
+		return nil
 	}
 
-	if err := scanner.Err(); err != nil {
-		return fmt.Errorf("scanner error: %w", err)
+	for {
+		line, readErr := bufReader.ReadBytes('\n')
+		if len(line) > 0 {
+			lineNum++
+			line = bytes.TrimSuffix(line, []byte{'\n'})
+			line = bytes.TrimSuffix(line, []byte{'\r'})
+			if len(line) > 0 {
+				var rawEvent map[string]interface{}
+				if err := json.Unmarshal(line, &rawEvent); err != nil {
+					return fmt.Errorf("%w at line %d: failed to parse JSON: %w", ErrInvalidEvent, lineNum, err)
+				}
+
+				event, err := eventconv.FromRawMap(rawEvent, "jsonl")
+				if err != nil {
+					return fmt.Errorf("%w at line %d: %w", ErrInvalidEvent, lineNum, err)
+				}
+
+				batch = append(batch, event)
+				if len(batch) == jsonlBatchSize {
+					if err := flush(); err != nil {
+						return err
+					}
+				}
+			}
+		}
+		if readErr != nil {
+			if errors.Is(readErr, io.EOF) {
+				break
+			}
+			return fmt.Errorf("failed to read jsonl input: %w", readErr)
+		}
 	}
 
-	if len(events) > 0 {
-		return p.ProcessBatch(ctx, events)
-	}
-
-	return nil
+	return flush()
 }
 
 func (p *EventProcessor) normalizeEvent(event *models.Event) *models.Event {

@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -379,6 +381,50 @@ func TestProcessBatchUsesCanonicalServiceForGraphNodes(t *testing.T) {
 }
 
 func TestProcessBatchLinksLocalTrace(t *testing.T) {
+func TestProcessJSONLAcceptsLineLargerThan64KB(t *testing.T) {
+	events := &fakeEventStore{}
+	p := NewEventProcessor(events, &fakeTopologyStoreForProcessor{}, &fakeGraphStoreForProcessor{})
+
+	// 128KB exceeds bufio.Scanner's default 64KB token limit. The line is also
+	// intentionally not newline-terminated to cover the final-line path.
+	largeMessage := strings.Repeat("x", 128*1024)
+	line := fmt.Sprintf(`{"id":"evt-large","timestamp":"2026-01-01T00:00:00Z","kind":"log","service":"svc-a","message":%q}`, largeMessage)
+
+	if err := p.ProcessJSONL(context.Background(), strings.NewReader(line)); err != nil {
+		t.Fatalf("process jsonl with a large line: %v", err)
+	}
+	if len(events.batchSaved) != 1 || len(events.batchSaved[0]) != 1 {
+		t.Fatalf("expected one event from large line, got %+v", events.batchSaved)
+	}
+	got, ok := events.batchSaved[0][0].Raw["message"].(string)
+	if !ok || got != largeMessage {
+		t.Fatalf("large raw payload was not preserved")
+	}
+}
+
+func TestProcessJSONLFlushesBoundedBatches(t *testing.T) {
+	events := &fakeEventStore{}
+	p := NewEventProcessor(events, &fakeTopologyStoreForProcessor{}, &fakeGraphStoreForProcessor{})
+
+	var payload bytes.Buffer
+	total := jsonlBatchSize + 5
+	for i := 0; i < total; i++ {
+		fmt.Fprintf(&payload, "{\"id\":\"evt-%d\",\"timestamp\":\"2026-01-01T00:00:00Z\",\"kind\":\"log\",\"service\":\"svc-a\"}\n", i)
+	}
+
+	if err := p.ProcessJSONL(context.Background(), &payload); err != nil {
+		t.Fatalf("process jsonl: %v", err)
+	}
+	if len(events.batchSaved) != 2 {
+		t.Fatalf("expected 2 bounded batches, got %d", len(events.batchSaved))
+	}
+	if len(events.batchSaved[0]) != jsonlBatchSize || len(events.batchSaved[1]) != 5 {
+		t.Fatalf("expected batch sizes %d and 5, got %d and %d",
+			jsonlBatchSize, len(events.batchSaved[0]), len(events.batchSaved[1]))
+	}
+}
+
+func TestProcessBatchLinksLocalTraceWithoutStoreLookup(t *testing.T) {
 	events := &fakeEventStore{}
 	topology := &fakeTopologyStoreForProcessor{}
 	graphStore := &fakeGraphStoreForProcessor{}
