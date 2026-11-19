@@ -14,6 +14,10 @@ pub mod axum_impl {
     use std::convert::Infallible;
     use std::future::Future;
     use std::pin::Pin;
+    use axum::extract::{ConnectInfo, Request};
+    use axum::middleware::Next;
+    use axum::response::Response;
+    use std::net::SocketAddr;
     use std::sync::Arc;
     use std::task::{Context, Poll};
     use std::time::Instant;
@@ -87,6 +91,13 @@ pub mod axum_impl {
         finish_result?;
         emit_result?;
         Ok(())
+    /// Read the peer address that axum inserts when the service is built with
+    /// `into_make_service_with_connect_info::<SocketAddr>()`.
+    fn remote_ip_from_request(req: &Request) -> String {
+        req.extensions()
+            .get::<ConnectInfo<SocketAddr>>()
+            .map(|connect_info| connect_info.0.to_string())
+            .unwrap_or_default()
     }
 
     pub async fn loza_middleware(
@@ -163,7 +174,7 @@ pub mod axum_impl {
             .and_then(|v| v.to_str().ok())
             .unwrap_or("")
             .to_string();
-        let remote_ip = ""; // Axum doesn't expose peer addr easily in middleware
+        let remote_ip = remote_ip_from_request(&req);
 
         let started = Instant::now();
 
@@ -280,6 +291,24 @@ pub mod axum_impl {
                 matches!(err, LozaError::Validation(_)),
                 "expected the emit failure to be surfaced, got {err}"
             );
+        use axum::body::Body;
+
+        fn request_with_connect_info(addr: SocketAddr) -> Request {
+            let mut req = Request::new(Body::empty());
+            req.extensions_mut().insert(ConnectInfo(addr));
+            req
+        }
+
+        #[test]
+        fn remote_ip_is_read_from_connect_info_extension() {
+            let addr: SocketAddr = "203.0.113.42:5151".parse().unwrap();
+            assert_eq!(remote_ip_from_request(&request_with_connect_info(addr)), addr.to_string());
+        }
+
+        #[test]
+        fn remote_ip_defaults_to_empty_without_connect_info() {
+            let req = Request::new(Body::empty());
+            assert_eq!(remote_ip_from_request(&req), "");
         }
     pub async fn loza_middleware(
         logger: Arc<Logger>,
