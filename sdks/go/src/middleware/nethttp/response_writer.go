@@ -10,7 +10,7 @@ import (
 type responseWriter struct {
 	http.ResponseWriter
 	statusCode  int
-	bytes       int
+	bytes       int64
 	wroteHeader bool
 }
 
@@ -72,7 +72,7 @@ func (w *responseWriter) Write(p []byte) (int, error) {
 		w.wroteHeader = true
 	}
 	n, err := w.ResponseWriter.Write(p)
-	w.bytes += n
+	w.bytes += int64(n)
 	return n, err
 }
 
@@ -114,6 +114,14 @@ func (w *responseWriter) readFrom(r io.Reader) (int64, error) {
 		w.bytes += int(written)
 		if !w.wroteHeader {
 			w.wroteHeader = true
+		}
+		w.bytes += cr.n
+		if !w.wroteHeader {
+			w.wroteHeader = true
+		}
+		if n > cr.n {
+			// Defensive: prefer underlying returned byte count when larger.
+			w.bytes += n - cr.n
 		}
 		return n, err
 	}
