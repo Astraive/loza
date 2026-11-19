@@ -60,18 +60,24 @@ impl Default for HTTPClient {
 
 impl HTTPClient {
     pub fn new() -> Self {
-        Self {
-            agent: ureq::AgentBuilder::new()
-                .timeout(Duration::from_millis(2_000))
-                .build(),
-        }
+        Self::with_timeout_ms(2_000)
     }
 
     pub fn with_timeout_ms(timeout_ms: u64) -> Self {
+        Self::with_timeout_ms_and_insecure(timeout_ms, false)
+    }
+
+    /// Build a transport that optionally skips TLS certificate verification.
+    ///
+    /// `insecure` is only intended for local development against collectors
+    /// that present self-signed certificates; verified TLS remains the default.
+    pub(crate) fn with_timeout_ms_and_insecure(timeout_ms: u64, insecure: bool) -> Self {
+        let mut builder = ureq::AgentBuilder::new().timeout(Duration::from_millis(timeout_ms));
+        if insecure {
+            builder = builder.tls_config(insecure_tls_config());
+        }
         Self {
-            agent: ureq::AgentBuilder::new()
-                .timeout(Duration::from_millis(timeout_ms))
-                .build(),
+            agent: builder.build(),
         }
     }
 
@@ -161,6 +167,65 @@ impl HTTPClient {
     }
 }
 
+/// Certificate verifier used only when `insecure` is enabled.
+///
+/// It deliberately accepts any server certificate so a client can reach a
+/// collector that presents a self-signed certificate during local development.
+#[derive(Debug)]
+struct AcceptAnyServerCert;
+
+impl ureq::rustls::client::danger::ServerCertVerifier for AcceptAnyServerCert {
+    fn verify_server_cert(
+        &self,
+        _end_entity: &ureq::rustls::pki_types::CertificateDer<'_>,
+        _intermediates: &[ureq::rustls::pki_types::CertificateDer<'_>],
+        _server_name: &ureq::rustls::pki_types::ServerName<'_>,
+        _ocsp_response: &[u8],
+        _now: ureq::rustls::pki_types::UnixTime,
+    ) -> Result<ureq::rustls::client::danger::ServerCertVerified, ureq::rustls::Error> {
+        Ok(ureq::rustls::client::danger::ServerCertVerified::assertion())
+    }
+
+    fn verify_tls12_signature(
+        &self,
+        _message: &[u8],
+        _cert: &ureq::rustls::pki_types::CertificateDer<'_>,
+        _dss: &ureq::rustls::DigitallySignedStruct,
+    ) -> Result<ureq::rustls::client::danger::HandshakeSignatureValid, ureq::rustls::Error> {
+        Ok(ureq::rustls::client::danger::HandshakeSignatureValid::assertion())
+    }
+
+    fn verify_tls13_signature(
+        &self,
+        _message: &[u8],
+        _cert: &ureq::rustls::pki_types::CertificateDer<'_>,
+        _dss: &ureq::rustls::DigitallySignedStruct,
+    ) -> Result<ureq::rustls::client::danger::HandshakeSignatureValid, ureq::rustls::Error> {
+        Ok(ureq::rustls::client::danger::HandshakeSignatureValid::assertion())
+    }
+
+    fn supported_verify_schemes(&self) -> Vec<ureq::rustls::SignatureScheme> {
+        ureq::rustls::crypto::ring::default_provider()
+            .signature_verification_algorithms
+            .supported_schemes()
+    }
+}
+
+/// Build a rustls client config that skips certificate verification.
+fn insecure_tls_config() -> std::sync::Arc<ureq::rustls::ClientConfig> {
+    use ureq::rustls;
+
+    let config = rustls::ClientConfig::builder_with_provider(
+        rustls::crypto::ring::default_provider().into(),
+    )
+    .with_protocol_versions(&[&rustls::version::TLS12, &rustls::version::TLS13])
+    .expect("ring supports TLS 1.2 and TLS 1.3")
+    .dangerous()
+    .with_custom_certificate_verifier(std::sync::Arc::new(AcceptAnyServerCert))
+    .with_no_client_auth();
+    std::sync::Arc::new(config)
+}
+
 /// Collector-specific HTTP client with envelope support.
 #[derive(Clone)]
 pub struct CollectorHttpClient {
@@ -240,6 +305,9 @@ impl CollectorHttpClient {
         self
     }
 
+    /// Allow insecure transport: plaintext HTTP for credentialed endpoints and
+    /// TLS connections without server-certificate verification (self-signed
+    /// collectors). Disabled by default; enable only for local development.
     pub fn with_insecure(mut self, insecure: bool) -> Self {
         self.insecure = insecure;
         self
@@ -322,7 +390,7 @@ impl CollectorHttpClient {
         body: Option<Value>,
     ) -> Result<CollectorResponse, String> {
         let url = format!("{}{}", self.endpoint.trim_end_matches('/'), path);
-        let client = HTTPClient::with_timeout_ms(self.timeout_ms);
+        let client = HTTPClient::with_timeout_ms_and_insecure(self.timeout_ms, self.insecure);
         let mut request = HTTPRequest::new(method, &url);
 
         // Any configured credential (Bearer API key or Basic auth) must never be
@@ -835,4 +903,113 @@ pub fn validate_ingest_envelope(envelope: &Value) -> Result<(), String> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::sync::Arc;
+    use std::thread;
+
+    // Throwaway, test-only self-signed Ed25519 certificate for 127.0.0.1,
+    // valid until 2126. The embedded key protects no real data; it exists only
+    // so tests can stand up a local endpoint with an untrusted certificate.
+    const TEST_CERT_DER_B64: &str = "MIIBWzCCAQ2gAwIBAgIUWmV7cGsyqWPXSGO3Ee+3H86S/aMwBQYDK2VwMBQxEjAQBgNVBAMMCWxvY2FsaG9zdDAgFw0yNjExMTkwMjU5NTVaGA8yMTI2MTAyNjAyNTk1NVowFDESMBAGA1UEAwwJbG9jYWxob3N0MCowBQYDK2VwAyEAHCJt94grB1Z0Eq+ju2GSEHIBOwSuDz0g8oEC6fvdoGmjbzBtMB0GA1UdDgQWBBS9tlrvG7d3klZTzulCzK6lhtjiwzAfBgNVHSMEGDAWgBS9tlrvG7d3klZTzulCzK6lhtjiwzAPBgNVHRMBAf8EBTADAQH/MBoGA1UdEQQTMBGHBH8AAAGCCWxvY2FsaG9zdDAFBgMrZXADQQDBu0ClvN1iaSyLKgV3s6EQ9kGDj6s0BKxweANfswKjWLMk07mjLTIe101N1c9m6xH+dOc5WL1JVOdCnz+I3WYH";
+    const TEST_KEY_DER_B64: &str =
+        "MC4CAQAwBQYDK2VwBCIEIDC2pB2KrObVfnggexU0ZWEIr+wDZbdpt5GNprfa5uL6";
+
+    fn accept_tls(
+        config: &Arc<ureq::rustls::ServerConfig>,
+        mut stream: std::net::TcpStream,
+    ) -> Option<ureq::rustls::StreamOwned<ureq::rustls::ServerConnection, std::net::TcpStream>>
+    {
+        use ureq::rustls;
+
+        let mut acceptor = rustls::server::Acceptor::default();
+        let accepted = loop {
+            acceptor.read_tls(&mut stream).ok()?;
+            if let Some(accepted) = acceptor.accept().ok()? {
+                break accepted;
+            }
+        };
+        let conn = accepted.into_connection(config.clone()).ok()?;
+        Some(rustls::StreamOwned::new(conn, stream))
+    }
+
+    fn spawn_tls_collector() -> (u16, thread::JoinHandle<()>) {
+        use ureq::rustls;
+
+        let cert = rustls::pki_types::CertificateDer::from(
+            base64::engine::general_purpose::STANDARD
+                .decode(TEST_CERT_DER_B64)
+                .expect("valid test certificate"),
+        );
+        let key = rustls::pki_types::PrivatePkcs8KeyDer::from(
+            base64::engine::general_purpose::STANDARD
+                .decode(TEST_KEY_DER_B64)
+                .expect("valid test key"),
+        );
+        let server_config = rustls::ServerConfig::builder_with_provider(
+            rustls::crypto::ring::default_provider().into(),
+        )
+        .with_protocol_versions(&[&rustls::version::TLS12, &rustls::version::TLS13])
+        .expect("ring supports TLS 1.2 and TLS 1.3")
+        .with_no_client_auth()
+        .with_single_cert(vec![cert], key.into())
+        .expect("valid test certificate/key pair");
+        let server_config = Arc::new(server_config);
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+        let port = listener.local_addr().expect("local address").port();
+        let handle = thread::spawn(move || {
+            // First connection: verifying client (handshake must fail).
+            // Second connection: insecure client (handshake must succeed).
+            for _ in 0..2 {
+                let Ok((stream, _)) = listener.accept() else {
+                    break;
+                };
+                let Some(mut tls) = accept_tls(&server_config, stream) else {
+                    continue;
+                };
+                let mut buf = [0_u8; 4096];
+                let _ = tls.read(&mut buf);
+                let body = r#"{"status":"accepted"}"#;
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+                let _ = tls.write_all(response.as_bytes());
+                let _ = tls.flush();
+            }
+        });
+        (port, handle)
+    }
+
+    #[test]
+    fn insecure_flag_disables_tls_verification_for_collector_requests() {
+        let (port, server) = spawn_tls_collector();
+        let endpoint = format!("https://127.0.0.1:{port}");
+
+        // Default behaviour: server certificate verification is enforced.
+        let verifying = CollectorHttpClient::new(&endpoint).with_api_key("token");
+        assert!(
+            verifying.query("from events").is_err(),
+            "verifying client must reject the self-signed certificate"
+        );
+
+        // Regression: with_insecure(true) must actually reach the collector.
+        let insecure = CollectorHttpClient::new(&endpoint)
+            .with_api_key("token")
+            .with_insecure(true);
+        let result = insecure.query("from events");
+        assert!(
+            result.is_ok(),
+            "insecure client should reach a self-signed collector: {result:?}"
+        );
+        assert_eq!(result.expect("successful response").status_code, 200);
+        server.join().expect("collector thread");
+    }
 }
