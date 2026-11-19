@@ -17,12 +17,10 @@ const maxHTTPTransportResponseBytes = 10 << 20
 
 // HTTPTransport provides HTTP client with retry logic for event delivery.
 type HTTPTransport struct {
-	client            *http.Client
-	maxRetries        int
-	maxBackoff        time.Duration
-	timeout           time.Duration
-	connectionTimeout time.Duration
-	metrics           *MetricsCollector
+	client     *http.Client
+	maxRetries int
+	maxBackoff time.Duration
+	metrics    *MetricsCollector
 }
 
 // HTTPTransportConfig configures the HTTP transport.
@@ -70,12 +68,10 @@ func NewHTTPTransport(cfg HTTPTransportConfig) *HTTPTransport {
 	}
 
 	return &HTTPTransport{
-		client:            client,
-		maxRetries:        cfg.MaxRetries,
-		maxBackoff:        cfg.MaxBackoff,
-		timeout:           cfg.Timeout,
-		connectionTimeout: cfg.ConnectionTimeout,
-		metrics:           cfg.Metrics,
+		client:     client,
+		maxRetries: cfg.MaxRetries,
+		maxBackoff: cfg.MaxBackoff,
+		metrics:    cfg.Metrics,
 	}
 }
 
