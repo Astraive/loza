@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"go.opentelemetry.io/otel/trace"
@@ -314,5 +315,44 @@ func TestIsValidSpanID(t *testing.T) {
 				t.Errorf("IsValidSpanID(%q) = %v, expected %v", tt.spanID, result, tt.expected)
 			}
 		})
+	}
+}
+
+// TestIDGenerationOnEntropyFailure is a regression test for the case where
+// crypto/rand fails while the fast process PRNG is also unavailable. The old
+// code returned the reserved all-zero IDs, which fail IsValidTraceID and
+// IsValidSpanID; generation must now fall back to guaranteed-non-zero IDs.
+func TestIDGenerationOnEntropyFailure(t *testing.T) {
+	origRand := traceRand
+	origReader := readEntropy
+	t.Cleanup(func() {
+		traceRand = origRand
+		readEntropy = origReader
+	})
+
+	// Force the fallback path: no seeded PRNG and a failing entropy source.
+	traceRand = nil
+	readEntropy = func([]byte) (int, error) {
+		return 0, errors.New("simulated entropy failure")
+	}
+
+	ctx := GenerateTraceContext()
+	if !IsValidTraceID(ctx.TraceID) {
+		t.Errorf("GenerateTraceContext returned invalid trace_id on entropy failure: %q", ctx.TraceID)
+	}
+	if !IsValidSpanID(ctx.SpanID) {
+		t.Errorf("GenerateTraceContext returned invalid span_id on entropy failure: %q", ctx.SpanID)
+	}
+
+	if traceID := GenerateTraceID(); !IsValidTraceID(traceID) {
+		t.Errorf("GenerateTraceID returned invalid trace_id on entropy failure: %q", traceID)
+	}
+	if spanID := GenerateSpanID(); !IsValidSpanID(spanID) {
+		t.Errorf("GenerateSpanID returned invalid span_id on entropy failure: %q", spanID)
+	}
+
+	// Successive fallback IDs must still differ.
+	if a, b := GenerateTraceID(), GenerateTraceID(); a == b {
+		t.Errorf("fallback produced duplicate trace_id: %q", a)
 	}
 }
