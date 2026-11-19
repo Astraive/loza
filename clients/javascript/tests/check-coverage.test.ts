@@ -20,6 +20,20 @@ function runCoverageCheck(lcov: string): { status: number | null; output: string
   }
 }
 
+const script = new URL('../scripts/check-coverage.ts', import.meta.url).pathname;
+
+function runCheckCoverage(lcov: string): { status: number | null; stdout: string; stderr: string } {
+  const dir = mkdtempSync(join(tmpdir(), 'check-coverage-'));
+  const file = join(dir, 'lcov.info');
+  writeFileSync(file, lcov);
+  try {
+    const result = spawnSync('bun', [script, file], { encoding: 'utf8' });
+    return { status: result.status, stdout: result.stdout, stderr: result.stderr };
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
 test('counts DA lines that carry an lcov checksum', () => {
   const { status, output } = runCoverageCheck([
     'TN:',
@@ -53,4 +67,34 @@ test('uncovered checksum lines count against the 95% gate', () => {
   assert.notEqual(status, 0, 'a 4/6 (66.67%) result must fail the 95% gate');
   assert.match(output, /Production line coverage: 4\/6 \(66\.67%\)/);
   assert.match(output, /below the required 95%/);
+});
+
+test('check-coverage accepts non-canonical source path prefixes', () => {
+  const lcov = [
+    'SF:./src/foo.ts',
+    'DA:1,1',
+    'DA:2,1',
+    'end_of_record',
+    'SF:C:\\repo\\src\\bar.ts',
+    'DA:1,1',
+    'end_of_record',
+    'SF:/home/ci/repo/src/baz.ts',
+    'DA:1,1',
+    'end_of_record',
+    'SF:./tests/foo.test.ts',
+    'DA:1,1',
+    'end_of_record',
+  ].join('\n');
+
+  const result = runCheckCoverage(lcov);
+  assert.equal(result.status, 0, result.stderr);
+  // Four source lines from src/* records are counted; the tests/* record is not.
+  assert.match(result.stdout, /Production line coverage: 4\/4 \(100\.00%\)/);
+});
+
+test('check-coverage still rejects coverage files with no source records', () => {
+  const lcov = ['SF:./tests/foo.test.ts', 'DA:1,1', 'end_of_record'].join('\n');
+  const result = runCheckCoverage(lcov);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /No production source records found/);
 });
