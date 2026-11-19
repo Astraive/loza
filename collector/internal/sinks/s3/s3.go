@@ -30,8 +30,15 @@ type Config struct {
 }
 
 type sink struct {
-	cfg       Config
-	mu        sync.Mutex
+	cfg Config
+	// mu protects buf, count and closed.
+	mu sync.Mutex
+	// uploadMu serializes a whole drain+upload+restore cycle so that a
+	// single flush owns the buffer at a time. Without it, a WriteEvent
+	// batch and a ticker/Flush batch could upload concurrently: on a
+	// partial failure restore() would prepend records ahead of entries
+	// appended in the meantime, reordering or duplicating NDJSON records.
+	uploadMu  sync.Mutex
 	buf       bytes.Buffer
 	batchSize int
 	columns   []string
@@ -101,6 +108,12 @@ func (s *sink) WriteEvent(ctx context.Context, encoded []byte, _ *collectorevent
 			return err
 		}
 	}
+	// Hold uploadMu across appendLocked as well: appendLocked drains a full
+	// batch, so the drain must stay under the same lock as the upload that
+	// follows it. This keeps concurrent flushes from owning the buffer at
+	// the same time.
+	s.uploadMu.Lock()
+	defer s.uploadMu.Unlock()
 	payload, n, err := s.appendLocked(encoded)
 	if err != nil {
 		return err
@@ -168,6 +181,8 @@ func (s *sink) appendLocked(encoded []byte) ([]byte, int, error) {
 }
 
 func (s *sink) flushBatch(ctx context.Context) error {
+	s.uploadMu.Lock()
+	defer s.uploadMu.Unlock()
 	payload, n := s.drain()
 	if len(payload) == 0 {
 		return nil
