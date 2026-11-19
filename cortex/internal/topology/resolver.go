@@ -53,14 +53,15 @@ func (r *Resolver) RegisterAlias(ctx context.Context, from string, to string, va
 	}
 
 	existingAliases, err := r.topologyStore.GetHistory(ctx, from)
-	if err == nil {
-		for _, existing := range existingAliases {
-			if existing.Canonical == to {
-				continue
-			}
-			if aliasPeriodsOverlap(existing.ValidFrom, existing.ValidTo, validFrom, validTo) {
-				return fmt.Errorf("overlapping alias period for service %s", from)
-			}
+	if err != nil {
+		return fmt.Errorf("verify alias history for service %s: %w", from, err)
+	}
+	for _, existing := range existingAliases {
+		if existing.Canonical == to {
+			continue
+		}
+		if aliasPeriodsOverlap(existing.ValidFrom, existing.ValidTo, validFrom, validTo) {
+			return fmt.Errorf("overlapping alias period for service %s", from)
 		}
 	}
 
