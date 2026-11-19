@@ -117,6 +117,49 @@ func assertResourceAttribute(t *testing.T, attrs map[string]string, key, want st
 	t.Helper()
 	if got := attrs[key]; got != want {
 		t.Fatalf("resource attribute %q: got %q, want %q", key, got, want)
+type shutdownSpyExporter struct {
+	shutdownCalled bool
+	shutdownCtx    context.Context
+}
+
+func (*shutdownSpyExporter) Export(context.Context, []log.Record) error { return nil }
+func (*shutdownSpyExporter) ForceFlush(context.Context) error           { return nil }
+func (s *shutdownSpyExporter) Shutdown(ctx context.Context) error {
+	s.shutdownCalled = true
+	s.shutdownCtx = ctx
+	return nil
+}
+
+// TestNewShutsDownExporterWhenResourceCreationFails verifies that a failed
+// resource creation does not leak the already-started exporter (gRPC
+// connection and background goroutines).
+func TestNewShutsDownExporterWhenResourceCreationFails(t *testing.T) {
+	origExporter, origResource := newExporterFn, newResourceFn
+	t.Cleanup(func() {
+		newExporterFn, newResourceFn = origExporter, origResource
+	})
+
+	spy := &shutdownSpyExporter{}
+	newExporterFn = func(context.Context, resolvedConfig) (log.Exporter, error) {
+		return spy, nil
+	}
+	newResourceFn = func(context.Context, ...resource.Option) (*resource.Resource, error) {
+		return nil, errors.New("forced resource failure")
+	}
+
+	ctx := context.Background()
+	_, err := New(ctx, Config{})
+	if err == nil {
+		t.Fatalf("expected resource creation error")
+	}
+	if !strings.Contains(err.Error(), "create resource") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !spy.shutdownCalled {
+		t.Fatalf("expected exporter.Shutdown to be called when resource creation fails")
+	}
+	if spy.shutdownCtx != ctx {
+		t.Fatalf("expected Shutdown to receive the provided context")
 	}
 }
 
