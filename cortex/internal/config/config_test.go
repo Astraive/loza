@@ -301,6 +301,26 @@ func TestApplyEnvOverridesRejectsInvalidValues(t *testing.T) {
 		{name: "pii redaction enabled", key: "CORTEX_PII_REDACTION_ENABLED", val: "yep"},
 		{name: "collector source of truth", key: "CORTEX_COLLECTOR_SOURCE_OF_TRUTH", val: "maybe"},
 		{name: "collector tail enabled", key: "CORTEX_COLLECTOR_TAIL_ENABLED", val: "maybe"},
+func TestParseEnvBool(t *testing.T) {
+	tests := []struct {
+		name    string
+		value   string
+		want    bool
+		wantErr bool
+	}{
+		{name: "true", value: "true", want: true},
+		{name: "true with surrounding whitespace", value: "  true  ", want: true},
+		{name: "uppercase", value: "TRUE", want: true},
+		{name: "numeric one", value: "1", want: true},
+		{name: "short t", value: "t", want: true},
+		{name: "capitalized", value: "True", want: true},
+		{name: "false", value: "false", want: false},
+		{name: "false with whitespace", value: " false ", want: false},
+		{name: "numeric zero", value: "0", want: false},
+		{name: "short f", value: "f", want: false},
+		{name: "yes is invalid", value: "yes", wantErr: true},
+		{name: "typo is invalid", value: "tru", wantErr: true},
+		{name: "empty is invalid", value: "", wantErr: true},
 	}
 
 	for _, tc := range tests {
@@ -384,6 +404,101 @@ func TestDefaultRejectsInvalidEnvironmentOverride(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "CORTEX_COLLECTOR_MAX_RESPONSE_BYTES") {
 		t.Fatalf("Default error = %v, want invalid CORTEX_COLLECTOR_MAX_RESPONSE_BYTES error", err)
+			got, err := parseEnvBool("CORTEX_AUTH_ENABLED", tc.value)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("parseEnvBool(%q) expected an error", tc.value)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("parseEnvBool(%q): %v", tc.value, err)
+			}
+			if got != tc.want {
+				t.Fatalf("parseEnvBool(%q) = %v, want %v", tc.value, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestApplyEnvOverridesBooleanToggles(t *testing.T) {
+	// Values the old `== "true"` / `EqualFold(v, "true")` comparisons rejected
+	// even though strconv.ParseBool considers them valid.
+	values := map[string]string{
+		"CORTEX_AUTH_ENABLED":           " true ",
+		"CORTEX_RATELIMIT_ENABLED":      "1",
+		"CORTEX_TLS_ENABLED":            "TRUE",
+		"CORTEX_PII_REDACTION_ENABLED":  "t",
+		"CORTEX_COLLECTOR_TAIL_ENABLED": "True",
+	}
+	for name, value := range values {
+		t.Setenv(name, value)
+	}
+
+	cfg := &Config{}
+	if err := applyEnvOverrides(cfg); err != nil {
+		t.Fatalf("applyEnvOverrides: %v", err)
+	}
+
+	if !cfg.Authentication.Enabled {
+		t.Error("CORTEX_AUTH_ENABLED=\" true \" should enable authentication")
+	}
+	if !cfg.RateLimit.Enabled {
+		t.Error("CORTEX_RATELIMIT_ENABLED=1 should enable rate limiting")
+	}
+	if !cfg.TLS.Enabled {
+		t.Error("CORTEX_TLS_ENABLED=TRUE should enable TLS")
+	}
+	if !cfg.PIIRedaction.Enabled {
+		t.Error("CORTEX_PII_REDACTION_ENABLED=t should enable PII redaction")
+	}
+	if !cfg.Collector.TailEnabled {
+		t.Error("CORTEX_COLLECTOR_TAIL_ENABLED=True should enable collector tail")
+	}
+}
+
+func TestApplyEnvOverridesRejectsInvalidBooleanToggle(t *testing.T) {
+	toggles := []string{
+		"CORTEX_AUTH_ENABLED",
+		"CORTEX_RATELIMIT_ENABLED",
+		"CORTEX_TLS_ENABLED",
+		"CORTEX_PII_REDACTION_ENABLED",
+		"CORTEX_COLLECTOR_TAIL_ENABLED",
+	}
+
+	for _, bad := range toggles {
+		t.Run(bad, func(t *testing.T) {
+			// Keep every other toggle valid so the failure is attributable to
+			// the toggle under test.
+			for _, name := range toggles {
+				value := "true"
+				if name == bad {
+					value = "yes" // not accepted by strconv.ParseBool
+				}
+				t.Setenv(name, value)
+			}
+
+			cfg := &Config{}
+			err := applyEnvOverrides(cfg)
+			if err == nil {
+				t.Fatalf("applyEnvOverrides accepted invalid %s=%q", bad, "yes")
+			}
+			if !strings.Contains(err.Error(), bad) {
+				t.Fatalf("error %q does not identify %s", err, bad)
+			}
+		})
+	}
+}
+
+func TestLoadRejectsInvalidBooleanOverride(t *testing.T) {
+	t.Setenv("CORTEX_AUTH_ENABLED", "yes")
+
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	writeConfigFile(t, path, "server:\n  port: 9312\n")
+
+	_, err := Load(path)
+	if err == nil || !strings.Contains(err.Error(), "CORTEX_AUTH_ENABLED") {
+		t.Fatalf("Load error = %v, want error mentioning CORTEX_AUTH_ENABLED", err)
 	}
 }
 
