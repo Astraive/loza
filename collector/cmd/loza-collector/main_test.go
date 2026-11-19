@@ -874,6 +874,45 @@ func TestHandleIngestMaxBodyExceeded(t *testing.T) {
 	if rec.Code != http.StatusRequestEntityTooLarge {
 		t.Fatalf("expected 413, got %d", rec.Code)
 	}
+	var resp ingest.Response
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.Error != "payload_too_large" {
+		t.Fatalf("expected payload_too_large, got %q", resp.Error)
+	}
+}
+
+// rewordedTooLargeError mimics a future ErrPayloadTooLarge from the ingest
+// package whose message was reworded: it Is-matches the sentinel but its text
+// deliberately does not contain the legacy "max body bytes" phrase. The status
+// must still be 413, proving detection is identity-based, not text-based.
+type rewordedTooLargeError struct{}
+
+func (rewordedTooLargeError) Error() string { return "upstream reworded this error" }
+
+func (rewordedTooLargeError) Is(target error) bool {
+	return target == ingest.ErrPayloadTooLarge
+}
+
+func TestIngestErrorStatusDoesNotDependOnMessageText(t *testing.T) {
+	status, code := ingestErrorStatus(rewordedTooLargeError{})
+	if status != http.StatusRequestEntityTooLarge {
+		t.Fatalf("expected 413 for sentinel error, got %d", status)
+	}
+	if code != "payload_too_large" {
+		t.Fatalf("expected payload_too_large, got %q", code)
+	}
+
+	// Conversely, an unrelated error that happens to contain the legacy wording
+	// must not be misclassified as too large.
+	status, code = ingestErrorStatus(errors.New("payload exceeds max body bytes, unrelated"))
+	if status != http.StatusBadRequest {
+		t.Fatalf("expected 400 for unrelated error, got %d", status)
+	}
+	if code != "invalid_request_payload" {
+		t.Fatalf("expected invalid_request_payload, got %q", code)
+	}
 }
 
 func TestHandleIngestMaxEventsExceeded(t *testing.T) {

@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -14,6 +15,12 @@ import (
 	speccontract "github.com/astraive/loza/spec/generated/go/contract"
 	"github.com/klauspost/compress/zstd"
 )
+
+// ErrPayloadTooLarge is returned by ParseEvents when the request body exceeds
+// the configured maximum. Callers should detect it with errors.Is rather than
+// matching on error-message text, so that rewording the message cannot change
+// the HTTP status chosen for an oversized payload.
+var ErrPayloadTooLarge = errors.New("payload exceeds max body bytes")
 
 func ParseEvents(r *http.Request, maxBodyBytes int64) ([][]byte, error) {
 	defer r.Body.Close()
@@ -42,7 +49,7 @@ func ParseEvents(r *http.Request, maxBodyBytes int64) ([][]byte, error) {
 		return nil, err
 	}
 	if int64(len(payload)) > maxBodyBytes {
-		return nil, fmt.Errorf("payload exceeds max body bytes")
+		return nil, ErrPayloadTooLarge
 	}
 	payload = bytes.TrimSpace(payload)
 	if len(payload) == 0 {
