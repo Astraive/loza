@@ -14,6 +14,10 @@ from pathlib import Path
 LOZA_SPEC_ROOT = Path(__file__).resolve().parents[1]
 WORKSPACE_ROOT = LOZA_SPEC_ROOT.parent
 
+# Shared width for every SDK column in the --matrix table, used by both the
+# header row and the data rows so that values line up under their SDK labels.
+MATRIX_COLUMN_WIDTH = 12
+
 
 
 @dataclass(frozen=True)
@@ -205,14 +209,14 @@ def _selected_checks(sdk: str, group: str) -> list[Check]:
 
 def _print_matrix() -> None:
     groups = _all_groups()
-    header = "group".ljust(24) + "".join(sdk.rjust(12) for sdk in ("go", "python", "rust", "javascript", "lql"))
+    header = "group".ljust(24) + "".join(sdk.rjust(MATRIX_COLUMN_WIDTH) for sdk in ("go", "python", "rust", "javascript", "lql"))
     print(header)
     print("-" * len(header))
     for group in groups:
         row = group.ljust(24)
         for sdk in ("go", "python", "rust", "javascript", "lql"):
             present = any(check.group == group for check in SDK_GROUPS[sdk])
-            row += ("yes" if present else "-").rjust(10)
+            row += ("yes" if present else "-").rjust(MATRIX_COLUMN_WIDTH)
         print(row)
 
 
