@@ -1048,3 +1048,91 @@ func TestWatchCommandMissingFieldsDoNotRenderNil(t *testing.T) {
 		t.Fatalf("expected sanitized event output, got %s", out)
 	}
 }
+
+func TestParseBlueprintColumnsTrimsComponents(t *testing.T) {
+	cols, err := parseBlueprintColumns("name : int : path")
+	if err != nil {
+		t.Fatalf("parse columns: %v", err)
+	}
+	col, ok := cols["name"].(map[string]string)
+	if !ok {
+		t.Fatalf("expected column map, got %T", cols["name"])
+	}
+	if col["duckdb_type"] != "int" || col["json_path"] != "path" {
+		t.Fatalf("expected trimmed components, got %#v", col)
+	}
+	if _, exists := cols["name "]; exists {
+		t.Fatalf("untrimmed column name key present: %#v", cols)
+	}
+}
+
+func TestParseBlueprintColumnsMultiple(t *testing.T) {
+	cols, err := parseBlueprintColumns("id:INTEGER:$.id, user_name:TEXT:$.user.name")
+	if err != nil {
+		t.Fatalf("parse columns: %v", err)
+	}
+	if len(cols) != 2 {
+		t.Fatalf("expected 2 columns, got %d: %#v", len(cols), cols)
+	}
+	col, ok := cols["user_name"].(map[string]string)
+	if !ok || col["duckdb_type"] != "TEXT" || col["json_path"] != "$.user.name" {
+		t.Fatalf("unexpected user_name column: %#v", cols["user_name"])
+	}
+}
+
+func TestParseBlueprintColumnsRejectsInvalidColumns(t *testing.T) {
+	tests := []struct {
+		name    string
+		columns string
+	}{
+		{"empty name", ":int:path"},
+		{"empty type", "name::path"},
+		{"empty path", "name:int:"},
+		{"whitespace name", "   :int:path"},
+		{"invalid identifier", "bad-name:int:path"},
+		{"too few parts", "name:int"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if _, err := parseBlueprintColumns(tt.columns); err == nil {
+				t.Fatalf("expected error for %q", tt.columns)
+			}
+		})
+	}
+}
+
+func TestBlueprintAddSendsTrimmedColumns(t *testing.T) {
+	var gotBody string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/schema/blueprint" {
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatalf("read body: %v", err)
+		}
+		gotBody = string(body)
+		_, _ = w.Write([]byte(`{"status":"accepted"}`))
+	}))
+	defer srv.Close()
+
+	cfg := config.Config{CollectorURL: srv.URL}
+	if err := SchemaCommand(cfg, []string{"blueprint", "add", "--name", "bp", "--columns", "name : int : path"}); err != nil {
+		t.Fatalf("blueprint add: %v", err)
+	}
+	if !strings.Contains(gotBody, `"name":{"duckdb_type":"int","json_path":"path"}`) {
+		t.Fatalf("expected trimmed column values in payload, got %s", gotBody)
+	}
+}
+
+func TestBlueprintAddRejectsMalformedColumns(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("collector should not be called for malformed columns")
+	}))
+	defer srv.Close()
+
+	cfg := config.Config{CollectorURL: srv.URL}
+	if err := SchemaCommand(cfg, []string{"blueprint", "add", "--name", "bp", "--columns", ":int:path"}); err == nil {
+		t.Fatalf("expected error for empty column name")
+	}
+}

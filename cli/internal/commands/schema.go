@@ -106,20 +106,13 @@ func runBlueprintAdd(ctx context.Context, cfg config.Config, args []string) erro
 		return fmt.Errorf("--columns is required (format: name:type:path,name:type:path)")
 	}
 
+	cols, err := parseBlueprintColumns(*columns)
+	if err != nil {
+		return err
+	}
 	blueprint := map[string]any{
 		"name":    *name,
-		"columns": map[string]any{},
-	}
-	cols := blueprint["columns"].(map[string]any)
-	for _, col := range strings.Split(*columns, ",") {
-		parts := strings.SplitN(strings.TrimSpace(col), ":", 3)
-		if len(parts) != 3 {
-			return fmt.Errorf("invalid column format: %s (expected name:type:path)", col)
-		}
-		cols[parts[0]] = map[string]string{
-			"duckdb_type": parts[1],
-			"json_path":   parts[2],
-		}
+		"columns": cols,
 	}
 
 	data, err := json.Marshal(blueprint)
@@ -132,6 +125,34 @@ func runBlueprintAdd(ctx context.Context, cfg config.Config, args []string) erro
 	}
 	fmt.Println(string(body))
 	return nil
+}
+
+// parseBlueprintColumns parses a comma-separated list of name:type:path column
+// definitions into the columns map of a blueprint payload. Each component is
+// trimmed and must be non-empty; the name must also be a valid identifier so
+// the collector can apply it as a SQL column.
+func parseBlueprintColumns(columnsCSV string) (map[string]any, error) {
+	cols := make(map[string]any)
+	for _, col := range strings.Split(columnsCSV, ",") {
+		parts := strings.SplitN(col, ":", 3)
+		if len(parts) != 3 {
+			return nil, fmt.Errorf("invalid column format: %s (expected name:type:path)", col)
+		}
+		name := strings.TrimSpace(parts[0])
+		duckdbType := strings.TrimSpace(parts[1])
+		jsonPath := strings.TrimSpace(parts[2])
+		if name == "" || duckdbType == "" || jsonPath == "" {
+			return nil, fmt.Errorf("invalid column format: %s (name, type, and path must not be empty)", col)
+		}
+		if !isValidIdentifier(name) {
+			return nil, fmt.Errorf("invalid column name %q in %s (must be a valid identifier)", name, col)
+		}
+		cols[name] = map[string]string{
+			"duckdb_type": duckdbType,
+			"json_path":   jsonPath,
+		}
+	}
+	return cols, nil
 }
 
 func runBlueprintList(ctx context.Context, cfg config.Config) error {
