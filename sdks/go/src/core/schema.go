@@ -613,12 +613,25 @@ func defaultSchemaMap(ev EventView) map[string]any {
 
 func flatSchemaMap(ev EventView) map[string]any {
 	base := defaultSchemaMap(ev)
+	// Record canonical field names before merging flattened attrs. An attr whose
+	// name matches a canonical field must neither overwrite it with the attr
+	// value nor remove it in the cleanup loop below.
+	canonical := make(map[string]struct{}, len(base))
+	for k := range base {
+		canonical[k] = struct{}{}
+	}
 	attrs := ev.Attrs()
 	flat := flattenAnyMap(attrs, "", "_")
 	for k, v := range flat {
+		if _, ok := canonical[k]; ok {
+			continue
+		}
 		base[k] = v
 	}
 	for k := range attrs {
+		if _, ok := canonical[k]; ok {
+			continue
+		}
 		delete(base, k)
 	}
 	return base
