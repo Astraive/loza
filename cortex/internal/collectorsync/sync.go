@@ -2,6 +2,9 @@ package collectorsync
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
@@ -220,22 +223,47 @@ func filterEventsAfterCursor(events []*models.Event, cursor collectorbridge.Curs
 	return filtered
 }
 
+// eventIdentityKey returns a stable key that captures the full identity of an
+// event. Deduplicating on event.ID alone is unsafe: distinct events can reuse an
+// ID (or share an empty ID and timestamp), and collapsing them silently drops
+// data. Hashing the whole event keeps genuinely distinct events while still
+// collapsing exact duplicates delivered more than once.
+func eventIdentityKey(event *models.Event) string {
+	payload, err := json.Marshal(event)
+	if err != nil {
+		// Well-formed events always marshal (all maps use string keys), but fall
+		// back to a composite of the available identity fields just in case.
+		return "raw:" + event.ID + "|" + event.EventID + "|" +
+			event.Timestamp.UTC().Format(time.RFC3339Nano) + "|" +
+			event.Service + "|" + event.Event
+	}
+	sum := sha256.Sum256(payload)
+	return hex.EncodeToString(sum[:])
+}
+
 func sortAndDedupeEvents(events []*models.Event, cursor collectorbridge.Cursor) []*models.Event {
 	filtered := filterEventsAfterCursor(events, cursor)
+	keys := make(map[*models.Event]string, len(filtered))
+	for _, event := range filtered {
+		keys[event] = eventIdentityKey(event)
+	}
 	sort.Slice(filtered, func(i, j int) bool {
-		if filtered[i].Timestamp.Equal(filtered[j].Timestamp) {
+		if !filtered[i].Timestamp.Equal(filtered[j].Timestamp) {
+			return filtered[i].Timestamp.Before(filtered[j].Timestamp)
+		}
+		if filtered[i].ID != filtered[j].ID {
 			return filtered[i].ID < filtered[j].ID
 		}
-		return filtered[i].Timestamp.Before(filtered[j].Timestamp)
+		// Distinct events may share both a timestamp and an ID; use the full
+		// identity as a final tiebreaker so ordering (and thus the cursor) is
+		// deterministic instead of dependent on input order.
+		return keys[filtered[i]] < keys[filtered[j]]
 	})
 
 	unique := make([]*models.Event, 0, len(filtered))
 	seen := make(map[string]struct{}, len(filtered))
 	for _, event := range filtered {
-		key := event.ID
-		if key == "" {
-			key = event.Timestamp.UTC().Format(time.RFC3339Nano)
-		}
+		key := keys[event]
 		if _, ok := seen[key]; ok {
 			continue
 		}
