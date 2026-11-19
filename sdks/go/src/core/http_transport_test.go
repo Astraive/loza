@@ -8,11 +8,23 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 )
+
+// underlyingHTTPTransport returns the net/http.Transport created by
+// NewHTTPTransport when no custom client is configured.
+func underlyingHTTPTransport(t *testing.T, transport *HTTPTransport) *http.Transport {
+	t.Helper()
+	inner, ok := transport.Client().Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("expected *http.Transport, got %T", transport.Client().Transport)
+	}
+	return inner
+}
 
 func TestNewHTTPTransport_DefaultConfig(t *testing.T) {
 	transport := NewHTTPTransport(HTTPTransportConfig{})
@@ -23,11 +35,17 @@ func TestNewHTTPTransport_DefaultConfig(t *testing.T) {
 	if transport.maxBackoff != 30*time.Second {
 		t.Errorf("expected default maxBackoff=30s, got %s", transport.maxBackoff)
 	}
-	if transport.timeout != 10*time.Second {
-		t.Errorf("expected default timeout=10s, got %s", transport.timeout)
+	// Timeout configuration is consumed by the generated client rather than
+	// being duplicated as unused state on HTTPTransport.
+	if got := transport.Client().Timeout; got != 10*time.Second {
+		t.Errorf("expected default client timeout=10s, got %s", got)
 	}
-	if transport.connectionTimeout != 5*time.Second {
-		t.Errorf("expected default connectionTimeout=5s, got %s", transport.connectionTimeout)
+	inner := underlyingHTTPTransport(t, transport)
+	if got := inner.ResponseHeaderTimeout; got != 10*time.Second {
+		t.Errorf("expected default response header timeout=10s, got %s", got)
+	}
+	if got := inner.TLSHandshakeTimeout; got != 5*time.Second {
+		t.Errorf("expected default connection timeout=5s, got %s", got)
 	}
 }
 
@@ -46,11 +64,40 @@ func TestNewHTTPTransport_CustomConfig(t *testing.T) {
 	if transport.maxBackoff != 60*time.Second {
 		t.Errorf("expected maxBackoff=60s, got %s", transport.maxBackoff)
 	}
-	if transport.timeout != 20*time.Second {
-		t.Errorf("expected timeout=20s, got %s", transport.timeout)
+	if got := transport.Client().Timeout; got != 20*time.Second {
+		t.Errorf("expected client timeout=20s, got %s", got)
 	}
-	if transport.connectionTimeout != 10*time.Second {
-		t.Errorf("expected connectionTimeout=10s, got %s", transport.connectionTimeout)
+	inner := underlyingHTTPTransport(t, transport)
+	if got := inner.ResponseHeaderTimeout; got != 20*time.Second {
+		t.Errorf("expected response header timeout=20s, got %s", got)
+	}
+	if got := inner.TLSHandshakeTimeout; got != 10*time.Second {
+		t.Errorf("expected connection timeout=10s, got %s", got)
+	}
+}
+
+// TestHTTPTransport_NoStoredTimeoutState guards the regression from issue #654:
+// HTTPTransport used to store timeout and connectionTimeout fields that were
+// assigned in the constructor but never read by production code. The effective
+// values belong only on the generated HTTP client.
+func TestHTTPTransport_NoStoredTimeoutState(t *testing.T) {
+	typ := reflect.TypeOf(HTTPTransport{})
+	for _, name := range []string{"timeout", "connectionTimeout"} {
+		if _, ok := typ.FieldByName(name); ok {
+			t.Errorf("HTTPTransport still stores the unused %q field", name)
+		}
+	}
+
+	transport := NewHTTPTransport(HTTPTransportConfig{
+		Timeout:           7 * time.Second,
+		ConnectionTimeout: 3 * time.Second,
+	})
+	if got := transport.Client().Timeout; got != 7*time.Second {
+		t.Errorf("expected client timeout=7s, got %s", got)
+	}
+	inner := underlyingHTTPTransport(t, transport)
+	if got := inner.TLSHandshakeTimeout; got != 3*time.Second {
+		t.Errorf("expected connection timeout=3s, got %s", got)
 	}
 }
 
