@@ -115,12 +115,23 @@ func (b *EventBuffer) Add(ctx context.Context, ev *Event, encoded []byte) error 
 
 	// Check if we should flush
 	// Requirement 33.4: flush when batch_size is reached
-	shouldFlush := len(b.events) >= b.batchSize
-	b.mu.Unlock()
+	if len(b.events) >= b.batchSize {
+		// Take ownership of the batch while still holding the lock. Releasing
+		// the lock first and calling Flush() would let a concurrent Add observe
+		// a full buffer and drop an event from a batch that never got flushed
+		// (acute when maxBufferSize is close to batchSize). Snapshotting here
+		// keeps the overflow drop and the batch hand-off atomic under one lock.
+		events := b.events
+		encodedBatch := b.encoded
+		b.events = make([]*Event, 0, b.batchSize)
+		b.encoded = make([][]byte, 0, b.batchSize)
+		b.mu.Unlock()
 
-	if shouldFlush {
-		return b.Flush(ctx)
+		// Flush outside the lock to avoid blocking new events.
+		return b.flushFunc(ctx, events, encodedBatch)
 	}
+
+	b.mu.Unlock()
 
 	return nil
 }
