@@ -107,6 +107,9 @@ type Queue struct {
 	wg        sync.WaitGroup
 	rng       *rand.Rand
 	rngMu     sync.Mutex
+
+	closeOnce sync.Once
+	closeErr  error
 }
 
 func NewQueue(cfg QueueConfig) (*Queue, error) {
@@ -392,6 +395,16 @@ func stopTimer(t *time.Timer) {
 		default:
 			q.mu.Lock()
 			if q.hasReadyEvent() && (len(q.events) >= q.cfg.BatchSize || q.hasReadyRetry()) {
+			// Close() broadcasts the cond while holding q.mu. Recheck stopCh
+			// under that same lock so a wake-up delivered before we parked in
+			// cond.Wait() cannot be missed.
+			select {
+			case <-q.stopCh:
+				q.mu.Unlock()
+				return
+			default:
+			}
+			if len(q.events) >= q.cfg.BatchSize {
 				q.mu.Unlock()
 				if err := q.doFlush(); err != nil {
 					log.Printf("queue flush error: %v", err)
@@ -690,21 +703,31 @@ func (q *Queue) State() State {
 }
 
 func (q *Queue) Close() error {
-	close(q.stopCh)
-	q.wg.Wait()
+	q.closeOnce.Do(func() {
+		// Signal shutdown while holding q.mu so flushLoop cannot park in
+		// cond.Wait() after the broadcast and miss the wake-up entirely.
+		q.mu.Lock()
+		close(q.stopCh)
+		q.cond.Broadcast()
+		q.mu.Unlock()
 
-	q.mu.Lock()
-	q.closed = true
-	q.mu.Unlock()
+		q.wg.Wait()
 
-	// Final flush of any remaining buffered events
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	if err := q.doFlush(); err != nil {
-		return err
-	}
+		q.mu.Lock()
+		q.closed = true
+		q.mu.Unlock()
 
-	return q.cfg.Sink.Close(ctx)
+		// Final flush of any remaining buffered events
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := q.doFlush(); err != nil {
+			q.closeErr = err
+			return
+		}
+
+		q.closeErr = q.cfg.Sink.Close(ctx)
+	})
+	return q.closeErr
 }
 
 func (q *Queue) generateEventID() string {

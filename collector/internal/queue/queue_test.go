@@ -659,5 +659,98 @@ func TestCircuitBreakerHalfOpenEndToEnd(t *testing.T) {
 	waitForCircuit(t, q, false)
 	if err := q.Enqueue(context.Background(), Event{Payload: []byte("recovered")}); err != nil {
 		t.Fatalf("enqueue after recovery was rejected: %v", err)
+type stubSink struct {
+	closeErr error
+}
+
+func (*stubSink) WriteEvent(context.Context, []byte, []byte) error { return nil }
+func (*stubSink) WriteBatch(context.Context, [][]byte) error       { return nil }
+func (*stubSink) Flush(context.Context) error                      { return nil }
+func (s *stubSink) Close(context.Context) error                    { return s.closeErr }
+
+func newTestQueue(t *testing.T, sink Sink) *Queue {
+	t.Helper()
+	q, err := NewQueue(QueueConfig{Directory: t.TempDir(), Sink: sink})
+	if err != nil {
+		t.Fatalf("new queue: %v", err)
+	}
+	return q
+}
+
+// TestQueueCloseIsIdempotent reproduces the reported defect: a second Close()
+// used to panic with "close of closed channel". It also exercises the case
+// where the flush loop is parked in cond.Wait() when shutdown starts.
+func TestQueueCloseIsIdempotent(t *testing.T) {
+	q := newTestQueue(t, &stubSink{})
+	for i := 0; i < 3; i++ {
+		if err := q.Enqueue(context.Background(), Event{Payload: []byte("event")}); err != nil {
+			t.Fatalf("enqueue: %v", err)
+		}
+	}
+	// Give flushLoop time to park in cond.Wait() before shutdown begins.
+	time.Sleep(5 * time.Millisecond)
+
+	if err := q.Close(); err != nil {
+		t.Fatalf("first close: %v", err)
+	}
+	if err := q.Close(); err != nil {
+		t.Fatalf("second close: %v", err)
+	}
+
+	if err := q.Enqueue(context.Background(), Event{Payload: []byte("late")}); err != ErrQueueClosed {
+		t.Fatalf("enqueue after close: got %v, want ErrQueueClosed", err)
+	}
+}
+
+// TestQueueCloseConcurrentReturnsStoredError verifies that concurrent Close()
+// calls neither panic nor race, and that every caller receives the same stored
+// error from the single shutdown performed by sync.Once.
+func TestQueueCloseConcurrentReturnsStoredError(t *testing.T) {
+	wantErr := errors.New("sink close failed")
+	q := newTestQueue(t, &stubSink{closeErr: wantErr})
+	for i := 0; i < 3; i++ {
+		if err := q.Enqueue(context.Background(), Event{Payload: []byte("event")}); err != nil {
+			t.Fatalf("enqueue: %v", err)
+		}
+	}
+	time.Sleep(5 * time.Millisecond)
+
+	const callers = 8
+	start := make(chan struct{})
+	errs := make([]error, callers)
+	var wg sync.WaitGroup
+	for i := 0; i < callers; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			<-start
+			errs[i] = q.Close()
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+
+	for i, err := range errs {
+		if !errors.Is(err, wantErr) {
+			t.Errorf("caller %d: got %v, want %v", i, err, wantErr)
+		}
+	}
+}
+
+// TestQueueCloseFlushesRemainingEvents guards against regressing the final
+// flush performed during shutdown.
+func TestQueueCloseFlushesRemainingEvents(t *testing.T) {
+	q := newTestQueue(t, &stubSink{})
+	const events = 3
+	for i := 0; i < events; i++ {
+		if err := q.Enqueue(context.Background(), Event{Payload: []byte("event")}); err != nil {
+			t.Fatalf("enqueue: %v", err)
+		}
+	}
+	if err := q.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	if got := q.State().Flushed; got != events {
+		t.Fatalf("flushed %d events, want %d", got, events)
 	}
 }
