@@ -97,6 +97,9 @@ def generate_dataset(seed: int = 42) -> dict:
         day = rng.randint(2, N_DAYS - 1)
         ts = base_time + timedelta(days=day, hours=rng.randint(10, 16))
         new_name = f"{svc}-v2" if i % 2 == 0 else svc.replace("-svc", "-service")
+        if new_name == svc:
+            # e.g. a service without "-svc" would otherwise yield a no-op rename
+            new_name = f"{svc}-v2"
         mutation = {
             "ts": ts.isoformat(),
             "kind": "topology",
