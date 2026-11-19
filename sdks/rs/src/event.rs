@@ -257,6 +257,11 @@ impl ContextCarrier {
         if version.eq_ignore_ascii_case("ff")
             || trace_id.bytes().all(|byte| byte == b'0')
             || span_id.bytes().all(|byte| byte == b'0')
+        // W3C Trace Context: `ff` is a reserved/invalid version, and the
+        // all-zero trace-id and span-id are explicitly invalid.
+        if version.eq_ignore_ascii_case("ff")
+            || trace_id.bytes().all(|b| b == b'0')
+            || span_id.bytes().all(|b| b == b'0')
         {
             return None;
         }
@@ -1147,5 +1152,20 @@ mod tests {
             .with_span_id(SPAN_ID);
         let expected = format!("00-{}-{}-01", TRACE_ID, SPAN_ID);
         assert_eq!(carrier.traceparent().as_deref(), Some(expected.as_str()));
+    #[test]
+    fn context_carrier_rejects_spec_invalid_traceparent() {
+        // W3C Trace Context: reserved version `ff` and all-zero IDs are invalid.
+        assert!(ContextCarrier::from_traceparent(
+            "ff-00000000000000000000000000000000-0000000000000000-00"
+        )
+        .is_none());
+        assert!(ContextCarrier::from_traceparent(
+            "00-00000000000000000000000000000000-b7ad6b7169203331-01"
+        )
+        .is_none());
+        assert!(ContextCarrier::from_traceparent(
+            "00-0af7651916cd43dd8448eb211c80319c-0000000000000000-01"
+        )
+        .is_none());
     }
 }
