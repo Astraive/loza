@@ -8,7 +8,9 @@ storage:
     path: "./cortex-stress.db"
 
 authentication:
-  # API keys are supplied at runtime via CORTEX_API_KEYS.
+  # API keys are supplied at runtime via CORTEX_API_KEYS as comma-separated
+  # name:key:role triples. Each field must be non-empty and must not contain
+  # ':' (the delimiter); malformed entries are rejected at startup.
   enabled: true
   api_keys: []
 

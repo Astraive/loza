@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -690,6 +691,123 @@ func TestValidateEnabledAuthenticationRequiresValidKey(t *testing.T) {
 				t.Fatal("expected validation error")
 			}
 		})
+	}
+}
+
+func TestParseAPIKeys(t *testing.T) {
+	tests := []struct {
+		name    string
+		raw     string
+		want    []APIKey
+		wantErr bool
+	}{
+		{
+			name: "single valid key",
+			raw:  "my-service:sk_abc123:writer",
+			want: []APIKey{{Name: "my-service", Key: "sk_abc123", Role: "writer"}},
+		},
+		{
+			name: "multiple valid keys with whitespace",
+			raw:  "my-service:sk_abc123:writer, read-only:sk_def456:reader ",
+			want: []APIKey{
+				{Name: "my-service", Key: "sk_abc123", Role: "writer"},
+				{Name: "read-only", Key: "sk_def456", Role: "reader"},
+			},
+		},
+		{
+			name: "empty entries and trailing comma ignored",
+			raw:  "my-service:sk_abc123:writer,,",
+			want: []APIKey{{Name: "my-service", Key: "sk_abc123", Role: "writer"}},
+		},
+		{
+			// A colon in the key used to be SplitN'd into the role, corrupting it.
+			name:    "key containing colon is rejected",
+			raw:     "my-service:sk:abc:writer",
+			wantErr: true,
+		},
+		{
+			name:    "too few fields",
+			raw:     "my-service:sk_abc123",
+			wantErr: true,
+		},
+		{
+			name:    "empty name",
+			raw:     ":sk_abc123:writer",
+			wantErr: true,
+		},
+		{
+			name:    "empty key",
+			raw:     "my-service::writer",
+			wantErr: true,
+		},
+		{
+			name:    "empty role",
+			raw:     "my-service:sk_abc123:",
+			wantErr: true,
+		},
+		{
+			name:    "one malformed entry among valid ones",
+			raw:     "my-service:sk_abc123:writer,bad:key:with:colon,read-only:sk_def456:reader",
+			wantErr: true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := parseAPIKeys(tc.raw)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatal("expected an error for malformed CORTEX_API_KEYS")
+				}
+				if !strings.Contains(err.Error(), "CORTEX_API_KEYS") {
+					t.Fatalf("error should identify the malformed variable, got: %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("parseAPIKeys: %v", err)
+			}
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("parseAPIKeys = %+v, want %+v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestLoadRejectsMalformedAPIKeys(t *testing.T) {
+	defaults := writeBundledDefaults(t)
+	useBundledDefaults(t, defaults)
+
+	override := filepath.Join(t.TempDir(), "runtime.yaml")
+	writeConfigFile(t, override, "authentication:\n  enabled: true\n")
+
+	// Previously this entry was silently misparsed: SplitN folded the extra
+	// colon into the role, and a bad role was only caught if auth was enabled.
+	t.Setenv("CORTEX_API_KEYS", "my-service:sk:with:colons:admin")
+
+	if _, err := Load(override); err == nil {
+		t.Fatal("expected Load to reject malformed CORTEX_API_KEYS")
+	} else if !strings.Contains(err.Error(), "CORTEX_API_KEYS") {
+		t.Fatalf("error should identify the malformed variable, got: %v", err)
+	}
+}
+
+func TestLoadAppliesValidAPIKeysFromEnv(t *testing.T) {
+	defaults := writeBundledDefaults(t)
+	useBundledDefaults(t, defaults)
+
+	override := filepath.Join(t.TempDir(), "runtime.yaml")
+	writeConfigFile(t, override, "authentication:\n  enabled: true\n")
+
+	t.Setenv("CORTEX_API_KEYS", "my-service:sk_abc123:writer")
+
+	cfg, err := Load(override)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	want := []APIKey{{Name: "my-service", Key: "sk_abc123", Role: "writer"}}
+	if !reflect.DeepEqual(cfg.Authentication.APIKeys, want) {
+		t.Fatalf("API keys = %+v, want %+v", cfg.Authentication.APIKeys, want)
 	}
 }
 
