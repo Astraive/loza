@@ -194,3 +194,48 @@ func TestRunRejectsInvalidFlags(t *testing.T) {
 		})
 	}
 }
+
+// TestRunReturnsErrorOnParseFailure reproduces the reported defect: with
+// flag.ContinueOnError, malformed input used to be silently discarded and the
+// load test would run with unintended defaults (10,000 events) instead of
+// failing fast.
+func TestRunReturnsErrorOnParseFailure(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+	}{
+		{name: "non-numeric events", args: []string{"-events", "abc"}},
+		{name: "non-numeric workers", args: []string{"-workers", "nope"}},
+		{name: "non-numeric batch", args: []string{"-batch", "x"}},
+		{name: "non-numeric body size", args: []string{"-body-size", "large"}},
+		{name: "unknown flag", args: []string{"-does-not-exist"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := run(tt.args); err == nil {
+				t.Fatalf("run(%v) returned nil, want a flag parsing error", tt.args)
+			}
+		})
+	}
+}
+
+// TestRunAcceptsValidFlags guards against the fix rejecting well-formed
+// input. Zero events keeps the run network-free and fast.
+func TestRunAcceptsValidFlags(t *testing.T) {
+	if err := run([]string{"-events", "0", "-workers", "1"}); err != nil {
+		t.Fatalf("run with valid flags returned error: %v", err)
+	}
+}
+
+// TestParseErrorMentionsBadValue checks that the underlying flag error is
+// propagated rather than replaced with a generic message.
+func TestParseErrorMentionsBadValue(t *testing.T) {
+	err := run([]string{"-events", "abc"})
+	if err == nil {
+		t.Fatal("run(-events abc) returned nil, want a flag parsing error")
+	}
+	if !strings.Contains(err.Error(), "events") {
+		t.Fatalf("error %q does not identify the offending flag", err)
+	}
+}
