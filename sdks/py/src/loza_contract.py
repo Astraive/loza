@@ -561,6 +561,14 @@ def _validate_event_size(payload: Any, strict: bool) -> None:
     if size > MAX_EVENT_BYTES:
         raise _event_bytes_too_large(size)
     validate_event_payload(payload, strict)
+def _validate_ndjson_line(line: bytes, strict: bool) -> None:
+    try:
+        parsed = json.loads(line)
+    except json.JSONDecodeError as exc:
+        raise ValidationErrors([ValidationError(field='payload', code='invalid_json', message=f'NDJSON line is not valid JSON: {exc}')]) from exc
+    if not isinstance(parsed, dict):
+        raise ValidationErrors([ValidationError(field='payload', code='invalid_payload', message='each NDJSON line must be a JSON object')])
+    validate_event_payload(parsed, strict)
 
 def validate_flexible_json_bytes(raw: bytes, strict: bool) -> None:
     trimmed = raw.strip()
@@ -582,6 +590,8 @@ def validate_flexible_json_bytes(raw: bytes, strict: bool) -> None:
             if len(line) > MAX_EVENT_BYTES:
                 raise _event_bytes_too_large(len(line))
             validate_event_payload(json.loads(line), strict)
+            if line.strip():
+                _validate_ndjson_line(line, strict)
         return
     if isinstance(payload, dict) and 'events' in payload:
         for event in payload['events']:
