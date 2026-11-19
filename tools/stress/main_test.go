@@ -8,6 +8,9 @@ import (
 	"strings"
 	"sync/atomic"
 	"net/http"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"testing"
 	"time"
 )
@@ -201,5 +204,58 @@ func TestMinLatencyTracksSmallestPositiveDuration(t *testing.T) {
 	})
 	if tr.MinLatency != small {
 		t.Fatalf("MinLatency = %v, want %v", tr.MinLatency, small)
+// TestNoDeadAtomicRequestCounter guards against reintroducing the write-only
+// atomic request counter that was removed from runLoadTest. On the buggy source
+// this test fails because main.go imports sync/atomic and calls atomic.AddInt64;
+// once the dead counter is removed it passes.
+func TestNoDeadAtomicRequestCounter(t *testing.T) {
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "main.go", nil, 0)
+	if err != nil {
+		t.Fatalf("parse main.go: %v", err)
+	}
+
+	for _, imp := range file.Imports {
+		if imp.Path.Value == `"sync/atomic"` {
+			t.Errorf("main.go imports sync/atomic: the write-only request counter should be removed")
+		}
+	}
+
+	ast.Inspect(file, func(n ast.Node) bool {
+		sel, ok := n.(*ast.SelectorExpr)
+		if !ok {
+			return true
+		}
+		pkg, ok := sel.X.(*ast.Ident)
+		if !ok {
+			return true
+		}
+		if pkg.Name == "atomic" && sel.Sel.Name == "AddInt64" {
+			t.Errorf("main.go calls atomic.AddInt64: the write-only request counter should be removed")
+		}
+		return true
+	})
+}
+
+// TestRunLoadTestTotalsFromCollectedResults documents that the authoritative
+// request total is derived from the collected results, not from a separate
+// side-effect counter. These invariants hold regardless of how many requests
+// complete during the test window.
+func TestRunLoadTestTotalsFromCollectedResults(t *testing.T) {
+	tr := runLoadTest("totals", 2, 100*time.Millisecond, func() Result {
+		return Result{StatusCode: 200, Duration: time.Millisecond}
+	})
+
+	if tr.TotalReqs != tr.SuccessReqs+tr.ErrorReqs {
+		t.Errorf("TotalReqs=%d, want SuccessReqs+ErrorReqs=%d",
+			tr.TotalReqs, tr.SuccessReqs+tr.ErrorReqs)
+	}
+
+	var byStatus int64
+	for _, n := range tr.StatusCodes {
+		byStatus += n
+	}
+	if byStatus != tr.TotalReqs {
+		t.Errorf("sum(StatusCodes)=%d, want TotalReqs=%d", byStatus, tr.TotalReqs)
 	}
 }
