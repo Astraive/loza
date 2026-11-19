@@ -54,7 +54,7 @@ def collect_features(manifests: dict[str, dict | None]) -> list[str]:
                 for item in manifest["features"]:
                     if isinstance(item, str):
                         features.add(item)
-                    elif isinstance(item, dict) and "name" in item:
+                    elif isinstance(item, dict) and isinstance(item.get("name"), str):
                         features.add(item["name"])
             else:
                 for key in manifest:
@@ -64,7 +64,7 @@ def collect_features(manifests: dict[str, dict | None]) -> list[str]:
             for item in manifest:
                 if isinstance(item, str):
                     features.add(item)
-                elif isinstance(item, dict) and "name" in item:
+                elif isinstance(item, dict) and isinstance(item.get("name"), str):
                     features.add(item["name"])
     return sorted(features)
 

@@ -9,6 +9,8 @@ column because the membership check was case- and whitespace-sensitive.
 """Regression tests for tools/generate-parity-report.py."""
 
 from __future__ import annotations
+#!/usr/bin/env python3
+"""Regression tests for tools/generate-parity-report.py."""
 
 import importlib.util
 from pathlib import Path
@@ -156,3 +158,46 @@ class ManifestLoadErrorTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+_MODULE_PATH = Path(__file__).with_name("generate-parity-report.py")
+_spec = importlib.util.spec_from_file_location("generate_parity_report", _MODULE_PATH)
+generate_parity_report = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(generate_parity_report)
+
+collect_features = generate_parity_report.collect_features
+
+
+def test_collect_features_ignores_non_string_names_in_dict_entries():
+    """Non-string `name` values must not break sorting of collected features."""
+    manifests = {
+        "go": {
+            "features": [
+                {"name": "auth"},
+                {"name": 123},
+                "logging",
+                {"name": None},
+                {"name": ["nested"]},
+            ]
+        },
+        "py": {"features": ["auth", {"name": "tracing"}]},
+    }
+
+    assert collect_features(manifests) == ["auth", "logging", "tracing"]
+
+
+def test_collect_features_ignores_non_string_names_in_list_manifests():
+    """The list-manifest branch must apply the same type validation."""
+    manifests = {
+        "rs": ["metrics", {"name": "auth"}, {"name": 42}, {"name": "batching"}],
+    }
+
+    assert collect_features(manifests) == ["auth", "batching", "metrics"]
+
+
+def test_collect_features_preserves_string_dict_names():
+    """Valid string names in dict entries are still collected."""
+    manifests = {
+        "js": {"features": [{"name": "zebra"}, {"name": "alpha"}]},
+    }
+
+    assert collect_features(manifests) == ["alpha", "zebra"]
