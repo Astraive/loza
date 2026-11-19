@@ -372,6 +372,29 @@ func TestHTTPTransport_RetryAfterCappedAtMaxBackoff(t *testing.T) {
 	}
 }
 
+func TestHTTPTransport_ParseRetryAfter_OverflowClamped(t *testing.T) {
+	transport := NewHTTPTransport(HTTPTransportConfig{
+		MaxRetries: 3,
+		MaxBackoff: 10 * time.Second,
+	})
+
+	// 10^10 seconds overflows int64 nanoseconds when scaled to a
+	// time.Duration, producing a negative delay that calculateBackoff would
+	// silently ignore. It must be clamped to maxBackoff instead.
+	for _, value := range []string{"60", "10000000000"} {
+		headers := http.Header{"Retry-After": []string{value}}
+		delay := transport.parseRetryAfter(headers)
+		if delay != transport.maxBackoff {
+			t.Errorf("Retry-After %q: expected clamp to maxBackoff %s, got %s", value, transport.maxBackoff, delay)
+		}
+
+		backoff := transport.calculateBackoff(0, delay)
+		if backoff != transport.maxBackoff {
+			t.Errorf("Retry-After %q: expected backoff capped at %s, got %s", value, transport.maxBackoff, backoff)
+		}
+	}
+}
+
 func TestHTTPTransport_ContextCancellation(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		time.Sleep(100 * time.Millisecond)

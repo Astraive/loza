@@ -216,7 +216,18 @@ func (t *HTTPTransport) parseRetryAfter(headers http.Header) time.Duration {
 
 	// Try parsing as seconds (integer)
 	if seconds, err := strconv.Atoi(retryAfter); err == nil && seconds > 0 {
-		return time.Duration(seconds) * time.Second
+		// Scaling seconds to nanoseconds can overflow int64 and wrap to a
+		// negative delay, which calculateBackoff would silently ignore. Clamp
+		// oversized values to maxBackoff instead of letting them wrap.
+		maxSeconds := int64(math.MaxInt64) / int64(time.Second)
+		if int64(seconds) > maxSeconds {
+			return t.maxBackoff
+		}
+		delay := time.Duration(seconds) * time.Second
+		if delay > t.maxBackoff {
+			return t.maxBackoff
+		}
+		return delay
 	}
 
 	// Try parsing as HTTP date
