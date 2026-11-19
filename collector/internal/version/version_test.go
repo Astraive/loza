@@ -95,3 +95,75 @@ func TestVersionFromFilesFallsBackWhenOnlyNestedVersion(t *testing.T) {
 		t.Errorf("versionFromFiles() = %q, want fallback %q", got, fallbackVersion)
 	}
 }
+// TestLoadVersionStripsInlineComment verifies that an inline YAML comment on
+// the version line is not returned as part of the parsed version. This is a
+// regression test for the defect where `version: 0.4.2 # comment` was returned
+// verbatim (and then cached by CollectorVersion via sync.Once).
+func TestLoadVersionStripsInlineComment(t *testing.T) {
+	tests := []struct {
+		name string
+		yaml string
+		want string
+	}{
+		{
+			name: "inline comment after unquoted version",
+			yaml: "name: loza\nversion: 0.4.2 # comment\nlicense: MIT\n",
+			want: "0.4.2",
+		},
+		{
+			name: "inline comment after double quoted version",
+			yaml: "version: \"0.4.2\" # release version\n",
+			want: "0.4.2",
+		},
+		{
+			name: "inline comment after single quoted version",
+			yaml: "version: '0.4.2' # release version\n",
+			want: "0.4.2",
+		},
+		{
+			name: "hash inside quoted value is not a comment",
+			yaml: "version: '0.4.2#build' # trailing comment\n",
+			want: "0.4.1", // fails validation, falls back
+		},
+		{
+			name: "plain version without comment",
+			yaml: "version: 0.4.2\n",
+			want: "0.4.2",
+		},
+		{
+			name: "commented out version line is ignored",
+			yaml: "# version: 9.9.9\nname: loza\n",
+			want: "0.4.1",
+		},
+		{
+			name: "version line that is only a comment falls back",
+			yaml: "version: # no version here\n",
+			want: "0.4.1",
+		},
+	}
+
+	originalWD, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := os.Chdir(originalWD); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			if err := os.WriteFile(filepath.Join(dir, "loza.yaml"), []byte(tt.yaml), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Chdir(dir); err != nil {
+				t.Fatal(err)
+			}
+			if got := loadVersion(); got != tt.want {
+				t.Errorf("loadVersion() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}

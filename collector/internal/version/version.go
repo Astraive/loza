@@ -42,6 +42,16 @@ func versionFromFiles(paths []string) string {
 		}
 		if v := versionFromYAML(data); v != "" {
 			return v
+		for _, line := range strings.Split(string(data), "\n") {
+			trimmed := strings.TrimSpace(line)
+			if strings.HasPrefix(trimmed, "version:") {
+				value := strings.TrimSpace(strings.TrimPrefix(trimmed, "version:"))
+				value = stripInlineComment(value)
+				value = strings.Trim(value, "\"'")
+				if isValidVersion(value) {
+					return value
+				}
+			}
 		}
 	}
 	return fallbackVersion
@@ -57,4 +67,45 @@ func versionFromYAML(data []byte) string {
 		return ""
 	}
 	return doc.Version
+// stripInlineComment removes a YAML inline comment from value. In YAML a '#'
+// starts a comment only when it is at the start of a scalar or is preceded by
+// whitespace; a '#' inside a quoted scalar is part of the value.
+func stripInlineComment(value string) string {
+	var quote rune
+	for i, r := range value {
+		switch {
+		case quote != 0:
+			if r == quote {
+				quote = 0
+			}
+		case r == '\'' || r == '"':
+			quote = r
+		case r == '#':
+			if i == 0 || value[i-1] == ' ' || value[i-1] == '\t' {
+				return strings.TrimSpace(value[:i])
+			}
+		}
+	}
+	return strings.TrimSpace(value)
+}
+
+// isValidVersion reports whether s is a plausible version token. It rejects
+// empty values and anything containing comment remnants or whitespace while
+// accepting the numeric/semver-style versions used across the repository.
+func isValidVersion(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		switch {
+		case r >= '0' && r <= '9',
+			r >= 'a' && r <= 'z',
+			r >= 'A' && r <= 'Z',
+			r == '.', r == '-', r == '+', r == '_':
+			continue
+		default:
+			return false
+		}
+	}
+	return true
 }
