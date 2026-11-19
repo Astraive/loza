@@ -10,6 +10,7 @@ import (
 
 	loza "github.com/astraive/loza/sdks/go"
 	fiberpkg "github.com/gofiber/fiber/v2"
+	fiberrecover "github.com/gofiber/fiber/v2/middleware/recover"
 )
 
 func configureFiber(t *testing.T, panicRecovery bool) *loza.MemorySinkStore {
@@ -265,6 +266,17 @@ func TestMiddlewarePanicRecordsServedStatus(t *testing.T) {
 		c.Status(http.StatusNotFound)
 		panic("boom")
 	})
+// TestMiddlewareRePanicWithRecoveryDisabledStillEmits verifies that a started
+// event is finished and emitted even when the panic is propagated to the caller
+// because panic recovery is disabled (MASS-0497 / issue #721).
+func TestMiddlewareRePanicWithRecoveryDisabledStillEmits(t *testing.T) {
+	store := configureFiber(t, false)
+	app := fiberpkg.New()
+	// A server-level recover outside the middleware catches the propagated
+	// panic so app.Test does not crash the test process.
+	app.Use(fiberrecover.New())
+	app.Use(Middleware(Config{Event: "fiber.norecov"}))
+	app.Get("/panic", func(*fiberpkg.Ctx) error { panic("boom") })
 	req, err := http.NewRequest(http.MethodGet, "/panic", nil)
 	if err != nil {
 		t.Fatalf("request: %v", err)
@@ -276,6 +288,9 @@ func TestMiddlewarePanicRecordsServedStatus(t *testing.T) {
 	if resp.StatusCode != http.StatusInternalServerError {
 		t.Fatalf("served status = %d, want %d", resp.StatusCode, http.StatusInternalServerError)
 	}
+	if _, err := app.Test(req); err != nil {
+		t.Fatalf("app.Test: %v", err)
+	}
 	if err := loza.Flush(context.Background()); err != nil {
 		t.Fatalf("Flush: %v", err)
 	}
@@ -284,5 +299,8 @@ func TestMiddlewarePanicRecordsServedStatus(t *testing.T) {
 	}
 	if got := store.Events()[0].StatusCode; got != http.StatusInternalServerError {
 		t.Fatalf("recorded status_code = %d, want %d (status actually served)", got, http.StatusInternalServerError)
+	ev := store.Events()[0]
+	if ev.Event != "fiber.norecov" || ev.Error == nil {
+		t.Fatalf("panic event = %+v", ev)
 	}
 }

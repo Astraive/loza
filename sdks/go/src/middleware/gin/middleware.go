@@ -48,6 +48,11 @@ func MiddlewareWithConfig(cfg Config) ginpkg.HandlerFunc {
 					_ = loza.Emit(ctx)
 					return
 				}
+				// The panic is intentionally propagated to the caller, but the
+				// event started above must still be finished and emitted so it
+				// is not orphaned when recovery is disabled.
+				loza.FinishError(ctx, panicErr{value: rec}, loza.Int("status_code", http.StatusInternalServerError))
+				_ = loza.Emit(ctx)
 				panic(rec)
 			}
 			if len(c.Errors) > 0 {
