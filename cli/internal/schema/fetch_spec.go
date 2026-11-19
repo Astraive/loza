@@ -21,6 +21,9 @@ func EventSchemaPath(specRepoPath string) string {
 	)
 }
 
-func FetchSpec(specRepoPath string) error {
+// EnsureSpecAssets verifies that a local spec repository contains all of the
+// assets required by the CLI. It performs only local filesystem checks and does
+// not fetch or clone anything from the network.
+func EnsureSpecAssets(specRepoPath string) error {
 	return ValidateSpecAssets(specRepoPath)
 }

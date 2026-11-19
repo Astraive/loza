@@ -115,6 +115,19 @@ func TestSchemaListHitsCollectorAPI(t *testing.T) {
 	}
 }
 
+func TestSchemaFetchValidatesLocalSpecRepo(t *testing.T) {
+	specRepo, err := filepath.Abs(filepath.Join("..", "..", "..", "spec"))
+	if err != nil {
+		t.Fatalf("resolve spec repo path: %v", err)
+	}
+	if err := SchemaCommand(config.Config{SpecRepoPath: specRepo}, []string{"fetch"}); err != nil {
+		t.Fatalf("schema fetch on a complete spec repo: %v", err)
+	}
+	if err := SchemaCommand(config.Config{SpecRepoPath: t.TempDir()}, []string{"fetch"}); err == nil {
+		t.Fatal("expected schema fetch to reject a spec repo with no assets")
+	}
+}
+
 func TestAuditPIIHitsCollectorAPI(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/audit/pii" {
