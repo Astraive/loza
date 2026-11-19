@@ -41,6 +41,55 @@ func TestWriterBuildsNestedJSONAndReusesBuffer(t *testing.T) {
 	}
 }
 
+// TestCompositeArrayElementsUseSep reproduces MASS-0485: composites written as
+// array elements must go through the separator state machine instead of
+// hand-injected commas. Hand-injected commas leave the array's first flag stuck
+// at true, so a later sep-based element at that level is emitted without a
+// separator and produces malformed JSON.
+func TestCompositeArrayElementsUseSep(t *testing.T) {
+	w := New(nil)
+	w.BeginObject()
+	w.AppendKey("items")
+	w.BeginArray()
+	w.Sep()
+	w.BeginObject()
+	w.AppendStringField("name", "first")
+	w.EndObject()
+	w.Sep()
+	w.BeginObject()
+	w.AppendStringField("name", "second")
+	w.EndObject()
+	// A sep-based element after the composites (AppendString inserts its own
+	// separator): with hand-injected commas the first flag would still be true
+	// and this string would not get a comma.
+	w.AppendString("tail")
+	w.EndArray()
+	w.AppendStringField("after", "ok")
+	w.EndObject()
+
+	want := `{"items":[{"name":"first"},{"name":"second"},"tail"],"after":"ok"}`
+	if got := string(w.Bytes()); got != want {
+		t.Fatalf("JSON = %s, want %s", got, want)
+	}
+	if len(w.first) != 0 {
+		t.Fatalf("first stack not balanced: %v", w.first)
+	}
+
+	// Sep must also behave for a bare array of composites with no mixed values.
+	w.Reset()
+	w.BeginArray()
+	for _, name := range []string{"a", "b", "c"} {
+		w.Sep()
+		w.BeginObject()
+		w.AppendStringField("n", name)
+		w.EndObject()
+	}
+	w.EndArray()
+	if got, want := string(w.Bytes()), `[{"n":"a"},{"n":"b"},{"n":"c"}]`; got != want {
+		t.Fatalf("composite array = %s, want %s", got, want)
+	}
+}
+
 func TestAppendEscapedStringHandlesJSONAndInvalidUTF8(t *testing.T) {
 	input := "quote\" slash\\ newline\n carriage\r tab\t control\x01 <safe> utf8-✓ " + string([]byte{0xff})
 	got := string(AppendEscapedString(nil, input))
