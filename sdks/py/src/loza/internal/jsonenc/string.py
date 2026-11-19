@@ -27,4 +27,4 @@ def truncate_utf8(value: str, max_bytes: int) -> str:
 
 
 def join_path(parts: Iterable[str]) -> str:
-    return ".".join(part.strip(".") for part in parts if part)
+    return ".".join(p for part in parts if (p := part.strip(".")))
