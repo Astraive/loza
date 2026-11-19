@@ -1,5 +1,6 @@
 import os
 import sys
+import threading
 from pathlib import Path
 from ..sinks import HTTPBatchSink, StdoutSink
 
@@ -18,36 +19,44 @@ class RotatingFileSink:
         os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
         self._file = open(path, "a", encoding="utf-8")
         self._size = os.path.getsize(path) if os.path.exists(path) else 0
+        # RLock lets write() call _rotate() while holding the same lock without
+        # deadlocking, while still serializing size accounting and rotation
+        # across threads (issue #336).
+        self._lock = threading.RLock()
 
     def write(self, encoded: str) -> None:
-        line = encoded + "\n"
-        size = len(line.encode("utf-8"))
-        if self._size + size > self.max_bytes:
-            self._rotate()
-        self._file.write(line)
-        self._file.flush()
-        self._size += size
+        with self._lock:
+            line = encoded + "\n"
+            size = len(line.encode("utf-8"))
+            if self._size + size > self.max_bytes:
+                self._rotate()
+            self._file.write(line)
+            self._file.flush()
+            self._size += size
 
     def _rotate(self) -> None:
-        self._file.close()
-        for i in range(self.max_backups - 1, 0, -1):
-            src = f"{self.path}.{i}"
-            dst = f"{self.path}.{i + 1}"
-            if os.path.exists(src):
-                if i + 1 >= self.max_backups:
-                    os.remove(src)
-                else:
-                    os.rename(src, dst)
-        if os.path.exists(self.path):
-            os.rename(self.path, f"{self.path}.1")
-        self._file = open(self.path, "a", encoding="utf-8")
-        self._size = 0
+        with self._lock:
+            self._file.close()
+            for i in range(self.max_backups - 1, 0, -1):
+                src = f"{self.path}.{i}"
+                dst = f"{self.path}.{i + 1}"
+                if os.path.exists(src):
+                    if i + 1 >= self.max_backups:
+                        os.remove(src)
+                    else:
+                        os.rename(src, dst)
+            if os.path.exists(self.path):
+                os.rename(self.path, f"{self.path}.1")
+            self._file = open(self.path, "a", encoding="utf-8")
+            self._size = 0
 
     def flush(self) -> None:
-        self._file.flush()
+        with self._lock:
+            self._file.flush()
 
     def close(self) -> None:
-        self._file.close()
+        with self._lock:
+            self._file.close()
 
 
 def CollectorSink(config=None):
