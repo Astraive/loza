@@ -622,12 +622,16 @@ def _opt_enum(payload: dict[str, Any], key: str, allowed: set[str], errors: list
     if not isinstance(value, str) or not value.strip() or value.strip() not in allowed:
         errors.append(ValidationError(field=key, code='invalid_enum', message=f'field "{key}" has unsupported value "{value}"'))
 
+def _is_int(value: Any) -> bool:
+    # bool subclasses int in Python, so exclude it explicitly for integer fields.
+    return isinstance(value, int) and not isinstance(value, bool)
+
 def _opt_nonneg_int(payload: dict[str, Any], key: str, errors: list[ValidationError]) -> None:
-    if key in payload and (not isinstance(payload[key], int) or payload[key] < 0):
+    if key in payload and (not _is_int(payload[key]) or payload[key] < 0):
         errors.append(ValidationError(field=key, code='invalid_integer', message=f'field "{key}" must be a non-negative integer'))
 
 def _opt_status_code(payload: dict[str, Any], key: str, errors: list[ValidationError]) -> None:
-    if key in payload and (not isinstance(payload[key], int) or payload[key] < 100 or payload[key] > 599):
+    if key in payload and (not _is_int(payload[key]) or payload[key] < 100 or payload[key] > 599):
         errors.append(ValidationError(field=key, code='invalid_status_code', message=f'field "{key}" must be between 100 and 599'))
 
 def _req_service(payload: dict[str, Any], errors: list[ValidationError]) -> None:
