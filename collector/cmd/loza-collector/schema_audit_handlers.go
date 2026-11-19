@@ -470,6 +470,21 @@ func (s *collectorState) applyBlueprint(bp Blueprint) error {
 		return fmt.Errorf("invalid table name %q: %w", s.config().duckDBTable, err)
 	}
 
+	// Apply every column in a single transaction so that a failure partway
+	// through the loop rolls back the columns that were already added. Without
+	// this, an error returns 500 (apply_failed) but leaves a partially applied
+	// blueprint in the table.
+	tx, err := db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin blueprint transaction: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+
 	for colName, colDef := range bp.Columns {
 		colIdent, err := quoteSQLIdent(colName)
 		if err != nil {
@@ -507,9 +522,13 @@ func (s *collectorState) applyBlueprint(bp Blueprint) error {
 			}
 		}
 		query := fmt.Sprintf("ALTER TABLE %s ADD COLUMN IF NOT EXISTS %s %s", tableIdent, colIdent, typ)
-		if _, err := db.Exec(query); err != nil {
+		if _, err := tx.Exec(query); err != nil {
 			return fmt.Errorf("add column %s: %w", colName, err)
 		}
 	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit blueprint transaction: %w", err)
+	}
+	committed = true
 	return nil
 }
