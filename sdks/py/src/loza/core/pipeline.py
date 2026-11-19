@@ -55,7 +55,13 @@ class DeliveryStats:
 
 
 class ByteBatcher:
-    """Byte-bounded batcher used by async delivery and collector transports."""
+    """Byte-bounded batcher used by async delivery and collector transports.
+
+    Batches are kept at or below ``max_batch_bytes``. As a documented exception,
+    a single event whose own UTF-8 size already exceeds ``max_batch_bytes``
+    cannot be byte-bounded with anything else, so it is emitted alone as its
+    own single-event batch (and never merged into a larger batch).
+    """
 
     def __init__(self, max_batch_bytes: int = 256 * 1024, max_events: int = 1024) -> None:
         self.max_batch_bytes = max(1, max_batch_bytes)
@@ -65,6 +71,11 @@ class ByteBatcher:
 
     def push(self, encoded: str) -> list[str] | None:
         size = len(encoded.encode("utf-8"))
+        if size > self.max_batch_bytes and not self._events:
+            # A single event larger than the byte bound cannot share a batch.
+            # Emit it alone immediately instead of buffering it until a later
+            # push or drain, where it would still violate the byte bound.
+            return [encoded]
         should_flush = bool(self._events) and (
             self._bytes + size > self.max_batch_bytes or len(self._events) >= self.max_events
         )
