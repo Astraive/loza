@@ -137,6 +137,7 @@ class CollectorClient:
         service: str = "",
         username: str = "",
         password: str = "",
+        http_client: Any = None,
     ) -> None:
         _validate_collector_endpoint(endpoint)
         _validate_basic_auth_endpoint(endpoint, username, password)
@@ -151,6 +152,19 @@ class CollectorClient:
         self.service = service
         self.username = username
         self.password = password
+        # An injected opener (with an ``open(request, timeout)`` method) handles
+        # every request, enabling instrumentation and mocking. When none is
+        # supplied we keep the legacy transport, including the redirect guard
+        # on the credentialed batch path.
+        self.http_client = http_client
+
+    def _open(self, request: Request, timeout: float, *, guarded: bool = False):
+        """Open a request through the injected client, or the default transport."""
+        if self.http_client is not None:
+            return self.http_client.open(request, timeout=timeout)
+        if guarded:
+            return _open_with_redirect_guard(request, timeout, self.endpoint)
+        return urlopen(request, timeout=timeout)
 
     def _auth_headers(self) -> dict[str, str]:
         if self.api_key:
@@ -175,6 +189,7 @@ class CollectorClient:
             try:
                 try:
                     with _open(request, timeout=self.timeout, endpoint=self.endpoint) as response:
+                    with self._open(request, self.timeout, guarded=True) as response:
                         status = getattr(response, "status", response.getcode())
                         headers_obj = getattr(response, "headers", None)
                         raw = response.read()
@@ -212,6 +227,7 @@ class CollectorClient:
             req = Request(f"{self._base_url()}{path}", headers=self._auth_headers(), method="GET")
             try:
                 with _open(req, timeout=self.timeout) as resp:
+                with self._open(req, self.timeout) as resp:
                     data = json.loads(resp.read())
                     if isinstance(data, dict) and data.get("status") == "ok":
                         return True
@@ -225,6 +241,7 @@ class CollectorClient:
             req = Request(f"{self._base_url()}{path}", headers=self._auth_headers(), method="GET")
             try:
                 with _open(req, timeout=self.timeout) as resp:
+                with self._open(req, self.timeout) as resp:
                     data = json.loads(resp.read())
                     if isinstance(data, dict) and data.get("status") in ("ok", "ready"):
                         return True
@@ -236,12 +253,14 @@ class CollectorClient:
         """Fetch version info from the collector."""
         req = Request(f"{self._base_url()}/version", headers=self._auth_headers(), method="GET")
         with _open(req, timeout=self.timeout) as resp:
+        with self._open(req, self.timeout) as resp:
             return json.loads(resp.read())
 
     def status(self) -> dict:
         """Fetch operational status from the collector."""
         req = Request(f"{self._base_url()}/status", headers=self._auth_headers(), method="GET")
         with _open(req, timeout=self.timeout) as resp:
+        with self._open(req, self.timeout) as resp:
             return json.loads(resp.read())
 
     def tail_lines(
@@ -271,6 +290,7 @@ class CollectorClient:
 
         request = Request(url, headers={"accept": "application/x-ndjson", **self._auth_headers()})
         with _open(request, timeout=timeout) as response:
+        with self._open(request, timeout) as response:
             for raw in response:
                 line = raw.decode("utf-8").strip()
                 if line:
@@ -539,6 +559,7 @@ def _collector_request(
     headers.update(client._auth_headers())
     req = Request(url, data=data, headers=headers, method=method)
     with _open(req, timeout=client.timeout) as resp:
+    with client._open(req, client.timeout) as resp:
         raw = resp.read()
         return json.loads(raw.decode("utf-8")) if raw else {}
 
