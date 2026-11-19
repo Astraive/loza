@@ -233,6 +233,9 @@ func RunCortexReconstruct(ctx context.Context, cfg config.Config, args []string)
 	if mode == "" {
 		mode = "fast"
 	}
+	if err := validateReconstructionMode(mode); err != nil {
+		return err
+	}
 
 	cortexURL := getCortexURL(cfg)
 	var context map[string]interface{}
