@@ -50,6 +50,22 @@ func TestAppendEscapedStringHandlesJSONAndInvalidUTF8(t *testing.T) {
 	}
 }
 
+func TestNoEscapeSetLeavesHTMLSensitiveBytesVerbatim(t *testing.T) {
+	// noEscapeSet is deliberately not the stdlib htmlSafeSet: '<', '>', and
+	// '&' need no JSON escaping and must be emitted as-is, not as \u00XX.
+	for _, b := range []byte{'<', '>', '&'} {
+		if !noEscapeSet[b] {
+			t.Errorf("noEscapeSet[%q] = false, want true (%q need no JSON escaping)", b, b)
+		}
+	}
+
+	got := string(AppendEscapedString(nil, `<a href="x&y">`))
+	want := `"<a href=\"x&y\">"`
+	if got != want {
+		t.Fatalf("escaped = %s, want %s", got, want)
+	}
+}
+
 func TestAppendNumbersEncodesSpecialFloatsAsNull(t *testing.T) {
 	if got := string(AppendInt64(nil, -123)); got != "-123" {
 		t.Fatalf("int = %s", got)

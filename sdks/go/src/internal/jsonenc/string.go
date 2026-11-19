@@ -10,7 +10,7 @@ func AppendEscapedString(dst []byte, s string) []byte {
 	for i := 0; i < len(s); {
 		b := s[i]
 		if b < utf8.RuneSelf {
-			if htmlSafeSet[b] {
+			if noEscapeSet[b] {
 				i++
 				continue
 			}
@@ -67,12 +67,17 @@ func hexChar(n byte) byte {
 	return 'a' + n - 10
 }
 
-// htmlSafeSet marks bytes that do NOT need escaping inside a JSON string.
+// noEscapeSet marks bytes that do NOT need escaping inside a JSON string.
 // All control chars (< 0x20), '"', '\', and bytes >= 0x80 (handled separately)
 // are false; everything else is true (safe to include as-is).
-var htmlSafeSet = buildHTMLSafeSet()
+//
+// This is intentionally NOT the stdlib encoding/json "htmlSafeSet" policy:
+// HTML-sensitive bytes ('<', '>', '&') are marked safe and emitted verbatim
+// here. The name reflects that these bytes need no JSON escaping, not that
+// the output is safe to embed in HTML.
+var noEscapeSet = buildNoEscapeSet()
 
-func buildHTMLSafeSet() [utf8.RuneSelf]bool {
+func buildNoEscapeSet() [utf8.RuneSelf]bool {
 	var t [utf8.RuneSelf]bool
 	for i := range t {
 		// safe if printable ASCII, not control, not special JSON char
