@@ -3,8 +3,11 @@ package loza
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -1010,7 +1013,58 @@ func SnapshotEvent(t testing.TB, ev *Event) string {
 	return core.SnapshotEvent(t, ev)
 }
 
-func GoldenTest(path string) string { return path }
+// GoldenTest compares snapshot - a canonical JSON event snapshot such as the
+// value returned by SnapshotEvent - against the golden file at path.
+//
+// It returns true when snapshot matches the golden file, and false on a
+// mismatch or when the golden file is missing or unreadable. A missing golden
+// file is deliberately not created implicitly: a mistyped path, a deleted
+// fixture, or a first run must not silently pass without comparing anything.
+// Pass update=true to explicitly (re)create the golden file from snapshot.
+//
+// Migration note: the previous GoldenTest(path) string was a no-op that simply
+// returned its argument. Callers must now pass the snapshot to compare and use
+// the bool result; use update=true to baseline a new golden file.
+func GoldenTest(path, snapshot string, update ...bool) bool {
+	canonical, err := canonicalGoldenJSON(snapshot)
+	if err != nil {
+		return false
+	}
+
+	if len(update) > 0 && update[0] {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			return false
+		}
+		return os.WriteFile(path, append([]byte(canonical), '\n'), 0o644) == nil
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	expected, err := canonicalGoldenJSON(string(data))
+	if err != nil {
+		return false
+	}
+	return expected == canonical
+}
+
+// canonicalGoldenJSON decodes a JSON snapshot while preserving numeric
+// literals and re-encodes it with sorted object keys, so golden comparisons
+// are stable across object-key ordering and insignificant whitespace.
+func canonicalGoldenJSON(s string) (string, error) {
+	dec := json.NewDecoder(strings.NewReader(s))
+	dec.UseNumber()
+	var v any
+	if err := dec.Decode(&v); err != nil {
+		return "", err
+	}
+	b, err := json.Marshal(v)
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
+}
 
 func ConformanceSuite() map[string]string {
 	return map[string]string{"name": "loza-go-conformance", "status": "available"}
