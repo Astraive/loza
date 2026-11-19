@@ -19,6 +19,7 @@ var userConfigFiles = []string{"loza-cortex.yaml", "loza.yaml"}
 
 // Config represents the complete Cortex configuration
 type Config struct {
+	Environment    string               `yaml:"environment"` // deployment environment; "production" enables stricter safety checks
 	Server         ServerConfig         `yaml:"server"`
 	GRPC           GRPCConfig           `yaml:"grpc"`
 	Storage        StorageConfig        `yaml:"storage"`
@@ -419,6 +420,13 @@ func parseEnvBool(name, v string) (bool, error) {
 // It returns an error when a boolean security toggle has a malformed value so
 // callers can fail closed instead of silently running with the toggle off.
 func applyEnvOverrides(cfg *Config) error {
+// applyEnvOverrides applies environment variable overrides to configuration
+func applyEnvOverrides(cfg *Config) {
+	// Environment override. CORTEX_ENV=production enables stricter startup checks.
+	if v := os.Getenv("CORTEX_ENV"); v != "" {
+		cfg.Environment = strings.ToLower(strings.TrimSpace(v))
+	}
+
 	// Server overrides
 	if v := os.Getenv("CORTEX_SERVER_HOST"); v != "" {
 		cfg.Server.Host = v
@@ -699,6 +707,17 @@ func isLocalPostgresHost(host string) bool {
 	return !strings.ContainsAny(host, ".:")
 }
 
+// isProduction reports whether the configured deployment environment is one
+// that requires explicit security configuration.
+func isProduction(environment string) bool {
+	switch strings.ToLower(strings.TrimSpace(environment)) {
+	case "production", "prod":
+		return true
+	default:
+		return false
+	}
+}
+
 // Validate validates the configuration
 func (c *Config) Validate() error {
 	// Validate server config
@@ -785,6 +804,13 @@ func (c *Config) Validate() error {
 			default:
 				return fmt.Errorf("invalid api key role: %s (must be 'reader', 'writer', or 'admin')", key.Role)
 			}
+		}
+		// In production an explicit HMAC secret is required. Auto-generating one
+		// at startup is acceptable for local/dev use, but production must pin the
+		// secret via configuration so it is explicit and auditable. Fail fast
+		// rather than silently deriving it from the API keys.
+		if isProduction(c.Environment) && strings.TrimSpace(c.Authentication.HMACSecret) == "" {
+			return fmt.Errorf("authentication.hmac_secret (CORTEX_HMAC_SECRET) is required when environment is production")
 		}
 	}
 

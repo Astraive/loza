@@ -57,6 +57,10 @@ authentication:
   # API keys are supplied at runtime via CORTEX_API_KEYS as comma-separated
   # name:key:role triples. Each field must be non-empty and must not contain
   # ':' (the delimiter); malformed entries are rejected at startup.
+  # API keys are supplied at runtime via CORTEX_API_KEYS.
+  # Set CORTEX_HMAC_SECRET to an explicit random secret. When unset, Cortex
+  # generates a cryptographically random per-process secret (dev use only).
+  # CORTEX_ENV=production requires CORTEX_HMAC_SECRET and fails startup otherwise.
   enabled: true
   api_keys: []
 

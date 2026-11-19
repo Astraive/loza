@@ -1,6 +1,9 @@
 package middleware
 
 import (
+	"bytes"
+	"crypto/sha256"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -192,6 +195,97 @@ func TestAuthorizeRoleFailsClosedOnUnknownRoles(t *testing.T) {
 				t.Fatalf("status = %d, want %d", rec.Code, tc.want)
 			}
 		})
+func TestGenerateHMACSecretHasIndependentEntropy(t *testing.T) {
+	first, err := GenerateHMACSecret()
+	if err != nil {
+		t.Fatalf("GenerateHMACSecret: %v", err)
+	}
+	second, err := GenerateHMACSecret()
+	if err != nil {
+		t.Fatalf("GenerateHMACSecret: %v", err)
+	}
+
+	if len(first) != hmacSecretBytes {
+		t.Fatalf("secret length = %d, want %d", len(first), hmacSecretBytes)
+	}
+	if bytes.Equal(first, second) {
+		t.Fatal("independently generated secrets must differ")
+	}
+
+	// Regression guard: the secret must not be the old deterministic
+	// SHA256(sorted API keys) derivation. With a single key that was SHA256(key).
+	sum := sha256.Sum256([]byte("secret"))
+	if bytes.Equal(first, sum[:]) {
+		t.Fatal("generated secret must not equal SHA256 of an API key")
+	}
+}
+
+func TestAuthGeneratedSecretVerifiesSignature(t *testing.T) {
+	auth := NewAuth(&config.AuthenticationConfig{
+		Enabled: true,
+		APIKeys: []config.APIKey{{Name: "key", Key: "secret", Role: "writer"}},
+	})
+	auth.once.Do(auth.init)
+	if auth.initErr != nil {
+		t.Fatalf("init: %v", auth.initErr)
+	}
+	if len(auth.hmacSecret) != hmacSecretBytes {
+		t.Fatalf("hmacSecret length = %d, want %d", len(auth.hmacSecret), hmacSecretBytes)
+	}
+	sum := sha256.Sum256([]byte("secret"))
+	if bytes.Equal(auth.hmacSecret, sum[:]) {
+		t.Fatal("hmacSecret must be random, not derived from the API key")
+	}
+
+	valid := httptest.NewRequest(http.MethodGet, "/", nil)
+	valid.Header.Set("X-API-Key", "secret")
+	if res := auth.authenticate(valid); !res.Authorized || res.KeyName != "key" {
+		t.Fatalf("valid key was not authorized: %+v", res)
+	}
+
+	forged := httptest.NewRequest(http.MethodGet, "/", nil)
+	forged.Header.Set("X-API-Key", "forged")
+	if res := auth.authenticate(forged); res.Authorized {
+		t.Fatal("forged key must be rejected")
+	}
+}
+
+func TestAuthUsesExplicitSecret(t *testing.T) {
+	secret := []byte("explicit-hmac-secret")
+	auth := NewAuth(&config.AuthenticationConfig{
+		Enabled:    true,
+		HMACSecret: string(secret),
+		APIKeys:    []config.APIKey{{Name: "key", Key: "secret", Role: "writer"}},
+	})
+	auth.once.Do(auth.init)
+	if auth.initErr != nil {
+		t.Fatalf("init: %v", auth.initErr)
+	}
+	if !bytes.Equal(auth.hmacSecret, secret) {
+		t.Fatalf("hmacSecret = %q, want explicit secret", auth.hmacSecret)
+	}
+}
+
+func TestAuthSecretGenerationFailureFailsClosed(t *testing.T) {
+	original := generateHMACSecret
+	t.Cleanup(func() { generateHMACSecret = original })
+	generateHMACSecret = func() ([]byte, error) {
+		return nil, errors.New("entropy source unavailable")
+	}
+
+	auth := NewAuth(&config.AuthenticationConfig{
+		Enabled: true,
+		APIKeys: []config.APIKey{{Name: "key", Key: "secret", Role: "writer"}},
+	})
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set("X-API-Key", "secret")
+	auth.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want %d (fail closed)", rec.Code, http.StatusUnauthorized)
 	}
 }
 			r := httptest.NewRequest(http.MethodGet, "/", nil)
