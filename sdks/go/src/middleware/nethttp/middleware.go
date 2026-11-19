@@ -24,6 +24,11 @@ type Config struct {
 	// HeaderAttrs controls which inbound request headers are copied into attrs as
 	// "http.header.<normalized-name>".
 	HeaderAttrs []string
+	// OnEmitError, when set, is invoked with any error returned by the sink when
+	// the completion event is emitted. The error is always logged through loza;
+	// this callback lets applications additionally route emission failures into
+	// their own monitoring or metrics. It is never called for successful emits.
+	OnEmitError func(error)
 }
 
 // Middleware starts a canonical event at request start and emits it on completion.
@@ -76,7 +81,7 @@ func MiddlewareWithConfig(cfg Config) func(http.Handler) http.Handler {
 							loza.Int("status_code", statusCode),
 							loza.Int64("response_bytes", responseBytes),
 						)
-						_ = loza.Emit(ctx)
+						reportEmitError(ctx, cfg.OnEmitError, loza.Emit(ctx))
 					}
 					return
 				}
@@ -88,7 +93,7 @@ func MiddlewareWithConfig(cfg Config) func(http.Handler) http.Handler {
 					loza.Int("status_code", statusCode),
 					loza.Int64("response_bytes", responseBytes),
 				)
-				_ = loza.Emit(ctx)
+				reportEmitError(ctx, cfg.OnEmitError, loza.Emit(ctx))
 			}()
 
 			route := ""
@@ -128,6 +133,20 @@ func MiddlewareWithConfig(cfg Config) func(http.Handler) http.Handler {
 
 			next.ServeHTTP(rw, r.WithContext(ctx))
 		})
+	}
+}
+
+// reportEmitError makes a failed completion emit observable. It logs the error
+// through loza and, when configured, forwards it to the OnEmitError callback so
+// applications can wire telemetry delivery failures into their own monitoring
+// instead of silently losing the event.
+func reportEmitError(ctx context.Context, onError func(error), err error) {
+	if err == nil {
+		return
+	}
+	loza.ErrorContext(ctx, "nethttp middleware failed to emit telemetry event", err, "loza.middleware.emit_error")
+	if onError != nil {
+		onError(err)
 	}
 }
 
