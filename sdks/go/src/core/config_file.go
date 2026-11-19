@@ -169,7 +169,10 @@ func mergeFileConfig(base Config, fc FileConfig) Config {
 			base.ConnectionTimeout = d
 		}
 	}
-	if fc.EnableCompression != nil {
+	// Like every other field above, apply the file value only while base is
+	// still at its zero value. A non-zero base (e.g. the documented default of
+	// true) has higher precedence and must not be reset by loza.yaml.
+	if fc.EnableCompression != nil && !base.EnableCompression {
 		base.EnableCompression = *fc.EnableCompression
 	}
 	return base

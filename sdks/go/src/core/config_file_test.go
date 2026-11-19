@@ -319,6 +319,30 @@ func TestMergeFileConfig_DoesNotOverrideExisting(t *testing.T) {
 	}
 }
 
+func TestMergeFileConfig_EnableCompressionRespectsNonZeroBase(t *testing.T) {
+	// File config has lower precedence than the base/default config and must
+	// only fill zero-value fields. A base that already holds the documented
+	// default of true must not be reset by an explicit false in loza.yaml.
+	disabled := false
+	merged := mergeFileConfig(
+		Config{EnableCompression: true},
+		FileConfig{EnableCompression: &disabled},
+	)
+	if !merged.EnableCompression {
+		t.Error("EnableCompression was reset from true to false by lower-precedence file config")
+	}
+}
+
+func TestMergeFileConfig_EnableCompressionFillsZeroValueBase(t *testing.T) {
+	// When the base field is still at its zero value, the file config value
+	// must be applied so the documented default can be configured from YAML.
+	enabled := true
+	merged := mergeFileConfig(Config{}, FileConfig{EnableCompression: &enabled})
+	if !merged.EnableCompression {
+		t.Error("EnableCompression was not filled from file config when base held the zero value")
+	}
+}
+
 func TestNewClient_RequiresCollectorURL(t *testing.T) {
 	// Clear env vars that might interfere
 	os.Unsetenv("LOZA_COLLECTOR_URL")
