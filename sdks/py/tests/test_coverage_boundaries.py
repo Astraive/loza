@@ -1205,7 +1205,8 @@ def test_legacy_config_environment_and_attr_helpers(monkeypatch: pytest.MonkeyPa
     user = tmp_path / "config.yaml"
     user.write_text("service: user\n", encoding="utf-8")
     monkeypatch.setenv("LOZA_PY_CONFIG", str(user))
-    assert legacy_config.load_layered_config().service == "user"
+    # The exported loader now runs the full pipeline, so env vars override file config (issue #798).
+    assert legacy_config.load_layered_config().service == "env-service"
     monkeypatch.setenv("LOZA_SERVICE", "svc")
     assert legacy_config.new_client(legacy_config.Config(service="code"))
 

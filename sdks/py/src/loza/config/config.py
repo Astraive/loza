@@ -218,6 +218,8 @@ def _resolve_unset(cfg: Config) -> Config:
 
 def new_client(code_config: Config):  # -> Logger
     """Create a Logger with 4-layer config precedence: defaults -> file -> env -> code."""
+def _build_validated_config(code_config: Config) -> Config:
+    """Run the full 4-layer precedence pipeline and return a validated Config."""
     # Step 1: Start with hardcoded defaults
     base = Config()
 
@@ -243,6 +245,21 @@ def new_client(code_config: Config):  # -> Logger
     # Step 6: Collapse unset sentinels to concrete defaults, then validate
     merged = _resolve_unset(merged)
     merged.validate()
+    return merged
+
+
+def load_layered_config() -> Config:
+    """Load the full layered config: defaults -> file -> env, validated.
+
+    Uses the same pipeline as :func:`new_client` so exported callers cannot
+    receive a silently different, unvalidated configuration.
+    """
+    return _build_validated_config(Config())
+
+
+def new_client(code_config: Config):  # -> Logger
+    """Create a Logger with 4-layer config precedence: defaults -> file -> env -> code."""
+    merged = _build_validated_config(code_config)
 
     from ..core.logger import Logger
 
