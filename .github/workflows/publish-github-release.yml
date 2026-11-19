@@ -34,6 +34,12 @@ jobs:
 
       - run: python -m pip install pyyaml
 
+      - name: Validate workflow inputs
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+          RELEASE_COMPONENT: ${{ inputs.component }}
+        run: python scripts/release/validate-inputs.py
+
       - name: Validate umbrella manifest
         run: python scripts/release/validate-manifests.py --component loza
 
@@ -52,8 +58,9 @@ jobs:
         if: inputs.dry_run != true
         env:
           GITHUB_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ inputs.version }}
         run: |
-          gh release create "v${{ inputs.version }}" \
+          gh release create "v${RELEASE_VERSION}" \
             release.yaml loza.yaml \
-            --title "LOZA ${{ inputs.version }}" \
-            --notes "Umbrella LOZA repository release ${{ inputs.version }}."
+            --title "LOZA ${RELEASE_VERSION}" \
+            --notes "Umbrella LOZA repository release ${RELEASE_VERSION}."

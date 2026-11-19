@@ -29,17 +29,26 @@ jobs:
       - name: Validate release manifests
         run: python scripts/release/validate-manifests.py
 
+      - name: Test release input validation
+        run: python -m unittest discover -s scripts/release -p 'test_*.py' -v
+
       - id: base
         name: Resolve comparison base
         shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          BEFORE_SHA: ${{ github.event.before }}
         run: |
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            echo "ref=${{ github.event.pull_request.base.sha }}" >> "$GITHUB_OUTPUT"
-          elif [ "${{ github.event_name }}" = "push" ] && [ "${{ github.event.before }}" != "0000000000000000000000000000000000000000" ]; then
-            echo "ref=${{ github.event.before }}" >> "$GITHUB_OUTPUT"
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            echo "ref=$PR_BASE_SHA" >> "$GITHUB_OUTPUT"
+          elif [ "$EVENT_NAME" = "push" ] && [ "$BEFORE_SHA" != "0000000000000000000000000000000000000000" ]; then
+            echo "ref=$BEFORE_SHA" >> "$GITHUB_OUTPUT"
           else
             echo "ref=$(git rev-parse HEAD^)" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Detect manifest version increments
-        run: python scripts/release/changed-components.py --base-ref "${{ steps.base.outputs.ref }}"
+        env:
+          BASE_REF: ${{ steps.base.outputs.ref }}
+        run: python scripts/release/changed-components.py --base-ref "$BASE_REF"
