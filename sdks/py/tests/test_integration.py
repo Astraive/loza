@@ -172,8 +172,8 @@ def test_schema_version_set() -> None:
     payload = logger.emit(ctx)
 
     event = json.loads(payload)
-    # Schema version should be canonical (0.2.0)
-    assert "schema_version" in event
+    # Schema version should be canonical (v1)
+    assert event["schema_version"] == loza.LOZA_SPEC_VERSION
 
 
 def test_collector_http_interface() -> None:
