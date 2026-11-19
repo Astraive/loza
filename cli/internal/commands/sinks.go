@@ -4,11 +4,25 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/url"
+	"regexp"
 
 	"github.com/astraive/loza/cli/internal/client"
 	"github.com/astraive/loza/cli/internal/config"
 	"github.com/astraive/loza/cli/internal/output"
 )
+
+// validSinkName restricts sink names to a single safe URL path segment so a
+// user-supplied name cannot introduce extra path segments ("../", "a/b"), a
+// query ("?") or a fragment ("#") into the collector endpoint.
+var validSinkName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
+
+func validateSinkName(name string) error {
+	if !validSinkName.MatchString(name) {
+		return fmt.Errorf("invalid sink name %q: must start with a letter or digit and contain only letters, digits, '.', '_' or '-'", name)
+	}
+	return nil
+}
 
 func SinksCommand(ctx context.Context, cfg config.Config, args []string) error {
 	sub := "list"
@@ -66,7 +80,10 @@ func sinksList(ctx context.Context, cfg config.Config) error {
 }
 
 func sinksShow(ctx context.Context, cfg config.Config, name string) error {
-	body, err := client.FetchSinkHealth(cfg.CollectorURL, name)
+	if err := validateSinkName(name); err != nil {
+		return err
+	}
+	body, err := client.FetchSinkHealth(cfg.CollectorURL, url.PathEscape(name))
 	if err != nil {
 		return fmt.Errorf("fetch sink %s: %w", name, err)
 	}
@@ -92,7 +109,10 @@ func sinksShow(ctx context.Context, cfg config.Config, name string) error {
 }
 
 func sinksTest(ctx context.Context, cfg config.Config, name string) error {
-	body, err := client.TestSink(ctx, cfg.CollectorURL, name)
+	if err := validateSinkName(name); err != nil {
+		return err
+	}
+	body, err := client.TestSink(ctx, cfg.CollectorURL, url.PathEscape(name))
 	if err != nil {
 		return fmt.Errorf("test sink %s: %w", name, err)
 	}
