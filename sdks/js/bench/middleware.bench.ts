@@ -28,8 +28,6 @@ describe('middleware', () => {
   });
 
   bench('startEvent only (no middleware overhead)', () => {
-    const ctx = logger.startEvent({ event: 'bench.plain' });
-    logger.finish(ctx, 'success');
-    logger.emit(ctx);
+    logger.startEvent({ event: 'bench.plain' });
   });
 });
