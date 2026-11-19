@@ -202,14 +202,10 @@ def test_finish_twice_handled() -> None:
 
     logger.finish(ctx, "success")
 
-    # Calling finish again should raise an error (not panic)
-    try:
+    # Calling finish again must raise a known error (not panic). Use
+    # pytest.raises so a second finish() that silently succeeds fails the test.
+    with pytest.raises(loza.EventAlreadyFinishedError, match="already finished"):
         logger.finish(ctx, "error")
-    except Exception as e:
-        # Should be a known error type (EventAlreadyFinishedError is OK)
-        assert "already finished" in str(e) or isinstance(e, (ValueError, RuntimeError)), (
-            f"Unexpected error: {type(e).__name__}"
-        )
 
 
 def test_emit_before_finish_handled() -> None:
