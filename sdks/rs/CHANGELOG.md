@@ -25,6 +25,17 @@ All notable changes to the LOZA Rust SDK are documented in this file.
   fixed name in the shared temp dir, and add `create_default_storage_dir()` to
   create it with `0700` permissions while refusing symlinks. `default_storage_dir()`
   keeps its `PathBuf` return type; call the new creation helper before writing.
+- `parse_lines` no longer silently discards malformed NDJSON lines. It now
+  returns `Result<Vec<Value>, NdjsonError>`, reporting the 1-based line number
+  and parse error of the first invalid line. Blank lines are still ignored.
+
+### Migration note
+- **Breaking:** callers of `parse_lines` must handle the returned `Result`.
+  Migration: `parse_lines(input)` previously returned `Vec<Value>` and dropped
+  invalid lines; replace `let values = parse_lines(input);` with
+  `let values = parse_lines(input)?;` (or `.expect(...)` / `.unwrap_or_default()`
+  to preserve the old lenient behavior). `NdjsonError` is exported alongside
+  `parse_lines` from `loza::utils`.
 
 ## [0.3.4] - 2026-08-26
 
