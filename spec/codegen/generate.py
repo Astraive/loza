@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import sys
 from pathlib import Path
 
 from emitters.conformance import render_conformance_manifest
@@ -57,7 +58,10 @@ def main() -> int:
 
     if args.check:
         if failed:
-            print(f"\n{stale_count} generated artifact(s) are out of date. Run: python codegen/generate.py")
+            # Echo the script path exactly as it was invoked so the suggested
+            # command works from the repository root and from `spec/`, the
+            # working directory used by CI and the release documentation.
+            print(f"\n{stale_count} generated artifact(s) are out of date. Run: python {sys.argv[0]}")
         else:
             print("✓ all generated artifacts are up-to-date")
 
