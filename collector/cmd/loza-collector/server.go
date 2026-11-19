@@ -50,6 +50,14 @@ func runCollector(cfg collectorConfig) error {
 		namedMetadata    map[string]database.Metadata
 	)
 
+	// Validate trusted proxy CIDRs before opening any resources or registering
+	// cleanup defers. An invalid CIDR must return an error rather than call
+	// os.Exit so that all deferred cleanup in this function still executes.
+	trustedCIDRs, err := parseTrustedCIDRs(cfg.trustedProxies)
+	if err != nil {
+		return err
+	}
+
 	if cfg.authEnabled && strings.TrimSpace(cfg.authServerSecret) == "" {
 		return errors.New("auth.enabled requires a resolved auth.server_secret")
 	}
@@ -216,6 +224,7 @@ func runCollector(cfg collectorConfig) error {
 		databaseConnections: namedConnections,
 		databaseMetadata:    namedMetadata,
 		eventBus:            bus,
+		trustedCIDRs:        trustedCIDRs,
 	}
 	if err := initializeAuthState(state); err != nil {
 		return err
@@ -313,16 +322,6 @@ func runCollector(cfg collectorConfig) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Parse trusted proxy CIDRs once for all servers
-	var trustedCIDRs []*net.IPNet
-	for _, cidr := range cfg.trustedProxies {
-		_, ipNet, err := net.ParseCIDR(cidr)
-		if err != nil {
-			log.Fatal().Err(err).Msgf("invalid trusted_proxies CIDR %q", cidr)
-		}
-		trustedCIDRs = append(trustedCIDRs, ipNet)
-	}
-
 	auxServers := make([]serverruntime.Server, 0, 2)
 	if cfg.serverConfig.GRPC.Enabled {
 		grpcSrv := serverruntime.NewGRPCServer(cfg.serverConfig.GRPC, state)
@@ -388,6 +387,25 @@ func runCollector(cfg collectorConfig) error {
 			return nil
 		}
 	}
+}
+
+// parseTrustedCIDRs parses the configured trusted proxy CIDRs once and reports
+// an invalid entry as a normal error. Callers propagate it through their error
+// returns instead of terminating the process with log.Fatal/os.Exit, so any
+// deferred resource cleanup still runs.
+func parseTrustedCIDRs(cidrs []string) ([]*net.IPNet, error) {
+	if len(cidrs) == 0 {
+		return nil, nil
+	}
+	parsed := make([]*net.IPNet, 0, len(cidrs))
+	for _, cidr := range cidrs {
+		_, ipNet, err := net.ParseCIDR(cidr)
+		if err != nil {
+			return nil, fmt.Errorf("invalid trusted_proxies CIDR %q: %w", cidr, err)
+		}
+		parsed = append(parsed, ipNet)
+	}
+	return parsed, nil
 }
 
 func shutdownCollector(server *http.Server, auxServers []serverruntime.Server, state *collectorState, db *sql.DB, cfg collectorConfig, schedulersStop chan struct{}, schedWG *sync.WaitGroup) {
@@ -594,18 +612,9 @@ func buildMux(state *collectorState) *http.ServeMux {
 				log.Fatal().Err(err).Msg("invalid collector authentication configuration")
 			}
 		}
-		var trustedCIDRs []*net.IPNet
-		for _, cidr := range state.config().trustedProxies {
-			_, ipNet, err := net.ParseCIDR(cidr)
-			if err != nil {
-				log.Fatal().Err(err).Msgf("invalid trusted_proxies CIDR %q", cidr)
-			}
-			trustedCIDRs = append(trustedCIDRs, ipNet)
-		}
-
 		authMW = auth.Middleware(state.keyStore, state.keyCache, state.serverSecret,
 			auth.WithAllowLocalDevKeys(state.config().authAllowLocalDevKeys),
-			auth.WithTrustedProxies(trustedCIDRs),
+			auth.WithTrustedProxies(state.trustedCIDRs),
 			auth.WithRateLimiter(state.keyRateLimiter),
 		)
 		protector = func(next http.Handler, perm string) http.Handler {

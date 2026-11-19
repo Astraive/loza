@@ -1163,6 +1163,11 @@ func validateFileConfig(fc fileConfig) error {
 		len(fc.Identity.MTLSAllowedEmails) == 0 {
 		return errors.New("at least one of identity.mtls_allowed_cns, identity.mtls_allowed_dns, or identity.mtls_allowed_emails must be configured when identity.mode is mtls")
 	}
+	// Validate trusted proxy CIDRs at config load so an invalid value is
+	// rejected with an error instead of terminating the process later.
+	if _, err := parseTrustedCIDRs(fc.Identity.TrustedProxies); err != nil {
+		return err
+	}
 	switch strings.ToLower(strings.TrimSpace(fc.Privacy.Mode)) {
 	case "", "off", "warn", "enforce":
 	default:
