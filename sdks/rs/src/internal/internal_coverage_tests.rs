@@ -128,6 +128,16 @@ mod tests {
         assert_eq!(id, "outer");
 
         core::uuidv7::reset_id_generator();
+    fn camel_key_capitalizes_non_ascii_segment_starts() {
+        // Regression: non-ASCII segment starts must be capitalized with the
+        // Unicode-aware char::to_uppercase(), not to_ascii_uppercase().
+        assert_eq!(core::dotkey::camel_key("user.éclair"), "userÉclair");
+        // ASCII behavior is unchanged.
+        assert_eq!(core::dotkey::camel_key("user.first_name"), "userFirst_name");
+        // to_uppercase can yield multiple chars when a segment starts with
+        // a character such as sharp s ("ß" -> "SS").
+        assert_eq!(core::dotkey::camel_key("user.ßeta"), "userSSeta");
+        assert_eq!(core::dotkey::camel_key("a.b.élan"), "aBÉlan");
     }
 
     #[test]

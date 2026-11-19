@@ -14,7 +14,7 @@ pub fn camel_key(key: &str) -> String {
         } else {
             let mut chars = part.chars();
             if let Some(first) = chars.next() {
-                out.push(first.to_ascii_uppercase());
+                out.extend(first.to_uppercase());
                 out.push_str(chars.as_str());
             }
         }
