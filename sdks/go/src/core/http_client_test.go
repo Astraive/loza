@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -191,6 +192,71 @@ func TestRoundTripperCheckpointsIncludeErrorAttr(t *testing.T) {
 		t.Fatalf("expected checkpoint duration attr")
 	} else if durationMS, ok := got.(int64); !ok || durationMS < 0 {
 		t.Fatalf("expected non-negative int64 duration attr")
+	}
+}
+
+func TestRoundTripperErrorAttrRedactsURLCredentials(t *testing.T) {
+	cfg := Test()
+	l, err := New(cfg)
+	if err != nil {
+		t.Fatalf("new logger: %v", err)
+	}
+	prev := Default()
+	SetDefault(l)
+	defer SetDefault(prev)
+
+	ctx := Default().StartEvent(context.Background(), Params{Event: "http.client.test"})
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
+		"https://apiuser:pw_supersecret@example.com/api?token=tok_9f8e7d&api_key=key_123456", nil)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+
+	// A *url.Error embeds the full request URL, including its credentials and
+	// query tokens. Reproduces the leak described in the finding.
+	callErr := &url.Error{
+		Op:  "Get",
+		URL: req.URL.String(),
+		Err: errors.New("dial tcp: connection refused"),
+	}
+	base := &captureRoundTripper{err: callErr}
+	if _, err := NewRoundTripper(base).RoundTrip(req); !errors.Is(err, callErr) {
+		t.Fatalf("expected roundtrip error")
+	}
+
+	finished := mustCheckpointByName(t, ctx, "http.client.finished")
+	got, ok := attrValue(finished.Attrs, "http.client.error")
+	if !ok {
+		t.Fatalf("expected checkpoint error attr")
+	}
+	msg, ok := got.(string)
+	if !ok {
+		t.Fatalf("expected string error attr, got %T", got)
+	}
+	for _, secret := range []string{"pw_supersecret", "tok_9f8e7d", "key_123456", "apiuser:pw_supersecret@"} {
+		if strings.Contains(msg, secret) {
+			t.Fatalf("error attr leaked secret %q: %s", secret, msg)
+		}
+	}
+	if !strings.Contains(msg, "example.com/api") {
+		t.Fatalf("error attr lost useful host/path context: %s", msg)
+	}
+	if !strings.Contains(msg, "connection refused") {
+		t.Fatalf("error attr lost underlying error context: %s", msg)
+	}
+}
+
+func TestSanitizeClientErrorRedactsBareEmbeddedURL(t *testing.T) {
+	// Transport errors may embed a URL without wrapping it in *url.Error.
+	err := errors.New(`request to "https://u:pw_hunter2@host.test/v1?sig=sig_deadbeef" failed`)
+	msg := sanitizeClientError(err)
+	for _, secret := range []string{"pw_hunter2", "sig_deadbeef", "u:pw_hunter2@"} {
+		if strings.Contains(msg, secret) {
+			t.Fatalf("sanitized error leaked secret %q: %s", secret, msg)
+		}
+	}
+	if !strings.Contains(msg, "host.test/v1") || !strings.Contains(msg, "failed") {
+		t.Fatalf("sanitized error lost useful context: %s", msg)
 	}
 }
 
