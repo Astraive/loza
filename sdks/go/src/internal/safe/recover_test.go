@@ -1,9 +1,15 @@
 package safe
 
 import (
+	"errors"
+	"strings"
 	"testing"
 	"time"
 )
+
+type sentinelError struct{ msg string }
+
+func (e *sentinelError) Error() string { return e.msg }
 
 func TestCallReturnsNilForSuccessfulFunction(t *testing.T) {
 	called := false
@@ -23,6 +29,48 @@ func TestCallConvertsPanicsToErrors(t *testing.T) {
 }
 
 func TestGoRunsFunctionsAndRecoversPanics(t *testing.T) {
+func TestCallPreservesPanicErrorIdentity(t *testing.T) {
+	sentinel := &sentinelError{msg: "sentinel panic"}
+	err := Call(func() { panic(sentinel) })
+
+	if !errors.Is(err, sentinel) {
+		t.Fatalf("errors.Is(Call panic, sentinel) = false, want true (err = %v)", err)
+	}
+
+	var pe *PanicError
+	if !errors.As(err, &pe) {
+		t.Fatalf("errors.As(Call panic, *PanicError) = false (err = %v)", err)
+	}
+	if !errors.Is(pe.Unwrap(), sentinel) {
+		t.Fatalf("PanicError.Unwrap() = %v, want %v", pe.Unwrap(), sentinel)
+	}
+
+	var recovered *sentinelError
+	if !errors.As(err, &recovered) || recovered != sentinel {
+		t.Fatalf("errors.As(Call panic, *sentinelError) = %v, want %v", recovered, sentinel)
+	}
+}
+
+func TestCallCapturesPanicStack(t *testing.T) {
+	err := Call(func() { panic("boom with stack") })
+
+	var pe *PanicError
+	if !errors.As(err, &pe) {
+		t.Fatalf("Call error is %T, want *PanicError", err)
+	}
+	stack := pe.StackTrace()
+	if stack == "" {
+		t.Fatal("Call panic error did not capture a stack trace")
+	}
+	if !strings.Contains(stack, "goroutine") {
+		t.Fatalf("captured stack does not look like a goroutine stack: %q", stack)
+	}
+	if !strings.Contains(stack, "TestCallCapturesPanicStack") {
+		t.Fatalf("captured stack does not contain the panicking test frame: %q", stack)
+	}
+}
+
+func TestGoAndSafeGoRunFunctionsAndRecoverPanics(t *testing.T) {
 	done := make(chan struct{}, 2)
 
 	// A normal function runs to completion.
