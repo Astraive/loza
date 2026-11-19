@@ -82,3 +82,35 @@ def test_sdk_version_matches_bundled_metadata():
             break
     assert expected is not None
     assert version.SDK_VERSION == expected
+from loza.version import SDK_VERSION, _version_from_text
+
+
+def test_inline_comment_is_not_part_of_version():
+    assert _version_from_text("version: 1.2.3 # comment\n") == "1.2.3"
+
+
+def test_inline_comment_without_space_is_stripped():
+    assert _version_from_text("version: 1.2.3#note\n") == "1.2.3"
+
+
+def test_quoted_value_with_inline_comment():
+    assert _version_from_text('version: "1.2.3" # comment\n') == "1.2.3"
+    assert _version_from_text("version: '1.2.3' # comment\n") == "1.2.3"
+
+
+def test_nested_version_key_is_ignored():
+    text = "metadata:\n  version: 9.9.9\nversion: 1.2.3\n"
+    assert _version_from_text(text) == "1.2.3"
+
+
+def test_trailing_text_is_rejected():
+    assert _version_from_text("version: 1.2.3 and more\n") is None
+
+
+def test_missing_version_returns_none():
+    assert _version_from_text("name: loza-py\n") is None
+
+
+def test_loaded_sdk_version_is_a_clean_token():
+    assert "#" not in SDK_VERSION
+    assert not any(char.isspace() for char in SDK_VERSION)
