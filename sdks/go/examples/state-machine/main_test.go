@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"context"
 	"testing"
 
 	"github.com/astraive/loza/sdks/go"
@@ -187,5 +188,30 @@ func TestMainDemonstratesStateObservability(t *testing.T) {
 		if !strings.Contains(output, want) {
 			t.Errorf("main() output missing %q", want)
 		}
+// TestActiveEventWithoutStartedEvent reproduces the reported defect at
+// main.go: loza.FromContext returns (nil, false) when no event has been stored
+// in the context. The demo call sites previously discarded the boolean and
+// dereferenced the nil event, which panicked. The guarded helper must report
+// ok == false and a nil event instead, so no caller can dereference it.
+func TestActiveEventWithoutStartedEvent(t *testing.T) {
+	ev, ok := activeEvent(context.Background())
+	if ok {
+		t.Fatalf("activeEvent() ok = true, want false for a context with no event")
+	}
+	if ev != nil {
+		t.Fatalf("activeEvent() event = %v, want nil when ok is false", ev)
+	}
+}
+
+// TestActiveEventWithStartedEvent confirms the normal path still returns the
+// active event so guarded callers keep working.
+func TestActiveEventWithStartedEvent(t *testing.T) {
+	ctx := loza.StartEvent(context.Background(), loza.Params{Event: "test.active_event"})
+	ev, ok := activeEvent(ctx)
+	if !ok {
+		t.Fatal("activeEvent() ok = false, want true for a context from StartEvent")
+	}
+	if ev == nil {
+		t.Fatal("activeEvent() event = nil, want non-nil when ok is true")
 	}
 }
