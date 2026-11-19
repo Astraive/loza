@@ -1,6 +1,7 @@
 package echo
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 
@@ -50,7 +51,7 @@ func MiddlewareWithConfig(cfg Config) echopkg.MiddlewareFunc {
 					}
 					err = panicErr{value: rec}
 					loza.FinishError(ctx, err, loza.Int("status_code", c.Response().Status))
-					_ = loza.Emit(ctx)
+					emitEvent(ctx, eventName)
 				}
 			}()
 
@@ -66,6 +67,8 @@ func MiddlewareWithConfig(cfg Config) echopkg.MiddlewareFunc {
 			}
 			_ = loza.Emit(ctx)
 			return nil
+			emitEvent(ctx, eventName)
+			return err
 		}
 	}
 }
@@ -76,4 +79,12 @@ type panicErr struct {
 
 func (e panicErr) Error() string {
 	return fmt.Sprintf("panic recovered: %v", e.value)
+}
+
+// emitEvent emits the in-flight event and logs (rather than silently
+// discarding) any delivery error so lost events are observable.
+func emitEvent(ctx context.Context, eventName string) {
+	if err := loza.Emit(ctx); err != nil {
+		loza.ErrorContext(ctx, "echo middleware: failed to emit event", err, eventName+".emit")
+	}
 }
