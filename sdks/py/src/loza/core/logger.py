@@ -4,6 +4,7 @@ import copy
 import json
 import sys
 import time
+from contextvars import ContextVar
 from dataclasses import replace
 from datetime import datetime, timezone
 from typing import Any, Callable
@@ -36,6 +37,12 @@ from .redactor import default_redactor
 from .schema import DefaultSchema, EventView
 from ..sinks.httpbatch import HTTPBatchSink
 from ..generated.spec_contract import validate_event_payload
+
+
+# Ambient "current event" shared across all Logger instances. A ContextVar keeps the
+# binding local to the current thread/task so concurrent requests do not see each
+# other's events.
+_current_event: ContextVar[EventContext | None] = ContextVar("loza_current_event", default=None)
 
 
 class Logger:
@@ -552,10 +559,19 @@ class Logger:
         parent.params.links = list(parent.params.links) + [child.event_id]
 
     def current_event(self) -> EventContext | None:
-        return None
+        """Return the event bound to the current context, if any."""
+        return _current_event.get()
 
     def bind_event(self, ctx: EventContext) -> "Logger":
+        """Bind ``ctx`` as the current event for this context and return self."""
+        _current_event.set(ctx)
         return self
+
+    def unbind_event(self) -> EventContext | None:
+        """Clear the current event for this context, returning the previously bound event."""
+        previous = _current_event.get()
+        _current_event.set(None)
+        return previous
 
     def wrap(self, ctx: EventContext, fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
         try:

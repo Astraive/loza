@@ -655,7 +655,11 @@ def test_root_facade_and_lifecycle_surface() -> None:
     assert loza.float("f", 1.0).value == 1.0 and loza.json("j", {"a": 1}).value == {"a": 1}
 
     current = loza.start_event(loza.Params(event="lifecycle"))
-    assert loza.current_event() is None and loza.bind_event(current) is logger
+    assert loza.current_event() is None
+    assert loza.bind_event(current) is logger
+    assert loza.current_event() is current
+    assert loza.unbind_event() is current
+    assert loza.current_event() is None
     assert loza.wrap(current, lambda value: value + 1, 1) == 2
     run_ctx = loza.start_event(loza.Params(event="run"))
     assert loza.run(run_ctx, lambda _ctx: None)
@@ -742,6 +746,34 @@ def test_root_facade_and_lifecycle_surface() -> None:
     assert loza.RenderPrometheus(metrics).startswith("# HELP")
     loza.flush()
     loza.shutdown()
+
+
+def test_current_event_is_context_local_and_bindable() -> None:
+    import contextvars
+
+    logger = loza.default()
+    first = loza.start_event(loza.Params(event="first"))
+    second = loza.start_event(loza.Params(event="second"))
+
+    loza.unbind_event()  # start from a clean ambient state
+    try:
+        assert loza.current_event() is None
+        assert loza.bind_event(first) is logger
+        assert loza.current_event() is first
+
+        # A copied context inherits the binding; rebinding there does not leak back
+        # to the original context (contextvars, not a module global).
+        child = contextvars.copy_context()
+        assert child.run(loza.current_event) is first
+        child.run(loza.bind_event, second)
+        assert child.run(loza.current_event) is second
+        assert loza.current_event() is first
+
+        # Clearing restores the unbound state and reports the previous binding.
+        assert loza.unbind_event() is first
+        assert loza.current_event() is None
+    finally:
+        loza.unbind_event()
 
 
 def test_config_options_security_and_legacy_helpers(tmp_path: Path) -> None:
