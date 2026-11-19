@@ -24,6 +24,39 @@ func (s *captureSink) Flush(_ context.Context) error { return nil }
 
 func (s *captureSink) Close(_ context.Context) error { return nil }
 
+// TestRunEventEmitFailureIsUnwrappable verifies that when the event function
+// fails and Emit also fails, both errors remain inspectable via errors.Is.
+// The emit failure must not be flattened with %v.
+func TestRunEventEmitFailureIsUnwrappable(t *testing.T) {
+	primaryErr := errors.New("primary failure")
+	emitErr := errors.New("emit failure")
+
+	cfg := Test()
+	cfg.Sinks = []Sink{failingSink{err: emitErr}}
+
+	l, err := New(cfg)
+	if err != nil {
+		t.Fatalf("new logger: %v", err)
+	}
+
+	prev := Default()
+	SetDefault(l)
+	defer SetDefault(prev)
+
+	err = RunEvent(context.Background(), Params{Event: "emit.unwrappable"}, func(context.Context) error {
+		return primaryErr
+	})
+	if err == nil {
+		t.Fatalf("expected an error")
+	}
+	if !errors.Is(err, primaryErr) {
+		t.Fatalf("primary error should be unwrappable, got: %v", err)
+	}
+	if !errors.Is(err, emitErr) {
+		t.Fatalf("emit error should be unwrappable, got: %v", err)
+	}
+}
+
 func TestRunEventPanicStackRespectsIncludeSource(t *testing.T) {
 	cases := []struct {
 		name          string
