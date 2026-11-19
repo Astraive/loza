@@ -84,12 +84,19 @@ type Queue struct {
 	mu         sync.Mutex
 	cond       *sync.Cond
 	closed     bool
+	cfg           QueueConfig
+	events        []Event
+	oldestEventAt time.Time
+	mu            sync.Mutex
+	wakeCh        chan struct{}
+	closed        bool
 
 	inflight   map[string]Event
 	inflightMu sync.Mutex
 
 	circuitFailures int
 	circuitOpenTime time.Time
+	halfOpenTrial   bool
 	circuitMu       sync.Mutex
 
 	state   State
@@ -142,12 +149,11 @@ func NewQueue(cfg QueueConfig) (*Queue, error) {
 		cfg:       cfg,
 		events:    make([]Event, 0, cfg.BatchSize),
 		inflight:  make(map[string]Event),
+		wakeCh:    make(chan struct{}, 1),
 		stopCh:    make(chan struct{}),
 		flushDone: make(chan struct{}, 1),
 		rng:       rand.New(rand.NewSource(time.Now().UnixNano())),
 	}
-
-	q.cond = sync.NewCond(&q.mu)
 
 	q.wg.Add(1)
 	go q.flushLoop()
@@ -204,6 +210,9 @@ func (q *Queue) Enqueue(ctx context.Context, event Event) error {
 		return ErrQueueFull
 	}
 
+	if len(q.events) == 0 {
+		q.oldestEventAt = time.Now()
+	}
 	q.events = append(q.events, event)
 	q.queueBytes += payloadBytes
 	q.stateMu.Lock()
@@ -215,7 +224,7 @@ func (q *Queue) Enqueue(ctx context.Context, event Event) error {
 	q.inflight[event.ID] = event
 	q.inflightMu.Unlock()
 
-	q.cond.Signal()
+	q.notifyFlush()
 
 	return nil
 }
@@ -268,6 +277,9 @@ func (q *Queue) EnqueueBatch(ctx context.Context, events []Event) []error {
 			continue
 		}
 
+		if len(q.events) == 0 {
+			q.oldestEventAt = time.Now()
+		}
 		q.events = append(q.events, event)
 		q.queueBytes += payloadBytes
 		errors[i] = nil
@@ -289,7 +301,7 @@ func (q *Queue) EnqueueBatch(ctx context.Context, events []Event) []error {
 	q.state.InFlight += int64(enqueued)
 	q.stateMu.Unlock()
 
-	q.cond.Signal()
+	q.notifyFlush()
 
 	return errors
 }
@@ -301,11 +313,32 @@ func (q *Queue) flushLoop() {
 	defer ticker.Stop()
 
 	for {
+		q.mu.Lock()
+		if len(q.events) == 0 {
+			q.mu.Unlock()
+			select {
+			case <-q.stopCh:
+				q.markClosed()
+				return
+			case <-ticker.C:
+			case <-q.wakeCh:
+			}
+			continue
+		}
+
+		// Flush a partial batch once its oldest event has waited BatchTimeout.
+		wait := q.cfg.BatchTimeout - time.Since(q.oldestEventAt)
+		if wait < 0 {
+			wait = 0
+		}
+		q.mu.Unlock()
+
+		timer := time.NewTimer(wait)
+		var timedFlush bool
 		select {
 		case <-q.stopCh:
-			q.mu.Lock()
-			q.closed = true
-			q.mu.Unlock()
+			stopTimer(timer)
+			q.markClosed()
 			return
 		case <-ticker.C:
 			q.mu.Lock()
@@ -316,7 +349,46 @@ func (q *Queue) flushLoop() {
 				}
 			} else {
 				q.mu.Unlock()
+			timedFlush = true
+		case <-q.wakeCh:
+			// A new event arrived; recompute the deadline for the oldest one.
+		case <-timer.C:
+			timedFlush = true
+		}
+		stopTimer(timer)
+
+		q.mu.Lock()
+		overBatchSize := len(q.events) >= q.cfg.BatchSize
+		q.mu.Unlock()
+
+		if timedFlush || overBatchSize {
+			if err := q.doFlush(); err != nil {
+				log.Printf("queue flush error: %v", err)
 			}
+		}
+	}
+}
+
+// notifyFlush wakes the flush loop after an event is buffered. The wake
+// channel is buffered with capacity one so notifications sent while the loop
+// is busy are coalesced rather than lost.
+func (q *Queue) notifyFlush() {
+	select {
+	case q.wakeCh <- struct{}{}:
+	default:
+	}
+}
+
+func (q *Queue) markClosed() {
+	q.mu.Lock()
+	q.closed = true
+	q.mu.Unlock()
+}
+
+func stopTimer(t *time.Timer) {
+	if !t.Stop() {
+		select {
+		case <-t.C:
 		default:
 			q.mu.Lock()
 			if q.hasReadyEvent() && (len(q.events) >= q.cfg.BatchSize || q.hasReadyRetry()) {
@@ -362,6 +434,10 @@ func (q *Queue) doFlush() error {
 	for _, e := range events {
 		q.queueBytes -= int64(len(e.Payload))
 	}
+	events := make([]Event, len(q.events))
+	copy(events, q.events)
+	q.events = q.events[:0]
+	q.oldestEventAt = time.Time{}
 	q.mu.Unlock()
 
 	batch := make([][]byte, len(events))
@@ -428,6 +504,9 @@ func (q *Queue) doFlush() error {
 	// of retrying immediately.
 	if len(retryEvents) > 0 {
 		q.mu.Lock()
+		if len(q.events) == 0 {
+			q.oldestEventAt = time.Now()
+		}
 		q.events = append(q.events, retryEvents...)
 		for _, e := range retryEvents {
 			q.queueBytes += int64(len(e.Payload))
@@ -441,6 +520,7 @@ func (q *Queue) doFlush() error {
 				q.mu.Unlock()
 			})
 		}
+		q.notifyFlush()
 	}
 
 	// Only flush if WriteBatch succeeded — don't mask the original error.
@@ -523,6 +603,18 @@ func (q *Queue) recordFailure() {
 	q.circuitMu.Lock()
 	defer q.circuitMu.Unlock()
 
+	if q.halfOpenTrial {
+		// The trial request failed: reopen the circuit and restart the
+		// cooldown rather than sending the sink the full stream again.
+		q.halfOpenTrial = false
+		q.circuitOpenTime = time.Now()
+		q.circuitFailures = q.cfg.CircuitBreakerThreshold
+		q.stateMu.Lock()
+		q.state.CircuitOpen = true
+		q.stateMu.Unlock()
+		return
+	}
+
 	q.circuitFailures++
 	if q.circuitFailures >= q.cfg.CircuitBreakerThreshold {
 		q.circuitOpenTime = time.Now()
@@ -535,6 +627,18 @@ func (q *Queue) recordFailure() {
 func (q *Queue) recordSuccess() {
 	q.circuitMu.Lock()
 	defer q.circuitMu.Unlock()
+
+	if q.halfOpenTrial {
+		// The trial request succeeded: the sink has recovered, so close the
+		// circuit and let traffic flow normally again.
+		q.halfOpenTrial = false
+		q.circuitOpenTime = time.Time{}
+		q.circuitFailures = 0
+		q.stateMu.Lock()
+		q.state.CircuitOpen = false
+		q.stateMu.Unlock()
+		return
+	}
 
 	if q.circuitFailures > 0 {
 		q.circuitFailures--
@@ -556,16 +660,27 @@ func (q *Queue) isCircuitOpen() bool {
 		return false
 	}
 
-	if time.Since(q.circuitOpenTime) > q.cfg.CircuitBreakerTimeout {
-		q.circuitOpenTime = time.Time{}
-		q.circuitFailures = 0
-		q.stateMu.Lock()
-		q.state.CircuitOpen = false
-		q.stateMu.Unlock()
+	if time.Since(q.circuitOpenTime) <= q.cfg.CircuitBreakerTimeout {
+		return true
+	}
+
+	// Cooldown elapsed. With half-open enabled, admit exactly one trial
+	// request; everyone else stays rejected until the trial's outcome is
+	// recorded by recordSuccess or recordFailure.
+	if q.cfg.CircuitBreakerHalfOpen {
+		if q.halfOpenTrial {
+			return true
+		}
+		q.halfOpenTrial = true
 		return false
 	}
 
-	return true
+	q.circuitOpenTime = time.Time{}
+	q.circuitFailures = 0
+	q.stateMu.Lock()
+	q.state.CircuitOpen = false
+	q.stateMu.Unlock()
+	return false
 }
 
 func (q *Queue) State() State {
