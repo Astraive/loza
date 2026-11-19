@@ -3,12 +3,18 @@
 from __future__ import annotations
 
 import json
+import logging
 import urllib.request
 from typing import Iterable
 from urllib.error import HTTPError, URLError
 
 from .context import CausalEdge, Context, IncidentMatch
 from .models import Remediation
+
+logger = logging.getLogger(__name__)
+
+# Upper bound on how much of an upstream error body is written to debug logs.
+_DEBUG_BODY_LIMIT = 512
 
 
 class Engine:
@@ -80,7 +86,11 @@ class Engine:
                 return {}
         except HTTPError as exc:
             raw = exc.read()
-            raise RuntimeError(f"cortex API error {exc.code}: {raw}") from exc
+            # Never embed the upstream body verbatim in the exception message:
+            # it can echo secrets or internal details into logs/UI. The status
+            # code is sufficient for callers; the body is kept for debug only.
+            logger.debug("cortex API error %s response body: %r", exc.code, raw[:_DEBUG_BODY_LIMIT])
+            raise RuntimeError(f"cortex API error {exc.code}") from exc
         except URLError as exc:
             raise RuntimeError(f"cortex connection error: {exc}") from exc
 
