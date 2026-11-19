@@ -5,7 +5,10 @@ import "strings"
 // DotNode is an intermediate tree node used to merge dot-key attrs
 // (e.g. "user.id", "user.name") into nested JSON objects.
 type DotNode struct {
-	// Value holds the leaf attr value (Kind, Value) when Children is nil.
+	// Value holds the attr value recorded for this node. A node that was only
+	// ever a leaf has Children nil. When a shorter and a longer dot key collide
+	// on the same path (e.g. "a.b" and "a.b.c") both the value and the children
+	// are preserved by the deterministic merge in ExpandDotKeys.
 	Value *LeafValue
 	// Children maps sub-key → child node.
 	Children map[string]*DotNode
@@ -19,6 +22,11 @@ type LeafValue struct {
 
 // ExpandDotKeys takes a flat list of (key, kind, value) tuples and converts
 // all dot-separated keys into a nested tree. Non-dot keys are left as-is.
+//
+// When dot keys collide on the same path (e.g. both "a.b" and "a.b.c" are
+// present), the nodes are merged deterministically: a leaf value never
+// replaces an existing branch, and a branch never drops an existing value.
+// Repeated identical leaf keys use last-write-wins.
 //
 // Returns two slices:
 //   - plain: attrs whose keys have no dot (or dot expansion is disabled)
@@ -52,21 +60,32 @@ func ExpandDotKeys(keys []string, kinds []uint8, values []any) (
 			rootOrder = append(rootOrder, top)
 		}
 
-		// Drill down, creating intermediate nodes.
+		// Drill down, creating intermediate nodes. If an intermediate segment
+		// was previously recorded as a leaf value, keep that value and attach
+		// children to the same node instead of replacing it.
 		cur := root
 		for _, part := range parts[1 : len(parts)-1] {
 			child, ok := cur.Children[part]
 			if !ok {
 				child = &DotNode{Children: make(map[string]*DotNode)}
 				cur.Children[part] = child
+			} else if child.Children == nil {
+				child.Children = make(map[string]*DotNode)
 			}
 			cur = child
 		}
 
+		// The final segment is a leaf value. Merge into any node that already
+		// exists at this position rather than replacing it: a longer dot key
+		// may have created a branch here, and replacing the whole node would
+		// silently drop that branch (and could write to a nil Children map).
 		leaf := parts[len(parts)-1]
-		cur.Children[leaf] = &DotNode{
-			Value: &LeafValue{Kind: kinds[i], Value: values[i]},
+		node, ok := cur.Children[leaf]
+		if !ok {
+			node = &DotNode{}
+			cur.Children[leaf] = node
 		}
+		node.Value = &LeafValue{Kind: kinds[i], Value: values[i]}
 	}
 
 	for _, k := range rootOrder {
