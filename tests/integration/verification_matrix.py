@@ -102,10 +102,65 @@ def _blocked(step_id: str, category: str, reason: str, status: str = "environmen
     return StepResult(id=step_id, category=category, status=status, details={"reason": reason})
 
 
+# The collector creates its own listener from an ``--addr`` flag, so the probe
+# socket used by ``_find_free_port`` cannot be handed off to it. That makes a
+# probed port a *candidate*, not a reservation: another process can claim it
+# between the probe and the collector's bind (a TOCTOU race). Startup therefore
+# detects a bind conflict and retries with a fresh candidate instead of trusting
+# the first probe result.
+_PORT_CONFLICT_MARKERS = ("address already in use", "bind: address", "eaddrinuse")
+_PORT_BIND_GRACE_S = 2.0
+_COLLECTOR_PORT_ATTEMPTS = 5
+
+
 def _find_free_port() -> int:
+    """Return a candidate loopback port that is currently available.
+
+    The probe socket is closed before this returns, so the port is not reserved.
+    Callers that hand the port to a child process must detect bind conflicts and
+    retry; see :func:`_start_collector`.
+    """
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         sock.bind(("127.0.0.1", 0))
         return int(sock.getsockname()[1])
+
+
+def _is_port_conflict_message(text: str) -> bool:
+    lowered = text.lower()
+    return any(marker in lowered for marker in _PORT_CONFLICT_MARKERS)
+
+
+def _collector_bind_conflict(stdout_file: Path, stderr_file: Path) -> bool:
+    for path in (stderr_file, stdout_file):
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        if _is_port_conflict_message(text):
+            return True
+    return False
+
+
+def _exited_on_bind_conflict(
+    proc: subprocess.Popen[str],
+    stdout_file: Path,
+    stderr_file: Path,
+    *,
+    grace_s: float | None = None,
+) -> bool:
+    """True if ``proc`` exited promptly with a port-bind conflict error."""
+    if grace_s is None:
+        grace_s = _PORT_BIND_GRACE_S
+    deadline = time.monotonic() + grace_s
+    while time.monotonic() < deadline:
+        # The collector logs the fatal bind error before the process has fully
+        # exited, so watch the log as well as the exit status.
+        if _collector_bind_conflict(stdout_file, stderr_file):
+            return True
+        if proc.poll() is not None:
+            return _collector_bind_conflict(stdout_file, stderr_file)
+        time.sleep(0.05)
+    return False
 
 
 def _http_request(
@@ -175,7 +230,7 @@ def _build_cli_config(temp_dir: Path, collector_url: str, cortex_url: str) -> Pa
 
 
 def _start_collector(
-    temp_dir: Path, port: int
+    temp_dir: Path, port: int, *, bind_attempts: int = _COLLECTOR_PORT_ATTEMPTS
 ) -> tuple[subprocess.Popen[str] | None, list[StepResult], CollectorRuntime | None]:
     results: list[StepResult] = []
     if not _tool_available("go"):
@@ -240,27 +295,46 @@ def _start_collector(
     )
     stdout_file = temp_dir / "collector.stdout.log"
     stderr_file = temp_dir / "collector.stderr.log"
-    stdout_handle = stdout_file.open("w", encoding="utf-8")
-    stderr_handle = stderr_file.open("w", encoding="utf-8")
-    proc = subprocess.Popen(
-        [str(binary), "run", "-c", str(config_path), "--addr", f"127.0.0.1:{port}"],
-        cwd=COLLECTOR_ROOT,
-        env=env,
-        stdout=stdout_handle,
-        stderr=stderr_handle,
-        text=True,
+
+    for attempt in range(bind_attempts):
+        with stdout_file.open("w", encoding="utf-8") as stdout_handle, stderr_file.open(
+            "w", encoding="utf-8"
+        ) as stderr_handle:
+            proc = subprocess.Popen(
+                [str(binary), "run", "-c", str(config_path), "--addr", f"127.0.0.1:{port}"],
+                cwd=COLLECTOR_ROOT,
+                env=env,
+                stdout=stdout_handle,
+                stderr=stderr_handle,
+                text=True,
+            )
+
+        if not _exited_on_bind_conflict(proc, stdout_file, stderr_file):
+            return (
+                proc,
+                results,
+                CollectorRuntime(
+                    base_url=f"http://127.0.0.1:{port}",
+                    ingest_token=f"lz_sec_live_kingest_{ingest_secret}",
+                    admin_token=f"lz_sec_live_kadmin_{admin_secret}",
+                ),
+            )
+
+        _stop_process(proc)
+        if attempt + 1 < bind_attempts:
+            # Another process claimed the probed port before the collector could
+            # bind it; try a fresh candidate instead of failing the whole flow.
+            port = _find_free_port()
+
+    results.append(
+        _blocked(
+            "collector.start",
+            "collector_runtime",
+            f"collector could not bind a free port after {bind_attempts} attempts",
+            "implemented_and_failing",
+        )
     )
-    stdout_handle.close()
-    stderr_handle.close()
-    return (
-        proc,
-        results,
-        CollectorRuntime(
-            base_url=f"http://127.0.0.1:{port}",
-            ingest_token=f"lz_sec_live_kingest_{ingest_secret}",
-            admin_token=f"lz_sec_live_kadmin_{admin_secret}",
-        ),
-    )
+    return None, results, None
 
 
 def _stop_process(proc: subprocess.Popen[str] | None) -> None:
