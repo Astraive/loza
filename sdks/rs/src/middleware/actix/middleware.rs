@@ -112,8 +112,11 @@ pub mod actix_impl {
             Box::pin(async move {
                 let mut params = Params::new("http.request").with_kind("http");
                 params.method = Some(method);
-                params.path = Some(path.clone());
-                params.route = Some(path);
+                params.path = Some(path);
+                // `route` is intentionally left unset: actix-web does not expose
+                // the matched route template to middleware, so aliasing it to the
+                // raw request path would give route-based grouping/sampling
+                // unbounded cardinality and false matches.
                 params.service = Some(service_name);
                 let mut ctx = logger.start_event(params);
 
