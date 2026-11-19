@@ -17,6 +17,24 @@ WORKSPACE_ROOT = LOZA_SPEC_ROOT.parent
 # Shared width for every SDK column in the --matrix table, used by both the
 # header row and the data rows so that values line up under their SDK labels.
 MATRIX_COLUMN_WIDTH = 12
+# A single SDK/test command must not be able to hang the whole conformance run.
+DEFAULT_CHECK_TIMEOUT_SECONDS = 600.0
+# Short bound for the lightweight "is the SDK importable?" probe.
+PROBE_TIMEOUT_SECONDS = 30.0
+# Mirrors GNU `timeout`'s exit status so a timed-out check is recognizable.
+TIMEOUT_RETURN_CODE = 124
+
+
+def _check_timeout_seconds() -> float:
+    """Return the per-check timeout, overridable via the environment."""
+    raw = os.environ.get("LOZA_CONFORMANCE_TIMEOUT_SECONDS")
+    if raw is None:
+        return DEFAULT_CHECK_TIMEOUT_SECONDS
+    try:
+        value = float(raw)
+    except ValueError:
+        return DEFAULT_CHECK_TIMEOUT_SECONDS
+    return value if value > 0 else DEFAULT_CHECK_TIMEOUT_SECONDS
 
 
 
@@ -116,16 +134,42 @@ def _all_groups() -> list[str]:
     return sorted(groups)
 
 
-def _run_check(check: Check, verbose: bool) -> CheckResult:
+def _run_check(check: Check, verbose: bool, timeout: float | None = None) -> CheckResult:
     print(f"[{check.sdk}:{check.group}] {' '.join(check.command)}")
     print(f"  {check.description}")
+    if timeout is None:
+        timeout = _check_timeout_seconds()
     started = time.perf_counter()
-    result = subprocess.run(
-        list(check.command),
-        cwd=check.cwd,
-        capture_output=not verbose,
-        text=True,
-    )
+    try:
+        result = subprocess.run(
+            list(check.command),
+            cwd=check.cwd,
+            capture_output=not verbose,
+            text=True,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired as exc:
+        duration_s = time.perf_counter() - started
+        reason = f"timed out after {timeout:g}s"
+        stdout = exc.stdout or ""
+        stderr = exc.stderr or ""
+        print(f"  FAIL ({reason})")
+        if not verbose:
+            partial_output = stdout + stderr
+            if partial_output.strip():
+                print(partial_output.strip()[:5000])
+        return CheckResult(
+            sdk=check.sdk,
+            group=check.group,
+            description=check.description,
+            command=check.command,
+            cwd=str(check.cwd),
+            passed=False,
+            returncode=TIMEOUT_RETURN_CODE,
+            duration_s=duration_s,
+            stdout=stdout,
+            stderr=f"{reason}\n{stderr}".strip(),
+        )
     duration_s = time.perf_counter() - started
     if result.returncode == 0:
         print("  PASS")
@@ -173,11 +217,15 @@ def _is_collector_reachable() -> bool:
 
 def _is_python_sdk_installed() -> bool:
     """Check if the loza Python SDK can be imported."""
-    result = subprocess.run(
-        [sys.executable, "-c", "import loza"],
-        capture_output=True,
-        text=True,
-    )
+    try:
+        result = subprocess.run(
+            [sys.executable, "-c", "import loza"],
+            capture_output=True,
+            text=True,
+            timeout=PROBE_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired:
+        return False
     return result.returncode == 0
 
 
