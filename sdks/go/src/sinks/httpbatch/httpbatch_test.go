@@ -353,6 +353,26 @@ func TestBatchSinkCapsBufferOnSustainedFailures(t *testing.T) {
 			default:
 			}
 		},
+func TestBatchFlushUsesCallerContext(t *testing.T) {
+	type ctxKey struct{}
+	const want = "caller-value"
+	ctx := context.WithValue(context.Background(), ctxKey{}, want)
+
+	var got string
+	transport := roundTripperFunc(func(r *http.Request) (*http.Response, error) {
+		got, _ = r.Context().Value(ctxKey{}).(string)
+		return &http.Response{
+			StatusCode: http.StatusNoContent,
+			Body:       io.NopCloser(strings.NewReader("")),
+			Header:     make(http.Header),
+		}, nil
+	})
+
+	gotSink, err := New(Config{
+		URL:           "http://collector.invalid",
+		BatchSize:     1,
+		FlushInterval: time.Hour,
+		Client:        &http.Client{Transport: transport},
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -389,6 +409,14 @@ func TestBatchSinkCapsBufferOnSustainedFailures(t *testing.T) {
 		}
 	default:
 		t.Fatal("no OnError notification for dropped events")
+	if err := gotSink.WriteEvent(ctx, []byte("event\n"), nil); err != nil {
+		t.Fatalf("WriteEvent: %v", err)
+	}
+	if got != want {
+		t.Fatalf("batch-triggered flush request context value = %q, want %q: caller context was not propagated", got, want)
+	}
+	if err := gotSink.Close(context.Background()); err != nil {
+		t.Fatalf("Close: %v", err)
 	}
 }
 
