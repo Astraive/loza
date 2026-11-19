@@ -487,9 +487,12 @@ impl Config {
     }
 
     pub fn validate_result(&self) -> Result<(), crate::errors::LozaError> {
+        // Log levels are case-insensitive (e.g. LOZA_LOG_LEVEL=INFO is not
+        // lowercased when loaded from the environment), and the full supported
+        // level set includes `trace` and `notice` in addition to the spec enum.
         if !matches!(
-            self.level.as_str(),
-            "debug" | "info" | "warn" | "error" | "fatal"
+            self.level.to_ascii_lowercase().as_str(),
+            "trace" | "debug" | "info" | "notice" | "warn" | "error" | "fatal"
         ) {
             return Err(crate::errors::LozaError::Validation(
                 crate::errors::ValidationError::new(
