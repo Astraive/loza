@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
 """
-Protect release snapshots from accidental mutations.
+Validate the structure of the frozen release snapshots in releases/.
 
-Enforces that releases/ folder changes require explicit version bump and CHANGELOG update.
+This check verifies that each release directory uses a semantic version name
+and contains a README.md or manifest.json documenting its contents. It does
+*not* enforce release immutability: rejecting changes to releases/ in a pull
+request (and requiring a CHANGELOG update) is handled by the
+``release-protection`` job in .github/workflows/spec-ci.yml.
 """
 
 from __future__ import annotations
 
-import json
 import sys
 from pathlib import Path
 
@@ -16,16 +19,24 @@ if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
     sys.stderr.reconfigure(encoding="utf-8")  # type: ignore[union-attr]
 
 
-def check_releases_immutability() -> tuple[bool, list[str]]:
+def check_releases_structure(spec_root: Path | None = None) -> tuple[bool, list[str]]:
     """
-    Verify releases/ folder integrity.
-    
+    Verify that the releases/ folder has a valid structure.
+
     Returns (is_valid, messages).
     Checks:
-    - Each release has a manifest or README documenting its contents
+    - Each release has a README.md or manifest.json documenting its contents
     - Releases are named semantically (v1, v0.0.1, v2.0.0, etc.)
+
+    This is a structure check only. Immutability enforcement (rejecting
+    changes to releases/ in a PR and requiring a CHANGELOG update) lives in
+    the ``release-protection`` job of .github/workflows/spec-ci.yml.
+
+    ``spec_root`` may be overridden to check an alternate tree; it defaults
+    to the spec/ directory containing this script.
     """
-    spec_root = Path(__file__).resolve().parents[1]
+    if spec_root is None:
+        spec_root = Path(__file__).resolve().parents[1]
     releases_dir = spec_root / "releases"
 
     messages = []
@@ -72,6 +83,18 @@ def check_releases_immutability() -> tuple[bool, list[str]]:
     return True, messages
 
 
+def check_releases_immutability(spec_root: Path | None = None) -> tuple[bool, list[str]]:
+    """Deprecated alias for :func:`check_releases_structure`.
+
+    The previous name overstated what this check does: it validates release
+    folder structure, not immutability. Immutability enforcement is performed
+    by the ``release-protection`` job in .github/workflows/spec-ci.yml.
+    Kept as an alias so existing callers keep working; use
+    ``check_releases_structure`` in new code.
+    """
+    return check_releases_structure(spec_root)
+
+
 def _is_semantic_version(name: str) -> bool:
     """Check if name looks like a version (v1, v1.0, v0.0.1, etc.)."""
     if not name.startswith("v"):
@@ -82,7 +105,7 @@ def _is_semantic_version(name: str) -> bool:
 
 
 def main() -> int:
-    is_valid, messages = check_releases_immutability()
+    is_valid, messages = check_releases_structure()
 
     for msg in messages:
         print(msg)
