@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/graphql-go/graphql"
 	"github.com/stretchr/testify/assert"
@@ -133,4 +134,57 @@ func TestGraphQLConfiguredBatchLimit(t *testing.T) {
 	require.Equal(t, http.StatusOK, rec.Code)
 	var single map[string]json.RawMessage
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &single))
+func TestGraphQLServerHTTPServerTimeouts(t *testing.T) {
+	srv := NewGraphQLServer(GraphQLConfig{Enabled: true, Port: ":9310"}, &mockState{})
+
+	s := srv.newServer(http.NotFoundHandler())
+
+	require.NotNil(t, s)
+	assert.Equal(t, ":9310", s.Addr)
+	assert.Equal(t, graphQLReadHeaderTimeout, s.ReadHeaderTimeout)
+	assert.Equal(t, graphQLReadTimeout, s.ReadTimeout)
+	assert.Equal(t, graphQLWriteTimeout, s.WriteTimeout)
+	assert.Equal(t, graphQLIdleTimeout, s.IdleTimeout)
+
+	// The defect was that all of these were left at zero (unbounded).
+	assert.Greater(t, s.ReadHeaderTimeout, time.Duration(0))
+	assert.Greater(t, s.ReadTimeout, time.Duration(0))
+	assert.Greater(t, s.WriteTimeout, time.Duration(0))
+	assert.Greater(t, s.IdleTimeout, time.Duration(0))
+}
+
+func TestGraphQLServerRejectsOversizedBody(t *testing.T) {
+	schema, err := graphql.NewSchema(graphql.SchemaConfig{
+		Query: graphql.NewObject(graphql.ObjectConfig{
+			Name: "Query",
+			Fields: graphql.Fields{
+				"h": &graphql.Field{
+					Type: graphql.Boolean,
+					Resolve: func(p graphql.ResolveParams) (interface{}, error) {
+						return true, nil
+					},
+				},
+			},
+		}),
+	})
+	require.NoError(t, err)
+
+	srv := NewGraphQLServer(GraphQLConfig{Enabled: true, Port: "127.0.0.1:0"}, &mockState{})
+	ts := httptest.NewServer(srv.newHandler(schema))
+	defer ts.Close()
+
+	t.Run("oversized body is rejected", func(t *testing.T) {
+		body := `{"query":"{h}","padding":"` + strings.Repeat("x", maxGraphQLBodyBytes) + `"}`
+		resp, err := http.Post(ts.URL+"/graphql", "application/json", strings.NewReader(body))
+		require.NoError(t, err)
+		defer resp.Body.Close()
+		assert.Equal(t, http.StatusRequestEntityTooLarge, resp.StatusCode)
+	})
+
+	t.Run("normal body still succeeds", func(t *testing.T) {
+		resp, err := http.Post(ts.URL+"/graphql", "application/json", strings.NewReader(`{"query":"{h}"}`))
+		require.NoError(t, err)
+		defer resp.Body.Close()
+		assert.Equal(t, http.StatusOK, resp.StatusCode)
+	})
 }

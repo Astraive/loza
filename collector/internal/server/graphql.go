@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"errors"
 	"net"
 	"net/http"
 	"sync/atomic"
@@ -17,6 +18,15 @@ import (
 const (
 	defaultGraphQLDepthLimit = 10
 	defaultGraphQLBatchLimit = 10
+	maxGraphQLDepth = 10
+
+	// These mirror the collector HTTP server defaults (see HTTPConfig and the
+	// default collector config) so the GraphQL endpoint is not left unbounded.
+	graphQLReadHeaderTimeout = 5 * time.Second
+	graphQLReadTimeout       = 30 * time.Second
+	graphQLWriteTimeout      = 60 * time.Second
+	graphQLIdleTimeout       = 90 * time.Second
+	maxGraphQLBodyBytes      = 10 << 20 // 10 MiB
 )
 
 type GraphQLServer struct {
@@ -131,11 +141,8 @@ func (s *GraphQLServer) Start(ctx context.Context) error {
 	}
 
 	handler := s.handler(schema)
-
-	s.server = &http.Server{
-		Addr:    s.cfg.Port,
-		Handler: handler,
-	}
+	handler := s.newHandler(schema)
+	s.server = s.newServer(handler)
 
 	go func() {
 		<-ctx.Done()
@@ -151,6 +158,74 @@ func (s *GraphQLServer) Start(ctx context.Context) error {
 
 	s.ready.Store(true)
 	return s.server.Serve(lis)
+}
+
+// newHandler builds the GraphQL request handler, including authentication and
+// a hard cap on the request body size so oversized payloads cannot be decoded.
+func (s *GraphQLServer) newHandler(schema graphql.Schema) http.Handler {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/graphql", func(w http.ResponseWriter, r *http.Request) {
+		r.Body = http.MaxBytesReader(w, r.Body, maxGraphQLBodyBytes)
+
+		var req struct {
+			Query         string                 `json:"query"`
+			OperationName string                 `json:"operationName"`
+			Variables     map[string]interface{} `json:"variables"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			var maxBytesErr *http.MaxBytesError
+			if errors.As(err, &maxBytesErr) {
+				http.Error(w, "Request body too large", http.StatusRequestEntityTooLarge)
+				return
+			}
+			http.Error(w, "Invalid request body", http.StatusBadRequest)
+			return
+		}
+
+		if isIntrospectionQuery(req.Query) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusForbidden)
+			_ = json.NewEncoder(w).Encode(map[string]any{"error": "introspection_disabled"})
+			return
+		}
+
+		if queryDepth(req.Query) > maxGraphQLDepth {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode(map[string]any{"error": "query_exceeds_maximum_depth"})
+			return
+		}
+
+		result := graphql.Do(graphql.Params{
+			Schema:         schema,
+			RequestString:  req.Query,
+			VariableValues: req.Variables,
+			OperationName:  req.OperationName,
+		})
+
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(result)
+	})
+
+	var handler http.Handler = mux
+	if s.authEnabled {
+		authMW := auth.Middleware(s.keyStore, s.keyCache, s.serverSecret, auth.WithAllowLocalDevKeys(s.allowLocalDevKeys))
+		handler = authMW(handler)
+	}
+	return handler
+}
+
+// newServer builds the HTTP server with bounded timeouts so slow or idle
+// clients cannot hold connections open indefinitely.
+func (s *GraphQLServer) newServer(handler http.Handler) *http.Server {
+	return &http.Server{
+		Addr:              s.cfg.Port,
+		Handler:           handler,
+		ReadHeaderTimeout: graphQLReadHeaderTimeout,
+		ReadTimeout:       graphQLReadTimeout,
+		WriteTimeout:      graphQLWriteTimeout,
+		IdleTimeout:       graphQLIdleTimeout,
+	}
 }
 
 func (s *GraphQLServer) Stop(ctx context.Context) error {
