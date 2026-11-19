@@ -18,6 +18,26 @@ describe('Logger', () => {
     assert.equal(ctx.service, 'checkout');
   });
 
+  it('startEvent applies custom attrs once through applyAttr bookkeeping', () => {
+    const loza = new Logger({ service: 'checkout', sink: new MemorySink() });
+    const ctx = loza.startEvent({
+      event: 'checkout',
+      custom: [
+        AttrString('normal', 'visible'),
+        SensitiveString('secret', 'hidden'),
+        { key: 'temp', kind: 'string', value: 'should-not-be-stored', drop: true },
+      ],
+    });
+
+    // Normal attrs are stored; sensitive/drop keys are tracked by applyAttr.
+    assert.equal(ctx.attrs.normal, 'visible');
+    assert.ok(ctx.sensitiveKeys.has('secret'));
+    assert.ok(ctx.droppedKeys.has('temp'));
+    // Regression: the removed second pass used to re-insert the drop value
+    // directly into raw attrs, bypassing applyAttr.
+    assert.equal(ctx.attrs.temp, undefined);
+  });
+
   it('enrich adds attrs to event', () => {
     const loza = new Logger({ service: 'checkout' });
     const ctx = loza.startEvent({ event: 'test' });
