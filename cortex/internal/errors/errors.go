@@ -8,6 +8,19 @@ import (
 	"time"
 )
 
+const maxBackoffDelay = 30 * time.Second
+
+// nextBackoffDelay doubles the current delay while honoring the maximum cap.
+// The guard runs before the multiplication because time.Duration is an int64:
+// doubling a large value would overflow to a negative delay, skip the cap, and
+// make time.After fire immediately (a tight retry loop).
+func nextBackoffDelay(delay time.Duration) time.Duration {
+	if delay > maxBackoffDelay/2 {
+		return maxBackoffDelay
+	}
+	return delay * 2
+}
+
 func RetryWithBackoff(ctx context.Context, maxAttempts int, initialDelay time.Duration, fn func() error) error {
 	delay := initialDelay
 	var lastErr error
@@ -27,10 +40,7 @@ func RetryWithBackoff(ctx context.Context, maxAttempts int, initialDelay time.Du
 					return ctx.Err()
 				case <-time.After(delay):
 				}
-				delay = delay * 2
-				if delay > 30*time.Second {
-					delay = 30 * time.Second
-				}
+				delay = nextBackoffDelay(delay)
 			}
 			continue
 		}
