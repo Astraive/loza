@@ -26,7 +26,7 @@ DEFAULT_HISTOGRAM_BUCKETS: tuple[float, ...] = (
 
 def _escape_label_value(value: Any) -> str:
     text = str(value)
-    return text.replace("\\", "\\\\").replace("\n", "\\n").replace('"', '\\"')
+    return text.replace("\\", "\\\\").replace("\n", "\\n").replace("\r", "\\r").replace('"', '\\"')
 
 
 def _format_labels(labels: dict[str, Any]) -> str:
