@@ -2,10 +2,13 @@ package learner
 
 import (
 	"context"
+	"database/sql"
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/astraive/loza/cortex/internal/models"
+	"github.com/astraive/loza/cortex/internal/storage"
 )
 
 type fakeRemediationStore struct {
@@ -73,8 +76,9 @@ func (f *fakeFeedbackStore) GetAverageTimeToResolve(_ context.Context, action st
 }
 
 type fakeSignatureStoreForLearner struct {
-	sigs  map[string]*models.IncidentSignature
-	saved []*models.IncidentSignature
+	sigs   map[string]*models.IncidentSignature
+	saved  []*models.IncidentSignature
+	getErr error
 }
 
 func (f *fakeSignatureStoreForLearner) Save(_ context.Context, sig *models.IncidentSignature) error {
@@ -84,10 +88,13 @@ func (f *fakeSignatureStoreForLearner) Save(_ context.Context, sig *models.Incid
 }
 
 func (f *fakeSignatureStoreForLearner) Get(_ context.Context, id string) (*models.IncidentSignature, error) {
+	if f.getErr != nil {
+		return nil, f.getErr
+	}
 	if sig, ok := f.sigs[id]; ok {
 		return sig, nil
 	}
-	return nil, errors.New("not found")
+	return nil, storage.ErrNotFound
 }
 
 func (f *fakeSignatureStoreForLearner) List(context.Context, int) ([]*models.IncidentSignature, error) {
@@ -305,5 +312,67 @@ func TestRecordFeedbackEmptyFeedbackIsNotAnError(t *testing.T) {
 
 	if err := l.RecordFeedback(context.Background(), feedback); err != nil {
 		t.Fatalf("expected no error for empty feedback, got %v", err)
+	}
+}
+
+// TestSignatureGetErrorHandling verifies that signature lookup failures are
+// only treated as "not found" for genuine missing-signature results. Transient
+// failures (DB outage, timeout, etc.) must be propagated so learning does not
+// silently stop.
+func TestSignatureGetErrorHandling(t *testing.T) {
+	transientErr := errors.New("db connection lost")
+
+	tests := []struct {
+		name      string
+		getErr    error
+		wantError bool
+	}{
+		{"transient error is returned", transientErr, true},
+		{"wrapped transient error is returned", fmt.Errorf("lookup: %w", transientErr), true},
+		{"not found sentinel is skipped", storage.ErrNotFound, false},
+		{"wrapped not found sentinel is skipped", fmt.Errorf("lookup: %w", storage.ErrNotFound), false},
+		{"sql no rows is skipped", sql.ErrNoRows, false},
+		{"wrapped sql no rows is skipped", fmt.Errorf("query: %w", sql.ErrNoRows), false},
+	}
+
+	operations := []struct {
+		name string
+		call func(*Learner) error
+	}{
+		{
+			name: "UpdateFeatureWeights",
+			call: func(l *Learner) error {
+				return l.UpdateFeatureWeights(context.Background(), "sig-1", 200)
+			},
+		},
+		{
+			name: "ReinforcePattern",
+			call: func(l *Learner) error {
+				return l.ReinforcePattern(context.Background(), "sig-1", "restart", 42)
+			},
+		},
+	}
+
+	for _, op := range operations {
+		t.Run(op.name, func(t *testing.T) {
+			for _, tt := range tests {
+				t.Run(tt.name, func(t *testing.T) {
+					l := NewLearner(nil, nil, &fakeSignatureStoreForLearner{getErr: tt.getErr})
+					err := op.call(l)
+					if tt.wantError {
+						if err == nil {
+							t.Fatal("expected transient error to be returned, got nil")
+						}
+						if !errors.Is(err, tt.getErr) {
+							t.Fatalf("expected error to wrap %v, got %v", tt.getErr, err)
+						}
+						return
+					}
+					if err != nil {
+						t.Fatalf("expected missing signature to be skipped, got %v", err)
+					}
+				})
+			}
+		})
 	}
 }
