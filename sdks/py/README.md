@@ -292,7 +292,7 @@ level = loza.ParseLevel("info")  # loza.LevelInfo
 import loza
 
 cfg = loza.production("checkout").with_sink(loza.StdoutSink())
-cfg = loza.production("checkout").with_sink(loza.FileSink("/var/log/app.log"))
+cfg = loza.production("checkout").with_sink(loza.FileSink("logs/app.log"))
 cfg = loza.production("checkout").with_sink(loza.HTTPBatchSink("http://collector:9308/events"))
 
 # For testing

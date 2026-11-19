@@ -120,6 +120,12 @@ The Python SDK public API surface, aligned with the cross-language parity manife
 | `HTTPBatchSink(endpoint)` | Batches and sends events via HTTP to a collector. |
 | `CollectorSink()` | Alias for HTTPBatchSink with default endpoint. |
 
+`FileSink(path)` accepts a relative path only: absolute paths and `..`
+traversal are rejected so the sink cannot append to arbitrary files. If you
+previously passed an absolute path (for example `/var/log/app.log`), pass a
+path relative to the process working directory instead (for example
+`logs/app.log`).
+
 ## Samplers
 
 | Sampler | Description |

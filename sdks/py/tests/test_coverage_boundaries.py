@@ -417,8 +417,9 @@ def test_sinks_and_cortex_adapters(monkeypatch: pytest.MonkeyPatch, tmp_path: Pa
     fanout.close()
     assert sink_a.events == ["one"] and sink_a.batches == [["two", "three"]] and sink_a.flushed and sink_a.closed
 
+    monkeypatch.chdir(tmp_path)
     path = tmp_path / "events.log"
-    file_sink = FileSink(str(path))
+    file_sink = FileSink("events.log")
     file_sink.write("event")
     file_sink.flush()
     file_sink.close()

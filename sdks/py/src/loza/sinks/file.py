@@ -8,6 +8,8 @@ def _safe_output_path(path: str) -> Path:
     if "\x00" in path:
         raise ValueError("file sink path contains a null byte")
     candidate = Path(path)
+    if candidate.is_absolute():
+        raise ValueError("file sink path must not be absolute")
     if any(part == ".." for part in candidate.parts):
         raise ValueError("file sink path must not contain parent-directory traversal")
     if candidate.exists() and candidate.is_dir():

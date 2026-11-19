@@ -16,6 +16,11 @@ def test_file_sink_rejects_parent_traversal():
         FileSink("../loza.ndjson")
 
 
+def test_file_sink_rejects_absolute_path():
+    with pytest.raises(ValueError, match="absolute"):
+        FileSink("/etc/passwd")
+
+
 def test_disk_offline_buffer_rejects_parent_traversal():
     with pytest.raises(ValueError, match="traversal"):
         DiskOfflineBuffer("../loza-spool.ndjson")
