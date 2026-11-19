@@ -34,3 +34,34 @@ func TestSampleByHeader(t *testing.T) {
 	}
 }
 
+func TestAllSamplerNilSemantics(t *testing.T) {
+	ev := &Event{}
+
+	// A nil-only (or empty) sampler set must drop, matching AnySampler(nil)
+	// and NotSampler(nil), so a misconfigured pipeline fails closed.
+	if AllSampler(nil).ShouldSample(ev) {
+		t.Fatal("AllSampler(nil) should drop, not keep every event")
+	}
+	if AllSampler(nil, nil).ShouldSample(ev) {
+		t.Fatal("AllSampler(nil, nil) should drop")
+	}
+	if AllSampler().ShouldSample(ev) {
+		t.Fatal("AllSampler() with no samplers should drop")
+	}
+
+	// Nils are ignored when at least one non-nil sampler is present.
+	if !AllSampler(SampleAll(), nil).ShouldSample(ev) {
+		t.Fatal("AllSampler should ignore nil samplers when a non-nil sampler exists")
+	}
+	if !AllSampler(nil, SampleAll()).ShouldSample(ev) {
+		t.Fatal("AllSampler should ignore leading nil samplers")
+	}
+	if AllSampler(nil, SampleNone()).ShouldSample(ev) {
+		t.Fatal("AllSampler should still honor non-nil samplers around nils")
+	}
+
+	// The three combinators stay consistent on nil.
+	if AnySampler(nil).ShouldSample(ev) || NotSampler(nil).ShouldSample(ev) || AllSampler(nil).ShouldSample(ev) {
+		t.Fatal("all combinators should drop on a nil sampler")
+	}
+}
