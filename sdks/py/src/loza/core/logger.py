@@ -22,6 +22,7 @@ from .duplicate_policy import apply_duplicate
 from .errors import EventClosedError, EventValidationError
 from .hashing import hash_sensitive_value
 from .event import (
+    EVENT_ACTIVE,
     EVENT_DELIVERY_FAILED,
     EVENT_EMITTED,
     EVENT_EMITTING,
@@ -522,7 +523,10 @@ class Logger:
         event.
         """
         if ctx.event_state in {EVENT_DELIVERY_FAILED, EVENT_EMITTED}:
-            ctx.event_state = EVENT_FINISHED
+            # Reopen through a mutable state so retry attrs can still be applied
+            # now that finished events are closed to mutation. The state is
+            # restored to EVENT_FINISHED below before the event is re-emitted.
+            ctx.event_state = EVENT_ACTIVE
             ctx.emitted = False
             ctx.emitted_payload = ""
         if attrs or named:
@@ -531,8 +535,10 @@ class Logger:
             ctx.finish("retried")
         else:
             # A previously finished event cannot be finished twice; the reopen
-            # above still makes it emittable, so just update the outcome.
+            # above still makes it emittable, so just update the outcome and
+            # restore the closed state.
             ctx.outcome = "retried"
+            ctx.event_state = EVENT_FINISHED
 
     def partial(self, ctx: EventContext, reason: str = "partial", *attrs: Attr, **named: Any) -> None:
         if attrs or named:

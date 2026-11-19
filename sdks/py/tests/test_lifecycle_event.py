@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 
 import loza
+import pytest
 
 
 def test_lifecycle_event_helpers():
@@ -152,3 +153,70 @@ def test_lifecycle_wrap_helpers():
     logger.emit(ctx)
     payload = json.loads(sink.events[-1])
     assert payload["outcome"] == "error"
+
+
+def test_finished_event_rejects_further_mutation():
+    """Mutators must not append data to an event after it has been finished."""
+    logger, _ = loza.TestLogger()
+    ctx = logger.start_event(loza.Params(event="mutate.finished"))
+    logger.finish(ctx, "success")
+    before = ctx.to_dict()
+
+    for mutate in (
+        lambda: ctx.checkpoint("too-late"),
+        lambda: ctx.start_process("late-process"),
+        lambda: ctx.start_timer("late-timer"),
+        lambda: ctx.start_group("late-group"),
+        lambda: logger.enrich(ctx, leaked="value"),
+        lambda: logger.set(ctx, leaked="value"),
+        lambda: logger.merge(ctx, "user", leaked="value"),
+        lambda: logger.delete(ctx, "leaked"),
+    ):
+        with pytest.raises(loza.EventClosedError):
+            mutate()
+
+    assert ctx.to_dict() == before
+
+
+def test_partial_event_rejects_further_mutation():
+    """mark_partial() also closes the event, even without finished_at."""
+    logger, _ = loza.TestLogger()
+    ctx = logger.start_event(loza.Params(event="mutate.partial"))
+    logger.partial(ctx, reason="timeout")
+    assert ctx.finished_at is None
+
+    with pytest.raises(loza.EventClosedError):
+        ctx.checkpoint("too-late")
+    with pytest.raises(loza.EventClosedError):
+        logger.enrich(ctx, leaked="value")
+    assert ctx.checkpoints == []
+    assert ctx.attrs == {}
+
+
+def test_double_finish_keeps_dedicated_error():
+    """Closing finished events must not lose the double-finish error type."""
+    logger, _ = loza.TestLogger()
+    ctx = logger.start_event(loza.Params(event="mutate.double-finish"))
+    logger.finish(ctx, "success")
+
+    with pytest.raises(loza.EventAlreadyFinishedError):
+        logger.finish(ctx, "again")
+    with pytest.raises(loza.EventAlreadyFinishedError):
+        logger.finish_error(ctx, ValueError("boom"))
+
+
+def test_retry_with_attrs_on_delivered_event():
+    """Retry still applies attrs and reopens an already finished event."""
+    logger, sink = loza.TestLogger()
+    ctx = logger.start_event(loza.Params(event="retry.attrs"))
+    logger.finish(ctx, "success")
+    assert logger.emit(ctx)
+
+    logger.retry(ctx, loza.String("attempt", "2"))
+    assert ctx.event_state == "finished"
+    assert not ctx.emitted
+
+    second = logger.emit(ctx)
+    assert second
+    assert len(sink.events) == 2
+    assert json.loads(second)["attrs"]["attempt"] == "2"

@@ -98,7 +98,18 @@ class EventContext:
     _drop_keys: set[str] = field(default_factory=set, repr=False)
 
     def _ensure_mutable(self) -> None:
-        if self.event_state in {EVENT_EMITTED, EVENT_EMITTING, EVENT_DELIVERY_FAILED, EVENT_FAILED_VALIDATION}:
+        # finish(), finish_error() and mark_partial() all close an event by
+        # moving it to EVENT_FINISHED, so that state must be rejected along
+        # with the emission-terminal states. finished_at is intentionally not
+        # used here: retry() reopens an already finished event via a mutable
+        # state before re-emitting it.
+        if self.event_state in {
+            EVENT_FINISHED,
+            EVENT_EMITTED,
+            EVENT_EMITTING,
+            EVENT_DELIVERY_FAILED,
+            EVENT_FAILED_VALIDATION,
+        }:
             raise EventClosedError(f"event {self.event_id} is closed in state {self.event_state}")
 
     def _mark_active(self) -> None:
@@ -142,17 +153,19 @@ class EventContext:
         return GroupHandle(self, name, datetime.now(timezone.utc))
 
     def finish(self, outcome: str) -> None:
-        self._ensure_mutable()
-        if self.finished_at is not None:
+        # Keep the dedicated double-finish error, but still report the typed
+        # EventClosedError for an emitted event that is finished a second time.
+        if self.finished_at is not None and self.event_state == EVENT_FINISHED:
             raise EventAlreadyFinishedError(f"event {self.event_id} already finished")
+        self._ensure_mutable()
         self.outcome = outcome
         self.finished_at = datetime.now(timezone.utc)
         self.event_state = EVENT_FINISHED
 
     def finish_error(self, error: BaseException) -> None:
-        self._ensure_mutable()
-        if self.finished_at is not None:
+        if self.finished_at is not None and self.event_state == EVENT_FINISHED:
             raise EventAlreadyFinishedError(f"event {self.event_id} already finished")
+        self._ensure_mutable()
         self.outcome = "error"
         self.finished_at = datetime.now(timezone.utc)
         self.event_state = EVENT_FINISHED
