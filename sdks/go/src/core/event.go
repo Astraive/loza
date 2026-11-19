@@ -589,8 +589,17 @@ func (e *Event) Checkpoint(name string, attrs ...Attr) error {
 		return err
 	}
 	start := e.StartedAt
+	// Use the configured clock so the delta is measured on the same time base
+	// as StartedAt (which is set from cfg.Clock). Falling back to wall time
+	// produces wrong or negative values when a mock/frozen clock is in use.
+	now := time.Now()
+	if e.logger != nil {
+		e.logger.mu.RLock()
+		now = e.logger.cfg.Clock.Now()
+		e.logger.mu.RUnlock()
+	}
 	e.mu.Unlock()
-	at := time.Since(start).Milliseconds()
+	at := now.Sub(start).Milliseconds()
 	return e.AddCheckpoint(EventCheckpoint{Name: name, AtMS: at, Attrs: attrs})
 }
 

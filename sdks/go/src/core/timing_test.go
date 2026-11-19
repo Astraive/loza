@@ -475,6 +475,48 @@ func TestTiming_WithAliasesRecordAttrs(t *testing.T) {
 	}
 	if got, ok := lookupAttrValue(ev.Timers[0].Attrs, "kind"); !ok || got != "timer" {
 		t.Errorf("WithTimer: attr missing: got %v (present=%v)", got, ok)
+// TestEventCheckpointUsesConfiguredClock verifies that (*Event).Checkpoint
+// measures the delta from StartedAt using the logger's configured clock, the
+// same time base used to set StartedAt in buildEvent. With a frozen/mock clock
+// whose time is ahead of wall time, using time.Since yields a wrong or negative
+// AtMS; this test reproduces that behavior and guards the fix.
+func TestEventCheckpointUsesConfiguredClock(t *testing.T) {
+	// Put the mock clock well ahead of wall time so the buggy wall-time path
+	// produces a large negative AtMS instead of the configured-clock delta.
+	start := time.Now().Add(24 * time.Hour)
+	fake := NewFakeClock(start)
+
+	cfg := Test()
+	cfg.Clock = fake
+	l, err := New(cfg)
+	if err != nil {
+		t.Fatalf("new logger: %v", err)
+	}
+
+	ctx := l.StartEvent(context.Background(), Params{Event: "checkpoint.clock"})
+	ev, ok := FromContext(ctx)
+	if !ok {
+		t.Fatal("expected event in context")
+	}
+	if !ev.StartedAt.Equal(start) {
+		t.Fatalf("StartedAt = %v, want %v", ev.StartedAt, start)
+	}
+
+	const advance = 1500 * time.Millisecond
+	fake.Advance(advance)
+
+	if err := ev.Checkpoint("step"); err != nil {
+		t.Fatalf("Checkpoint: %v", err)
+	}
+
+	ev.MuLock()
+	defer ev.MuUnlock()
+	if len(ev.Checkpoints) != 1 {
+		t.Fatalf("expected 1 checkpoint, got %d", len(ev.Checkpoints))
+	}
+	want := advance.Milliseconds()
+	if got := ev.Checkpoints[0].AtMS; got != want {
+		t.Fatalf("checkpoint AtMS = %d, want %d (configured clock delta)", got, want)
 	}
 }
 
