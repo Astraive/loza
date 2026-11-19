@@ -5,9 +5,24 @@ const records = readFileSync(coverageFile, 'utf8')
   .split('end_of_record')
   .map(record => record.trim())
   .filter(Boolean);
+// Coverage producers disagree on how they emit SF paths: Bun uses "src/foo.ts",
+// but others emit "./src/foo.ts", Windows paths ("C:\\repo\\src\\foo.ts"), or
+// absolute paths. Normalize to a project-relative "src/..." path so none of
+// them are silently dropped by the filter below.
+function toProjectRelativeSource(rawSource: string): string | undefined {
+  const normalized = rawSource
+    .replaceAll('\\', '/')
+    .replace(/^[A-Za-z]:/, '')
+    .replace(/^\/+/, '');
+  const match = normalized.match(/(?:^|\/)src\/(.+)$/);
+  return match ? `src/${match[1]}` : undefined;
+}
+
 const sourceRecords = records.filter(record => {
-  const source = record.match(/^SF:(.+)$/m)?.[1].replaceAll('\\', '/');
-  return source?.startsWith('src/') && source.endsWith('.ts');
+  const source = record.match(/^SF:(.+)$/m)?.[1];
+  if (!source) return false;
+  const relative = toProjectRelativeSource(source);
+  return relative?.startsWith('src/') && relative.endsWith('.ts');
 });
 if (sourceRecords.length === 0) {
   throw new Error(`No production source records found in ${coverageFile}`);
