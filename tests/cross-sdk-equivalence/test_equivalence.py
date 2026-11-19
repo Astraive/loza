@@ -11,7 +11,7 @@ import sys
 import time
 import urllib.request
 import urllib.error
-from datetime import datetime, timezone
+import uuid
 
 COLLECTOR_URL = "http://localhost:9308"
 CANONICAL_EVENT = {
@@ -79,6 +79,32 @@ def query_events(marker: str) -> list[dict]:
         return []
 
 
+def make_marker(prefix: str) -> str:
+    """Build a collision-free marker for a single emitted event.
+
+    ``int(time.time())`` only has second resolution, so two runs in the same
+    second reuse the same ``event_id``. A uuid4 suffix makes every emit
+    independently identifiable.
+    """
+    return f"{prefix}-{uuid.uuid4().hex}"
+
+
+def require_unique_event(events: list[dict], marker: str) -> dict | None:
+    """Return the one row for ``marker``, or None unless exactly one exists.
+
+    Verifying ``events[0]`` from ``ORDER BY event_id DESC`` can select a stale
+    row left by an earlier run that reused the same marker. Require a single
+    row so verification always operates on the just-emitted event.
+    """
+    if len(events) != 1:
+        print(
+            f"  WARN: Expected exactly one row for marker={marker}, got {len(events)}",
+            file=sys.stderr,
+        )
+        return None
+    return events[0]
+
+
 def canonical_match(projected: dict, expected: dict) -> bool:
     """Check canonical fields exposed by the Collector's encrypted schema."""
     return (
@@ -106,7 +132,7 @@ def main():
     print()
 
     # Emit the canonical event with a unique marker
-    marker = f"equiv-{int(time.time())}"
+    marker = make_marker("equiv")
     event = dict(CANONICAL_EVENT)
     event["event_id"] = marker
     event["attrs"] = dict(CANONICAL_EVENT["attrs"])
@@ -126,12 +152,10 @@ def main():
     # Query and verify
     print("Querying stored events...")
     events = query_events(marker)
-    if not events:
-        print("FAIL: No events found for marker={marker}")
+    found = require_unique_event(events, marker)
+    if found is None:
+        print(f"FAIL: Expected exactly one event for marker={marker}, got {len(events)}")
         sys.exit(1)
-
-    found = events[0]
-
 
     print("  Found matching event. Verifying canonical fields...")
 
@@ -153,7 +177,7 @@ def main():
     print("1. Release field equivalence...")
     release_event = dict(CANONICAL_EVENT)
     release_event["attrs"] = dict(CANONICAL_EVENT["attrs"])
-    release_marker = f"equiv-release-{int(time.time())}"
+    release_marker = make_marker("equiv-release")
     release_event["event_id"] = release_marker
     release_event["release"] = "1.2.3"
     release_event["attrs"]["test.marker"] = release_marker
@@ -164,17 +188,18 @@ def main():
     else:
         time.sleep(0.5)
         events = query_events(release_marker)
-        if events and canonical_match(events[0], release_event):
+        release_found = require_unique_event(events, release_marker)
+        if release_found is not None and canonical_match(release_found, release_event):
             print("  PASS: Release event accepted and stored")
         else:
             print("  WARN: Release event was not found in projected storage")
 
     # 2. Notice level equivalence
     print("2. Notice level equivalence...")
-    notice_marker = f"equiv-notice-{int(time.time())}"
+    notice_marker = make_marker("equiv-notice")
     notice_event = dict(
         CANONICAL_EVENT,
-        event=f"test.notice.{int(time.time())}",
+        event=f"test.notice.{notice_marker}",
         event_id=notice_marker,
         level="notice",
         attrs=dict(CANONICAL_EVENT["attrs"], **{"test.marker": notice_marker}),
@@ -188,11 +213,11 @@ def main():
     # 3. Agent/ai kind equivalence
     print("3. Agent/ai kind equivalence...")
     for kind in ("agent", "ai"):
-        kind_marker = f"equiv-kind-{kind}-{int(time.time())}"
+        kind_marker = make_marker(f"equiv-kind-{kind}")
         result = emit_event_via_api(
             dict(
                 CANONICAL_EVENT,
-                event=f"test.{kind}.{int(time.time())}",
+                event=f"test.{kind}.{kind_marker}",
                 event_id=kind_marker,
                 kind=kind,
                 attrs=dict(CANONICAL_EVENT["attrs"], **{"test.marker": kind_marker}),
@@ -205,8 +230,8 @@ def main():
 
     # 4. Domain helper equivalence (money, percent, httpStatus)
     print("4. Domain helper equivalence...")
-    domain_marker = f"equiv-domain-{int(time.time())}"
-    domain_event = dict(CANONICAL_EVENT, event=f"test.domain.{int(time.time())}", event_id=domain_marker)
+    domain_marker = make_marker("equiv-domain")
+    domain_event = dict(CANONICAL_EVENT, event=f"test.domain.{domain_marker}", event_id=domain_marker)
     domain_event["attrs"] = {
         **CANONICAL_EVENT["attrs"],
         "test.marker": domain_marker,
@@ -218,7 +243,8 @@ def main():
     if result:
         time.sleep(0.5)
         events = query_events(domain_marker)
-        if events and canonical_match(events[0], domain_event):
+        domain_found = require_unique_event(events, domain_marker)
+        if domain_found is not None and canonical_match(domain_found, domain_event):
             print("  PASS: Domain helper fields preserved in projected storage")
         else:
             print("  WARN: Domain event was not found in projected storage")
