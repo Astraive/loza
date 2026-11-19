@@ -6,6 +6,7 @@ from dataclasses import dataclass, field, replace
 from typing import Any, Callable, Protocol, runtime_checkable
 
 from ..sinks.stdout import StdoutSink
+from .env import get_env, get_env_bool, get_env_int
 
 CanonicalWins = "canonical_wins"
 UserWins = "user_wins"
@@ -206,38 +207,24 @@ def _apply_env_vars(cfg: Config) -> Config:
         "LOZA_DUPLICATE_POLICY": "duplicate_policy",
     }
     for env_key, cfg_field in env_map.items():
-        val = os.getenv(env_key, "").strip()
+        val = get_env(env_key)
         if val:
             setattr(cfg, cfg_field, val)
 
     # Strict mode from env
-    strict_env = os.getenv("LOZA_STRICT", "").strip().lower()
-    if strict_env in ("1", "true", "yes"):
-        cfg.strict = True
-    elif strict_env in ("0", "false", "no"):
-        cfg.strict = False
+    cfg.strict = get_env_bool("LOZA_STRICT", default=cfg.strict)
 
     # Async from env
-    async_env = os.getenv("LOZA_ASYNC_ENABLED", "").strip().lower()
-    if async_env in ("1", "true", "yes"):
-        cfg.async_config.enabled = True
-    elif async_env in ("0", "false", "no"):
-        cfg.async_config.enabled = False
+    cfg.async_config.enabled = get_env_bool("LOZA_ASYNC_ENABLED", default=cfg.async_config.enabled)
 
     # Async queue size
-    queue_env = os.getenv("LOZA_MAX_BUFFER_SIZE", "").strip()
-    if queue_env.isdigit():
-        cfg.async_config.queue_size = int(queue_env)
+    cfg.async_config.queue_size = get_env_int("LOZA_MAX_BUFFER_SIZE", default=cfg.async_config.queue_size)
 
     # Batch size
-    batch_env = os.getenv("LOZA_BATCH_SIZE", "").strip()
-    if batch_env.isdigit():
-        cfg.async_config.max_batch_bytes = int(batch_env)
+    cfg.async_config.max_batch_bytes = get_env_int("LOZA_BATCH_SIZE", default=cfg.async_config.max_batch_bytes)
 
     # Max event bytes
-    max_bytes_env = os.getenv("LOZA_MAX_EVENT_BYTES", "").strip()
-    if max_bytes_env.isdigit():
-        cfg.security.max_event_bytes = int(max_bytes_env)
+    cfg.security.max_event_bytes = get_env_int("LOZA_MAX_EVENT_BYTES", default=cfg.security.max_event_bytes)
 
     return cfg
 
