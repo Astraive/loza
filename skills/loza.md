@@ -185,7 +185,7 @@ Command routing in the released CLI:
 - `loza delete tenant|user|event ID [--reason TEXT]`: perform destructive event deletion; verify scope first.
 - `loza audit pii [--limit N]`: scan stored events for PII findings.
 - `loza schema validate|fetch|list|diff|publish`: validate/fetch/list/compare/publish schemas; `loza schema blueprint add|list|publish` manages blueprints.
-- `loza export [--engine E] [-o FILE] [--format ndjson|parquet] [--table events]`: export stored data.
+- `loza export [--engine E] [-o FILE] [--format ndjson] [--table events]`: export stored data.
 - `loza keys create|revoke ID|rotate ID`: administer API keys; protect these commands.
 - `loza incident ID [--mode fast|deep] [--depth N] [--format json|text]`: incident-oriented Cortex output.
 - `loza graph service|incident NAME_OR_ID [--depth N] [--format json|ascii]`: graph output.
