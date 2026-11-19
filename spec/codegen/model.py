@@ -1,31 +1,49 @@
 from __future__ import annotations
 
 import json
+import warnings
 from pathlib import Path
 from typing import Any
 
 
-_FALLBACK_PRODUCT_VERSION = "0.4.0"
+# Keep aligned with the version declared in spec/loza-spec.yaml.
+_FALLBACK_PRODUCT_VERSION = "0.4.1"
 
 
 def _load_product_version(spec_root: Path) -> str:
-    """Read version from loza-spec.yaml, falling back to hardcoded default."""
+    """Read version from loza-spec.yaml, falling back to hardcoded default.
+
+    Emits a ``RuntimeWarning`` whenever no version could be read from any
+    candidate spec file, so generated artifacts are never silently stamped
+    with the fallback version.
+    """
     candidates = [
         spec_root / "loza-spec.yaml",
         spec_root.parent / "loza-spec.yaml",
     ]
+    unreadable: list[Path] = []
     for path in candidates:
-        if path.is_file():
-            try:
-                text = path.read_text(encoding="utf-8")
-                for line in text.splitlines():
-                    stripped = line.strip()
-                    if stripped.startswith("version:"):
-                        value = stripped.split(":", 1)[1].strip().strip("\"'")
-                        if value:
-                            return value
-            except OSError:
-                continue
+        if not path.is_file():
+            continue
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError:
+            unreadable.append(path)
+            continue
+        for line in text.splitlines():
+            stripped = line.strip()
+            if stripped.startswith("version:"):
+                value = stripped.split(":", 1)[1].strip().strip("\"'")
+                if value:
+                    return value
+
+    detail = f" (unreadable: {', '.join(str(p) for p in unreadable)})" if unreadable else ""
+    warnings.warn(
+        f"could not read product version from spec files{detail}; "
+        f"using fallback version {_FALLBACK_PRODUCT_VERSION}",
+        RuntimeWarning,
+        stacklevel=2,
+    )
     return _FALLBACK_PRODUCT_VERSION
 
 
