@@ -144,7 +144,10 @@ export class CollectorClient {
     parameters: Record<string, LqlQueryValue> = {},
     limit = 1000,
   ): Promise<LqlQueryResult> {
-    const normalizedLimit = Math.min(Math.max(Math.trunc(limit) || 1000, 1), 1000);
+    const truncatedLimit = Math.trunc(limit);
+    const normalizedLimit = Number.isNaN(truncatedLimit)
+      ? 1
+      : Math.min(Math.max(truncatedLimit, 1), 1000);
     const res = await this.request(
       'POST',
       this.collectorPath('/lql/query'),
