@@ -83,3 +83,102 @@ func TestShouldProcessMatchesPartitionKeyForEveryNode(t *testing.T) {
 		}
 	}
 }
+func services(n int) []string {
+	out := make([]string, n)
+	for i := range out {
+		out[i] = fmt.Sprintf("service-%d", i)
+	}
+	return out
+}
+
+// TestAllNodesAgreeOnMapping verifies that independent Partitioners built for
+// the same topology (different nodeID) compute identical ownership and that
+// exactly one node processes each service.
+func TestAllNodesAgreeOnMapping(t *testing.T) {
+	const nodeCount = 7
+	nodes := make([]*Partitioner, nodeCount)
+	for id := 0; id < nodeCount; id++ {
+		nodes[id] = NewPartitioner(nodeCount, id)
+	}
+
+	for _, service := range services(500) {
+		owner := nodes[0].PartitionKey(service)
+		if owner < 0 || owner >= nodeCount {
+			t.Fatalf("PartitionKey(%q) = %d, out of range [0,%d)", service, owner, nodeCount)
+		}
+		processCount := 0
+		for id, node := range nodes {
+			if got := node.PartitionKey(service); got != owner {
+				t.Fatalf("node %d mapped %q to %d, want %d (all nodes must agree)", id, service, got, owner)
+			}
+			if node.ShouldProcess(service) {
+				processCount++
+			}
+		}
+		if processCount != 1 {
+			t.Fatalf("%d nodes process %q, want exactly 1 (node %d)", processCount, service, owner)
+		}
+		if !nodes[owner].ShouldProcess(service) {
+			t.Fatalf("owner node %d does not process %q", owner, service)
+		}
+	}
+}
+
+// TestConsistentHashingOnResize is the regression test for the reported
+// defect. With plain modulo hashing, changing nodeCount from N to N+1 moves
+// roughly N/(N+1) of all services. A real consistent-hash ring moves only
+// ~1/(N+1) (the share taken by the new node).
+func TestConsistentHashingOnResize(t *testing.T) {
+	const (
+		oldNodes = 10
+		newNodes = 11
+		keys     = 3000
+	)
+
+	oldRing := NewPartitioner(oldNodes, 0)
+	newRing := NewPartitioner(newNodes, 0)
+
+	remapped := 0
+	for _, service := range services(keys) {
+		if oldRing.PartitionKey(service) != newRing.PartitionKey(service) {
+			remapped++
+		}
+	}
+	fraction := float64(remapped) / float64(keys)
+
+	// Modulo hashing remaps ~10/11 (~0.91) of services; consistent hashing
+	// remaps ~1/11 (~0.09). A generous bound keeps the test stable while
+	// still catching a regression to modulo hashing.
+	const maxFraction = 0.25
+	if fraction > maxFraction {
+		t.Fatalf("growing cluster from %d to %d nodes remapped %.1f%% of services, want <= %.0f%%: "+
+			"implementation is not stable consistent hashing", oldNodes, newNodes, fraction*100, maxFraction*100)
+	}
+}
+
+// TestPartitionKeyDeterministic ensures the ring is derived deterministically
+// from nodeCount and does not depend on this node's own ID.
+func TestPartitionKeyDeterministic(t *testing.T) {
+	for _, nodeCount := range []int{2, 3, 8, 16} {
+		a := NewPartitioner(nodeCount, 0)
+		b := NewPartitioner(nodeCount, nodeCount-1)
+		for _, service := range services(200) {
+			if got, want := a.PartitionKey(service), b.PartitionKey(service); got != want {
+				t.Fatalf("nodeCount=%d: PartitionKey(%q) depends on nodeID: %d vs %d", nodeCount, service, got, want)
+			}
+		}
+	}
+}
+
+func TestClampingAndAccessors(t *testing.T) {
+	p := NewPartitioner(0, -5)
+	if p.NodeCount() != 1 {
+		t.Fatalf("NodeCount() = %d, want 1 (nodeCount clamped)", p.NodeCount())
+	}
+	if p.NodeID() != 0 {
+		t.Fatalf("NodeID() = %d, want 0 (nodeID clamped)", p.NodeID())
+	}
+	if got := p.PartitionKey("anything"); got != 0 {
+		t.Fatalf("PartitionKey with single node = %d, want 0", got)
+	}
+}
