@@ -3,6 +3,7 @@ package commands
 import (
 	"context"
 	"errors"
+	"flag"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -1234,5 +1235,21 @@ func TestBlueprintAddRejectsMalformedColumns(t *testing.T) {
 	cfg := config.Config{CollectorURL: srv.URL}
 	if err := SchemaCommand(cfg, []string{"blueprint", "add", "--name", "bp", "--columns", ":int:path"}); err == nil {
 		t.Fatalf("expected error for empty column name")
+	}
+}
+
+func TestExportHelpDoesNotAdvertiseParquet(t *testing.T) {
+	cfg := config.Config{CollectorURL: "http://127.0.0.1:9308"}
+	help, err := captureStderr(t, func() error {
+		return ExportCommand(cfg, []string{"-h"})
+	})
+	if err != flag.ErrHelp {
+		t.Fatalf("expected flag.ErrHelp, got %v", err)
+	}
+	if !strings.Contains(help, "ndjson") {
+		t.Fatalf("expected ndjson to be advertised in export help, got %s", help)
+	}
+	if strings.Contains(help, "parquet") {
+		t.Fatalf("export help must not advertise unsupported parquet format, got %s", help)
 	}
 }
