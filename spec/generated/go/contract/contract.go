@@ -14,6 +14,7 @@ const (
 	LOZAEventVersion     = "v1"
 	LOZAIngestAPIVersion = "v1"
 	MaxEventBytes        = 65536
+	MaxBatchBytes        = 1048576
 )
 
 var rfc3339Pattern = regexp.MustCompile(`^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2}))$`)
@@ -198,8 +199,8 @@ func ValidateFlexibleJSONBytes(raw []byte, strict bool) error {
 	if len(trimmed) == 0 {
 		return ValidationErrors{{Field: "payload", Code: "empty_payload", Message: "payload is empty"}}
 	}
-	if len(trimmed) > MaxEventBytes && !bytes.Contains(trimmed, []byte(`"events"`)) && !bytes.Contains(trimmed, []byte("\n")) {
-		return ValidationErrors{{Field: "payload", Code: "too_large", Message: fmt.Sprintf("payload exceeds max_event_size_bytes (%d > %d)", len(trimmed), MaxEventBytes)}}
+	if len(trimmed) > MaxBatchBytes {
+		return ValidationErrors{{Field: "payload", Code: "too_large", Message: fmt.Sprintf("payload exceeds max_batch_size_bytes (%d > %d)", len(trimmed), MaxBatchBytes)}}
 	}
 	if json.Valid(trimmed) {
 		var payload any
@@ -207,6 +208,16 @@ func ValidateFlexibleJSONBytes(raw []byte, strict bool) error {
 			return err
 		}
 		return validateAny(payload, strict)
+	}
+	// NDJSON path: bound each raw line before unmarshalling it.
+	for _, line := range bytes.Split(trimmed, []byte("\n")) {
+		line = bytes.TrimSpace(line)
+		if len(line) == 0 {
+			continue
+		}
+		if len(line) > MaxEventBytes {
+			return ValidationErrors{{Field: "payload", Code: "too_large", Message: fmt.Sprintf("event exceeds max_event_size_bytes (%d > %d)", len(line), MaxEventBytes)}}
+		}
 	}
 	scanner := bufio.NewScanner(bytes.NewReader(trimmed))
 	// bufio.Scanner defaults to a 64 KiB token limit. A single NDJSON record
@@ -275,6 +286,12 @@ func ValidateEventMap(payload map[string]any, strict bool) error {
 func ValidateEventMapDetailed(payload map[string]any, strict bool) ValidationErrors {
 	errs := ValidationErrors{}
 	
+	// Enforce the per-event byte limit after parsing, independent of payload shape.
+	encoded, marshalErr := json.Marshal(payload)
+	if marshalErr == nil && len(encoded) > MaxEventBytes {
+		errs = append(errs, ValidationError{Field: "payload", Code: "too_large", Message: fmt.Sprintf("event exceeds max_event_size_bytes (%d > %d)", len(encoded), MaxEventBytes)})
+	}
+
 	// STRICT MODE: Reject aliases BEFORE normalization
 	if strict {
 		if _, hasAlias := payload["event_type"]; hasAlias {

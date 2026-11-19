@@ -1,7 +1,9 @@
 package schema
 
 import (
+	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -121,6 +123,50 @@ func TestValidateWrappedEventsWithNullAPIVersion(t *testing.T) {
 	}
 	if err := ValidateEventBytes(nullVersion); err == nil {
 		t.Fatal("ValidateEventBytes should reject an explicit null api_version instead of taking the wrapped-events shortcut")
+// TestValidateOversizedPayloadsRejected covers the size-limit bypass where a
+// payload containing an "events" key or an embedded newline skipped the limit.
+// The global bound is now shape-independent, and per-event limits are applied
+// after parsing.
+func TestValidateOversizedPayloadsRejected(t *testing.T) {
+	oversizedPadding := strings.Repeat("x", speccontract.MaxEventBytes+1024)
+
+	cases := []struct {
+		name string
+		raw  []byte
+	}{
+		{
+			name: "oversized event object with events-like key",
+			raw:  []byte(fmt.Sprintf(`{"events":%q}`, oversizedPadding)),
+		},
+		{
+			name: "oversized payload with embedded newline",
+			raw:  []byte("{\n\"data\":\"" + oversizedPadding + "\"\n}"),
+		},
+		{
+			name: "oversized wrapped events envelope",
+			raw: []byte(fmt.Sprintf(
+				`{"api_version":"v1","source":{"sdk":"test","version":"v1","service":"svc"},"events":[{"schema_version":"v1","event_version":"v1","timestamp":"2026-05-12T00:00:00Z","event_id":"evt_1","service":"checkout","event":"checkout.request","kind":"http","data":%q}]}`,
+				oversizedPadding,
+			)),
+		},
+		{
+			name: "oversized raw payload",
+			raw:  []byte(oversizedPadding),
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if len(bytes.TrimSpace(tc.raw)) <= speccontract.MaxEventBytes {
+				t.Fatalf("test payload must exceed MaxEventBytes (%d)", speccontract.MaxEventBytes)
+			}
+			if err := speccontract.ValidateFlexibleJSONBytes(tc.raw, false); err == nil {
+				t.Fatal("ValidateFlexibleJSONBytes should reject oversized payload")
+			}
+			if err := ValidateEventBytes(tc.raw); err == nil {
+				t.Fatal("ValidateEventBytes should reject oversized payload")
+			}
+		})
 	}
 }
 

@@ -28,6 +28,7 @@ const (
 \tLOZAEventVersion     = "{contract["event_version"]}"
 \tLOZAIngestAPIVersion = "{contract["api_version"]}"
 \tMaxEventBytes        = {contract["limits"]["max_event_size_bytes"]}
+\tMaxBatchBytes        = {contract["limits"]["max_batch_size_bytes"]}
 )
 
 var rfc3339Pattern = regexp.MustCompile(`^(\\d{{4}}-\\d{{2}}-\\d{{2}}T\\d{{2}}:\\d{{2}}:\\d{{2}}(?:\\.\\d+)?(?:Z|[+-]\\d{{2}}:\\d{{2}}))$`)
@@ -212,8 +213,8 @@ func ValidateFlexibleJSONBytes(raw []byte, strict bool) error {{
 \tif len(trimmed) == 0 {{
 \t\treturn ValidationErrors{{{{Field: "payload", Code: "empty_payload", Message: "payload is empty"}}}}
 \t}}
-\tif len(trimmed) > MaxEventBytes && !bytes.Contains(trimmed, []byte(`"events"`)) && !bytes.Contains(trimmed, []byte("\\n")) {{
-\t\treturn ValidationErrors{{{{Field: "payload", Code: "too_large", Message: fmt.Sprintf("payload exceeds max_event_size_bytes (%d > %d)", len(trimmed), MaxEventBytes)}}}}
+\tif len(trimmed) > MaxBatchBytes {{
+\t\treturn ValidationErrors{{{{Field: "payload", Code: "too_large", Message: fmt.Sprintf("payload exceeds max_batch_size_bytes (%d > %d)", len(trimmed), MaxBatchBytes)}}}}
 \t}}
 \tif json.Valid(trimmed) {{
 \t\tvar payload any
@@ -221,6 +222,16 @@ func ValidateFlexibleJSONBytes(raw []byte, strict bool) error {{
 \t\t\treturn err
 \t\t}}
 \t\treturn validateAny(payload, strict)
+\t}}
+\t// NDJSON path: bound each raw line before unmarshalling it.
+\tfor _, line := range bytes.Split(trimmed, []byte("\\n")) {{
+\t\tline = bytes.TrimSpace(line)
+\t\tif len(line) == 0 {{
+\t\t\tcontinue
+\t\t}}
+\t\tif len(line) > MaxEventBytes {{
+\t\t\treturn ValidationErrors{{{{Field: "payload", Code: "too_large", Message: fmt.Sprintf("event exceeds max_event_size_bytes (%d > %d)", len(line), MaxEventBytes)}}}}
+\t\t}}
 \t}}
 \tscanner := bufio.NewScanner(bytes.NewReader(trimmed))
 \t// bufio.Scanner defaults to a 64 KiB token limit. A single NDJSON record
@@ -289,6 +300,12 @@ func ValidateEventMap(payload map[string]any, strict bool) error {{
 func ValidateEventMapDetailed(payload map[string]any, strict bool) ValidationErrors {{
 \terrs := ValidationErrors{{}}
 \t
+\t// Enforce the per-event byte limit after parsing, independent of payload shape.
+\tencoded, marshalErr := json.Marshal(payload)
+\tif marshalErr == nil && len(encoded) > MaxEventBytes {{
+\t\terrs = append(errs, ValidationError{{Field: "payload", Code: "too_large", Message: fmt.Sprintf("event exceeds max_event_size_bytes (%d > %d)", len(encoded), MaxEventBytes)}})
+\t}}
+
 \t// STRICT MODE: Reject aliases BEFORE normalization
 \tif strict {{
 \t\tif _, hasAlias := payload["event_type"]; hasAlias {{
