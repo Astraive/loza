@@ -2,7 +2,8 @@ use serde_json::Value;
 
 use crate::config::RedactorConfig;
 
-use super::keys::{hash_input, matches_key, sha256_hex, DEFAULT_KEYS};
+use super::keys::{hash_input, matches_key, DEFAULT_KEYS};
+use crate::internal::hashing::secure_hash;
 
 pub fn redact(mut value: Value, redactor: &RedactorConfig) -> Value {
     match redactor {
@@ -132,7 +133,7 @@ fn walk(value: &mut Value, keys: &[&str], mode: &RedactionMode) {
                             map.insert(key, Value::String("[REDACTED]".to_string()));
                         }
                         RedactionMode::Hash => {
-                            let hashed = sha256_hex(&hash_input(&map[&key]));
+                            let hashed = secure_hash(&hash_input(&map[&key]));
                             map.insert(key, Value::String(hashed));
                         }
                         RedactionMode::Drop => {
