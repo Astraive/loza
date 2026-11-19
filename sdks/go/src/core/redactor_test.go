@@ -4,6 +4,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 func TestRedactKeysKeepsNonMatchingFields(t *testing.T) {
@@ -158,6 +159,47 @@ func TestMaskKeysPartiallyMasksValues(t *testing.T) {
 	}
 	if out[1].Value != "u_123" {
 		t.Fatalf("expected user.id unchanged, got %v", out[1].Value)
+	}
+}
+
+func TestMaskKeysPreservesMultiByteUTF8(t *testing.T) {
+	// Each CJK rune is 3 bytes in UTF-8. Slicing by byte index cuts mid-rune
+	// and emits invalid UTF-8, so masking must be done by rune index.
+	const value = "日本語テスト"
+	attrs := []Attr{String("name", value)}
+
+	out := applyRedactor(attrs, MaskKeys("name"))
+	s, ok := out[0].Value.(string)
+	if !ok {
+		t.Fatalf("expected masked value to be string, got %T", out[0].Value)
+	}
+	if !utf8.ValidString(s) {
+		t.Fatalf("masked value is not valid UTF-8: %q", s)
+	}
+
+	runes := []rune(value)
+	want := string(runes[:2]) + strings.Repeat("*", len(runes)-4) + string(runes[len(runes)-2:])
+	if s != want {
+		t.Fatalf("expected masked value %q, got %q", want, s)
+	}
+}
+
+func TestMaskKeysShortMultiByteUTF8(t *testing.T) {
+	// "日本語" is 3 runes but 9 bytes. The byte-based length check treated it
+	// as long enough to mask, producing a mid-rune cut; 3 runes must map to
+	// the fully-masked "****" case like any other short value.
+	attrs := []Attr{String("name", "日本語")}
+
+	out := applyRedactor(attrs, MaskKeys("name"))
+	s, ok := out[0].Value.(string)
+	if !ok {
+		t.Fatalf("expected masked value to be string, got %T", out[0].Value)
+	}
+	if s != "****" {
+		t.Fatalf("expected fully masked value for short multi-byte input, got %q", s)
+	}
+	if !utf8.ValidString(s) {
+		t.Fatalf("masked value is not valid UTF-8: %q", s)
 	}
 }
 

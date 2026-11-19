@@ -82,11 +82,11 @@ func (r *maskRedactor) Redact(key string, value any) (any, bool) {
 	if _, ok := r.keys[lower]; !ok {
 		return noRedaction, true
 	}
-	s := fmt.Sprintf("%v", value)
-	if len(s) <= 4 {
+	runes := []rune(fmt.Sprintf("%v", value))
+	if len(runes) <= 4 {
 		return "****", true
 	}
-	return s[:2] + strings.Repeat("*", len(s)-4) + s[len(s)-2:], true
+	return string(runes[:2]) + strings.Repeat("*", len(runes)-4) + string(runes[len(runes)-2:]), true
 }
 
 // MaskKeys returns a Redactor that partially masks values for given keys.
