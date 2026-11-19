@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -29,6 +30,18 @@ type lqlStdioCompiler struct {
 	restartFailures  uint
 	restartNotBefore time.Time
 	lastRestartError error
+
+	// A single reader goroutine owns the stdout pipe for the lifetime of the
+	// subprocess. It dispatches each response to the request waiting on it, so
+	// a cancelled request can never leave unread bytes that desync the stream.
+	pendingMu sync.Mutex
+	pending   map[int64]chan lqlRPCResult
+	// outstanding records request IDs in issue order, including cancelled
+	// ones, so a protocol variant that omits the response id can still match
+	// responses in order and discard the reply to a cancelled request.
+	outstanding   []int64
+	readerDone    chan struct{}
+	activeReaders atomic.Int64
 }
 
 func newLQLStdioCompiler(ctx context.Context, cfg collectorConfig) (*lqlStdioCompiler, error) {
@@ -88,6 +101,7 @@ func (c *lqlStdioCompiler) startLocked(ctx context.Context) error {
 		return err
 	}
 	c.cmd, c.stdin, c.stdout = cmd, stdin, bufio.NewReader(stdout)
+	c.startReaderLocked()
 	response, err := c.requestLocked(ctx, "handshake", map[string]any{})
 	if err != nil {
 		_ = c.killLocked()
@@ -255,6 +269,82 @@ type lqlRPCResponse struct {
 	} `json:"error"`
 }
 
+type lqlRPCResult struct {
+	response lqlRPCResponse
+	err      error
+}
+
+// startReaderLocked launches the single goroutine that reads the subprocess
+// stdout for the lifetime of the current process. Callers must hold c.mu.
+func (c *lqlStdioCompiler) startReaderLocked() {
+	done := make(chan struct{})
+	c.readerDone = done
+	c.pendingMu.Lock()
+	c.outstanding = nil
+	c.pendingMu.Unlock()
+	reader := c.stdout
+	go c.readLoop(reader, done)
+}
+
+// readLoop continuously drains stdout and routes each response to the request
+// waiting for it. It never stops on cancellation: a response for a request
+// that has already returned simply has no pending channel and is discarded.
+func (c *lqlStdioCompiler) readLoop(reader *bufio.Reader, done chan struct{}) {
+	c.activeReaders.Add(1)
+	defer c.activeReaders.Add(-1)
+	defer close(done)
+	for {
+		line, err := reader.ReadBytes('\n')
+		if err != nil {
+			// readerDone unblocks every waiter for this subprocess generation.
+			return
+		}
+		var response lqlRPCResponse
+		if err := json.Unmarshal(line, &response); err != nil {
+			// Keep draining: a malformed line must not strand the stream.
+			continue
+		}
+		c.deliver(response)
+	}
+}
+
+// deliver hands a response to the matching pending request. When the protocol
+// variant omits the response id, responses are matched to request IDs in issue
+// order; a cancelled request has no pending channel, so its late response is
+// discarded instead of being misrouted to a later request.
+func (c *lqlStdioCompiler) deliver(response lqlRPCResponse) {
+	c.pendingMu.Lock()
+	defer c.pendingMu.Unlock()
+	if response.ID != 0 {
+		c.removeOutstanding(response.ID)
+		if ch, ok := c.pending[response.ID]; ok {
+			delete(c.pending, response.ID)
+			ch <- lqlRPCResult{response: response}
+		}
+		return
+	}
+	if len(c.outstanding) == 0 {
+		return
+	}
+	id := c.outstanding[0]
+	c.outstanding = c.outstanding[1:]
+	if ch, ok := c.pending[id]; ok {
+		delete(c.pending, id)
+		ch <- lqlRPCResult{response: response}
+	}
+}
+
+// removeOutstanding drops an id from the issue-order queue. Called with
+// pendingMu held.
+func (c *lqlStdioCompiler) removeOutstanding(id int64) {
+	for index, queued := range c.outstanding {
+		if queued == id {
+			c.outstanding = append(c.outstanding[:index], c.outstanding[index+1:]...)
+			return
+		}
+	}
+}
+
 func (c *lqlStdioCompiler) requestLocked(ctx context.Context, method string, params any) (lqlRPCResponse, error) {
 	c.nextID++
 	id := c.nextID
@@ -319,4 +409,36 @@ func (c *lqlStdioCompiler) requestLocked(ctx context.Context, method string, par
 		}
 		return read.response, nil
 	}
+}
+
+	resultCh := make(chan lqlRPCResult, 1)
+	readerDone := c.readerDone
+	c.pendingMu.Lock()
+	if c.pending == nil {
+		c.pending = make(map[int64]chan lqlRPCResult)
+	}
+	c.pending[id] = resultCh
+	c.outstanding = append(c.outstanding, id)
+	c.pendingMu.Unlock()
+	defer func() {
+		c.pendingMu.Lock()
+		delete(c.pending, id)
+		c.pendingMu.Unlock()
+	}()
+
+	if _, err := c.stdin.Write(append(line, '\n')); err != nil {
+		return lqlRPCResponse{}, err
+	}
+	select {
+	case <-ctx.Done():
+		return lqlRPCResponse{}, ctx.Err()
+	case <-readerDone:
+		return lqlRPCResponse{}, errors.New("lql stdio reader stopped")
+	case res := <-resultCh:
+		return res.response, res.err
+	}
+}
+
+func escapeLQLString(value string) string {
+	return strings.ReplaceAll(strings.ReplaceAll(value, `\`, `\\`), `"`, `\"`)
 }
