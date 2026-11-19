@@ -14,6 +14,113 @@ import (
 
 var version = lozacli.Version
 
+// validOutputFormats is the set of formats accepted by the global --output
+// flag. csv is included because QueryCommand reads the format from the
+// context and supports it; yaml is included because isGlobalOutputFormat
+// recognises it as a global display format.
+var validOutputFormats = map[string]struct{}{
+	"text":  {},
+	"json":  {},
+	"table": {},
+	"csv":   {},
+	"yaml":  {},
+}
+
+func validateOutputFormat(format string) error {
+	if _, ok := validOutputFormats[format]; !ok {
+		return fmt.Errorf("invalid output format %q (expected one of: csv, json, table, text, yaml)", format)
+	}
+	return nil
+}
+
+// commandUsesOutputPath reports whether the command being invoked reuses
+// --output for a file path (for example `emit sample --output envelope.json`
+// or `export --output events.json`). For those commands a value that is not a
+// recognised global display format is left in place for the subcommand's own
+// flag set instead of being validated as a global format.
+func commandUsesOutputPath(filtered []string) bool {
+	for _, tok := range filtered {
+		if strings.HasPrefix(tok, "-") {
+			continue
+		}
+		switch tok {
+		case "emit", "export", "schema":
+			return true
+		default:
+			return false
+		}
+	}
+	return false
+}
+
+// parseFlags is the shared global-flag parser. It combines both behaviors:
+// --output is recognized generically in both the space and equals forms (any
+// value is accepted before the command), while a subcommand's own
+// --output <path> flag is still preserved once a command has been seen and the
+// value is not a known global format. Global --output values after the command
+// are validated, so a missing value, a swallowed flag, or an unsupported
+// format is reported as an error.
+func parseFlags(args []string) (verbose bool, outputFmt string, filtered []string, err error) {
+	outputFmt = "text"
+	commandSeen := false
+	for i := 0; i < len(args); i++ {
+		switch {
+		case args[i] == "--verbose":
+			verbose = true
+		case args[i] == "--output":
+			if i+1 >= len(args) {
+				if !commandSeen || !commandUsesOutputPath(filtered) {
+					return false, "", nil, fmt.Errorf("--output requires a value (expected one of: csv, json, table, text, yaml)")
+				}
+				// Dangling subcommand --output: leave it for the subcommand.
+				filtered = append(filtered, args[i])
+				continue
+			}
+			value := args[i+1]
+			if strings.HasPrefix(value, "-") {
+				return false, "", nil, fmt.Errorf("--output requires a value, got flag %q", value)
+			}
+			switch {
+			case isGlobalOutputFormat(value):
+				i++
+				outputFmt = value
+			case commandSeen && commandUsesOutputPath(filtered):
+				// Subcommand output path: leave the flag and its value in place.
+				filtered = append(filtered, args[i], value)
+				i++
+			case commandSeen:
+				return false, "", nil, validateOutputFormat(value)
+			default:
+				// Before the command any value is accepted generically.
+				i++
+				outputFmt = value
+			}
+		case strings.HasPrefix(args[i], "--output="):
+			value := strings.TrimPrefix(args[i], "--output=")
+			switch {
+			case isGlobalOutputFormat(value):
+				outputFmt = value
+			case commandSeen:
+				return false, "", nil, validateOutputFormat(value)
+			default:
+				// Before the command any value is accepted generically.
+				outputFmt = value
+			}
+		default:
+			filtered = append(filtered, args[i])
+			commandSeen = true
+		}
+	}
+	return verbose, outputFmt, filtered, nil
+}
+
+// parseGlobalFlags consumes the global flags from args and returns the
+// remaining arguments, the verbose setting, and the validated output format.
+func parseGlobalFlags(args []string) ([]string, bool, string, error) {
+	verbose, outputFmt, filtered, err := parseFlags(args)
+	return filtered, verbose, outputFmt, err
+}
+
 var CommandMaturity = map[string]string{
 	"init":       "stable",
 	"cortex":     "beta",
@@ -51,7 +158,7 @@ var CommandMaturity = map[string]string{
 // format must therefore be left in place for the subcommand's own flag set.
 func isGlobalOutputFormat(value string) bool {
 	switch value {
-	case "json", "table", "text", "yaml":
+	case "json", "table", "text", "yaml", "csv":
 		return true
 	}
 	return false
@@ -59,43 +166,12 @@ func isGlobalOutputFormat(value string) bool {
 
 // extractGlobalFlags removes the global flags from args and returns the
 // remaining positional arguments. The space form (--output FORMAT) and the
-// equals form (--output=FORMAT) are parsed in this one shared place so that
-// both accept any format value and behave identically.
-//
-// This combines two behaviors: the global --output flag is recognized
-// generically (any value is accepted for either form), while a subcommand's
-// own --output <path> flag is still preserved once a command has been seen and
-// the value is not a known global format (e.g. `emit sample --output x.json`).
+// equals form (--output=FORMAT) are parsed in one shared place so that both
+// accept any format value and behave identically. A subcommand's own
+// --output <path> flag is preserved once a command has been seen and the value
+// is not a known global format (e.g. `emit sample --output x.json`).
 func extractGlobalFlags(args []string) (verbose bool, outputFmt string, filtered []string) {
-	outputFmt = "text"
-	commandSeen := false
-	for i := 0; i < len(args); i++ {
-		switch {
-		case args[i] == "--verbose":
-			verbose = true
-		case args[i] == "--output":
-			if i+1 < len(args) {
-				value := args[i+1]
-				if isGlobalOutputFormat(value) || !commandSeen {
-					// Known global format, or still before the command: consume
-					// the value as the global output format (any value is valid).
-					i++
-					outputFmt = value
-				} else {
-					// Subcommand output path: leave the flag for the subcommand.
-					filtered = append(filtered, args[i])
-				}
-			} else {
-				// Dangling --output flag: leave it for the subcommand.
-				filtered = append(filtered, args[i])
-			}
-		case strings.HasPrefix(args[i], "--output="):
-			_, outputFmt, _ = strings.Cut(args[i], "--output=")
-		default:
-			filtered = append(filtered, args[i])
-			commandSeen = true
-		}
-	}
+	verbose, outputFmt, filtered, _ = parseFlags(args)
 	return verbose, outputFmt, filtered
 }
 
@@ -113,7 +189,12 @@ func Run(args []string) error {
 		return nil
 	}
 
-	verbose, outputFmt, filtered := extractGlobalFlags(args)
+	// Extract global flags, preserving subcommand --output file paths while
+	// rejecting missing, malformed, or unsupported global --output values.
+	verbose, outputFmt, filtered, err := parseFlags(args)
+	if err != nil {
+		return err
+	}
 	args = filtered
 
 	if len(args) == 0 {

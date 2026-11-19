@@ -255,3 +255,110 @@ func TestInitWithValidConfigStillGenerates(t *testing.T) {
 		t.Fatalf("expected generated config file: %v", statErr)
 	}
 }
+
+func TestParseGlobalFlagsValid(t *testing.T) {
+	tests := []struct {
+		name             string
+		args             []string
+		wantArgs         []string
+		wantVerbose      bool
+		wantOutputFormat string
+	}{
+		{
+			name:             "bare output format after command",
+			args:             []string{"status", "--output", "json"},
+			wantArgs:         []string{"status"},
+			wantOutputFormat: "json",
+		},
+		{
+			name:             "bare output format before command with verbose",
+			args:             []string{"--verbose", "--output", "table", "status", "--limit", "5"},
+			wantArgs:         []string{"status", "--limit", "5"},
+			wantVerbose:      true,
+			wantOutputFormat: "table",
+		},
+		{
+			name:             "equals form",
+			args:             []string{"--output=text", "status"},
+			wantArgs:         []string{"status"},
+			wantOutputFormat: "text",
+		},
+		{
+			name:             "csv is supported by query",
+			args:             []string{"query", "--output", "csv", "-q", "SELECT 1"},
+			wantArgs:         []string{"query", "-q", "SELECT 1"},
+			wantOutputFormat: "csv",
+		},
+		{
+			name:             "no output flag defaults to text",
+			args:             []string{"status"},
+			wantArgs:         []string{"status"},
+			wantOutputFormat: "text",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotArgs, gotVerbose, gotFormat, err := parseGlobalFlags(tt.args)
+			if err != nil {
+				t.Fatalf("parseGlobalFlags() unexpected error: %v", err)
+			}
+			if strings.Join(gotArgs, " ") != strings.Join(tt.wantArgs, " ") {
+				t.Errorf("args = %v, want %v", gotArgs, tt.wantArgs)
+			}
+			if gotVerbose != tt.wantVerbose {
+				t.Errorf("verbose = %v, want %v", gotVerbose, tt.wantVerbose)
+			}
+			if gotFormat != tt.wantOutputFormat {
+				t.Errorf("format = %q, want %q", gotFormat, tt.wantOutputFormat)
+			}
+		})
+	}
+}
+
+func TestParseGlobalFlagsMissingValue(t *testing.T) {
+	_, _, _, err := parseGlobalFlags([]string{"status", "--output"})
+	if err == nil {
+		t.Fatal("parseGlobalFlags() accepted --output with no value")
+	}
+	if !strings.Contains(err.Error(), "--output requires a value") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestParseGlobalFlagsRejectsFlagAsValue(t *testing.T) {
+	_, _, _, err := parseGlobalFlags([]string{"--output", "--verbose", "status"})
+	if err == nil {
+		t.Fatal("parseGlobalFlags() accepted --verbose as the --output value")
+	}
+	if !strings.Contains(err.Error(), "--verbose") {
+		t.Fatalf("error should name the swallowed flag, got: %v", err)
+	}
+}
+
+func TestParseGlobalFlagsRejectsInvalidFormat(t *testing.T) {
+	for _, args := range [][]string{
+		{"status", "--output", "bogus"},
+		{"status", "--output=bogus"},
+	} {
+		_, _, _, err := parseGlobalFlags(args)
+		if err == nil {
+			t.Fatalf("parseGlobalFlags(%q) accepted an unsupported format", args)
+		}
+		if !strings.Contains(err.Error(), "invalid output format") {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	}
+}
+
+func TestRunRejectsInvalidOutputFlag(t *testing.T) {
+	for _, args := range [][]string{
+		{"status", "--output"},
+		{"--output", "--verbose", "status"},
+		{"status", "--output", "bogus"},
+	} {
+		if err := Run(args); err == nil {
+			t.Fatalf("Run(%q) returned nil, want an error", args)
+		}
+	}
+}
