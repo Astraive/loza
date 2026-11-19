@@ -558,8 +558,9 @@ export function queueSize(sink: Sink & { queueSize?: () => number; getLength?: (
   return 0;
 }
 
-export function health(sink: Sink): { name: string; status: 'healthy' } {
-  return { name: sink.name(), status: 'healthy' };
+export async function health(sink: Sink): Promise<{ name: string; status: 'healthy' | 'unhealthy' }> {
+  const healthy = typeof sink.health === 'function' ? await sink.health() : true;
+  return { name: sink.name(), status: healthy ? 'healthy' : 'unhealthy' };
 }
 
 /** Options accepted by {@link kafkaSink}. */
