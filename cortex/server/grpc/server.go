@@ -15,6 +15,10 @@ func New(cfg *config.Config, stor storage.Storage) *api.GRPCServer {
 // When redaction is enabled and no mode is explicitly configured, enforcement
 // is the safe default regardless of whether a blocklist is present.
 func buildRedactConfig(cfg *config.Config) redaction.Config {
+	return api.NewGRPCServer(cfg, stor, redactionConfig(cfg))
+}
+
+func redactionConfig(cfg *config.Config) redaction.Config {
 	redactCfg := redaction.Config{
 		Mode:      redaction.Mode(cfg.PIIRedaction.Mode),
 		Blocklist: cfg.PIIRedaction.Blocklist,
