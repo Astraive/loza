@@ -104,6 +104,67 @@ func TestMiddlewareRecordedStatusMatchesServedStatus(t *testing.T) {
 			}
 			if got := store.Events()[0].StatusCode; got != tt.want {
 				t.Fatalf("recorded status_code = %d, want %d (status actually served)", got, tt.want)
+func TestMiddlewareSkipsRouteForUnmatchedRequests(t *testing.T) {
+	store := configureFiber(t, false)
+	app := fiberpkg.New()
+	app.Use(Middleware())
+	app.Get("/users/:id", func(c *fiberpkg.Ctx) error { return c.SendString("ok") })
+
+	// A matched request is emitted first so it can be told apart from the
+	// unmatched one below. Fiber's Ctx.Path() aliases the request buffer, so
+	// the emitted Path attribute is not a reliable event identifier here.
+	matchedReq, err := http.NewRequest(http.MethodGet, "/users/123", nil)
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	if _, err := app.Test(matchedReq); err != nil {
+		t.Fatalf("app.Test matched: %v", err)
+	}
+
+	unmatchedReq, err := http.NewRequest(http.MethodGet, "/missing/secret", nil)
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	resp, err := app.Test(unmatchedReq)
+	if err != nil {
+		t.Fatalf("app.Test unmatched: %v", err)
+	}
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("unmatched status = %d, want 404", resp.StatusCode)
+	}
+
+	if err := loza.Flush(context.Background()); err != nil {
+		t.Fatalf("Flush: %v", err)
+	}
+	if store.Len() != 2 {
+		t.Fatalf("events = %d, want 2", store.Len())
+	}
+	events := store.Events()
+
+	route, ok := events[0].Get("route")
+	if !ok || route != "/users/:id" {
+		t.Fatalf("matched route = %v (ok=%v), want %q", route, ok, "/users/:id")
+	}
+	if route, ok := events[1].Get("route"); ok {
+		t.Fatalf("unmatched request recorded route %v; raw request paths must not be recorded", route)
+	}
+}
+
+func TestIsUnmatchedRoute(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{name: "nil", err: nil, want: false},
+		{name: "not found", err: fiberpkg.NewError(fiberpkg.StatusNotFound, "nope"), want: true},
+		{name: "method not allowed", err: fiberpkg.ErrMethodNotAllowed, want: true},
+		{name: "other fiber error", err: fiberpkg.NewError(fiberpkg.StatusInternalServerError, "boom"), want: false},
+		{name: "plain error", err: errors.New("boom"), want: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := isUnmatchedRoute(tc.err); got != tc.want {
+				t.Fatalf("isUnmatchedRoute(%v) = %v, want %v", tc.err, got, tc.want)
 			}
 		})
 	}

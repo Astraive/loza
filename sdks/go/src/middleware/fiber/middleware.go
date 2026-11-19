@@ -62,6 +62,15 @@ func MiddlewareWithConfig(cfg Config) fiberpkg.Handler {
 
 		err = c.Next()
 		enrichRoute(ctx, c)
+		route := ""
+		if !isUnmatchedRoute(err) {
+			if matched := c.Route(); matched != nil {
+				route = matched.Path
+			}
+		}
+		if route != "" {
+			loza.Set(ctx, loza.Route(route))
+		}
 		if err != nil {
 			status := effectiveStatus(err)
 			c.Status(status)
@@ -108,4 +117,21 @@ type panicErr struct {
 
 func (e panicErr) Error() string {
 	return fmt.Sprintf("panic recovered: %v", e.value)
+}
+
+// isUnmatchedRoute reports whether err is the error Fiber's router produces
+// when no registered route matched the request (404 Not Found) or when the
+// request method is not allowed for a matched path (405 Method Not Allowed).
+//
+// Fiber's Ctx.Route() never returns nil: for an unmatched request it falls
+// back to a synthetic Route whose Path is the raw original request path.
+// Recording that value creates high-cardinality telemetry and can leak
+// path-segment values, so unmatched requests are detected here instead of
+// relying on an always-true nil check.
+func isUnmatchedRoute(err error) bool {
+	var fiberErr *fiberpkg.Error
+	if !errors.As(err, &fiberErr) {
+		return false
+	}
+	return fiberErr.Code == fiberpkg.StatusNotFound || fiberErr.Code == fiberpkg.StatusMethodNotAllowed
 }
