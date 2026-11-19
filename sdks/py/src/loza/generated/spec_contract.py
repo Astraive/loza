@@ -99,6 +99,49 @@ except ImportError:
             "back to the backup contract, which may omit spec/security fixes.",
             exc_info=True,
         )
+except Exception:
+    # Fallback: load the contract from a sibling loza-spec checkout in the
+    # monorepo (development only). Load it directly from its file path instead
+    # of inserting the directory into sys.path: mutating the process-wide
+    # module search path on import lets this development copy shadow other
+    # installed modules and makes behavior depend on import order.
+    try:
+        spec_dir = Path(__file__).parent.parent.parent.parent.parent.parent / "spec" / "generated" / "python"
+        contract_path = spec_dir / "loza_contract.py"
+        if not contract_path.exists():
+            raise ImportError(f"loza-spec not found at {contract_path}")
+        loader = importlib.machinery.SourceFileLoader("loza_contract_from_spec", str(contract_path))
+        spec = importlib.util.spec_from_loader(loader.name, loader)
+        if spec is None:
+            raise ImportError(f"Cannot load contract module from {contract_path}")
+        contract = importlib.util.module_from_spec(spec)
+        sys.modules[loader.name] = contract
+        loader.exec_module(contract)
+
+        LOZA_SPEC_VERSION = contract.LOZA_SPEC_VERSION
+        LOZA_INGEST_API_VERSION = contract.LOZA_INGEST_API_VERSION
+        LOZA_EVENT_VERSION = contract.LOZA_EVENT_VERSION
+        MAX_EVENT_BYTES = contract.MAX_EVENT_BYTES
+        ALLOWED_TOP_LEVEL_FIELDS = contract.ALLOWED_TOP_LEVEL_FIELDS
+        CANONICAL_FIELDS = contract.CANONICAL_FIELDS
+        ALLOWED_KINDS = contract.ALLOWED_KINDS
+        ALLOWED_LEVELS = contract.ALLOWED_LEVELS
+        ALLOWED_OUTCOMES = contract.ALLOWED_OUTCOMES
+        ALLOWED_PARTIAL_REASONS = contract.ALLOWED_PARTIAL_REASONS
+        ALLOWED_EVENT_STATES = contract.ALLOWED_EVENT_STATES
+        CollectorAck = contract.CollectorAck
+        CollectorError = contract.CollectorError
+        CollectorResponse = contract.CollectorResponse
+        parse_collector_response = contract.parse_collector_response
+        looks_like_loza_event = contract.looks_like_loza_event
+        normalize_event_aliases = contract.normalize_event_aliases
+        build_ingest_envelope = contract.build_ingest_envelope
+        validate_event_payload = contract.validate_event_payload
+        validate_event_payload_detailed = contract.validate_event_payload_detailed
+        validate_flexible_json_bytes = contract.validate_flexible_json_bytes
+        ValidationError = contract.ValidationError
+        ValidationErrors = contract.ValidationErrors
+    except Exception as e:
         backup_path = Path(__file__).with_name("spec_contract.py.bak")
         if not backup_path.exists():
             raise ImportError(
