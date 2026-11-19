@@ -12,6 +12,7 @@ from .config import LOZA_EVENT_VERSION, LOZA_SPEC_VERSION
 from .hashing import hash_sensitive_value
 from .uuidv7 import uuidv7_like
 from .errors import EventAlreadyFinishedError, EventClosedError
+from .hashing import secure_hash
 
 EVENT_CREATED = "created"
 EVENT_ACTIVE = "active"
@@ -387,6 +388,7 @@ def _hash_at_path(target: dict[str, Any], key: str) -> None:
     if value is None:
         return
     hashed = hash_sensitive_value(value)
+    hashed = secure_hash(value)
     _set_path_direct(target, key, hashed)
 
 

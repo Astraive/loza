@@ -31,12 +31,22 @@ cfg = loza.production("my-service").with_redactor(redactor)
 
 ### HashKeys
 
-Replace the values of specified keys with their SHA-256 hash. Useful when you need to correlate events without exposing the original value:
+Replace the values of specified keys with a keyed HMAC-SHA256 hash. Useful when you need to correlate events without exposing the original value:
 
 ```python
 redactor = loza.HashKeys("user.email", "user.phone")
 cfg = loza.production("my-service").with_redactor(redactor)
 ```
+
+Plain SHA-256 hashes of low-entropy values (emails, phone numbers, account IDs) are trivially recoverable with dictionary or rainbow-table attacks. SDK value hashing therefore uses **keyed** HMAC-SHA256. Set the `LOZA_HASH_SECRET` environment variable to a stable secret shared by every producer:
+
+```sh
+export LOZA_HASH_SECRET='a-long-random-secret'
+```
+
+When `LOZA_HASH_SECRET` is unset, a random key is generated per process. Hashes are then still non-reversible, but they are only comparable within that process — set the variable if you need stable hashes across processes or restarts. Treat it like any other credential: keep it out of source control and logs.
+
+This keyed hashing applies to `HashKeys`, `HashString`/`hash_value` and the `hash_value=True` attribute handling. The typed helpers `email_hash()` and `ip_hash()` remain unkeyed SHA-256 for compatibility with externally precomputed hashes; do not rely on those for secret material.
 
 ### DropKeys
 

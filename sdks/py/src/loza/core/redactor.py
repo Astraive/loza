@@ -7,6 +7,7 @@ from collections.abc import Callable
 from typing import Any
 
 from .hashing import hash_sensitive_text
+from .hashing import secure_hash
 
 REDACTED_VALUE = "[REDACTED]"
 
@@ -57,6 +58,7 @@ def _stable_text(value: Any) -> str:
 
 def _hash(value: Any) -> str:
     return hash_sensitive_text(_stable_text(value))
+    return secure_hash(_stable_text(value))
 
 
 def _mask(value: Any, prefix: int = 2, suffix: int = 2) -> str:
