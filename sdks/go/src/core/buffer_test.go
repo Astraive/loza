@@ -640,6 +640,82 @@ func TestEventBuffer_ConcurrentAddDoesNotDropPendingBatch(t *testing.T) {
 			if seen[id] != 1 {
 				t.Fatalf("event %s flushed %d times, want exactly 1", id, seen[id])
 			}
+// TestEventBuffer_CloseReturnsFlushErrorToAllCallers verifies that an error
+// returned by the close-time Flush is reported to every Close caller, not just
+// the first one that runs the sync.Once body.
+func TestEventBuffer_CloseReturnsFlushErrorToAllCallers(t *testing.T) {
+	wantErr := errors.New("close flush failed")
+	var flushCount atomic.Int32
+
+	buf := NewEventBuffer(EventBufferConfig{
+		BatchSize:     100,
+		FlushInterval: time.Hour,
+		MaxBufferSize: 1000,
+		FlushFunc: func(ctx context.Context, events []*Event, encoded [][]byte) error {
+			flushCount.Add(1)
+			return wantErr
+		},
+	})
+
+	ctx := context.Background()
+	if err := buf.Add(ctx, &Event{EventID: NewUUIDv7()}, []byte("test")); err != nil {
+		t.Fatalf("Add failed: %v", err)
+	}
+
+	// The first Close performs the flush and returns its error.
+	if err := buf.Close(ctx); !errors.Is(err, wantErr) {
+		t.Fatalf("first Close() error = %v, want %v", err, wantErr)
+	}
+
+	// Every subsequent Close must return the same stored error.
+	for i := 0; i < 3; i++ {
+		if err := buf.Close(ctx); !errors.Is(err, wantErr) {
+			t.Errorf("subsequent Close() #%d error = %v, want %v", i+1, err, wantErr)
+		}
+	}
+
+	if got := flushCount.Load(); got != 1 {
+		t.Errorf("expected exactly 1 flush on close, got %d", got)
+	}
+}
+
+// TestEventBuffer_ConcurrentCloseReturnsFlushError verifies that concurrent
+// Close callers all observe the Flush error produced by the single Do body.
+func TestEventBuffer_ConcurrentCloseReturnsFlushError(t *testing.T) {
+	wantErr := errors.New("concurrent close flush failed")
+
+	buf := NewEventBuffer(EventBufferConfig{
+		BatchSize:     100,
+		FlushInterval: time.Hour,
+		MaxBufferSize: 1000,
+		FlushFunc: func(ctx context.Context, events []*Event, encoded [][]byte) error {
+			return wantErr
+		},
+	})
+
+	ctx := context.Background()
+	if err := buf.Add(ctx, &Event{EventID: NewUUIDv7()}, []byte("test")); err != nil {
+		t.Fatalf("Add failed: %v", err)
+	}
+
+	const callers = 16
+	errs := make([]error, callers)
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(callers)
+	for i := 0; i < callers; i++ {
+		go func(i int) {
+			defer wg.Done()
+			<-start
+			errs[i] = buf.Close(ctx)
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+
+	for i, err := range errs {
+		if !errors.Is(err, wantErr) {
+			t.Errorf("concurrent Close() #%d error = %v, want %v", i, err, wantErr)
 		}
 	}
 }
