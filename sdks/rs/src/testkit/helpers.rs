@@ -20,9 +20,23 @@ pub fn assert_contains(encoded: &str, needle: &str) {
 pub fn capture(f: impl FnOnce(&Logger)) -> Vec<String> {
     let store = MemorySinkStore::new();
     let logger = Logger::new(Config::test("capture").with_sink(SinkConfig::Memory(store.clone())));
-    f(&logger);
-    let _ = logger.flush();
-    store.events()
+    capture_with(&logger, f)
+}
+
+/// Flush `logger` and collect captured events from its memory sinks.
+///
+/// A failed flush must surface as a test failure: silently discarding the
+/// `Result` would let callers assert against incomplete or empty events.
+fn capture_with(logger: &Logger, f: impl FnOnce(&Logger)) -> Vec<String> {
+    f(logger);
+    logger.flush().expect("capture: flush failed");
+    let mut events = Vec::new();
+    for sink in &logger.config().sinks {
+        if let SinkConfig::Memory(store) = sink {
+            events.extend(store.events());
+        }
+    }
+    events
 }
 
 /// Assert that a decoded event JSON contains the expected key-value pair.
@@ -226,5 +240,29 @@ mod tests {
         let encoded = serde_json::to_string(&sample()).expect("encode sample");
         assert_event(&encoded, "checkpoints.1.name", "second");
         assert_event(&encoded, "dotted\\.key", "literal");
+    #[test]
+    #[should_panic(expected = "capture: flush failed")]
+    fn capture_surfaces_flush_failure() {
+        let logger = Logger::new(
+            Config::test("capture-flush-failure")
+                .with_async(true)
+                .with_sink(SinkConfig::Memory(MemorySinkStore::new())),
+        );
+        // Shutting down the async worker makes a subsequent flush fail
+        // deterministically (sending the flush command finds no receiver).
+        logger.shutdown().expect("shutdown should succeed");
+        capture_with(&logger, |_| {});
+    }
+
+    #[test]
+    fn capture_collects_events_after_flush() {
+        reset_for_test();
+        let events = capture(|logger| {
+            let mut event = logger.start_event(crate::Params::new("capture.flush.ok"));
+            logger.append(&mut event, crate::string("family", "testkit"));
+            let _ = logger.finish(&mut event, "success");
+            let _ = logger.emit(&event);
+        });
+        assert_eq!(events.len(), 1, "capture should return all flushed events");
     }
 }
