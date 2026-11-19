@@ -70,6 +70,14 @@ impl SpanContext {
         {
             return None;
         }
+        // W3C Trace Context reserves version `ff` and forbids all-zero
+        // trace-id / span-id values; such headers are spec-invalid.
+        if version.eq_ignore_ascii_case("ff")
+            || trace_id.bytes().all(|byte| byte == b'0')
+            || span_id.bytes().all(|byte| byte == b'0')
+        {
+            return None;
+        }
         Some(
             Self::new()
                 .with_trace_id(trace_id.to_ascii_lowercase())
