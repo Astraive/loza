@@ -45,7 +45,18 @@ func TestHookRunEmitsToLova(t *testing.T) {
 	}
 }
 
-func TestHookRunMapsLevels(t *testing.T) {
+// assertHookMapsLevels emits one event at each zerolog level through the
+// adapter hook and asserts that all five reach loza. zerolog suppresses events
+// below the process-wide global level even when the logger itself allows them,
+// so the global level is explicitly raised to Trace (and restored afterwards)
+// to make this assertion independent of other tests' global state.
+func assertHookMapsLevels(t *testing.T) {
+	t.Helper()
+
+	prevLevel := zerolog.GlobalLevel()
+	zerolog.SetGlobalLevel(zerolog.TraceLevel)
+	t.Cleanup(func() { zerolog.SetGlobalLevel(prevLevel) })
+
 	sink, store := loza.MemorySink()
 	cfg := loza.Test().WithSink(sink)
 	if err := loza.Configure(cfg); err != nil {
@@ -56,7 +67,6 @@ func TestHookRunMapsLevels(t *testing.T) {
 
 	// Debug and Trace both map to loza Debug.
 	zl.Debug().Msg("debug msg")
-	zerolog.GlobalLevel() // ensure trace is available
 	zl.Trace().Msg("trace msg")
 	zl.Info().Msg("info msg")
 	zl.Warn().Msg("warn msg")
@@ -142,4 +152,17 @@ func TestHookRunMapsLevelsToSeverity(t *testing.T) {
 			}
 		})
 	}
+func TestHookRunMapsLevels(t *testing.T) {
+	assertHookMapsLevels(t)
+}
+
+// TestHookRunMapsLevelsWithRestrictiveGlobalLevel is a regression test for the
+// no-op "ensure trace is available" call: a restrictive global level left by
+// another test must not suppress the Debug/Trace events this mapping relies on.
+func TestHookRunMapsLevelsWithRestrictiveGlobalLevel(t *testing.T) {
+	origLevel := zerolog.GlobalLevel()
+	zerolog.SetGlobalLevel(zerolog.InfoLevel)
+	t.Cleanup(func() { zerolog.SetGlobalLevel(origLevel) })
+
+	assertHookMapsLevels(t)
 }
