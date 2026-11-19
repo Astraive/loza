@@ -522,6 +522,8 @@ func TestHandleIngestJWTAuthorization(t *testing.T) {
 	cfg.storageEncryptionKey = "test-encryption-key-for-e2e-32bytes!"
 	cfg.identityMode = "jwt"
 	cfg.apiKey = "0123456789abcdef0123456789abcdef"
+	cfg.jwtIssuer = "https://issuer.loza.test"
+	cfg.jwtAudience = []string{"loza-collector"}
 	state := &collectorState{
 		cfg:         cfg,
 		ingestSink:  sink,
@@ -534,7 +536,9 @@ func TestHandleIngestJWTAuthorization(t *testing.T) {
 		t.Fatalf("new signer: %v", err)
 	}
 	token, err := jwt.Signed(signer).Claims(jwt.Claims{
-		Expiry: jwt.NewNumericDate(time.Now().Add(time.Hour)),
+		Issuer:   cfg.jwtIssuer,
+		Audience: jwt.Audience(cfg.jwtAudience),
+		Expiry:   jwt.NewNumericDate(time.Now().Add(time.Hour)),
 	}).Serialize()
 	if err != nil {
 		t.Fatalf("serialize jwt: %v", err)

@@ -308,6 +308,9 @@ func applyEnvOverrides(fc *fileConfig) error {
 		fc.Auth.Value = v
 		fc.Auth.Enabled = true
 	}
+	setString("COLLECTOR_JWT_ISSUER", &fc.Auth.JWT.Issuer)
+	setCSV("COLLECTOR_JWT_AUDIENCE", &fc.Auth.JWT.Audience)
+	setString("COLLECTOR_JWT_SUBJECT", &fc.Auth.JWT.Subject)
 	if v, ok := get("LOZA_STORAGE_ENCRYPTION_KEY"); ok {
 		fc.Storage.EncryptionKey = v
 	}
@@ -1167,6 +1170,13 @@ func validateFileConfig(fc fileConfig) error {
 	// rejected with an error instead of terminating the process later.
 	if _, err := parseTrustedCIDRs(fc.Identity.TrustedProxies); err != nil {
 		return err
+	if identityMode == "jwt" {
+		if strings.TrimSpace(fc.Auth.JWT.Issuer) == "" {
+			return errors.New("auth.jwt.issuer must not be empty when identity.mode is jwt")
+		}
+		if len(trimStrings(fc.Auth.JWT.Audience)) == 0 {
+			return errors.New("auth.jwt.audience must not be empty when identity.mode is jwt")
+		}
 	}
 	switch strings.ToLower(strings.TrimSpace(fc.Privacy.Mode)) {
 	case "", "off", "warn", "enforce":
@@ -1835,6 +1845,9 @@ func runtimeConfigFromFile(fc fileConfig) collectorConfig {
 		allowedOrigins:          append([]string(nil), fc.Identity.AllowedOrigins...),
 		trustedProxies:          append([]string(nil), fc.Identity.TrustedProxies...),
 		identityMode:            strings.ToLower(strings.TrimSpace(fc.Identity.Mode)),
+		jwtIssuer:               strings.TrimSpace(fc.Auth.JWT.Issuer),
+		jwtAudience:             trimStrings(fc.Auth.JWT.Audience),
+		jwtSubject:              strings.TrimSpace(fc.Auth.JWT.Subject),
 		authIdentityWins:        fc.Identity.AuthIdentityWins,
 		allowPayloadIdentity:    fc.Identity.AllowPayloadIdentity,
 		boundServiceName:        strings.TrimSpace(fc.Identity.ServiceName),

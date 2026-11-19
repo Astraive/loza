@@ -187,6 +187,9 @@ type collectorConfig struct {
 	allowedOrigins          []string
 	trustedProxies          []string
 	identityMode            string
+	jwtIssuer               string
+	jwtAudience             []string
+	jwtSubject              string
 	authIdentityWins        bool
 	allowPayloadIdentity    bool
 	boundServiceName        string

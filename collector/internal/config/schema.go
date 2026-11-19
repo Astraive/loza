@@ -112,11 +112,22 @@ type AuthConfig struct {
 	ServerSecret      string                `yaml:"server_secret"`
 	CacheTTL          time.Duration         `yaml:"cache_ttl"`
 	NegativeCacheTTL  time.Duration         `yaml:"negative_cache_ttl"`
+	JWT               AuthJWTConfig         `yaml:"jwt"`
 	DefaultCollector  string                `yaml:"default_collector"`
 	Collectors        []AuthCollectorConfig `yaml:"collectors"`
 	Grants            []AuthGrantConfig     `yaml:"grants"`
 	Keys              []AuthKeyConfig       `yaml:"keys"`
 	Tokens            []AuthTokenConfig     `yaml:"tokens"`
+}
+
+// AuthJWTConfig declares the protected claims a JWT must carry when
+// identity.mode is "jwt". Issuer and Audience are required in that mode;
+// Subject is optional and, when set, must match the token's "sub" claim.
+// Audience is matched as "any of" the configured values (RFC 7519 aud).
+type AuthJWTConfig struct {
+	Issuer   string   `yaml:"issuer"`
+	Audience []string `yaml:"audience"`
+	Subject  string   `yaml:"subject"`
 }
 
 // AuthCollectorConfig declares a collector that may be targeted by a grant.
