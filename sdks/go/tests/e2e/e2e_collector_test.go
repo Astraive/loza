@@ -3,8 +3,10 @@ package e2e
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
@@ -14,6 +16,17 @@ import (
 )
 
 const defaultCollectorURL = "http://127.0.0.1:9308"
+
+// collectorRequestTimeout bounds every HTTP probe made against the collector
+// so a stalled or unresponsive collector fails the E2E test instead of hanging
+// indefinitely. A variable so the regression test can shorten it.
+var collectorRequestTimeout = 10 * time.Second
+
+// collectorHTTPClient returns a client with a finite timeout for collector
+// probes. Go's default client has a zero timeout, which can hang the suite.
+func collectorHTTPClient() *http.Client {
+	return &http.Client{Timeout: collectorRequestTimeout}
+}
 
 func collectorURL() string {
 	if value := strings.TrimRight(os.Getenv("LOZA_TEST_COLLECTOR_URL"), "/"); value != "" {
@@ -115,22 +128,32 @@ func TestE2E_HTTPBatchSink_AsyncBatch(t *testing.T) {
 func TestE2E_HTTPBatchSink_VersionCheck(t *testing.T) {
 	_ = newTestClient(t)
 
-	resp, err := http.Get(collectorURL() + "/version")
+	version, err := fetchCollectorVersion(collectorHTTPClient(), collectorURL())
 	if err != nil {
 		t.Fatalf("version: %v", err)
-	}
-	defer resp.Body.Close()
-
-	body, _ := io.ReadAll(resp.Body)
-	var version map[string]any
-	if err := json.Unmarshal(body, &version); err != nil {
-		t.Fatalf("parse version: %v", err)
 	}
 	t.Logf("Collector version: %+v", version)
 
 	if _, ok := version["ingest_api_version"]; !ok {
 		t.Fatal("expected ingest_api_version in version response")
 	}
+}
+
+// fetchCollectorVersion performs the /version probe with the supplied client
+// so the request's timeout behavior can be exercised in isolation.
+func fetchCollectorVersion(client *http.Client, baseURL string) (map[string]any, error) {
+	resp, err := client.Get(baseURL + "/version")
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	var version map[string]any
+	if err := json.Unmarshal(body, &version); err != nil {
+		return nil, err
+	}
+	return version, nil
 }
 
 func TestE2E_HTTPBatchSink_MultipleFlushes(t *testing.T) {
@@ -159,21 +182,61 @@ func TestE2E_HTTPBatchSink_MultipleFlushes(t *testing.T) {
 
 func getCollectorStatus(t *testing.T) []byte {
 	t.Helper()
-	req, err := http.NewRequest(http.MethodGet, collectorURL()+"/status", nil)
-	if err != nil {
-		t.Fatalf("create status request: %v", err)
-	}
-	if token := adminAPIKey(); token != "" {
-		req.Header.Set("Authorization", "Bearer "+token)
-	}
-	resp, err := http.DefaultClient.Do(req)
+	body, err := fetchCollectorStatus(collectorHTTPClient(), collectorURL(), adminAPIKey())
 	if err != nil {
 		t.Fatalf("status: %v", err)
+	}
+	return body
+}
+
+// fetchCollectorStatus performs the /status probe with the supplied client so
+// the request's timeout behavior can be exercised in isolation.
+func fetchCollectorStatus(client *http.Client, baseURL, token string) ([]byte, error) {
+	req, err := http.NewRequest(http.MethodGet, baseURL+"/status", nil)
+	if err != nil {
+		return nil, err
+	}
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
 	}
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != 200 {
-		t.Fatalf("status %d: %s", resp.StatusCode, string(body))
+		return nil, fmt.Errorf("status %d: %s", resp.StatusCode, string(body))
 	}
-	return body
+	return body, nil
+}
+
+// TestCollectorHTTPRequestsAreBounded is a regression test for the default
+// client's zero timeout: a collector that accepts a connection but never
+// answers must not hang the E2E suite forever.
+func TestCollectorHTTPRequestsAreBounded(t *testing.T) {
+	stalled := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done()
+	}))
+	defer stalled.Close()
+
+	originalTimeout := collectorRequestTimeout
+	collectorRequestTimeout = 100 * time.Millisecond
+	defer func() { collectorRequestTimeout = originalTimeout }()
+
+	client := collectorHTTPClient()
+	if client.Timeout <= 0 {
+		t.Fatalf("expected a finite client timeout, got %s", client.Timeout)
+	}
+
+	start := time.Now()
+	if _, err := fetchCollectorVersion(client, stalled.URL); err == nil {
+		t.Fatal("expected /version request against a stalled collector to fail")
+	}
+	if _, err := fetchCollectorStatus(client, stalled.URL, ""); err == nil {
+		t.Fatal("expected /status request against a stalled collector to fail")
+	}
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Fatalf("stalled collector requests took %s; expected them to be bounded by the client timeout", elapsed)
+	}
 }
