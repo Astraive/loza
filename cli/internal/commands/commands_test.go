@@ -734,6 +734,44 @@ func TestSchemaValidateNoPathWithoutStrictChecksSpecAssets(t *testing.T) {
 	}
 }
 
+// TestCommandsRejectPathInjectionIDs verifies the call sites named in
+// MASS-0035 reject IDs that could inject URL path segments or a query string,
+// and that no request is sent for such input.
+func TestCommandsRejectPathInjectionIDs(t *testing.T) {
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer srv.Close()
+
+	cfg := config.Config{CollectorURL: srv.URL}
+	ctx := context.Background()
+	const maliciousID = "x/../../keys?force=true"
+
+	tests := []struct {
+		name string
+		run  func() error
+	}{
+		{"keys revoke", func() error { return KeysCommand(ctx, cfg, []string{"revoke", maliciousID}) }},
+		{"keys rotate", func() error { return KeysCommand(ctx, cfg, []string{"rotate", maliciousID}) }},
+		{"quarantine replay", func() error { return QuarantineCommand(ctx, cfg, []string{"replay", maliciousID}) }},
+		{"quarantine delete", func() error { return QuarantineCommand(ctx, cfg, []string{"delete", maliciousID}) }},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.run()
+			if err == nil || !strings.Contains(err.Error(), "invalid id") {
+				t.Fatalf("expected invalid id error, got %v", err)
+			}
+		})
+	}
+	if got := hits.Load(); got != 0 {
+		t.Fatalf("expected no HTTP requests for injected IDs, got %d", got)
+	}
+}
+
 func TestEmitWithCustomKindAndOutcome(t *testing.T) {
 	cfg := config.Config{CollectorURL: "http://127.0.0.1:9308"}
 	old := os.Stdout
