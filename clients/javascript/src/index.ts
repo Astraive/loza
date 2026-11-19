@@ -85,23 +85,23 @@ export class Client {
     }
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), this.config.timeoutMs);
-    const normalizedLimit = Math.max(1, Math.min(Math.trunc(limit), 1000));
-    const encodedParameters: Record<string, QueryValue> = {};
-    for (const [name, value] of Object.entries(parameters)) {
-      encodedParameters[name] = isQueryValue(value)
-        ? value
-        : { type: inferType(value), value };
-    }
-    const endpoint = `${this.config.endpoint}/collectors/${encodeURIComponent(this.config.collector)}/lql/query`;
-    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-    if (this.config.apiKey) {
-      headers.Authorization = `Bearer ${this.config.apiKey}`;
-    } else if (this.config.username) {
-      headers.Authorization = `Basic ${base64(`${this.config.username}:${this.config.password}`)}`;
-    }
-    if (this.config.env) headers['X-Loza-Env'] = this.config.env;
-    if (this.config.service) headers['X-Loza-Service'] = this.config.service;
     try {
+      const normalizedLimit = Math.max(1, Math.min(Math.trunc(limit), 1000));
+      const encodedParameters: Record<string, QueryValue> = {};
+      for (const [name, value] of Object.entries(parameters)) {
+        encodedParameters[name] = isQueryValue(value)
+          ? value
+          : { type: inferType(value), value };
+      }
+      const endpoint = `${this.config.endpoint}/collectors/${encodeURIComponent(this.config.collector)}/lql/query`;
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (this.config.apiKey) {
+        headers.Authorization = `Bearer ${this.config.apiKey}`;
+      } else if (this.config.username) {
+        headers.Authorization = `Basic ${base64(`${this.config.username}:${this.config.password}`)}`;
+      }
+      if (this.config.env) headers['X-Loza-Env'] = this.config.env;
+      if (this.config.service) headers['X-Loza-Service'] = this.config.service;
       const response = await this.config.fetch(endpoint, {
         method: 'POST',
         headers,
