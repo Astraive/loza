@@ -61,7 +61,9 @@ func run(args []string) error {
 	batchSize := fs.Int("batch", cfg.BatchSize, "batch size per request")
 	apiKey := fs.String("api-key", cfg.APIKey, "API key for auth")
 	bodySize := fs.Int("body-size", cfg.BodySize, "average body size in bytes")
-	_ = fs.Parse(args)
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
 
 	cfg.URL = *url
 	cfg.Events = *events
