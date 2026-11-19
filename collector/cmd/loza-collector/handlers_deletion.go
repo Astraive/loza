@@ -259,8 +259,3 @@ func getUserIDFromPath(path string) string {
 	}
 	return ""
 }
-
-// escapeSQL escapes SQL string values
-func escapeSQL(s string) string {
-	return strings.ReplaceAll(s, `'`, `''`)
-}
