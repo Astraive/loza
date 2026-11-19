@@ -14,7 +14,6 @@ import (
 	"sort"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 )
 
@@ -124,7 +123,6 @@ func runLoadTest(name string, concurrency int, duration time.Duration, reqFunc f
 	defer cancel()
 
 	var wg sync.WaitGroup
-	var totalReqs int64
 
 	// Start workers
 	for i := 0; i < concurrency; i++ {
@@ -139,6 +137,11 @@ func runLoadTest(name string, concurrency int, duration time.Duration, reqFunc f
 					r := reqFunc()
 					atomic.AddInt64(&totalReqs, 1)
 					submitResult(results, r)
+					select {
+					case results <- r:
+					default:
+						// Drop if channel full
+					}
 				}
 			}
 		}()
