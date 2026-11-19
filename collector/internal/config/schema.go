@@ -565,8 +565,30 @@ type EBKafkaConfig struct {
 	Compression       string   `yaml:"compression"`
 }
 
+const (
+	defaultsEnvVar   = "LOZA_COLLECTOR_DEFAULTS"
+	defaultsFileName = "loza-collector.defaults.yaml"
+)
+
+// defaultsTrustedPaths are deployment-controlled absolute locations for the
+// collector defaults file. They are searched before anything derived from the
+// current working directory.
+var defaultsTrustedPaths = []string{"/app/config.yaml"}
+
+// defaultsCWDCandidates are relative locations kept for source-checkout use
+// (development and tests). They are a last resort and are skipped entirely
+// for privileged processes, where the working directory may not be trusted.
+var defaultsCWDCandidates = []string{
+	defaultsFileName,
+	filepath.Join("..", defaultsFileName),
+	filepath.Join("..", "..", defaultsFileName),
+}
+
 func Default() Config {
-	path := findDefaultsFile()
+	path, err := findDefaultsFile()
+	if err != nil {
+		panic(err)
+	}
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		panic(fmt.Errorf("read collector defaults %s: %w", path, err))
@@ -603,33 +625,95 @@ func LoadFile(cfg *Config, path string) error {
 	return nil
 }
 
-func findDefaultsFile() string {
-	if override := strings.TrimSpace(os.Getenv("LOZA_COLLECTOR_DEFAULTS")); override != "" {
-		return override
+// findDefaultsFile resolves the file that supplies the collector's defaults.
+// Those defaults include security-sensitive settings (auth.enabled and the
+// route/sink definitions), so resolution is deliberately conservative:
+//
+//   - the LOZA_COLLECTOR_DEFAULTS override must be a clean absolute path with
+//     no traversal segments and must point to a file with safe permissions;
+//   - deployment-controlled absolute paths and locations derived from the
+//     executable are preferred over anything relative to the working directory;
+//   - working-directory-relative candidates are skipped for privileged
+//     processes, so an attacker-controlled CWD cannot inject a defaults file.
+func findDefaultsFile() (string, error) {
+	if override := strings.TrimSpace(os.Getenv(defaultsEnvVar)); override != "" {
+		path, err := cleanAbsolutePath(override)
+		if err != nil {
+			return "", fmt.Errorf("invalid %s: %w", defaultsEnvVar, err)
+		}
+		if err := verifyDefaultsFile(path); err != nil {
+			return "", err
+		}
+		return path, nil
 	}
 
-	candidates := []string{
-		"loza-collector.defaults.yaml",
-		filepath.Join("..", "loza-collector.defaults.yaml"),
-		filepath.Join("..", "..", "loza-collector.defaults.yaml"),
-		filepath.Join(string(filepath.Separator), "app", "config.yaml"),
-	}
-	for _, candidate := range candidates {
-		if _, err := os.Stat(candidate); err == nil {
-			return candidate
+	for _, candidate := range defaultsTrustedPaths {
+		if info, err := os.Stat(candidate); err == nil && info.Mode().IsRegular() {
+			if err := verifyDefaultsFile(candidate); err == nil {
+				return candidate, nil
+			}
 		}
 	}
 
-	exe, err := os.Executable()
-	if err == nil {
+	if exe, err := os.Executable(); err == nil {
 		dir := filepath.Dir(exe)
 		for i := 0; i < 5; i++ {
-			candidate := filepath.Join(dir, "loza-collector.defaults.yaml")
-			if _, statErr := os.Stat(candidate); statErr == nil {
-				return candidate
+			candidate := filepath.Join(dir, defaultsFileName)
+			if info, statErr := os.Stat(candidate); statErr == nil && info.Mode().IsRegular() {
+				if err := verifyDefaultsFile(candidate); err == nil {
+					return candidate, nil
+				}
 			}
 			dir = filepath.Dir(dir)
 		}
 	}
-	return "loza-collector.defaults.yaml"
+
+	if !runningPrivileged() {
+		for _, candidate := range defaultsCWDCandidates {
+			if info, err := os.Stat(candidate); err == nil && info.Mode().IsRegular() {
+				if err := verifyDefaultsFile(candidate); err == nil {
+					return candidate, nil
+				}
+			}
+		}
+	}
+
+	return "", fmt.Errorf("collector defaults file %q not found in a trusted location (set %s to an absolute path)", defaultsFileName, defaultsEnvVar)
+}
+
+// cleanAbsolutePath validates and normalizes a caller-supplied path. Relative
+// paths and ".." traversal segments are rejected so the override cannot be
+// used to point the collector at an arbitrary defaults file.
+func cleanAbsolutePath(raw string) (string, error) {
+	if !filepath.IsAbs(raw) {
+		return "", fmt.Errorf("path %q must be absolute", raw)
+	}
+	for _, segment := range strings.Split(filepath.ToSlash(raw), "/") {
+		if segment == ".." {
+			return "", fmt.Errorf("path %q must not contain traversal segments", raw)
+		}
+	}
+	return filepath.Clean(raw), nil
+}
+
+// verifyDefaultsFile rejects files that other users can modify, because a
+// planted defaults file could otherwise rewrite the entire security config.
+func verifyDefaultsFile(path string) error {
+	info, err := os.Stat(path)
+	if err != nil {
+		return fmt.Errorf("stat collector defaults %s: %w", path, err)
+	}
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("collector defaults %s is not a regular file", path)
+	}
+	if perm := info.Mode().Perm(); perm&0o022 != 0 {
+		return fmt.Errorf("collector defaults %s has insecure permissions %o (must not be group- or world-writable)", path, perm)
+	}
+	return nil
+}
+
+// runningPrivileged reports whether the process has elevated (root)
+// privileges. It returns false on platforms without that concept.
+func runningPrivileged() bool {
+	return os.Geteuid() == 0
 }
