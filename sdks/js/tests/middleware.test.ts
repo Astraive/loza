@@ -6,6 +6,7 @@ import { lozaKoaMiddleware } from '../src/middleware/koa.ts';
 import { lozaFastifyPlugin } from '../src/middleware/fastify.ts';
 import { lozaHonoMiddleware } from '../src/middleware/hono.ts';
 import { lozaNextMiddleware } from '../src/middleware/next.ts';
+import { Logger } from '../src/core/logger.ts';
 
 type HttpResponse = {
   statusCode: number;
@@ -143,5 +144,54 @@ describe('framework middleware', () => {
       headers: { get: () => '10.0.0.2' },
     };
     await assert.rejects(() => middleware(nextRequest, async () => { throw new Error('request failed'); }), /request failed/);
+  });
+
+  it('does not record a spoofed X-Forwarded-For chain verbatim as http.remote_ip', async () => {
+    // Capture the event the middleware enriches so we can assert on the actual
+    // attribute value (the middleware owns its Logger and exposes no sink).
+    const original = Logger.prototype.startHTTPEvent;
+    let captured: any;
+    Logger.prototype.startHTTPEvent = function (params: any) {
+      captured = original.call(this, params);
+      return captured;
+    };
+
+    const makeRequest = (xff: string) => ({
+      method: 'GET',
+      url: '/inspect',
+      headers: {
+        get: (name: string) =>
+          name === 'user-agent' ? 'ua' : name === 'x-forwarded-for' ? xff : '',
+      },
+    });
+
+    try {
+      const middleware = lozaNextMiddleware({ service: 'next' });
+
+      // A client prepends a fake address; the trusted proxy appends the real
+      // client. The raw chain must never be recorded, and the client-controlled
+      // leftmost value must not win over the appended hop.
+      await middleware(makeRequest('203.0.113.10, 198.51.100.20'), async () => ({ status: 200 }));
+      assert.equal(captured.get('http.remote_ip'), '198.51.100.20');
+      assert.equal(captured.get('http.user_agent'), 'ua');
+
+      // Multiple prepended spoofed entries are still ignored.
+      await middleware(makeRequest('203.0.113.10, 9.9.9.9, 198.51.100.20'), async () => ({ status: 200 }));
+      assert.equal(captured.get('http.remote_ip'), '198.51.100.20');
+
+      // Invalid rightmost entries are skipped in favour of the last valid IP.
+      await middleware(makeRequest('203.0.113.10, not-an-ip'), async () => ({ status: 200 }));
+      assert.equal(captured.get('http.remote_ip'), '203.0.113.10');
+
+      // IPv6 hops are supported and trimmed.
+      await middleware(makeRequest(' 203.0.113.10 , 2001:db8::1 '), async () => ({ status: 200 }));
+      assert.equal(captured.get('http.remote_ip'), '2001:db8::1');
+
+      // A header containing no valid IP never becomes a remote IP.
+      await middleware(makeRequest('attacker-controlled-key'), async () => ({ status: 200 }));
+      assert.equal(captured.get('http.remote_ip'), '');
+    } finally {
+      Logger.prototype.startHTTPEvent = original;
+    }
   });
 });
