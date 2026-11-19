@@ -153,8 +153,33 @@ def test_duration_ms_is_protected() -> None:
     logger2.finish(ctx2, "success")
 
     payload2 = json.loads(logger2.emit(ctx2))
-    # Should use actual measured duration, not user-provided value
+    # Should use actual measured duration, not user-provided value. Assert the numeric type
+    # explicitly: comparing an injected string ("9999999") against an int would pass even if
+    # the override were honored, leaving the protection check ineffective.
+    assert isinstance(payload2["duration_ms"], (int, float))
+    assert payload2["duration_ms"] != "9999999", "duration_ms should not be the injected string"
     assert payload2["duration_ms"] != 9999999, "duration_ms should be calculated, not overridable by user"
+
+
+def test_duration_ms_string_override_never_reaches_canonical_field() -> None:
+    """Regression: a string duration_ms override must not masquerade as the canonical field.
+
+    Injecting "9999999" and asserting only ``!= 9999999`` (int) cannot detect an override,
+    because json.loads would yield the string "9999999", which differs from the int. Verify
+    the emitted canonical field stays numeric and is not either representation of the
+    injected value, under every duplicate policy.
+    """
+    injected = "9999999"
+    for policy in [loza.CanonicalWins, loza.UserWins, loza.KeepBoth]:
+        logger = loza.New(loza.Test("test").with_duplicate_policy(policy))
+        ctx = logger.start_event(loza.Params(event="test.event"))
+        logger.enrich(ctx, loza.String("duration_ms", injected))
+        logger.finish(ctx, "success")
+
+        payload = json.loads(logger.emit(ctx))
+        assert isinstance(payload["duration_ms"], (int, float)), f"canonical duration_ms must be numeric with {policy}"
+        assert payload["duration_ms"] != injected, f"injected string leaked into canonical field with {policy}"
+        assert payload["duration_ms"] != int(injected), f"injected value leaked into canonical field with {policy}"
 
 
 def test_outcome_is_protected() -> None:
