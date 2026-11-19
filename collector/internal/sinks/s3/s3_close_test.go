@@ -232,5 +232,62 @@ func TestCloseReturnsWhenPeriodicFlushStalls(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("Close hung while a periodic flush was stalled")
+	"errors"
+	"net/http"
+	"testing"
+
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/credentials"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
+)
+
+var errSimulatedPut = errors.New("simulated s3 put failure")
+
+type failingHTTPClient struct{}
+
+func (failingHTTPClient) Do(*http.Request) (*http.Response, error) {
+	return nil, errSimulatedPut
+}
+
+// TestCloseReturnsFlushErrorOnEveryCall reproduces the case where the final
+// flush fails: the error must be reported to the first and every later caller.
+func TestCloseReturnsFlushErrorOnEveryCall(t *testing.T) {
+	client := s3.NewFromConfig(aws.Config{
+		Region:      "us-east-1",
+		Credentials: credentials.NewStaticCredentialsProvider("id", "secret", ""),
+		HTTPClient:  failingHTTPClient{},
+		Retryer:     func() aws.Retryer { return aws.NopRetryer{} },
+	})
+	s := &sink{
+		cfg: Config{
+			Client:      client,
+			Bucket:      "bucket",
+			ObjectKeyFn: func() string { return "events.ndjson" },
+		},
+		batchSize: 10,
+		stop:      make(chan struct{}),
+	}
+
+	if err := s.WriteEvent(context.Background(), []byte(`{"id":"e1"}`), nil); err != nil {
+		t.Fatalf("write event failed: %v", err)
+	}
+
+	for i := 1; i <= 3; i++ {
+		err := s.Close(context.Background())
+		if !errors.Is(err, errSimulatedPut) {
+			t.Fatalf("Close call %d returned %v; want final flush error", i, err)
+		}
+	}
+}
+
+func TestCloseReturnsNilWhenFlushSucceeds(t *testing.T) {
+	s := &sink{
+		batchSize: 10,
+		stop:      make(chan struct{}),
+	}
+	for i := 1; i <= 2; i++ {
+		if err := s.Close(context.Background()); err != nil {
+			t.Fatalf("Close call %d returned %v; want nil", i, err)
+		}
 	}
 }

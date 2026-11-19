@@ -50,6 +50,7 @@ type sink struct {
 	closed    bool
 	stop      chan struct{}
 	closeOnce sync.Once
+	closeErr  error
 	wg        sync.WaitGroup
 	// inflight tracks every putObject that may restore records to the buffer.
 	// Close waits for it so restored records are included in the final flush.
@@ -160,6 +161,8 @@ func (s *sink) Close(ctx context.Context) error {
 		// so restored records are uploaded (or surface as a Close error).
 		s.inflight.Wait()
 		s.closeErr = s.finalFlush(ctx)
+		s.wg.Wait()
+		s.closeErr = s.flushBatch(ctx)
 	})
 	return s.closeErr
 }
