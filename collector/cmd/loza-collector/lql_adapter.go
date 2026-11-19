@@ -303,6 +303,3 @@ func (c *lqlStdioCompiler) requestLocked(ctx context.Context, method string, par
 		return <-result, nil
 	}
 }
-func escapeLQLString(value string) string {
-	return strings.ReplaceAll(strings.ReplaceAll(value, `\`, `\\`), `"`, `\"`)
-}
