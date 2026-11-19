@@ -279,7 +279,6 @@ func (p *EventProcessor) createGraphNodes(ctx context.Context, event *models.Eve
 }
 
 func (p *EventProcessor) createGraphNodesBatch(ctx context.Context, events []*models.Event) error {
-	canonicalServices := make(map[string]string, len(events))
 	traceGroups := make(map[string][]*models.Event)
 	incidentGroups := make(map[string][]*models.Event)
 	seenEdges := make(map[string]struct{})
@@ -291,7 +290,6 @@ func (p *EventProcessor) createGraphNodesBatch(ctx context.Context, events []*mo
 		if alias, err := p.topology.GetAlias(ctx, event.Service, event.Timestamp.Format(time.RFC3339)); err == nil {
 			canonicalService = alias.Canonical
 		}
-		canonicalServices[event.ID] = canonicalService
 
 		if err := p.saveCoreGraphArtifacts(ctx, event, canonicalService); err != nil {
 			return err

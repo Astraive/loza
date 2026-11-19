@@ -319,6 +319,65 @@ func TestProcessEventDeduplicatesRepeatedRelatedEdges(t *testing.T) {
 	}
 }
 
+func TestProcessBatchUsesCanonicalServiceForGraphNodes(t *testing.T) {
+	events := &fakeEventStore{}
+	topology := &fakeTopologyStoreForProcessor{
+		alias: &models.ServiceAlias{Alias: "svc-a", Canonical: "svc-b"},
+	}
+	graphStore := &fakeGraphStoreForProcessor{}
+	p := NewEventProcessor(events, topology, graphStore)
+
+	batch := []*models.Event{
+		{
+			ID:         "evt-1",
+			Timestamp:  time.Now(),
+			Kind:       models.EventKindLog,
+			Service:    "svc-a",
+			Provenance: "jsonl",
+		},
+		{
+			ID:         "evt-2",
+			Timestamp:  time.Now(),
+			Kind:       models.EventKindLog,
+			Service:    "svc-a",
+			Provenance: "jsonl",
+		},
+	}
+
+	if err := p.ProcessBatch(context.Background(), batch); err != nil {
+		t.Fatalf("process batch: %v", err)
+	}
+
+	// The batch path must still resolve the alias to the canonical service and
+	// use it for graph nodes/edges; removing the dead per-event map must not
+	// drop canonicalization.
+	canonicalNodes := 0
+	for _, node := range graphStore.nodes {
+		if node.Type == models.NodeTypeService {
+			if node.ID != "svc-b" {
+				t.Fatalf("expected canonical service node svc-b, got %q", node.ID)
+			}
+			canonicalNodes++
+		}
+	}
+	if canonicalNodes != len(batch) {
+		t.Fatalf("expected %d canonical service nodes, got %d (nodes: %+v)", len(batch), canonicalNodes, graphStore.nodes)
+	}
+
+	dependsOnEdges := 0
+	for _, edge := range graphStore.edges {
+		if edge.Type == models.EdgeTypeDependsOn {
+			if edge.ToNodeID != "svc-b" {
+				t.Fatalf("expected depends-on edge to canonical service svc-b, got %q", edge.ToNodeID)
+			}
+			dependsOnEdges++
+		}
+	}
+	if dependsOnEdges != len(batch) {
+		t.Fatalf("expected %d depends-on edges to canonical service, got %d", len(batch), dependsOnEdges)
+	}
+}
+
 func TestProcessBatchLinksLocalTrace(t *testing.T) {
 	events := &fakeEventStore{}
 	topology := &fakeTopologyStoreForProcessor{}
