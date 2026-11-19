@@ -35,6 +35,35 @@ func TestFromRawMapPreservesFractionalSecondsFromNumericTimestamp(t *testing.T) 
 			timestamp: -1.5,
 			wantSec:   -2,
 			wantNsec:  500000000,
+// TestTimestampLayouts verifies that FromRawMap still parses every timestamp
+// layout it is meant to support after removing the redundant RFC3339 branches.
+// RFC3339Nano alone covers both RFC3339 and its nanosecond variant; the bare
+// "2006-01-02T15:04:05" form is the only genuinely distinct layout kept.
+func TestTimestampLayouts(t *testing.T) {
+	tests := []struct {
+		name      string
+		timestamp string
+		want      time.Time
+	}{
+		{
+			name:      "RFC3339 with Z",
+			timestamp: "2024-01-02T03:04:05Z",
+			want:      time.Date(2024, 1, 2, 3, 4, 5, 0, time.UTC),
+		},
+		{
+			name:      "RFC3339 with fractional seconds",
+			timestamp: "2024-01-02T03:04:05.123456789Z",
+			want:      time.Date(2024, 1, 2, 3, 4, 5, 123456789, time.UTC),
+		},
+		{
+			name:      "RFC3339 with numeric offset",
+			timestamp: "2024-01-02T03:04:05+02:00",
+			want:      time.Date(2024, 1, 2, 3, 4, 5, 0, time.FixedZone("", 2*60*60)),
+		},
+		{
+			name:      "bare datetime without zone",
+			timestamp: "2024-01-02T03:04:05",
+			want:      time.Date(2024, 1, 2, 3, 4, 5, 0, time.UTC),
 		},
 	}
 
@@ -217,5 +246,33 @@ func TestFromRawMapPlainNumericLifecycleStrings(t *testing.T) {
 	tm := event.Timers[0]
 	if tm.DurationMs != 750 || tm.StatusCode != 203 {
 		t.Errorf("timer = %+v, want duration=750 status=203", tm)
+			raw := map[string]any{
+				"id":        "evt-1",
+				"service":   "svc-a",
+				"kind":      "log",
+				"timestamp": tt.timestamp,
+			}
+			event, err := FromRawMap(raw, "loza")
+			if err != nil {
+				t.Fatalf("FromRawMap() unexpected error: %v", err)
+			}
+			if !event.Timestamp.Equal(tt.want) {
+				t.Errorf("Timestamp = %v, want %v", event.Timestamp, tt.want)
+			}
+		})
+	}
+}
+
+// TestTimestampUnsupportedLayoutRejected ensures no leftover layout silently
+// accepts a value none of the supported layouts can parse.
+func TestTimestampUnsupportedLayoutRejected(t *testing.T) {
+	raw := map[string]any{
+		"id":        "evt-1",
+		"service":   "svc-a",
+		"kind":      "log",
+		"timestamp": "not-a-timestamp",
+	}
+	if _, err := FromRawMap(raw, "loza"); err == nil {
+		t.Fatal("FromRawMap() expected an error for an unparseable timestamp, got nil")
 	}
 }
