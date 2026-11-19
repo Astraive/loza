@@ -6,7 +6,8 @@ import loza
 
 def test_events_emitted_total() -> None:
     """Verify events_emitted_total counter increments."""
-    logger = loza.New(loza.Test("test"))
+    metrics = loza.NewMetricsCollector()
+    logger = loza.New(loza.Test("test").with_metrics(metrics))
 
     # Emit multiple events
     ctx1 = logger.start_event(loza.Params(event="event1"))
@@ -21,11 +22,11 @@ def test_events_emitted_total() -> None:
     logger.finish(ctx3, "success")
     logger.emit(ctx3)
 
-    # Logger should track emitted count
-    # Note: Python SDK may not expose metrics directly, so we verify by emission
-    assert ctx1 is not None
-    assert ctx2 is not None
-    assert ctx3 is not None
+    # Actually inspect the counter: three emits must be recorded. Checking only
+    # the returned contexts lets a broken/no-op counter pass unnoticed.
+    emitted = metrics.snapshot()["counter_vecs"].get("events_emitted_total", {})
+    assert emitted.get("success", 0) == 3
+    assert sum(emitted.values()) == 3
 
 
 def test_delivery_attempts_recorded() -> None:
