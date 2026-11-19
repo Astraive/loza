@@ -409,7 +409,7 @@ func (s *collectorState) handleDLQList(w http.ResponseWriter, r *http.Request) {
 	}
 	events, err := s.readDLQRecords()
 	if err != nil {
-		writeJSON(w, http.StatusOK, map[string]any{"events": []any{}, "error": err.Error()})
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"events": []any{}, "error": err.Error()})
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"events": events, "count": len(events)})
@@ -480,7 +480,7 @@ func (s *collectorState) handleDLQReplayAll(w http.ResponseWriter, r *http.Reque
 	}
 	events, err := s.readDLQRecords()
 	if err != nil {
-		writeJSON(w, http.StatusOK, map[string]any{"accepted": 0, "replayed": 0, "error": err.Error()})
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"accepted": 0, "replayed": 0, "error": err.Error()})
 		return
 	}
 	rawEvents := make([][]byte, 0, len(events))
