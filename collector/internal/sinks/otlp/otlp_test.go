@@ -160,6 +160,46 @@ func TestNewShutsDownExporterWhenResourceCreationFails(t *testing.T) {
 	}
 	if spy.shutdownCtx != ctx {
 		t.Fatalf("expected Shutdown to receive the provided context")
+func TestResolveConfigIgnoresGRPCReconnectionPeriodForHTTP(t *testing.T) {
+	// GRPCReconnectionPeriod is only consumed by the gRPC exporter. An HTTP-only
+	// configuration must not be rejected for it, and the value must not leak
+	// into the resolved config.
+	cfg, err := resolveConfig(Config{
+		Protocol:               "http",
+		GRPCReconnectionPeriod: -time.Second,
+	})
+	if err != nil {
+		t.Fatalf("HTTP config must not be rejected for gRPC-only field: %v", err)
+	}
+	if cfg.GRPCReconnectionPeriod != 0 {
+		t.Fatalf("expected reconnection period to be ignored for HTTP, got %s", cfg.GRPCReconnectionPeriod)
+	}
+}
+
+func TestResolveConfigStillValidatesGRPCReconnectionPeriodForGRPC(t *testing.T) {
+	_, err := resolveConfig(Config{
+		Protocol:               "grpc",
+		GRPCReconnectionPeriod: -time.Second,
+	})
+	if err == nil {
+		t.Fatalf("expected reconnection period validation error for gRPC")
+	}
+	if !strings.Contains(err.Error(), "reconnection period") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestResolveConfigKeepsValidGRPCReconnectionPeriodForGRPC(t *testing.T) {
+	const period = 3 * time.Second
+	cfg, err := resolveConfig(Config{
+		Protocol:               "grpc",
+		GRPCReconnectionPeriod: period,
+	})
+	if err != nil {
+		t.Fatalf("resolve config: %v", err)
+	}
+	if cfg.GRPCReconnectionPeriod != period {
+		t.Fatalf("expected reconnection period %s, got %s", period, cfg.GRPCReconnectionPeriod)
 	}
 }
 

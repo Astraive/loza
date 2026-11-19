@@ -348,9 +348,15 @@ func resolveConfig(cfg Config) (resolvedConfig, error) {
 		timeout = defaultTimeout
 	}
 
-	reconnect := cfg.GRPCReconnectionPeriod
-	if reconnect < 0 {
-		return resolvedConfig{}, fmt.Errorf("otlp: grpc reconnection period must be >= 0")
+	// The reconnection period is a gRPC-only concern: newExporter only reads it
+	// in the gRPC branch. Validate and carry it for gRPC alone so an HTTP-only
+	// configuration is not rejected for an irrelevant field.
+	var reconnect time.Duration
+	if protocol == "grpc" {
+		reconnect = cfg.GRPCReconnectionPeriod
+		if reconnect < 0 {
+			return resolvedConfig{}, fmt.Errorf("otlp: grpc reconnection period must be >= 0")
+		}
 	}
 
 	retry, err := resolveRetryConfig(cfg.Retry)
