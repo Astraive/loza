@@ -209,8 +209,11 @@ def _parse_dsn(raw: str) -> dict[str, str]:
         raise ValueError("invalid tls")
     port = parsed.port or (9308 if parsed.hostname in {"localhost", "127.0.0.1", "::1"} else 443 if use_tls else 80)
     query = urllib.parse.parse_qs(parsed.query)
+    host = parsed.hostname
+    if ":" in host and not host.startswith("["):
+        host = f"[{host}]"
     return {
-        "endpoint": f"{'https' if use_tls else 'http'}://{parsed.hostname}:{port}",
+        "endpoint": f"{'https' if use_tls else 'http'}://{host}:{port}",
         "collector": collector,
         "env": query.get("env", ["default"])[0] or "default",
         "service": query.get("service", [""])[0],
