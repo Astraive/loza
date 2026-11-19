@@ -6,10 +6,57 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"os"
+	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
 )
+
+func TestConfigFileDocReferences(t *testing.T) {
+	// Regression for #285: the parseYAML doc comment directed callers to a
+	// function (LoadFromFileWithYAML) that does not exist anywhere in the
+	// package. Doc comments must only point callers at real APIs.
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "config_file.go", nil, parser.ParseComments)
+	if err != nil {
+		t.Fatalf("parser.ParseFile(config_file.go) error = %v", err)
+	}
+
+	declared := make(map[string]bool)
+	for _, decl := range file.Decls {
+		if fn, ok := decl.(*ast.FuncDecl); ok {
+			declared[fn.Name.Name] = true
+		}
+	}
+
+	staleRef := regexp.MustCompile(`\bLoadFromFileWithYAML\b`)
+	for _, group := range file.Comments {
+		if text := group.Text(); staleRef.MatchString(text) {
+			t.Errorf("doc comment references nonexistent function LoadFromFileWithYAML: %q", text)
+		}
+	}
+
+	// The production YAML loader advertised by the docs must exist.
+	if !declared["LoadFromFile"] {
+		t.Error("doc comment references LoadFromFile, but it is not declared in config_file.go")
+	}
+
+	// parseYAML must direct production callers to that real entry point.
+	for _, decl := range file.Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if !ok || fn.Name.Name != "parseYAML" {
+			continue
+		}
+		if fn.Doc == nil || !strings.Contains(fn.Doc.Text(), "LoadFromFile") {
+			t.Error("parseYAML doc comment should direct production callers to LoadFromFile")
+		}
+	}
+}
 
 func TestParseSimpleYAML(t *testing.T) {
 	content := `
