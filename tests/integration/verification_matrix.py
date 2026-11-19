@@ -436,23 +436,34 @@ def run_cli_flow() -> list[StepResult]:
         results.append(emit)
 
         time.sleep(1.0)
-        query_status, query_body = _http_request(
-            "POST",
-            collector.base_url + "/query",
-            body=json.dumps({"query": "SELECT raw FROM events ORDER BY timestamp DESC LIMIT 20"}).encode("utf-8"),
-            headers={
-                "Authorization": f"Bearer {collector.admin_token}",
-                "Content-Type": "application/json",
-            },
-        )
-        results.append(
-            StepResult(
-                id="cli.query_roundtrip",
-                category="cli_runtime",
-                status="implemented_and_passing" if query_status == 200 and _has_encrypted_raw(query_body) else "implemented_and_failing",
-                details={"marker": marker, "response": query_body},
+        try:
+            query_status, query_body = _http_request(
+                "POST",
+                collector.base_url + "/query",
+                body=json.dumps({"query": "SELECT raw FROM events ORDER BY timestamp DESC LIMIT 20"}).encode("utf-8"),
+                headers={
+                    "Authorization": f"Bearer {collector.admin_token}",
+                    "Content-Type": "application/json",
+                },
             )
-        )
+        except urllib.error.URLError as exc:
+            results.append(
+                StepResult(
+                    id="cli.query_roundtrip",
+                    category="cli_runtime",
+                    status="implemented_and_failing",
+                    details={"marker": marker, "error": str(exc)},
+                )
+            )
+        else:
+            results.append(
+                StepResult(
+                    id="cli.query_roundtrip",
+                    category="cli_runtime",
+                    status="implemented_and_passing" if query_status == 200 and _has_encrypted_raw(query_body) else "implemented_and_failing",
+                    details={"marker": marker, "response": query_body},
+                )
+            )
 
         _stop_process(collector_proc)
     return results

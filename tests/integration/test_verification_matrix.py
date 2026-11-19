@@ -206,3 +206,60 @@ def test_node_available_runs_all_e2e_steps():
         "sdk.rs.collector_e2e",
     ):
         assert by_id[step_id].status == "implemented_and_passing"
+"""Regression tests for the verification matrix flows."""
+
+from __future__ import annotations
+
+import importlib.util
+import sys
+import urllib.error
+from pathlib import Path
+from unittest.mock import MagicMock, patch
+
+MODULE_PATH = Path(__file__).resolve().parent / "verification_matrix.py"
+_spec = importlib.util.spec_from_file_location("verification_matrix", MODULE_PATH)
+vm = importlib.util.module_from_spec(_spec)
+assert _spec.loader is not None
+sys.modules["verification_matrix"] = vm
+_spec.loader.exec_module(vm)
+
+
+def _passing_result(step_id: str) -> vm.StepResult:
+    return vm.StepResult(id=step_id, category="cli_runtime", status="implemented_and_passing")
+
+
+def test_cli_flow_handles_urlerror_from_query() -> None:
+    """A URLError during the CLI query round-trip must not abort the flow.
+
+    ``_http_request`` only catches ``HTTPError`` (a subclass of ``URLError``), so
+    transport-level ``URLError``s such as a reset connection propagate through
+    ``run_cli_flow`` and ``main``, aborting the whole verification matrix before
+    any JSON is emitted. The flow must instead record a failing step.
+    """
+    collector = vm.CollectorRuntime(
+        base_url="http://127.0.0.1:1",
+        ingest_token="ingest-token",
+        admin_token="admin-token",
+    )
+    config_path = Path("/tmp/loza-cli-test.yaml")
+
+    with (
+        patch.object(vm, "_tool_available", return_value=True),
+        patch.object(
+            vm,
+            "_start_collector",
+            return_value=(MagicMock(), [], collector),
+        ),
+        patch.object(vm, "_run", side_effect=lambda step_id, *_args, **_kwargs: _passing_result(step_id)),
+        patch.object(vm, "_build_cli_config", return_value=config_path),
+        patch.object(vm, "_wait_for_http", return_value=True),
+        patch.object(vm, "_stop_process") as stop_process,
+        patch.object(vm, "_http_request", side_effect=urllib.error.URLError("collector connection reset")),
+    ):
+        results = vm.run_cli_flow()
+
+    query_results = [result for result in results if result.id == "cli.query_roundtrip"]
+    assert len(query_results) == 1
+    assert query_results[0].status == "implemented_and_failing"
+    assert "collector connection reset" in str(query_results[0].details)
+    stop_process.assert_called_once()
