@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -69,7 +70,7 @@ func New(_ context.Context, cfg eventbus.Config) (eventbus.Bus, error) {
 
 	// Ensure consumer group exists
 	err := client.XGroupCreateMkStream(ctx, rc.Stream, rc.Group, "0").Err()
-	if err != nil && err.Error() != "BUSYGROUP Consumer Group name already exists" {
+	if err != nil && !isBusyGroupErr(err) {
 		client.Close()
 		return nil, fmt.Errorf("eventbus/redis: create group: %w", err)
 	}
@@ -148,8 +149,14 @@ func (b *redisBus) Subscribe(ctx context.Context, topic string, group string, ha
 }
 
 func isBusyGroupErr(err error) bool {
-	return err != nil && (err.Error() == "BUSYGROUP Consumer Group name already exists" ||
-		(len(err.Error()) > 20 && err.Error()[:20] == "BUSYGROUP Consumer G"))
+	if err == nil {
+		return false
+	}
+	// go-redis reports server replies as redis.Error; HasErrorPrefix looks
+	// through wrapping (and an optional "ERR " prefix). Fall back to the
+	// rendered message so driver/version differences don't make startup fail
+	// spuriously when the group already exists.
+	return redis.HasErrorPrefix(err, "BUSYGROUP") || strings.HasPrefix(err.Error(), "BUSYGROUP")
 }
 
 func (b *redisBus) consume(ctx context.Context, stream, group, consumer string, handler eventbus.Handler) {
