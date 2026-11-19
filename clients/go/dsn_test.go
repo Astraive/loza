@@ -137,6 +137,8 @@ func TestNewRejectsInvalidConfiguration(t *testing.T) {
 		{"endpoint userinfo", ConnectionConfig{Endpoint: "https://user:pass@example.com", Collector: "demo"}},
 		{"endpoint missing host", ConnectionConfig{Endpoint: "https:///path", Collector: "demo"}},
 		{"endpoint unsupported scheme", ConnectionConfig{Endpoint: "ftp://example.com", Collector: "demo"}},
+		{"endpoint query", ConnectionConfig{Endpoint: "http://host/base?x=1", Collector: "demo"}},
+		{"endpoint fragment", ConnectionConfig{Endpoint: "http://host/base#frag", Collector: "demo"}},
 		{"invalid collector", ConnectionConfig{Endpoint: "https://example.com", Collector: "bad/collector"}},
 		{"basic password required", ConnectionConfig{Endpoint: "https://example.com", Collector: "demo", Username: "private"}},
 		{"basic auth requires TLS", ConnectionConfig{Endpoint: "http://example.com", Collector: "demo", Username: "private", Password: "secret"}},
