@@ -1,10 +1,7 @@
-"""Redaction rules - lightweight SDK stub.
-
-Full redaction rule engine lives in the loza-collector package.
-"""
+"""Compatibility re-export of the canonical ``Redactor`` alias."""
 
 from __future__ import annotations
 
-from typing import Any, Callable
+from ..core.redactor import Redactor
 
-Redactor = Callable[[dict[str, Any]], dict[str, Any]]
+__all__ = ["Redactor"]

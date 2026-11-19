@@ -104,6 +104,11 @@ def default_redactor() -> Redactor:
     return redact_keys(*DEFAULT_KEYS)
 
 
+def noop_redactor() -> Redactor:
+    """Return an identity redactor that leaves payloads unchanged."""
+    return lambda payload: payload
+
+
 def hash_keys(*keys: str) -> Redactor:
     wanted = {key.lower() for key in keys}
     return lambda payload: _walk(
@@ -150,7 +155,7 @@ def redact_patterns(*patterns: str) -> Redactor:
 def sensitive_attrs_redactor(sensitive_keys: set[str]) -> Redactor:
     """Create a redactor that redacts keys marked sensitive via Attr.sensitive."""
     if not sensitive_keys:
-        return lambda payload: payload
+        return noop_redactor()
     return redact_keys(*sensitive_keys)
 
 
