@@ -102,14 +102,19 @@ func main() {
 		WriteTimeout: cfg.Server.WriteTimeout,
 	}
 
-	go func() {
-		if err := httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Fatal().Err(err).Msg("Server failed")
-		}
-	}()
+	listenErr := make(chan error, 1)
+	go runHTTPServer(httpSrv, listenErr)
 
-	<-processCtx.Done()
-	log.Info().Msg("Shutting down server...")
+	select {
+	case err := <-listenErr:
+		// A listen failure must not terminate the process: cancel the shared
+		// context so the collector sync unwinds and the shutdown sequence
+		// below (gRPC graceful stop, HTTP shutdown, deferred stor.Close) runs.
+		log.Error().Err(err).Msg("HTTP server failed, initiating shutdown")
+		stopSignals()
+	case <-processCtx.Done():
+		log.Info().Msg("Shutting down server...")
+	}
 
 	shutdownGRPCServer(grpcReady)
 
@@ -122,6 +127,16 @@ func main() {
 	<-syncDone
 	log.Info().Msg("Collector source-of-truth sync stopped")
 	log.Info().Msg("Server shutdown complete")
+}
+
+// runHTTPServer serves until the server is shut down. Any unexpected listen
+// error is reported to errCh so the caller can perform an orderly shutdown;
+// it must never call log.Fatal, which would exit the process and skip main's
+// deferred cleanup.
+func runHTTPServer(httpSrv *http.Server, errCh chan<- error) {
+	if err := httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		errCh <- err
+	}
 }
 
 func startCollectorSync(ctx context.Context, cfg config.CollectorConfig, proc collectorsync.BatchProcessor) <-chan struct{} {
