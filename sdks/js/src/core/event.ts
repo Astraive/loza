@@ -526,6 +526,26 @@ export class Event {
     }
   }
 
+  /**
+   * Assign an attr as an own data property instead of using [[Set]].
+   *
+   * `attrs[key] = value` invokes the inherited `__proto__` setter when a
+   * caller-controlled key is `__proto__`, which changes the prototype of
+   * `attrs` and lets attacker-controlled inherited values resolve through
+   * `get()` and the `key in attrs` checks in sanitizeEvent. Defining a plain
+   * own property avoids [[Set]] entirely, so `__proto__`, `constructor` and
+   * `prototype` become ordinary keys without altering the prototype chain or
+   * breaking legitimate attribute names.
+   */
+  private assignAttr(key: PropertyKey, value: any): void {
+    Object.defineProperty(this.attrs, key, {
+      value,
+      writable: true,
+      enumerable: true,
+      configurable: true,
+    });
+  }
+
   /** Apply a single attr, respecting sensitive/hash/drop flags. */
   private applyAttr(attr: Attr): void {
     if (attr.drop) {
@@ -535,7 +555,7 @@ export class Event {
     }
     if (attr.sensitive) this._sensitiveKeys.add(attr.key);
     if (attr.hashValue) this._hashKeys.add(attr.key);
-    this.attrs[attr.key] = attr.value;
+    this.assignAttr(attr.key, attr.value);
   }
 
   /** Enrich the event with attributes. */
@@ -556,14 +576,20 @@ export class Event {
   set(key: string, value: any): void {
     this.ensureMutable();
     this.markActive();
-    this.attrs[key] = value;
+    this.assignAttr(key, value);
   }
 
   /** Merge a plain object's entries into attrs. */
   merge(obj: Record<string, any>): void {
     this.ensureMutable();
     this.markActive();
-    Object.assign(this.attrs, obj);
+    // Copy own enumerable keys via defineProperty (not Object.assign/[[Set]])
+    // so a caller-supplied `__proto__` key cannot mutate the attrs prototype.
+    for (const key of Reflect.ownKeys(obj)) {
+      if (Object.prototype.propertyIsEnumerable.call(obj, key)) {
+        this.assignAttr(key, (obj as Record<PropertyKey, any>)[key]);
+      }
+    }
   }
 
   /** Remove an attr by key. */
