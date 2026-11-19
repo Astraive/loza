@@ -225,8 +225,8 @@ func overlayFileConfig(base, override FileConfig) FileConfig {
 // dependency. It uses a simple line-by-line parser for the flat key: value
 // format used by loza.yaml.
 //
-// This avoids adding a yaml dependency to the core module. For production use,
-// callers can use LoadFromFileWithYAML which accepts pre-parsed data.
+// This avoids adding a yaml dependency to the core module. Production callers
+// should use LoadFromFile, which reads a loza.yaml file and invokes this parser.
 func parseYAML(data []byte, fc *FileConfig) error {
 	return parseSimpleYAML(string(data), fc)
 }
