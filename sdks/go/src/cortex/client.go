@@ -74,7 +74,7 @@ func (c *Client) Health(ctx context.Context) bool {
 		return false
 	}
 	var body map[string]any
-	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+	if !readBoundedObject(resp.Body, &body) {
 		// Fail closed: an undecodable body cannot confirm status=="ok".
 		return false
 	}
@@ -99,7 +99,7 @@ func (c *Client) Ready(ctx context.Context) bool {
 		return false
 	}
 	var body map[string]any
-	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+	if !readBoundedObject(resp.Body, &body) {
 		// Fail closed: an undecodable body cannot confirm readiness.
 		return false
 	}
@@ -279,6 +279,18 @@ func readResponseBody(body io.Reader) ([]byte, error) {
 		return raw[:maxResponseBytes], fmt.Errorf("response exceeds %d bytes", maxResponseBytes)
 	}
 	return raw, nil
+}
+
+// readBoundedObject decodes a JSON object from a response body capped at
+// maxResponseBytes, so health/readiness probes cannot allocate unbounded
+// memory from an oversized or streamed body. It reports false when the body
+// exceeds the limit or cannot be decoded as JSON.
+func readBoundedObject(body io.Reader, out *map[string]any) bool {
+	raw, err := readResponseBody(body)
+	if err != nil {
+		return false
+	}
+	return json.NewDecoder(bytes.NewReader(raw)).Decode(out) == nil
 }
 
 func (c *Client) getJSON(ctx context.Context, path string, out any) error {
