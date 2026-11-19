@@ -229,6 +229,96 @@ func TestProcessJSONLDefaultsProvenance(t *testing.T) {
 	}
 }
 
+func TestProcessEventSameTraceAndIncidentEdgeIDsAreDistinct(t *testing.T) {
+	related := &models.Event{
+		ID:         "evt-related",
+		Timestamp:  time.Now(),
+		Kind:       models.EventKindLog,
+		Service:    "svc-a",
+		TraceID:    "trace-1",
+		IncidentID: "incident-1",
+	}
+	events := &fakeEventStore{
+		byTraceID:  map[string][]*models.Event{"trace-1": {related}},
+		byIncident: map[string][]*models.Event{"incident-1": {related}},
+	}
+	graphStore := &fakeGraphStoreForProcessor{}
+	p := NewEventProcessor(events, &fakeTopologyStoreForProcessor{}, graphStore)
+
+	event := &models.Event{
+		ID:         "evt-1",
+		Timestamp:  time.Now(),
+		Kind:       models.EventKindLog,
+		Service:    "svc-a",
+		TraceID:    "trace-1",
+		IncidentID: "incident-1",
+	}
+	if err := p.ProcessEvent(context.Background(), event); err != nil {
+		t.Fatalf("process event: %v", err)
+	}
+
+	var traceEdge, incidentEdge *models.Edge
+	for _, edge := range graphStore.edges {
+		switch edge.Type {
+		case models.EdgeTypeSameTrace:
+			traceEdge = edge
+		case models.EdgeTypeSameIncident:
+			incidentEdge = edge
+		}
+	}
+	if traceEdge == nil {
+		t.Fatalf("expected same-trace edge, got %+v", graphStore.edges)
+	}
+	if incidentEdge == nil {
+		t.Fatalf("expected same-incident edge, got %+v", graphStore.edges)
+	}
+	if traceEdge.ID == incidentEdge.ID {
+		t.Fatalf("same-trace and same-incident edges must have distinct IDs, both were %q", traceEdge.ID)
+	}
+	if want := "evt-1->evt-related:same_trace"; traceEdge.ID != want {
+		t.Fatalf("expected same-trace edge ID %q, got %q", want, traceEdge.ID)
+	}
+	if want := "evt-1->evt-related:same_incident"; incidentEdge.ID != want {
+		t.Fatalf("expected same-incident edge ID %q, got %q", want, incidentEdge.ID)
+	}
+}
+
+func TestProcessEventDeduplicatesRepeatedRelatedEdges(t *testing.T) {
+	related := &models.Event{
+		ID:        "evt-related",
+		Timestamp: time.Now(),
+		Kind:      models.EventKindLog,
+		Service:   "svc-a",
+		TraceID:   "trace-1",
+	}
+	events := &fakeEventStore{
+		byTraceID: map[string][]*models.Event{"trace-1": {related, related}},
+	}
+	graphStore := &fakeGraphStoreForProcessor{}
+	p := NewEventProcessor(events, &fakeTopologyStoreForProcessor{}, graphStore)
+
+	event := &models.Event{
+		ID:        "evt-1",
+		Timestamp: time.Now(),
+		Kind:      models.EventKindLog,
+		Service:   "svc-a",
+		TraceID:   "trace-1",
+	}
+	if err := p.ProcessEvent(context.Background(), event); err != nil {
+		t.Fatalf("process event: %v", err)
+	}
+
+	traceEdges := 0
+	for _, edge := range graphStore.edges {
+		if edge.Type == models.EdgeTypeSameTrace {
+			traceEdges++
+		}
+	}
+	if traceEdges != 1 {
+		t.Fatalf("expected exactly one deduplicated same-trace edge, got %d in %+v", traceEdges, graphStore.edges)
+	}
+}
+
 func TestProcessBatchLinksLocalTrace(t *testing.T) {
 	events := &fakeEventStore{}
 	topology := &fakeTopologyStoreForProcessor{}

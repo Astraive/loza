@@ -203,6 +203,8 @@ func (p *EventProcessor) createGraphNodes(ctx context.Context, event *models.Eve
 	if err := p.saveCoreGraphArtifacts(ctx, event, canonicalService); err != nil {
 		return err
 	}
+
+	seen := make(map[string]struct{})
 	if event.TraceID != "" {
 		relatedEvents, err := p.eventStore.FindByTraceID(ctx, event.TraceID)
 		if err != nil {
@@ -211,8 +213,13 @@ func (p *EventProcessor) createGraphNodes(ctx context.Context, event *models.Eve
 		var errs []error
 		for _, related := range relatedEvents {
 			if related.ID != event.ID {
+				edgeID := fmt.Sprintf("%s->%s:%s", event.ID, related.ID, models.EdgeTypeSameTrace)
+				if _, ok := seen[edgeID]; ok {
+					continue
+				}
+				seen[edgeID] = struct{}{}
 				edge := &models.Edge{
-					ID:         fmt.Sprintf("%s->%s", event.ID, related.ID),
+					ID:         edgeID,
 					FromNodeID: event.ID,
 					ToNodeID:   related.ID,
 					Type:       models.EdgeTypeSameTrace,
@@ -238,8 +245,13 @@ func (p *EventProcessor) createGraphNodes(ctx context.Context, event *models.Eve
 		var errs []error
 		for _, related := range relatedEvents {
 			if related.ID != event.ID {
+				edgeID := fmt.Sprintf("%s->%s:%s", event.ID, related.ID, models.EdgeTypeSameIncident)
+				if _, ok := seen[edgeID]; ok {
+					continue
+				}
+				seen[edgeID] = struct{}{}
 				edge := &models.Edge{
-					ID:         fmt.Sprintf("%s->%s", event.ID, related.ID),
+					ID:         edgeID,
 					FromNodeID: event.ID,
 					ToNodeID:   related.ID,
 					Type:       models.EdgeTypeSameIncident,
