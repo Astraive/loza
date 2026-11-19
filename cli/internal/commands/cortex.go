@@ -5,6 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -197,6 +199,35 @@ var fetchEventsTimeout = 30 * time.Second
 
 func fetchEventsFromURL(ctx context.Context, url string) ([]map[string]interface{}, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+// normalizeFetchURL validates an arbitrary --url value before it is used as a
+// fetch target. It rejects malformed URLs and non-HTTP schemes and returns the
+// canonical form produced by net/url, so special characters are encoded rather
+// than being interpreted as URL structure.
+func normalizeFetchURL(rawURL string) (string, error) {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return "", fmt.Errorf("invalid --url: %w", err)
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return "", fmt.Errorf("invalid --url: scheme must be http or https")
+	}
+	if parsed.Host == "" {
+		return "", fmt.Errorf("invalid --url: missing host")
+	}
+	// Re-encode the query with url.Values so raw spaces, "&", "=", and similar
+	// characters cannot survive as URL structure. Already-encoded URLs round
+	// trip unchanged because url.Parse decodes them first.
+	parsed.RawQuery = parsed.Query().Encode()
+	return parsed.String(), nil
+}
+
+func fetchEventsFromURL(rawURL string) []map[string]interface{} {
+	target, err := normalizeFetchURL(rawURL)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "%v\n", err)
+		return nil
+	}
+	resp, err := http.Get(target)
 	if err != nil {
 		return nil, fmt.Errorf("build events request for %s: %w", url, err)
 	}
