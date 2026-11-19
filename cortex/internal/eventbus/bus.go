@@ -84,6 +84,13 @@ func (b *EventBus) Unsubscribe(filter string, ch <-chan *models.Event) {
 		// Compare the underlying channel
 		if sub == ch {
 			b.subscribers[key] = append(subs[:i], subs[i+1:]...)
+			remaining := append(subs[:i], subs[i+1:]...)
+			if len(remaining) == 0 {
+				// Drop the key so empty subscriptions are not left in the map.
+				delete(b.subscribers, filter)
+			} else {
+				b.subscribers[filter] = remaining
+			}
 			close(sub)
 			break
 		}
