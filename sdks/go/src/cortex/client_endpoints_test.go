@@ -65,7 +65,7 @@ func TestClientHealthReadyAndMetricsBoundaries(t *testing.T) {
 
 func TestClientSimilarIncidentsAndSchemaConstructors(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = json.NewEncoder(w).Encode(IncidentContext{SimilarIncidents: []map[string]any{{"id": "similar"}}})
+		_ = json.NewEncoder(w).Encode(IncidentContext{IncidentID: "inc-1", Timestamp: "2026-01-01T00:00:00Z", SimilarIncidents: []map[string]any{{"id": "similar"}}})
 	}))
 	defer srv.Close()
 	similar, err := NewClient(srv.URL).SimilarIncidents(context.Background(), "inc-1")
