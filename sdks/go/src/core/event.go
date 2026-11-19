@@ -737,6 +737,16 @@ func (e *Event) Clone() *Event {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
+	// An emitted event is closed for further mutation. Clone's contract is to
+	// reset that state so the copy stays usable, so derive the clone state once
+	// and keep the atomic emitted flag in sync with it. Copying raw state while
+	// leaving emitted at its zero value produces State()==Emitted together with
+	// IsEmitted()==false.
+	cloneState := e.state
+	if cloneState == EventStateEmitted || e.emitted.Load() {
+		cloneState = EventStateCreated
+	}
+
 	cp := &Event{
 		Timestamp:     e.Timestamp,
 		SchemaVersion: e.SchemaVersion,
@@ -771,9 +781,10 @@ func (e *Event) Clone() *Event {
 		Processes:     cloneProcesses(e.Processes),
 		Groups:        cloneGroups(e.Groups),
 		Timers:        cloneTimers(e.Timers),
-		state:         e.state,
+		processStep:   e.processStep,
 		logger:        e.logger,
 	}
+	cp.setStateLocked(cloneState)
 	if e.Error != nil {
 		errCopy := *e.Error
 		cp.Error = &errCopy
