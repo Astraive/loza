@@ -525,10 +525,19 @@ cd collector && go test ./...
 
 ## Development
 
+The Go protobuf code in `gen/go/loza/core/` is generated, not committed. From a
+fresh clone, run the single bootstrap command once to install the pinned protobuf
+tools and generate that code before building any Go service:
+
 ```bash
 git clone https://github.com/astraive/loza.git
 cd loza
+make bootstrap
+```
 
+Afterwards, the usual commands work:
+
+```bash
 # Collector tests
 cd collector
 go test ./...

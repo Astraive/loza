@@ -2,6 +2,25 @@
 
 ## Development Setup
 
+### First-time bootstrap (required)
+
+The generated Go protobuf code under `gen/go/loza/core/` is not committed. After
+cloning, run one command from the repository root to install the pinned protobuf
+tools (`protoc`, `protoc-gen-go`, `protoc-gen-go-grpc`) and generate the code:
+
+```bash
+make bootstrap
+```
+
+`make proto` performs the same generation and now installs missing tools itself,
+so it also works from a fresh clone. Run `make bootstrap` again whenever the
+`.proto` files under `proto/loza/core/` change. Verify generated code is in sync
+with `make check-proto` (or `bash scripts/check-proto-sync.sh`); both work whether
+or not generated files are already present.
+
+Without this step, `go build ./...` in `collector` or `cortex` fails because
+`github.com/astraive/loza/gen/go/loza/core` does not exist yet.
+
 ### Collector (Go)
 
 ```bash
