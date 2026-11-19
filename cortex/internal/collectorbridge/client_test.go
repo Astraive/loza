@@ -16,6 +16,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -248,6 +249,38 @@ func TestTailURLUsesConfiguredCollectorScope(t *testing.T) {
 	}
 	if got, want := client.tailURL("/ws/tail", true), "wss://collector.example/base/collectors/demo/ws/tail"; got != want {
 		t.Fatalf("WebSocket tail URL = %q, want %q", got, want)
+	}
+}
+
+func TestTailURLIncludesSinceFromRecoveredCursor(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "collector.cursor")
+	client := NewClient(config.CollectorConfig{
+		URL:        "https://collector.example/base",
+		Collector:  "demo",
+		CursorPath: path,
+	})
+	backup := Cursor{Timestamp: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), EventID: "evt-1"}
+	if err := client.SaveCursor(backup); err != nil {
+		t.Fatalf("save backup cursor: %v", err)
+	}
+	if err := client.SaveCursor(Cursor{Timestamp: time.Date(2026, 1, 1, 0, 0, 1, 0, time.UTC), EventID: "evt-2"}); err != nil {
+		t.Fatalf("save primary cursor: %v", err)
+	}
+	// Corrupt the primary so LoadCursor recovers the valid backup with ErrCursorRecovered.
+	if err := os.WriteFile(path, []byte(`{"timestamp":`), 0o600); err != nil {
+		t.Fatalf("corrupt primary cursor: %v", err)
+	}
+
+	u, err := url.Parse(client.tailURL("/tail", false))
+	if err != nil {
+		t.Fatalf("parse tail URL: %v", err)
+	}
+	q := u.Query()
+	if got, want := q.Get("since"), backup.Timestamp.UTC().Format(time.RFC3339Nano); got != want {
+		t.Fatalf("since = %q, want %q", got, want)
+	}
+	if got, want := q.Get("after_event_id"), backup.EventID; got != want {
+		t.Fatalf("after_event_id = %q, want %q", got, want)
 	}
 }
 
