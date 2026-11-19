@@ -184,6 +184,103 @@ func TestPipelineWorkerReportsWriteErrors(t *testing.T) {
 	}
 }
 
+// TestPipelineWorkerReportsWriteErrorOnce guards against the worker notifying
+// OnError a second time for an error that writeBatch already reported.
+func TestPipelineWorkerReportsWriteErrorOnce(t *testing.T) {
+	writeErr := errors.New("sink write failed")
+	var mu sync.Mutex
+	var got []error
+	p := NewPipeline(PipelineConfig{
+		QueueSize:     2,
+		Workers:       1,
+		FlushInterval: time.Hour,
+		Sinks:         []SinkWriter{failingSinkWriter{err: writeErr}},
+		OnError: func(err error) {
+			mu.Lock()
+			got = append(got, err)
+			mu.Unlock()
+		},
+	})
+
+	ok, err := p.Enqueue(PipelineItem{Encoded: []byte("event")})
+	if err != nil || !ok {
+		t.Fatalf("enqueue failed: ok=%v err=%v", ok, err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := p.Shutdown(ctx); err != nil {
+		t.Fatalf("shutdown failed: %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(got) != 1 {
+		t.Fatalf("expected exactly one OnError call for the write error, got %d: %v", len(got), got)
+	}
+	if !errors.Is(got[0], writeErr) {
+		t.Fatalf("expected write error, got %v", got[0])
+	}
+}
+
+// timedFlushErrorSink returns err for the first left Flush calls and nil after.
+type timedFlushErrorSink struct {
+	err  error
+	mu   sync.Mutex
+	left int
+}
+
+func (s *timedFlushErrorSink) WriteEvent(context.Context, []byte, *Event) error { return nil }
+func (s *timedFlushErrorSink) Close(context.Context) error                      { return nil }
+func (s *timedFlushErrorSink) Flush(context.Context) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.left > 0 {
+		s.left--
+		return s.err
+	}
+	return nil
+}
+
+// TestPipelineFlusherReportsFlushErrorOnce guards against the periodic flusher
+// notifying OnError a second time for an error that flushSinks already reported.
+func TestPipelineFlusherReportsFlushErrorOnce(t *testing.T) {
+	flushErr := errors.New("sink flush failed")
+	sink := &timedFlushErrorSink{err: flushErr, left: 1}
+	errCh := make(chan error, 8)
+	p := NewPipeline(PipelineConfig{
+		QueueSize:     2,
+		Workers:       1,
+		FlushInterval: 10 * time.Millisecond,
+		Sinks:         []SinkWriter{sink},
+		OnError: func(err error) {
+			errCh <- err
+		},
+	})
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		_ = p.Shutdown(ctx)
+	}()
+
+	select {
+	case got := <-errCh:
+		if !errors.Is(got, flushErr) {
+			t.Fatalf("expected flush error, got %v", got)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatalf("expected periodic flusher error callback")
+	}
+
+	// The duplicate used to fire back-to-back within the same flush cycle, so a
+	// short settling window is enough to catch it without making the test flaky.
+	select {
+	case dup := <-errCh:
+		t.Fatalf("OnError fired more than once for a single flush error: %v", dup)
+	case <-time.After(200 * time.Millisecond):
+	}
+}
+
 func TestPipelineConcurrentEnqueueAndFlushDoesNotLoseDrainWakeup(t *testing.T) {
 	p := NewPipeline(PipelineConfig{
 		QueueSize:     1,

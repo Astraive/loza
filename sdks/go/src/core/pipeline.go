@@ -294,9 +294,8 @@ func (p *Pipeline) worker() {
 			return
 		}
 		batch := p.collectBatch(item, &carry)
-		if err := p.writeBatch(batch); err != nil {
-			p.notifyError(err)
-		}
+		// writeBatch reports each failing sink through OnError; do not notify again here.
+		_ = p.writeBatch(batch)
 		p.finishItems(len(batch))
 
 		select {
@@ -307,9 +306,7 @@ func (p *Pipeline) worker() {
 					return
 				}
 				batch := p.collectBatch(item, &carry)
-				if err := p.writeBatch(batch); err != nil {
-					p.notifyError(err)
-				}
+				_ = p.writeBatch(batch)
 				p.finishItems(len(batch))
 			}
 		default:
@@ -371,9 +368,8 @@ func (p *Pipeline) flusher() {
 	for {
 		select {
 		case <-t.C:
-			if err := p.flushSinks(context.Background()); err != nil {
-				p.notifyError(err)
-			}
+			// flushSinks reports each failing sink through OnError; do not notify again here.
+			_ = p.flushSinks(context.Background())
 		case <-p.done:
 			return
 		}
