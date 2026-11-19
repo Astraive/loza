@@ -596,6 +596,68 @@ func TestIncidentCommandRendersGraphOnSuccess(t *testing.T) {
 	}
 }
 
+func TestSinksShowHitsCollectorAPI(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/sinks/duckdb" {
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+		if r.Method != http.MethodGet {
+			t.Fatalf("unexpected method %s", r.Method)
+		}
+		_, _ = w.Write([]byte(`{"name":"duckdb","status":"healthy"}`))
+	}))
+	defer srv.Close()
+
+	cfg := config.Config{CollectorURL: srv.URL}
+	if err := SinksCommand(context.Background(), cfg, []string{"show", "duckdb"}); err != nil {
+		t.Fatalf("sinks show: %v", err)
+	}
+}
+
+func TestSinksRejectsUnsafeNames(t *testing.T) {
+	requested := false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requested = true
+		_, _ = w.Write([]byte(`{"status":"ok"}`))
+	}))
+	defer srv.Close()
+
+	cfg := config.Config{CollectorURL: srv.URL}
+	unsafeNames := []string{
+		"../admin",
+		"a/b",
+		"..",
+		"duckdb?verbose=1",
+		"duckdb#fragment",
+		"duckdb extra",
+		"duckdb%2Fadmin",
+		"",
+	}
+	for _, name := range unsafeNames {
+		for _, sub := range []string{"show", "test"} {
+			err := SinksCommand(context.Background(), cfg, []string{sub, name})
+			if err == nil {
+				t.Errorf("expected %s %q to be rejected", sub, name)
+				continue
+			}
+			if !strings.Contains(err.Error(), "invalid sink name") {
+				t.Errorf("expected invalid sink name error for %s %q, got %v", sub, name, err)
+			}
+		}
+	}
+	if requested {
+		t.Fatal("no collector request should be made for an invalid sink name")
+	}
+}
+
+func TestSinksAcceptsSafeNames(t *testing.T) {
+	for _, name := range []string{"duckdb", "primary-1", "sink_v2", "sink.v2"} {
+		if err := validateSinkName(name); err != nil {
+			t.Errorf("expected %q to be a valid sink name, got %v", name, err)
+		}
+	}
+}
+
 func TestGraphServiceHitsCortexAPI(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !strings.HasPrefix(r.URL.Path, "/graph/service/") {
