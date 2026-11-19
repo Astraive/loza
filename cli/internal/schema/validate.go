@@ -9,9 +9,17 @@ import (
 	speccontract "github.com/astraive/loza/spec/generated/go/contract"
 )
 
+// firstExisting returns the first path that os.Stat does not report as absent.
+// A path is skipped only when it is confirmed missing (os.IsNotExist); errors such
+// as permission denied or a symlink loop are treated as existing-but-unusable
+// candidates rather than silently discarded. When every path is confirmed absent,
+// the first path is returned as the canonical default. An empty input returns "".
 func firstExisting(paths ...string) string {
+	if len(paths) == 0 {
+		return ""
+	}
 	for _, path := range paths {
-		if _, err := os.Stat(path); err == nil {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
 			return path
 		}
 	}

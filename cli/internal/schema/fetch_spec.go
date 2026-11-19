@@ -1,17 +1,12 @@
 package schema
 
-import (
-	"os"
-	"path/filepath"
-)
+import "path/filepath"
 
+// firstExistingPath delegates to firstExisting so both call sites share the same
+// guarded behaviour: no panic on empty input, and non-IsNotExist stat errors are
+// not mistaken for a missing path.
 func firstExistingPath(paths ...string) string {
-	for _, path := range paths {
-		if _, err := os.Stat(path); err == nil {
-			return path
-		}
-	}
-	return paths[0]
+	return firstExisting(paths...)
 }
 
 func EventSchemaPath(specRepoPath string) string {
