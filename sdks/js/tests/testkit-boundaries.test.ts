@@ -192,4 +192,17 @@ describe('Testkit boundaries', () => {
     assert.equal(setClock(() => 20)(), 20);
     resetForTest();
   });
+
+  it('imports only the type actually used from core/event', () => {
+    const source = fs.readFileSync(
+      path.resolve(import.meta.dirname, '../src/testkit/helpers.ts'),
+      'utf-8',
+    );
+    const typeImport = source.match(/^import type \{([^}]*)\} from '\.\.\/core\/event\.ts';$/m);
+    assert.ok(typeImport, 'expected a single-line type-only import from ../core/event.ts');
+    const importedNames = typeImport![1].split(',').map(name => name.trim()).filter(Boolean);
+    assert.deepEqual(importedNames, ['Params']);
+    assert.ok(!importedNames.includes('Event'));
+    assert.ok(!importedNames.includes('Attr'));
+  });
 });
