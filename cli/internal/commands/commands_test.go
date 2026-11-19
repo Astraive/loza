@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/astraive/loza/cli/internal/config"
@@ -237,6 +238,41 @@ func TestRunCortexServerRequiresConfiguredRepo(t *testing.T) {
 	err := RunCortexServer(context.Background(), cfg, nil)
 	if err == nil || !strings.Contains(err.Error(), "cortex_repo_path") {
 		t.Fatalf("expected cortex repo path error, got %v", err)
+	}
+}
+
+func TestRunCortexIngestRejectsBothFileAndURL(t *testing.T) {
+	filePath := filepath.Join(t.TempDir(), "events.ndjson")
+	if err := os.WriteFile(filePath, []byte(`{"event":"from.file"}`+"\n"), 0o644); err != nil {
+		t.Fatalf("write events file: %v", err)
+	}
+
+	var urlHits atomic.Int32
+	urlSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		urlHits.Add(1)
+		_, _ = w.Write([]byte(`[{"event":"from.url"}]`))
+	}))
+	defer urlSrv.Close()
+
+	var ingested atomic.Int32
+	cortexSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/events/batch" {
+			ingested.Add(1)
+		}
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	defer cortexSrv.Close()
+
+	cfg := config.Config{Cortex: &config.CortexConfig{URL: cortexSrv.URL}}
+	err := RunCortexIngest(context.Background(), cfg, []string{"--file", filePath, "--url", urlSrv.URL})
+	if err == nil || !strings.Contains(err.Error(), "not both") {
+		t.Fatalf("expected mutually exclusive error, got %v", err)
+	}
+	if urlHits.Load() != 0 {
+		t.Fatalf("URL should not be fetched when both sources are given, got %d hits", urlHits.Load())
+	}
+	if ingested.Load() != 0 {
+		t.Fatalf("no events should be ingested when both sources are given, got %d", ingested.Load())
 	}
 }
 

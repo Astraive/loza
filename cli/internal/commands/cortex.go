@@ -93,6 +93,9 @@ func RunCortexIngest(ctx context.Context, cfg config.Config, args []string) erro
 	if file == "" && url == "" {
 		return fmt.Errorf("specify --file <path> or --url <url>")
 	}
+	if file != "" && url != "" {
+		return fmt.Errorf("specify either --file <path> or --url <url>, not both")
+	}
 
 	cortexURL := getCortexURL(cfg)
 
