@@ -2,6 +2,7 @@ package models
 
 import (
 	"errors"
+	"math"
 	"testing"
 	"time"
 )
@@ -74,6 +75,24 @@ func TestOutcomeCategory(t *testing.T) {
 	for _, tt := range tests {
 		if got := OutcomeCategory(tt.code); got != tt.expected {
 			t.Errorf("OutcomeCategory(%d) = %q, want %q", tt.code, got, tt.expected)
+func TestEdgeValidateRejectsNaNWeight(t *testing.T) {
+	base := Edge{ID: "e1", FromNodeID: "n1", ToNodeID: "n2", Type: EdgeTypeDependsOn}
+
+	// NaN compares false against both range bounds, so without an explicit
+	// IsNaN check it would otherwise pass validation.
+	for _, weight := range []float64{math.NaN(), math.Inf(1), math.Inf(-1)} {
+		edge := base
+		edge.Weight = weight
+		if err := edge.Validate(); err == nil {
+			t.Errorf("edge with weight %v should be rejected", weight)
+		}
+	}
+
+	for _, weight := range []float64{0.0, 0.5, 1.0} {
+		edge := base
+		edge.Weight = weight
+		if err := edge.Validate(); err != nil {
+			t.Errorf("edge with weight %v should be valid: %v", weight, err)
 		}
 	}
 }
