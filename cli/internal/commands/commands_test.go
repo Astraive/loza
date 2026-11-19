@@ -927,6 +927,31 @@ func TestCommandsRejectPathInjectionIDs(t *testing.T) {
 	}
 }
 
+func TestDebugPipelineReportsFetchSinksError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/status":
+			_, _ = w.Write([]byte(`{"status":"ok"}`))
+		case "/sinks":
+			http.Error(w, "sinks unavailable", http.StatusInternalServerError)
+		default:
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	cfg := config.Config{CollectorURL: srv.URL}
+	_, err := captureStdout(t, func() error {
+		return DebugCommand(context.Background(), cfg, []string{"pipeline"})
+	})
+	if err == nil {
+		t.Fatal("debug pipeline: expected an error when the sinks fetch fails, got nil")
+	}
+	if !strings.Contains(err.Error(), "fetch sinks") {
+		t.Fatalf("debug pipeline: expected a fetch sinks error, got %v", err)
+	}
+}
+
 func TestEmitWithCustomKindAndOutcome(t *testing.T) {
 	cfg := config.Config{CollectorURL: "http://127.0.0.1:9308"}
 	old := os.Stdout
