@@ -30,7 +30,6 @@ type Config struct {
 
 type sink struct {
 	pool        *pgxpool.Pool
-	table       string
 	rawColumn   string
 	schema      map[string]string
 	columns     []string
@@ -111,7 +110,6 @@ func New(ctx context.Context, cfg Config) (collectorevent.Sink, error) {
 
 	return &sink{
 		pool:        pool,
-		table:       quotedTable,
 		rawColumn:   quotedRaw,
 		schema:      schema,
 		columns:     columns,
