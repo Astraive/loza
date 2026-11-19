@@ -9,6 +9,36 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Callable, Iterable, Optional
 
+# Failures that cannot be fixed by producing again (e.g. an invalid key or
+# header type rejected by ``producer.produce``). These must fail fast instead
+# of burning through retry attempts and backoff sleeps.
+_NON_RETRYABLE_EXCEPTIONS: tuple[type[BaseException], ...] = (TypeError, ValueError)
+
+# Failures that may succeed on a later attempt. ``RuntimeError`` is emitted by
+# this module for flush timeouts and delivery errors; retrying those is safe
+# only because idempotent production is enabled by default.
+_RETRYABLE_EXCEPTIONS: tuple[type[BaseException], ...] = (
+    ConnectionError,
+    TimeoutError,
+    OSError,
+    RuntimeError,
+)
+
+# Kafka error-code attribute names describing transient broker/connectivity
+# conditions. Any other Kafka error code (invalid args, auth, bad message)
+# is treated as permanent.
+_TRANSIENT_KAFKA_ERROR_NAMES = (
+    "_TRANSPORT",
+    "_ALL_BROKERS_DOWN",
+    "_BROKER_NOT_AVAILABLE",
+    "_TIMED_OUT",
+    "_MSG_TIMED_OUT",
+    "_QUEUE_FULL",
+    "_RESOLVE",
+    "_RETRY",
+    "_WAIT_MSG",
+)
+
 
 @dataclass(frozen=True)
 class RetryPolicy:
@@ -94,7 +124,13 @@ class KafkaAdapter:
             kafka_error_cls = kafka_error_cls or KafkaError
 
         self.kafka_error_cls = kafka_error_cls
-        producer_config = {"bootstrap.servers": self.config.brokers}
+        producer_config = {
+            "bootstrap.servers": self.config.brokers,
+            # Retrying after a delivery error can duplicate a message that the
+            # broker already accepted. Idempotent production lets the broker
+            # de-duplicate retries; callers may still override explicitly.
+            "enable.idempotence": True,
+        }
         producer_config.update(self.config.extra_producer_config)
         consumer_config = {
             "bootstrap.servers": self.config.brokers,
@@ -193,6 +229,43 @@ class KafkaAdapter:
             return False
         return code_fn() == partition_eof
 
+    def _kafka_error_code(self, exc: BaseException) -> int | None:
+        """Return the Kafka error code carried by ``exc``, when available."""
+        error_cls = self.kafka_error_cls
+        if error_cls is None:
+            return None
+        candidates = (
+            exc,
+            *getattr(exc, "args", ()),
+            getattr(exc, "error", None),
+            getattr(exc, "kafka_error", None),
+        )
+        for candidate in candidates:
+            if candidate is not None and isinstance(candidate, error_cls):
+                code_fn = getattr(candidate, "code", None)
+                if callable(code_fn):
+                    try:
+                        return code_fn()
+                    except Exception:
+                        return None
+        return None
+
+    def _is_retryable_error(self, exc: BaseException) -> bool:
+        """Only retry transient/connection failures, never permanent ones."""
+        if isinstance(exc, _NON_RETRYABLE_EXCEPTIONS):
+            return False
+
+        code = self._kafka_error_code(exc)
+        if code is not None:
+            transient_codes = set()
+            for name in _TRANSIENT_KAFKA_ERROR_NAMES:
+                value = getattr(self.kafka_error_cls, name, None)
+                if isinstance(value, int):
+                    transient_codes.add(value)
+            return code in transient_codes
+
+        return isinstance(exc, _RETRYABLE_EXCEPTIONS)
+
     def _produce_with_retry(
         self,
         topic: str,
@@ -207,6 +280,8 @@ class KafkaAdapter:
                 self._produce_once(topic, payload, key=key, headers=headers)
                 return
             except Exception as exc:
+                if not self._is_retryable_error(exc):
+                    raise
                 last_error = exc
                 if attempt >= self.retry_policy.max_attempts:
                     break
