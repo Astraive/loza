@@ -24,10 +24,13 @@ func TraceAttrs(ctx context.Context) []loza.Attr {
 }
 
 // EnrichTrace extracts and appends trace attrs to an active LOZA event in ctx.
-func EnrichTrace(ctx context.Context) {
+// It returns the error from loza.Enrich so callers can detect failed enrichment
+// (for example when the active event is no longer mutable). It returns nil when
+// there are no trace attrs to add.
+func EnrichTrace(ctx context.Context) error {
 	attrs := TraceAttrs(ctx)
 	if len(attrs) == 0 {
-		return
+		return nil
 	}
-	loza.Enrich(ctx, attrs...)
+	return loza.Enrich(ctx, attrs...)
 }

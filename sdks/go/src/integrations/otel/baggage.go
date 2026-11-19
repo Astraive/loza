@@ -37,10 +37,13 @@ func BaggageAttrs(ctx context.Context, allowlist ...string) []loza.Attr {
 }
 
 // EnrichBaggage extracts allow-listed baggage keys and appends them to an active LOZA event.
-func EnrichBaggage(ctx context.Context, allowlist ...string) {
+// It returns the error from loza.Enrich so callers can detect failed enrichment
+// (for example when the active event is no longer mutable). It returns nil when
+// there are no baggage attrs to add.
+func EnrichBaggage(ctx context.Context, allowlist ...string) error {
 	attrs := BaggageAttrs(ctx, allowlist...)
 	if len(attrs) == 0 {
-		return
+		return nil
 	}
-	loza.Enrich(ctx, attrs...)
+	return loza.Enrich(ctx, attrs...)
 }
