@@ -46,6 +46,22 @@ func TestWithAttrsWithGroupCallOrder(t *testing.T) {
 			WithAttrs([]stdslog.Attr{stdslog.String("after", "nested")}),
 	)
 	logger.InfoContext(context.Background(), "request", stdslog.String("record", "value"))
+func TestWithGroupEmptyIsNoOp(t *testing.T) {
+	// slog.Handler.WithGroup specifies that an empty name returns the receiver
+	// unchanged (no grouping). It must not create a group with an empty key.
+	base := Handler()
+	if got := base.WithGroup(""); got != base {
+		t.Fatalf("WithGroup(\"\") did not return the receiver unchanged")
+	}
+
+	sink, store := loza.MemorySink()
+	cfg := loza.Test().WithSink(sink)
+	if err := loza.Configure(cfg); err != nil {
+		t.Fatalf("configure: %v", err)
+	}
+
+	logger := stdslog.New(Handler().WithGroup(""))
+	logger.InfoContext(context.Background(), "request", stdslog.String("probe", "value"))
 
 	if store.Len() != 1 {
 		t.Fatalf("expected one emitted event, got %d", store.Len())
@@ -133,6 +149,24 @@ func TestToAttrInlinesNestedEmptyKeyGroup(t *testing.T) {
 }
 
 func TestSlogHandlerInlinesEmptyKeyGroupAttrs(t *testing.T) {
+	if _, ok := findGroup(attrs, ""); ok {
+		t.Fatalf("unexpected empty-key group in output: %#v", attrs)
+	}
+	if got, ok := findString(attrs, "probe"); !ok || got != "value" {
+		t.Fatalf("expected top-level probe attr, got %#v", attrs)
+	}
+}
+
+func TestWithGroupEmptyPreservesExistingGroups(t *testing.T) {
+	base := Handler().WithGroup("http")
+	if got := base.WithGroup(""); got != base {
+		t.Fatalf("WithGroup(\"\") should return the receiver with existing groups intact")
+	}
+}
+
+func TestEmptyKeyGroupAttrsAreInlined(t *testing.T) {
+	// slog inlines empty-key groups: their children are promoted to the parent
+	// instead of being wrapped in a group with an empty key.
 	sink, store := loza.MemorySink()
 	cfg := loza.Test().WithSink(sink)
 	if err := loza.Configure(cfg); err != nil {
@@ -145,6 +179,10 @@ func TestSlogHandlerInlinesEmptyKeyGroupAttrs(t *testing.T) {
 	// assert on custom attrs without the duplicate-field policy dropping them.
 	logger.InfoContext(context.Background(), "request",
 		stdslog.Group("", stdslog.String("http_method", "GET"), stdslog.String("http_path", "/")))
+
+	logger := stdslog.New(Handler())
+	logger.InfoContext(context.Background(), "event",
+		stdslog.Group("", stdslog.String("flat", "1"), stdslog.Group("nested", stdslog.String("inner", "2"))))
 
 	if store.Len() != 1 {
 		t.Fatalf("expected one emitted event, got %d", store.Len())
@@ -188,6 +226,18 @@ func countKey(attrs []loza.Attr, key string) int {
 		if a.Key == "" {
 			t.Fatalf("emitted event contains empty-key attr: %#v", a)
 		}
+	if _, ok := findGroup(attrs, ""); ok {
+		t.Fatalf("unexpected empty-key group in output: %#v", attrs)
+	}
+	if got, ok := findString(attrs, "flat"); !ok || got != "1" {
+		t.Fatalf("expected inlined flat attr, got %#v", attrs)
+	}
+	group, ok := findGroup(attrs, "nested")
+	if !ok {
+		t.Fatalf("expected nested group to be preserved: %#v", attrs)
+	}
+	if got, ok := findString(group, "inner"); !ok || got != "2" {
+		t.Fatalf("expected nested.inner attr, got %#v", group)
 	}
 }
 
