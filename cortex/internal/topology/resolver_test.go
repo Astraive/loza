@@ -313,5 +313,46 @@ func TestRegisterAliasFailsWhenHistoryLookupFails(t *testing.T) {
 	}
 	if len(store.saved) != 0 {
 		t.Fatalf("alias must not be saved when history cannot be verified, got %d saved", len(store.saved))
+func TestAliasIDIncludesValidTo(t *testing.T) {
+	validFrom := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	validTo1 := validFrom.Add(time.Hour)
+	validTo2 := validFrom.Add(2 * time.Hour)
+
+	id1 := aliasID("svc-a", "svc-b", validFrom, &validTo1)
+	id2 := aliasID("svc-a", "svc-b", validFrom, &validTo2)
+	if id1 == id2 {
+		t.Fatalf("distinct validity windows produced identical ID %q", id1)
+	}
+
+	// An open-ended alias must not collide with a bounded one.
+	openID := aliasID("svc-a", "svc-b", validFrom, nil)
+	if openID == id1 || openID == id2 {
+		t.Fatalf("open-ended alias ID %q collided with a bounded alias", openID)
+	}
+
+	// IDs must remain deterministic for the same inputs.
+	if again := aliasID("svc-a", "svc-b", validFrom, &validTo1); again != id1 {
+		t.Fatalf("alias ID is not deterministic: %q != %q", again, id1)
+	}
+}
+
+func TestRegisterAliasDistinctIDsForDistinctValidityWindows(t *testing.T) {
+	validFrom := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	validTo1 := validFrom.Add(time.Hour)
+	validTo2 := validFrom.Add(2 * time.Hour)
+	store := &fakeTopologyStore{history: map[string][]*models.ServiceAlias{}}
+	resolver := NewResolver(store)
+
+	if err := resolver.RegisterAlias(context.Background(), "svc-a", "svc-b", validFrom, &validTo1); err != nil {
+		t.Fatalf("register first alias: %v", err)
+	}
+	if err := resolver.RegisterAlias(context.Background(), "svc-a", "svc-b", validFrom, &validTo2); err != nil {
+		t.Fatalf("register second alias: %v", err)
+	}
+	if len(store.saved) != 2 {
+		t.Fatalf("expected two saved aliases, got %d", len(store.saved))
+	}
+	if store.saved[0].ID == store.saved[1].ID {
+		t.Fatalf("both aliases saved with colliding ID %q", store.saved[0].ID)
 	}
 }
