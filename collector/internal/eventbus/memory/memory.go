@@ -307,6 +307,14 @@ func (b *Bus) PublishDLQ(_ context.Context, original eventbus.Envelope, reason e
 	// Clone before recording so dlq_reason is never written into the caller's
 	// shared Headers map (MASS-0178).
 	b.appendToDLQ(cloneEnvelope(original), reason)
+	b.dlqMu.Lock()
+	defer b.dlqMu.Unlock()
+	original.Attempts++
+	if original.Headers == nil {
+		original.Headers = make(map[string]string)
+	}
+	original.Headers["dlq_reason"] = eventbus.DLQReasonString(reason)
+	b.dlq = append(b.dlq, original)
 	return nil
 }
 

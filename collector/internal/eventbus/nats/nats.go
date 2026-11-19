@@ -323,7 +323,7 @@ func (b *natsBus) PublishDLQ(ctx context.Context, original eventbus.Envelope, re
 	if original.Headers == nil {
 		original.Headers = make(map[string]string)
 	}
-	original.Headers["dlq_reason"] = reason.Error()
+	original.Headers["dlq_reason"] = eventbus.DLQReasonString(reason)
 	original.Headers["dlq_time"] = time.Now().UTC().Format(time.RFC3339Nano)
 	return b.Publish(ctx, dlqTopic, []eventbus.Envelope{original})
 }
