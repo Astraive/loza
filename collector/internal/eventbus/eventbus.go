@@ -12,6 +12,7 @@ import (
 	"time"
 
 	collectorevent "github.com/astraive/loza/collector/internal/event"
+	"github.com/astraive/loza/collector/internal/processing"
 )
 
 // Bus is the core event bus interface. All adapters implement this.
@@ -92,6 +93,10 @@ func (s *SinkAdapter) WriteEvent(ctx context.Context, encoded []byte, ev *collec
 		if !ev.Timestamp.IsZero() {
 			env.Timestamp = ev.Timestamp
 		}
+	// Populate the envelope's tenant metadata so downstream bus adapters can
+	// route by tenant (e.g. Kafka partition keys, per-tenant DLQs).
+	if tenantID, ok := processing.ExtractTenantID(encoded); ok {
+		env.TenantID = tenantID
 	}
 	return s.bus.Publish(ctx, s.topic, []Envelope{env})
 }
@@ -115,6 +120,9 @@ func (s *SinkAdapter) WriteBatch(ctx context.Context, events [][]byte) error {
 			Timestamp: time.Now(),
 			Body:      body,
 			Headers:   make(map[string]string),
+		}
+		if tenantID, ok := processing.ExtractTenantID(body); ok {
+			envs[i].TenantID = tenantID
 		}
 	}
 	return s.bus.Publish(ctx, s.topic, envs)
