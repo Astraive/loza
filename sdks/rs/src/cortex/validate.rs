@@ -30,7 +30,9 @@ pub fn validate_incident_context(ctx: &IncidentContext) -> Result<(), CortexVali
             message: "must be non-empty".to_string(),
         });
     }
-    if ctx.confidence < 0.0 || ctx.confidence > 1.0 {
+    // All comparisons against NaN are false, so the range checks alone would
+    // let a NaN confidence through validation and on to the API.
+    if ctx.confidence.is_nan() || ctx.confidence < 0.0 || ctx.confidence > 1.0 {
         return Err(CortexValidationError {
             field: "confidence".to_string(),
             message: "must be between 0.0 and 1.0".to_string(),
@@ -100,4 +102,38 @@ pub fn validate_remediation_feedback(
         });
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ctx_with_confidence(confidence: f64) -> IncidentContext {
+        IncidentContext {
+            incident_id: "inc-1".to_string(),
+            timestamp: "2026-01-01T00:00:00Z".to_string(),
+            confidence,
+            ..IncidentContext::default()
+        }
+    }
+
+    #[test]
+    fn nan_confidence_is_rejected() {
+        let err = validate_incident_context(&ctx_with_confidence(f64::NAN))
+            .expect_err("NaN confidence must not pass validation");
+        assert_eq!(err.field, "confidence");
+    }
+
+    #[test]
+    fn valid_and_out_of_range_confidence_still_behave_as_before() {
+        for confidence in [0.0, 0.5, 1.0] {
+            validate_incident_context(&ctx_with_confidence(confidence))
+                .unwrap_or_else(|err| panic!("{confidence} should be valid: {err}"));
+        }
+        for confidence in [-0.1, 1.1, f64::INFINITY, f64::NEG_INFINITY] {
+            let err = validate_incident_context(&ctx_with_confidence(confidence))
+                .expect_err("out-of-range confidence should be rejected");
+            assert_eq!(err.field, "confidence");
+        }
+    }
 }
