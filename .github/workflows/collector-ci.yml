@@ -11,6 +11,9 @@ on:
       - "proto/**"
       - "Makefile"
       - "scripts/**"
+      - "gen/go/**"
+      - "Makefile"
+      - "scripts/check-proto-sync.sh"
   pull_request:
     branches: [main]
     paths:
@@ -21,6 +24,9 @@ on:
       - "proto/**"
       - "Makefile"
       - "scripts/**"
+      - "gen/go/**"
+      - "Makefile"
+      - "scripts/check-proto-sync.sh"
 
 permissions:
   contents: read
@@ -28,6 +34,39 @@ permissions:
 jobs:
   fresh-clone-bootstrap:
     name: Verify clean-clone protobuf bootstrap
+  clean-clone-build:
+    name: Fresh clone builds without codegen
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: collector/go.mod
+
+      - name: Verify generated protobuf code is committed
+        run: |
+          for f in event.pb.go ingest.pb.go collector.pb.go cortex.pb.go \
+                   ingest_grpc.pb.go collector_grpc.pb.go cortex_grpc.pb.go; do
+            test -f "gen/go/loza/core/$f" || {
+              echo "Missing generated file: gen/go/loza/core/$f"
+              exit 1
+            }
+          done
+          git ls-files --error-unmatch gen/go/loza/core/event.pb.go >/dev/null
+
+      # Deliberately no `make proto` here: this proves a fresh checkout builds.
+      - name: Build collector from clean clone
+        working-directory: collector
+        run: go build ./...
+
+      - name: Build cortex from clean clone
+        working-directory: cortex
+        run: go build ./...
+
+  proto-sync:
+    name: Check proto files are in sync
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -63,10 +102,9 @@ jobs:
           go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.11
           go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.6.2
 
-      - name: Regenerate proto and check diff
-        run: |
-          make proto
-          make check-proto
+      - name: Check committed proto code is in sync
+        # check-proto backs up the committed files, regenerates, and compares.
+        run: make check-proto
 
   unit:
     runs-on: ubuntu-latest

@@ -1,4 +1,5 @@
 .PHONY: bootstrap proto-tools proto lint clean check-proto
+.PHONY: proto bootstrap lint clean check-proto
 
 # Directories
 PROTO_DIR := proto
@@ -51,6 +52,15 @@ proto-tools:
 # proto-tools is a prerequisite so this works on a fresh clone without any
 # manual installation of protoc or the Go plugins.
 proto: proto-tools
+# Pinned protoc Go plugin versions (keep in sync with gen/go/go.mod).
+PROTOC_GEN_GO_VERSION := v1.36.11
+PROTOC_GEN_GO_GRPC_VERSION := v1.6.2
+
+# Generate Go protobuf code from proto/loza/core/*.proto into gen/go/loza/core/.
+# Uses protoc directly; buf users get the same output with `cd proto && buf generate`
+# (see proto/buf.gen.yaml). Generated files are committed, so a fresh clone does
+# not need to run this target in order to build collector and cortex.
+proto:
 	@mkdir -p $(GEN_DIR)/loza/core
 	protoc $(PROTO_INCLUDES) \
 		--go_out=$(GEN_DIR) --go_opt=paths=source_relative \
@@ -60,11 +70,19 @@ proto: proto-tools
 		proto/loza/core/collector.proto \
 		proto/loza/core/cortex.proto
 
+# One-command regeneration bootstrap: install the pinned Go plugins, then generate.
+# protoc itself is a system prerequisite (see docs/contributing.md).
+bootstrap:
+	@echo "Installing protoc Go plugins..."
+	go install google.golang.org/protobuf/cmd/protoc-gen-go@$(PROTOC_GEN_GO_VERSION)
+	go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@$(PROTOC_GEN_GO_GRPC_VERSION)
+	$(MAKE) proto
+
 # Lint protobuf definitions (requires buf)
 lint:
 	cd $(PROTO_DIR) && buf lint
 
-# Clean generated Go protobuf code
+# Remove generated Go protobuf code (committed files; restore with `make proto`).
 clean:
 	rm -rf $(GEN_DIR)/loza/core/*.pb.go $(GEN_DIR)/loza/core/*_grpc.pb.go
 
@@ -87,3 +105,38 @@ check-proto:
 	done
 	@rm -rf /tmp/proto-backup
 	@echo "All generated proto files are up to date."
+# Check that committed generated proto files match the proto sources.
+# Regenerates into the working tree and compares against a backup. The protoc
+# version comment is ignored so the check works with any protoc release. Handles
+# the case where generated files are absent instead of failing on an unmatched glob.
+check-proto:
+	@echo "Checking generated proto files are up to date..."
+	@backup=$$(mktemp -d); \
+	trap 'rm -rf "$$backup"' EXIT; \
+	found=0; \
+	for f in $(GEN_DIR)/loza/core/*.pb.go; do \
+		if [ -f "$$f" ]; then cp "$$f" "$$backup/"; found=1; fi; \
+	done; \
+	if [ "$$found" -eq 0 ]; then \
+		echo "ERROR: no generated files in $(GEN_DIR)/loza/core; run 'make proto' and commit them."; \
+		exit 1; \
+	fi; \
+	$(MAKE) proto || exit 1; \
+	status=0; \
+	for f in "$$backup"/*.pb.go; do \
+		[ -f "$$f" ] || continue; \
+		base=$$(basename "$$f"); \
+		if [ ! -f "$(GEN_DIR)/loza/core/$$base" ]; then \
+			echo "ERROR: $$base is missing after regeneration. Run 'make proto' and commit the changes."; \
+			status=1; \
+			continue; \
+		fi; \
+		sed '/^\/\/.*[[:space:]]protoc[[:space:]].*v[0-9]/d' "$$f" > "$$backup/old.norm"; \
+		sed '/^\/\/.*[[:space:]]protoc[[:space:]].*v[0-9]/d' "$(GEN_DIR)/loza/core/$$base" > "$$backup/new.norm"; \
+		if ! cmp -s "$$backup/old.norm" "$$backup/new.norm"; then \
+			echo "ERROR: $$base is out of date. Run 'make proto' and commit the changes."; \
+			status=1; \
+		fi; \
+	done; \
+	if [ "$$status" -eq 0 ]; then echo "All generated proto files are up to date."; fi; \
+	exit $$status
