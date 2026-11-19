@@ -2,6 +2,7 @@ package auth
 
 import (
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 )
@@ -244,4 +245,25 @@ func TestMemoryKeyCache_NonPositiveTTLsAreClamped(t *testing.T) {
 			}
 		})
 	}
+func TestMemoryKeyCache_CloseIdempotent(t *testing.T) {
+	cache := NewMemoryKeyCache(10*time.Second, 5*time.Second)
+
+	cache.Close()
+	// A second Close must be a safe no-op, not a "close of closed channel" panic.
+	cache.Close()
+}
+
+func TestMemoryKeyCache_CloseConcurrent(t *testing.T) {
+	cache := NewMemoryKeyCache(10*time.Second, 5*time.Second)
+
+	const callers = 16
+	var wg sync.WaitGroup
+	for i := 0; i < callers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			cache.Close()
+		}()
+	}
+	wg.Wait()
 }
