@@ -64,6 +64,15 @@ func (w *Writer) sep() {
 	}
 }
 
+// Sep inserts the separator before the next element at the current object or
+// array level. Call it before writing each element, including the first: the
+// first call flips the level to "not first" without emitting a byte, and each
+// later call emits a comma. This keeps the first stack in sync for composite
+// elements (BeginObject/BeginArray), which do not insert separators themselves
+// because they are also used as field values whose separator AppendKey already
+// handled. Callers must not hand-inject commas instead of using Sep.
+func (w *Writer) Sep() { w.sep() }
+
 // ── Key / value helpers ───────────────────────────────────────────────────────
 
 // AppendKey writes a comma-separated JSON key followed by ':'.
