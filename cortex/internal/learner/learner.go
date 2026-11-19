@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/astraive/loza/cortex/internal/models"
@@ -19,6 +20,12 @@ type Learner struct {
 	learningRate     float64
 	weightMin        float64
 	weightMax        float64
+
+	// signatureMu serializes the read-modify-write sequences on a signature.
+	// Without it concurrent RecordFeedback/ReinforcePattern/UpdateFeatureWeights
+	// calls read the same counter value and their Save calls overwrite each
+	// other, dropping increments and average-time updates.
+	signatureMu sync.Mutex
 }
 
 func NewLearner(
@@ -87,6 +94,9 @@ func (l *Learner) RecordFeedback(ctx context.Context, feedback *models.Remediati
 	}
 
 	if remediation.SignatureID != "" {
+		// Serialize the signature read-modify-write so concurrent feedback
+		// records cannot overwrite each other's counter and average updates.
+		l.signatureMu.Lock()
 		sig, err := l.signatureStore.Get(ctx, remediation.SignatureID)
 		if err == nil {
 			sig.OccurrenceCount++
@@ -103,6 +113,7 @@ func (l *Learner) RecordFeedback(ctx context.Context, feedback *models.Remediati
 				log.Warn().Err(saveErr).Str("signature_id", sig.SignatureID).Msg("failed to save updated signature")
 			}
 		}
+		l.signatureMu.Unlock()
 	}
 
 	return nil
@@ -136,6 +147,9 @@ func (l *Learner) GetAverageTimeToResolve(ctx context.Context, action string, si
 // UpdateFeatureWeights adjusts feature vector weights based on feedback outcome.
 // Successful remediations increase discriminating feature weights; failures decrease them.
 func (l *Learner) UpdateFeatureWeights(ctx context.Context, signatureID string, outcomeCode int) error {
+	l.signatureMu.Lock()
+	defer l.signatureMu.Unlock()
+
 	sig, err := l.signatureStore.Get(ctx, signatureID)
 	if err != nil {
 		if isSignatureNotFound(err) {
@@ -180,6 +194,9 @@ func (l *Learner) UpdateFeatureWeights(ctx context.Context, signatureID string, 
 
 // ReinforcePattern updates a signature after a successful remediation.
 func (l *Learner) ReinforcePattern(ctx context.Context, signatureID string, remediationAction string, resolutionTime int64) error {
+	l.signatureMu.Lock()
+	defer l.signatureMu.Unlock()
+
 	sig, err := l.signatureStore.Get(ctx, signatureID)
 	if err != nil {
 		if isSignatureNotFound(err) {
