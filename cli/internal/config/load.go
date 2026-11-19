@@ -50,6 +50,8 @@ func Load() (Config, error) {
 		if err := yaml.Unmarshal(raw, &cfg); err != nil {
 			return Config{}, err
 		}
+	} else if !os.IsNotExist(err) {
+		return Config{}, err
 	}
 	if strings.TrimSpace(cfg.CollectorRepoPath) != "" {
 		cfg.CollectorRepoPath = filepath.Clean(cfg.CollectorRepoPath)

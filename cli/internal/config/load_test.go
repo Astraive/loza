@@ -162,3 +162,66 @@ func TestLoadNormalizesValidationMode(t *testing.T) {
 		t.Fatalf("validation mode = %q, want normalized %q", cfg.ValidationMode, "enforce")
 	}
 }
+
+func TestLoadReturnsNonNotExistStatErrors(t *testing.T) {
+	dir := t.TempDir()
+	defaultsPath := filepath.Join(dir, "loza-cli.defaults.yaml")
+
+	if err := os.WriteFile(defaultsPath, []byte(""+
+		"collector_repo_path: defaults-collector\n"+
+		"spec_repo_path: defaults-spec\n"+
+		"collector_url: http://defaults:9308\n"+
+		"duckdb_path: defaults.db\n"+
+		"spool_dir: defaults-spool\n"+
+		"spool_file: defaults.ndjson\n"+
+		"dlq_path: defaults-dlq.ndjson\n"), 0o600); err != nil {
+		t.Fatalf("write defaults: %v", err)
+	}
+
+	// Using a regular file as a directory component makes os.Stat fail with
+	// ENOTDIR ("not a directory"), which is not an os.IsNotExist error. A
+	// correct Load must surface this instead of silently using defaults.
+	notDir := filepath.Join(dir, "not-a-directory")
+	if err := os.WriteFile(notDir, []byte("data"), 0o600); err != nil {
+		t.Fatalf("write regular file: %v", err)
+	}
+	userPath := filepath.Join(notDir, ".loza-cli.yaml")
+
+	t.Setenv("LOZA_CLI_DEFAULTS", defaultsPath)
+	t.Setenv("LOZA_CLI_CONFIG", userPath)
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("Load returned nil; want the non-not-exist stat error surfaced")
+	}
+	if os.IsNotExist(err) {
+		t.Fatalf("Load returned a not-exist error; want a non-not-exist error: %v", err)
+	}
+}
+
+func TestLoadAllowsGenuinelyAbsentUserConfig(t *testing.T) {
+	dir := t.TempDir()
+	defaultsPath := filepath.Join(dir, "loza-cli.defaults.yaml")
+
+	if err := os.WriteFile(defaultsPath, []byte(""+
+		"collector_repo_path: defaults-collector\n"+
+		"spec_repo_path: defaults-spec\n"+
+		"collector_url: http://defaults:9308\n"+
+		"duckdb_path: defaults.db\n"+
+		"spool_dir: defaults-spool\n"+
+		"spool_file: defaults.ndjson\n"+
+		"dlq_path: defaults-dlq.ndjson\n"), 0o600); err != nil {
+		t.Fatalf("write defaults: %v", err)
+	}
+
+	t.Setenv("LOZA_CLI_DEFAULTS", defaultsPath)
+	t.Setenv("LOZA_CLI_CONFIG", filepath.Join(dir, "does-not-exist.yaml"))
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("load with absent user config: %v", err)
+	}
+	if cfg.CollectorURL != "http://defaults:9308" {
+		t.Fatalf("collector url = %q, want defaults value", cfg.CollectorURL)
+	}
+}
