@@ -1,4 +1,130 @@
 """Compatibility import path for the canonical ``loza.core.logger.Logger``.
+from __future__ import annotations
+
+import json
+import sys
+import time
+from dataclasses import replace
+from datetime import datetime, timezone
+from typing import Any
+
+from .config import (
+    CanonicalWins,
+    Config,
+    ErrorOnDuplicate,
+    FirstWins,
+    KeepBoth,
+    LastWins,
+    UserWins,
+    _collector_ingest_endpoint,
+)
+from .errors import EventClosedError, EventValidationError
+from .event import (
+    EVENT_DELIVERY_FAILED,
+    EVENT_EMITTED,
+    EVENT_EMITTING,
+    EVENT_FINISHED,
+    EVENT_FAILED_VALIDATION,
+    Attr,
+    EventContext,
+    Params,
+)
+from .pipeline import EnqueueOutcome, MemoryOfflineBuffer, Pipeline
+from .redactor import default_redactor
+from .schema import DefaultSchema
+from ..sinks.httpbatch import HTTPBatchSink
+from ..generated.spec_contract import validate_event_payload
+
+
+class Logger:
+    def __init__(self, config: Config) -> None:
+        config.validate()
+        self._config = config
+        self._pipeline: Pipeline | None = None
+        self._metrics = config.metrics
+        self._stats_handler = config.stats_handler
+        self._install_default_collector_sink()
+        if not self._config.sinks and self._config.environment != "test":
+            self._config = replace(self._config, sinks=Config.dev(config.service).sinks)
+        if self._config.sampler is None:
+            self._config.sampler = lambda event: True
+        if self._config.redactor is None:
+            self._config.redactor = default_redactor()
+        if self._config.schema is None:
+            self._config.schema = DefaultSchema()
+        if self._config.async_config.enabled and self._config.sinks:
+            self._pipeline = Pipeline(
+                self._config.sinks,
+                queue_size=self._config.async_config.queue_size,
+                max_batch_bytes=self._config.async_config.max_batch_bytes,
+                offline_buffer=MemoryOfflineBuffer(self._config.async_config.queue_size),
+                metrics=self._metrics,
+            )
+            self._pipeline.start(self._config.async_config.workers)
+
+    def _install_default_collector_sink(self) -> None:
+        endpoint = self._config.collector_endpoint.strip()
+        if not endpoint:
+            return
+        if any(isinstance(sink, HTTPBatchSink) for sink in self._config.sinks):
+            return
+        if not self._config.sinks or all(self._is_default_terminal_sink(sink) for sink in self._config.sinks):
+            self._config = replace(
+                self._config,
+                sinks=[
+                    HTTPBatchSink(
+                        _collector_ingest_endpoint(endpoint, self._config.collector_name),
+                        api_key=self._config.api_key,
+                        username=self._config.username,
+                        password=self._config.password,
+                        service=self._config.service,
+                    )
+                ],
+            )
+
+    @staticmethod
+    def _is_default_terminal_sink(sink: object) -> bool:
+        return sink.__class__.__name__ in {"StdoutSink", "StderrSink"}
+
+    def start_event(self, params: Params) -> EventContext:
+        params = replace(params, custom=list(params.custom))
+        if not params.service and self._config.service:
+            params.service = self._config.service
+        if not params.version and self._config.version:
+            params.version = self._config.version
+        if not params.environment and self._config.environment:
+            params.environment = self._config.environment
+        if not params.region and self._config.region:
+            params.region = self._config.region
+        if not params.deployment_id and self._config.deployment_id:
+            params.deployment_id = self._config.deployment_id
+        if self._config.include_host and not params.host:
+            import socket
+
+            params.host = socket.gethostname()
+        ctx = EventContext(service=params.service or self._config.service, params=params)
+        ctx._max_checkpoints = self._config.max_checkpoints
+        for attr in params.custom:
+            self._apply_attr(ctx, attr)
+        if params.user_id:
+            self.merge(ctx, "user", id=params.user_id)
+        if params.tenant_id:
+            self.merge(ctx, "tenant", id=params.tenant_id)
+        if params.workspace_id:
+            self.merge(ctx, "tenant", workspace_id=params.workspace_id)
+        if self._config.checkpoint_emit_immediately:
+            ctx._checkpoint_writer = self._emit_checkpoint_immediate
+        if self._metrics is not None:
+            self._metrics.on_event_created()
+        return ctx
+
+    def enrich(self, ctx: EventContext, *attrs: Attr, **named: Any) -> None:
+        ctx._ensure_mutable()
+        ctx._mark_active()
+        for attr in attrs:
+            self._apply_attr(ctx, attr)
+        for key, value in named.items():
+            self._apply_attr(ctx, Attr(key, value))
 
 This module used to hold a second, diverged copy of the ``Logger``
 implementation. The package never used it (``loza.core`` exports ``Logger``
@@ -9,6 +135,85 @@ importing from ``loza.core.client``.
 The legacy import path is preserved as a thin re-export so that there is a
 single implementation of ``Logger`` and no public API is broken.
 """
+    def _emit_inner(self, ctx: EventContext) -> str:
+        if ctx.event_state == EVENT_EMITTED or ctx.emitted:
+            return ctx.emitted_payload
+        if ctx.event_state in {EVENT_EMITTING, EVENT_DELIVERY_FAILED, EVENT_FAILED_VALIDATION}:
+            raise EventClosedError(f"event {ctx.event_id} is closed in state {ctx.event_state}")
+
+        emit_start = time.monotonic()
+        try:
+            self._validate(ctx)
+
+            if not self._config.sampler(ctx):
+                ctx.event_state = EVENT_EMITTED
+                ctx.emitted = True
+                ctx.emitted_payload = ""
+                self._notify_drop("sampled_out")
+                return ""
+
+            ctx.event_state = EVENT_EMITTING
+            ctx.delivery_attempts += 1
+            self._apply_duplicate_field_policy(ctx)
+            self._enforce_attr_limit(ctx)
+            payload = self._config.schema.encode(ctx)
+            payload = self._config.redactor(payload)
+            encoded = json.dumps(payload, separators=(",", ":"), sort_keys=True)
+            if len(encoded.encode("utf-8")) > self._config.security.max_event_bytes:
+                if self._config.security.drop_oversized_events:
+                    ctx.event_state = EVENT_EMITTED
+                    ctx.emitted = True
+                    ctx.emitted_payload = ""
+                    self._notify_drop("oversized_event")
+                    return ""
+                raise EventValidationError("event exceeds max_event_bytes")
+            if self._pipeline is not None:
+                outcome = self._pipeline.enqueue(encoded)
+                if outcome is EnqueueOutcome.DROPPED:
+                    self._notify_drop("queue_full")
+                    raise EventValidationError("async pipeline backpressure drop")
+                if outcome is EnqueueOutcome.BUFFERED:
+                    # The queue was full and the event was only spooled to the
+                    # offline retry buffer. It has not been emitted: do not
+                    # report it as delivered or count it as emitted.
+                    ctx.emitted = False
+                    ctx.emitted_payload = ""
+                    return ""
+            else:
+                for sink in self._config.sinks:
+                    sink.write(encoded)
+            ctx.emitted = True
+            ctx.event_state = EVENT_EMITTED
+            ctx.emitted_payload = encoded
+            self._notify_emit(ctx)
+            return encoded
+        except EventValidationError:
+            ctx.event_state = EVENT_FAILED_VALIDATION
+            ctx.emitted = False
+            self._notify_emit_failure(ctx)
+            raise
+        except ValueError as exc:
+            ctx.event_state = EVENT_FAILED_VALIDATION
+            ctx.emitted = False
+            self._notify_emit_failure(ctx)
+            raise EventValidationError(str(exc)) from exc
+        except Exception as exc:
+            ctx.event_state = EVENT_DELIVERY_FAILED
+            ctx.emitted = False
+            self._notify_delivery_failed(ctx, exc)
+            raise
+        finally:
+            if self._metrics is not None:
+                self._metrics.observe_emit_duration(time.monotonic() - emit_start)
+
+    def flush(self, timeout: float = 30.0) -> None:
+        if self._pipeline is not None:
+            self._pipeline.drain_once()
+            self._pipeline.replay_offline()
+        for sink in self._config.sinks:
+            flush = getattr(sink, "flush", None)
+            if callable(flush):
+                flush()
 
 from __future__ import annotations
     def shutdown(self, timeout: float = 30.0) -> None:

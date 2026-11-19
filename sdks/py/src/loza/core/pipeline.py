@@ -9,6 +9,11 @@ from pathlib import Path
 from queue import Empty, Full, Queue
 from threading import Event, Lock, RLock, Thread
 from typing import Callable, Iterable, Protocol
+from enum import Enum
+from pathlib import Path
+from queue import Empty, Full, Queue
+from threading import Event, Lock, Thread
+from typing import Any, Callable, Iterable, Protocol
 
 from ..version import SDK_VERSION
 
@@ -37,6 +42,7 @@ class DeliveryStats:
     enqueued: int = 0
     emitted: int = 0
     dropped: int = 0
+    buffered: int = 0
     failed: int = 0
     retried: int = 0
     batches: int = 0
@@ -72,16 +78,37 @@ class DeliveryStats:
 
     def snapshot(self) -> dict[str, int | str]:
         """Return a consistent view taken while no mutation is in progress."""
+    _lock: Any = field(default_factory=Lock, init=False, repr=False, compare=False)
+
+    def increase(self, name: str, amount: int = 1) -> None:
+        """Atomically add to a counter. All counter writes go through this lock."""
+        with self._lock:
+            setattr(self, name, getattr(self, name) + amount)
+
+    def set_last_error(self, message: str) -> None:
+        with self._lock:
+            self.last_error = message
+
+    def snapshot(self) -> dict[str, int | str]:
         with self._lock:
             return {
                 "enqueued": self.enqueued,
                 "emitted": self.emitted,
                 "dropped": self.dropped,
+                "buffered": self.buffered,
                 "failed": self.failed,
                 "retried": self.retried,
                 "batches": self.batches,
                 "last_error": self.last_error,
             }
+
+
+class EnqueueOutcome(Enum):
+    """Where an event ended up when it was handed to the async pipeline."""
+
+    QUEUED = "queued"
+    BUFFERED = "buffered"
+    DROPPED = "dropped"
 
 
 class ByteBatcher:
@@ -250,6 +277,16 @@ class Pipeline:
         self._write_batch([encoded])
 
     def try_enqueue(self, encoded: str) -> bool:
+        """Return True only when the event was accepted into the live queue."""
+        return self.enqueue(encoded) is EnqueueOutcome.QUEUED
+
+    def enqueue(self, encoded: str) -> EnqueueOutcome:
+        """Hand an event to the async pipeline and report where it actually went.
+
+        A full queue with an offline buffer means the event was *buffered* for a
+        later replay, not emitted and not dropped. Without a buffer the event is
+        genuinely dropped and must be reported as such.
+        """
         try:
             self.queue.put_nowait(encoded)
             self.stats.record_enqueued()
@@ -260,9 +297,21 @@ class Pipeline:
             self.stats.record_dropped()
             if self._metrics is not None:
                 self._metrics.on_event_dropped("queue_full")
+        except Full:
             if self.offline_buffer is not None:
                 self.offline_buffer.append(encoded)
-            return False
+                self.stats.increase("buffered")
+                if self._metrics is not None:
+                    self._metrics.on_backpressure()
+                return EnqueueOutcome.BUFFERED
+            self.stats.increase("dropped")
+            if self._metrics is not None:
+                self._metrics.on_event_dropped("queue_full")
+            return EnqueueOutcome.DROPPED
+        self.stats.increase("enqueued")
+        if self._metrics is not None:
+            self._metrics.set_buffer_size(self.queue.qsize())
+        return EnqueueOutcome.QUEUED
 
     def drain_once(self) -> int:
         batcher = ByteBatcher(self.max_batch_bytes)
@@ -357,6 +406,8 @@ class Pipeline:
             errors.append(RuntimeError("no sinks configured"))
         if errors:
             self.stats.record_failed(len(encoded_events), "; ".join(str(error) for error in errors))
+            self.stats.increase("failed", len(encoded_events))
+            self.stats.set_last_error("; ".join(str(error) for error in errors))
             if self._metrics is not None:
                 self._metrics.on_event_dropped("no_sinks" if no_sinks else "transport")
             if buffer_on_failure and self.offline_buffer is not None:
@@ -368,6 +419,8 @@ class Pipeline:
         else:
             self.stats.record_emitted(len(encoded_events))
         self.stats.record_batch()
+            self.stats.increase("emitted", len(encoded_events))
+        self.stats.increase("batches")
         return not errors
 
     def _write_sink_with_retry(self, sink: object, encoded_events: list[str]) -> Exception | None:
@@ -384,6 +437,7 @@ class Pipeline:
             except Exception as exc:
                 last_error = exc
                 self.stats.record_retried(int(attempt < self.retry_policy.max_attempts))
+                self.stats.increase("retried", int(attempt < self.retry_policy.max_attempts))
                 if self._metrics is not None:
                     self._metrics.on_retry(attempt)
                 time.sleep(self.retry_policy.delay(attempt))

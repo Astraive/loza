@@ -35,7 +35,7 @@ from .event import (
     Params,
     sanitize_event,
 )
-from .pipeline import MemoryOfflineBuffer, Pipeline
+from .pipeline import EnqueueOutcome, MemoryOfflineBuffer, Pipeline
 from .redactor import default_redactor
 from .schema import DefaultSchema, EventView
 from ..sinks.httpbatch import HTTPBatchSink
@@ -317,10 +317,17 @@ class Logger:
                     return ""
                 raise EventValidationError("event exceeds max_event_bytes")
             if self._pipeline is not None:
-                accepted = self._pipeline.try_enqueue(encoded)
-                if not accepted and self._pipeline.offline_buffer is None:
+                outcome = self._pipeline.enqueue(encoded)
+                if outcome is EnqueueOutcome.DROPPED:
                     self._notify_drop("queue_full")
                     raise EventValidationError("async pipeline backpressure drop")
+                if outcome is EnqueueOutcome.BUFFERED:
+                    # The queue was full and the event was only spooled to the
+                    # offline retry buffer. It has not been emitted: do not
+                    # report it as delivered or count it as emitted.
+                    ctx.emitted = False
+                    ctx.emitted_payload = ""
+                    return ""
             else:
                 delivery_failed = False
                 for sink in self._config.sinks:
