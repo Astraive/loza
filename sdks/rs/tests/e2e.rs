@@ -2,6 +2,17 @@
 use loza::{Config, New, Params, LOZA_SPEC_VERSION};
 use serde_json::Value;
 
+/// Fetch the `attrs` object from an emitted event, failing loudly when it is absent.
+///
+/// Attribute checks must never pass vacuously: if the emitter stops producing an
+/// `attrs` object, every test that relies on it should fail rather than skip its
+/// assertion.
+fn attrs_of(event: &Value) -> &Value {
+    event
+        .get("attrs")
+        .expect("emitted event must contain an attrs object")
+}
+
 #[test]
 fn test_emit_to_collector_basic() {
     let logger = New(Config::test("integration_test"));
@@ -98,10 +109,16 @@ fn test_trace_context_preservation() {
     let payload = logger.emit(&ctx).unwrap();
 
     let event: Value = serde_json::from_str(&payload).unwrap();
-    // Should have attributes
-    if let Some(attrs) = event.get("attrs") {
-        assert!(attrs.get("trace_id").is_some() || attrs.get("span_id").is_some());
-    }
+    // Should have attributes; fail if `attrs` is missing instead of skipping the check.
+    let attrs = attrs_of(&event);
+    assert_eq!(
+        attrs.get("trace_id").and_then(Value::as_str),
+        Some("trace_abc123")
+    );
+    assert_eq!(
+        attrs.get("span_id").and_then(Value::as_str),
+        Some("span_def456")
+    );
 }
 
 #[test]
@@ -133,10 +150,24 @@ fn test_enrichment_preserved() {
     let payload = logger.emit(&ctx).unwrap();
 
     let event: Value = serde_json::from_str(&payload).unwrap();
-    // Custom fields should be present
-    if let Some(attrs) = event.get("attrs") {
-        assert_eq!(attrs["custom_field"], "custom_value");
-    }
+    // Custom fields should be present; fail if `attrs` is missing instead of skipping the check.
+    let attrs = attrs_of(&event);
+    assert_eq!(
+        attrs.get("custom_field").and_then(Value::as_str),
+        Some("custom_value")
+    );
+}
+
+#[test]
+fn test_attr_assertions_are_not_vacuous() {
+    // Regression for the vacuous-pass defect: a payload without `attrs` must
+    // make the attribute accessor panic rather than silently pass.
+    let event: Value = serde_json::from_str(r#"{"event":"no_attrs"}"#).unwrap();
+    let result = std::panic::catch_unwind(|| attrs_of(&event));
+    assert!(
+        result.is_err(),
+        "a payload missing attrs must fail the assertion"
+    );
 }
 
 #[test]
