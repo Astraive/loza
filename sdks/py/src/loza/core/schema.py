@@ -133,6 +133,13 @@ class NestedSchema(DefaultSchema):
     pass
 
 
+def _put_flat(out: dict[str, Any], key: str, value: Any) -> None:
+    """Write a flattened field, refusing to silently overwrite another field."""
+    if key in out:
+        raise ValueError(f"FlatSchema: flattened key {key!r} is produced by more than one field")
+    out[key] = value
+
+
 class FlatSchema:
     def encode(self, event: EventView) -> dict[str, Any]:
         payload = event.to_dict()
@@ -142,11 +149,16 @@ class FlatSchema:
 
     def _flatten(self, prefix: str, value: Any, out: dict[str, Any]) -> None:
         if isinstance(value, dict):
+            if not value:
+                # Emit an explicit empty container so the field is not silently dropped.
+                if prefix:
+                    _put_flat(out, prefix, {})
+                return
             for key, child in value.items():
                 next_key = f"{prefix}_{key}" if prefix else key
                 self._flatten(next_key, child, out)
             return
-        out[prefix] = value
+        _put_flat(out, prefix, value)
 
 
 class OTelLogSchema:
