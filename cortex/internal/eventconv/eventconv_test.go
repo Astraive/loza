@@ -315,5 +315,59 @@ func TestTimestampUnsupportedLayoutRejected(t *testing.T) {
 				t.Errorf("HTTP.StatusCode = %d, want %d", got, tt.want)
 			}
 		})
+func validRawMap() map[string]any {
+	return map[string]any{
+		"id":         "evt-1",
+		"timestamp":  time.Now().UTC().Format(time.RFC3339Nano),
+		"kind":       "log",
+		"service":    "svc-a",
+		"provenance": "jsonl",
+	}
+}
+
+// TestFromRawMapAttrsFallbackNoTopLevelExtraction guards the documented
+// behavior: when no explicit "attrs" key is present, event.Attrs is an empty
+// map and unrecognized top-level fields remain only in event.Raw. They must
+// not be promoted into event.Attrs, which is persisted and streamed separately.
+func TestFromRawMapAttrsFallbackNoTopLevelExtraction(t *testing.T) {
+	raw := validRawMap()
+	raw["custom_field"] = "custom-value"
+	raw["secret"] = "should-not-be-attrs"
+
+	event, err := FromRawMap(raw, "loza")
+	if err != nil {
+		t.Fatalf("FromRawMap: %v", err)
+	}
+
+	if event.Attrs == nil {
+		t.Fatal("expected Attrs to be an initialized map, got nil")
+	}
+	if len(event.Attrs) != 0 {
+		t.Fatalf("expected no top-level fields promoted into Attrs, got %+v", event.Attrs)
+	}
+	if got := event.Raw["custom_field"]; got != "custom-value" {
+		t.Fatalf("expected custom_field preserved in Raw, got %v", got)
+	}
+	if got := event.Raw["secret"]; got != "should-not-be-attrs" {
+		t.Fatalf("expected secret preserved in Raw, got %v", got)
+	}
+}
+
+func TestFromRawMapExplicitAttrs(t *testing.T) {
+	raw := validRawMap()
+	raw["attrs"] = map[string]any{"region": "us-east-1", "retries": float64(3)}
+
+	event, err := FromRawMap(raw, "loza")
+	if err != nil {
+		t.Fatalf("FromRawMap: %v", err)
+	}
+	if len(event.Attrs) != 2 {
+		t.Fatalf("expected 2 explicit attrs, got %d (%+v)", len(event.Attrs), event.Attrs)
+	}
+	if got := event.Attrs["region"]; got != "us-east-1" {
+		t.Fatalf("expected region attr, got %v", got)
+	}
+	if _, ok := event.Raw["attrs"]; ok {
+		t.Fatal("expected explicit attrs key excluded from Raw")
 	}
 }
