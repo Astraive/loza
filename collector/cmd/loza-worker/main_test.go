@@ -192,6 +192,129 @@ func TestCloseOnceReaderPropagatesFirstErrorWithoutReclosing(t *testing.T) {
 	}
 	if got := base.closeCount(); got != 1 {
 		t.Fatalf("underlying reader closed %d times, want 1", got)
+type stubQueueReader struct {
+	calls int
+	poll  func(call int) ([]queueRecord, error)
+}
+
+func (r *stubQueueReader) Poll(context.Context, time.Duration) ([]queueRecord, error) {
+	r.calls++
+	if r.poll == nil {
+		return nil, nil
+	}
+	return r.poll(r.calls)
+}
+
+func (r *stubQueueReader) Close() error { return nil }
+
+// TestRunThrottlesPersistentPollErrors reproduces the reported behavior: with
+// the old code a permanent Poll error spun thousands of times in this window.
+func TestRunThrottlesPersistentPollErrors(t *testing.T) {
+	originalSleep := sleepWithContext
+	sleepWithContext = sleepWithContextReal
+	defer func() { sleepWithContext = originalSleep }()
+
+	reader := &stubQueueReader{poll: func(int) ([]queueRecord, error) {
+		return nil, errors.New("broker unavailable")
+	}}
+	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
+	defer cancel()
+
+	err := (&workerState{}).run(ctx, reader)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("run error = %v, want context.DeadlineExceeded", err)
+	}
+	if reader.calls == 0 {
+		t.Fatal("Poll was never called")
+	}
+	if reader.calls > 10 {
+		t.Fatalf("Poll called %d times in 150ms; expected bounded backoff", reader.calls)
+	}
+}
+
+// TestRunPollErrorBackoffIsBounded checks that consecutive failures back off
+// exponentially, capped at workerPollErrorMaxBackoff.
+func TestRunPollErrorBackoffIsBounded(t *testing.T) {
+	originalSleep := sleepWithContext
+	defer func() { sleepWithContext = originalSleep }()
+
+	var waits []time.Duration
+	sleepWithContext = func(ctx context.Context, d time.Duration) error {
+		waits = append(waits, d)
+		if len(waits) == 8 {
+			return context.Canceled // simulate shutdown during backoff
+		}
+		return nil
+	}
+	reader := &stubQueueReader{poll: func(int) ([]queueRecord, error) {
+		return nil, errors.New("persistent failure")
+	}}
+
+	err := (&workerState{}).run(context.Background(), reader)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("run error = %v, want context.Canceled", err)
+	}
+	// Build the expectation explicitly: double each time, capped at the max.
+	want := make([]time.Duration, 0, 8)
+	current := workerPollErrorBackoff
+	for i := 0; i < 8; i++ {
+		want = append(want, current)
+		current *= 2
+		if current > workerPollErrorMaxBackoff {
+			current = workerPollErrorMaxBackoff
+		}
+	}
+	if len(waits) != len(want) {
+		t.Fatalf("backoff waits = %v, want %v", waits, want)
+	}
+	for i := range want {
+		if waits[i] != want[i] {
+			t.Fatalf("backoff waits = %v, want %v", waits, want)
+		}
+	}
+	if reader.calls != len(want) {
+		t.Fatalf("Poll called %d times, want %d", reader.calls, len(want))
+	}
+}
+
+// TestRunPollErrorBackoffResetsOnSuccess checks that a successful poll clears
+// the consecutive-failure streak so a later isolated error is retried quickly.
+func TestRunPollErrorBackoffResetsOnSuccess(t *testing.T) {
+	originalSleep := sleepWithContext
+	defer func() { sleepWithContext = originalSleep }()
+
+	var waits []time.Duration
+	sleepWithContext = func(ctx context.Context, d time.Duration) error {
+		waits = append(waits, d)
+		if len(waits) == 4 {
+			return context.Canceled
+		}
+		return nil
+	}
+	reader := &stubQueueReader{poll: func(call int) ([]queueRecord, error) {
+		if call == 3 {
+			return nil, nil // successful (empty) poll
+		}
+		return nil, errors.New("transient failure")
+	}}
+
+	err := (&workerState{}).run(context.Background(), reader)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("run error = %v, want context.Canceled", err)
+	}
+	want := []time.Duration{
+		workerPollErrorBackoff,
+		2 * workerPollErrorBackoff,
+		workerPollErrorBackoff,
+		2 * workerPollErrorBackoff,
+	}
+	if len(waits) != len(want) {
+		t.Fatalf("backoff waits = %v, want %v", waits, want)
+	}
+	for i := range want {
+		if waits[i] != want[i] {
+			t.Fatalf("backoff waits = %v, want %v", waits, want)
+		}
 	}
 }
 

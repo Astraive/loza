@@ -23,7 +23,14 @@ import (
 	"github.com/twmb/franz-go/pkg/kgo"
 )
 
-const workerCommitTimeout = 5 * time.Second
+const (
+	workerCommitTimeout = 5 * time.Second
+
+	// Bounds used to throttle consecutive poll errors. A persistent broker or
+	// deserialization error must not be retried in a tight loop.
+	workerPollErrorBackoff    = 50 * time.Millisecond
+	workerPollErrorMaxBackoff = 2 * time.Second
+)
 
 type queueRecord struct {
 	value  []byte
@@ -333,9 +340,35 @@ func watchSignals(ctx context.Context, cancel context.CancelFunc, signals ...os.
 		close(done)
 		<-exitedCh
 	}, exitedCh
+// sleepWithContext waits for d or until ctx is done. It is a variable so tests
+// can replace it with a deterministic implementation.
+var sleepWithContext = sleepWithContextReal
+
+func sleepWithContextReal(ctx context.Context, d time.Duration) error {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
+// nextPollErrorBackoff grows the backoff exponentially but never past the cap.
+func nextPollErrorBackoff(current time.Duration) time.Duration {
+	if current >= workerPollErrorMaxBackoff {
+		return workerPollErrorMaxBackoff
+	}
+	next := current * 2
+	if next > workerPollErrorMaxBackoff {
+		return workerPollErrorMaxBackoff
+	}
+	return next
 }
 
 func (s *workerState) run(ctx context.Context, reader queueReader) error {
+	backoff := workerPollErrorBackoff
 	for {
 		if ctx.Err() != nil {
 			return ctx.Err()
@@ -345,9 +378,19 @@ func (s *workerState) run(ctx context.Context, reader queueReader) error {
 			if errors.Is(err, context.Canceled) {
 				return err
 			}
-			logJSON("error", "worker_kafka_poll_failed", map[string]any{"error": err.Error()})
+			logJSON("error", "worker_kafka_poll_failed", map[string]any{
+				"error":      err.Error(),
+				"backoff_ms": backoff.Milliseconds(),
+			})
+			// Wait before retrying so a persistent error cannot spin.
+			if waitErr := sleepWithContext(ctx, backoff); waitErr != nil {
+				return waitErr
+			}
+			backoff = nextPollErrorBackoff(backoff)
 			continue
 		}
+		// A successful poll clears the consecutive-failure streak.
+		backoff = workerPollErrorBackoff
 		for _, record := range records {
 			s.handleRecord(ctx, record)
 		}
