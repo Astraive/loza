@@ -258,6 +258,7 @@ func (s *collectorState) appendSpoolLocked(raw []byte) (spoolDelivery, error) {
 
 func (s *collectorState) validateDeliveryPayload(raw []byte) error {
 	if !s.memoryLimiterEnabled() || s.config().maxQueueBytes <= 0 || int64(len(raw)) <= s.config().maxQueueBytes {
+	if s.cfg.maxQueueBytes <= 0 || int64(len(raw)) <= s.cfg.maxQueueBytes {
 		return nil
 	}
 	s.metrics.requestsThrottled.Add(1)
@@ -291,6 +292,8 @@ func (s *collectorState) enqueueDelivery(item spoolDelivery) error {
 		withinLimit := !s.memoryLimiterEnabled() ||
 			s.config().maxQueueBytes <= 0 ||
 			current+size <= s.config().maxQueueBytes
+		withinLimit := s.cfg.maxQueueBytes <= 0 ||
+			current+size <= s.cfg.maxQueueBytes
 		durableOversize := item.endOffset > item.startOffset && current == 0
 		if withinLimit || durableOversize {
 			if s.metrics.queueBytes.CompareAndSwap(current, current+size) {
