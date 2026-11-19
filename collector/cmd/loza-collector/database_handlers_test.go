@@ -174,6 +174,67 @@ func TestDatabaseQueryThreadsPlanLimitToCollector(t *testing.T) {
 	}
 }
 
+// budgetConsumingConnection models a healthy connection whose Ping consumes the
+// whole timeout budget before succeeding. The follow-up SELECT 1 probe must be
+// given a fresh budget, otherwise it inherits an expired deadline.
+type budgetConsumingConnection struct {
+	info          database.Metadata
+	queryObserved bool
+	queryCtxErr   error
+}
+
+func (f *budgetConsumingConnection) Backend() string             { return f.info.Backend }
+func (f *budgetConsumingConnection) Metadata() database.Metadata { return f.info }
+func (f *budgetConsumingConnection) Ping(ctx context.Context) error {
+	// Block until this operation's budget is exhausted, then report success —
+	// a slow but ultimately healthy database.
+	<-ctx.Done()
+	return nil
+}
+func (f *budgetConsumingConnection) Query(ctx context.Context, query string, args ...any) (database.Result, error) {
+	f.queryObserved = true
+	f.queryCtxErr = ctx.Err()
+	if err := ctx.Err(); err != nil {
+		return database.Result{}, err
+	}
+	return database.Result{Columns: []string{"value"}, Rows: [][]any{{"ok"}}}, nil
+}
+func (f *budgetConsumingConnection) QueryWithLimit(ctx context.Context, limit int, query string, args ...any) (database.Result, error) {
+	return f.Query(ctx, query, args...)
+}
+func (f *budgetConsumingConnection) Close(context.Context) error { return nil }
+
+func TestDatabaseConnectionTestGivesProbeFreshTimeoutBudget(t *testing.T) {
+	const timeout = 40 * time.Millisecond
+	connection := &budgetConsumingConnection{
+		info: database.Metadata{Name: "analytics", Backend: "postgres"},
+	}
+	state := &collectorState{
+		cfg: collectorConfig{
+			authEnabled:         false,
+			databaseConnections: []databaseConnectionConfig{{name: "analytics", queryTimeout: timeout}},
+		},
+		databaseConnections: map[string]database.Connection{"analytics": connection},
+	}
+	request := httptest.NewRequest(http.MethodGet, "/collectors/acme/database/connections/analytics/test", nil)
+	request.SetPathValue("name", "analytics")
+	request = request.WithContext(publichttp.WithAuthorizedCollector(request.Context(), "acme", "prod"))
+	recorder := httptest.NewRecorder()
+	state.HandleDatabaseConnectionTest(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s (query ctx err = %v)", recorder.Code, recorder.Body.String(), connection.queryCtxErr)
+	}
+	if !connection.queryObserved {
+		t.Fatal("SELECT 1 probe was not executed")
+	}
+	if connection.queryCtxErr != nil {
+		t.Fatalf("SELECT 1 probe received an exhausted context: %v", connection.queryCtxErr)
+	}
+	if !strings.Contains(recorder.Body.String(), `"healthy":true`) {
+		t.Fatalf("expected healthy response, got: %s", recorder.Body.String())
+	}
+}
+
 func containsSecretField(body string) bool {
 	return stringContains(body, "password") || stringContains(body, "username") || stringContains(body, "dsn")
 }

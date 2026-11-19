@@ -117,12 +117,18 @@ func (s *collectorState) HandleDatabaseConnectionTest(w http.ResponseWriter, r *
 	if effectiveName == "" {
 		effectiveName = name
 	}
-	ctx, cancel := database.BoundedContext(r.Context(), timeout)
-	defer cancel()
 	start := time.Now()
-	err = connection.Ping(ctx)
+	// Give each health probe its own timeout budget. Sharing one context meant a
+	// Ping that consumed most of the budget could leave the follow-up SELECT 1
+	// with an already-expired deadline, causing a healthy connection to be
+	// reported as unhealthy (HTTP 503).
+	pingCtx, pingCancel := database.BoundedContext(r.Context(), timeout)
+	err = connection.Ping(pingCtx)
+	pingCancel()
 	if err == nil {
-		_, err = connection.Query(ctx, "SELECT 1")
+		queryCtx, queryCancel := database.BoundedContext(r.Context(), timeout)
+		defer queryCancel()
+		_, err = connection.Query(queryCtx, "SELECT 1")
 	}
 	response := map[string]any{
 		"connection":  effectiveName,
