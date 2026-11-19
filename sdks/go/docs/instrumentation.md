@@ -972,7 +972,8 @@ redactor := loza.ComposeRedactors(
 | `HashKeysWithSecret(secret, keys...)` | Same, with a caller-supplied secret for stable digests across processes |
 | `MaskKeys(keys...)` | Replaces values with `****` |
 | `DropKeys(keys...)` | Removes the attr entirely |
-| `RedactPatterns(patterns...)` | Redacts values matching regex patterns |
+| `RedactPatterns(patterns...)` | Redacts values matching regex patterns; invalid patterns are reported to stderr and skipped |
+| `TryRedactPatterns(patterns...)` | Same, but returns `(Redactor, error)` on an invalid pattern |
 | `ComposeRedactors(redactors...)` | Chains multiple redactors in order |
 
 `HashKeys` uses a keyed MAC (HMAC-SHA256), not a bare digest: an unkeyed hash of
