@@ -1,7 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  sampleAll, sampleNone, sampleRandom, sampleErrors,
+  sampleAll, sampleNone, sampleRandom, sampleRate, sampleErrors,
   sampleStatusCodes, sampleRoutes, anySampler, allSampler, notSampler,
 } from '../src/sampling/sampler.ts';
 import { Event } from '../src/core/event.ts';
@@ -52,5 +52,39 @@ describe('Sampler', () => {
   it('notSampler inverts', () => {
     const s = notSampler(sampleAll());
     assert.equal(s(makeEvent()), false);
+  });
+});
+
+describe('Sampler rate validation', () => {
+  it('accepts finite rates within [0, 1] including the boundaries', () => {
+    const originalRandom = Math.random;
+    Math.random = () => 0.25;
+    try {
+      assert.equal(sampleRandom(0)(makeEvent()), false);
+      assert.equal(sampleRandom(1)(makeEvent()), true);
+      assert.equal(sampleRandom(0.5)(makeEvent()), true);
+      assert.equal(sampleRate(0.5)(makeEvent()), true);
+      assert.equal(sampleRate(0)(makeEvent()), false);
+    } finally {
+      Math.random = originalRandom;
+    }
+  });
+
+  it('throws for rates outside [0, 1] on both aliases', () => {
+    assert.throws(() => sampleRandom(1.0001), RangeError);
+    assert.throws(() => sampleRandom(2), RangeError);
+    assert.throws(() => sampleRandom(-0.1), RangeError);
+    assert.throws(() => sampleRandom(-1), RangeError);
+    assert.throws(() => sampleRate(1.5), RangeError);
+    assert.throws(() => sampleRate(-2), RangeError);
+  });
+
+  it('throws for non-finite and non-numeric rates instead of silently dropping', () => {
+    assert.throws(() => sampleRandom(NaN), TypeError);
+    assert.throws(() => sampleRandom(Infinity), TypeError);
+    assert.throws(() => sampleRandom(-Infinity), TypeError);
+    assert.throws(() => sampleRandom('0.5' as any), TypeError);
+    assert.throws(() => sampleRandom(undefined as any), TypeError);
+    assert.throws(() => sampleRate(NaN), TypeError);
   });
 });

@@ -13,8 +13,23 @@ export function sampleNone(): Sampler {
   return () => false;
 }
 
+/**
+ * Validate a fractional sampling rate. The documented range is [0, 1]; values
+ * outside it (or non-finite/non-numeric values) must fail loudly instead of
+ * silently changing sampling behavior.
+ */
+function validateSamplingRate(rate: number): void {
+  if (typeof rate !== 'number' || !Number.isFinite(rate)) {
+    throw new TypeError(`sampling rate must be a finite number between 0 and 1, got ${String(rate)}`);
+  }
+  if (rate < 0 || rate > 1) {
+    throw new RangeError(`sampling rate must be between 0 and 1, got ${rate}`);
+  }
+}
+
 /** Keep approximately `rate` fraction (0.0 to 1.0). */
 export function sampleRandom(rate: number): Sampler {
+  validateSamplingRate(rate);
   return () => Math.random() < rate;
 }
 
