@@ -137,7 +137,7 @@ func runLoadTest(cfg Config) error {
 	fmt.Printf("Invalid:     %d\n", stats.invalid)
 	fmt.Printf("Rejected:    %d\n", stats.rejected)
 	fmt.Printf("Errors:      %d\n", stats.errors)
-	fmt.Printf("Throughput:  %.2f events/sec\n", float64(stats.accepted)/stats.duration.Seconds())
+	fmt.Printf("Throughput:  %s events/sec\n", formatThroughput(stats.accepted, stats.duration))
 
 	return nil
 }
@@ -156,6 +156,14 @@ func workerEventCount(events, workers, workerID int) int {
 		count++
 	}
 	return count
+// formatThroughput renders the events/sec rate for the report. A non-positive
+// duration (for example a degenerate run started with -events 0) would
+// otherwise make the division yield NaN or +Inf, so it is reported as "n/a".
+func formatThroughput(accepted int64, d time.Duration) string {
+	if secs := d.Seconds(); secs > 0 {
+		return fmt.Sprintf("%.2f", float64(accepted)/secs)
+	}
+	return "n/a"
 }
 
 func runWorker(ctx context.Context, client *http.Client, cfg Config, workerID, count int, stats *Stats) {
