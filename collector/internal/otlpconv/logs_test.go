@@ -214,4 +214,44 @@ func intAttr(v int64) *commonv1.AnyValue {
 
 func doubleAttr(v float64) *commonv1.AnyValue {
 	return &commonv1.AnyValue{Value: &commonv1.AnyValue_DoubleValue{DoubleValue: v}}
+func TestOutcomeFromAttrsFallsThroughOnUnrecognizedValue(t *testing.T) {
+	tests := []struct {
+		name  string
+		attrs map[string]any
+		want  string
+	}{
+		{
+			name:  "unrecognized first key falls through to valid second key",
+			attrs: map[string]any{"event.outcome": "bogus", "outcome": "error"},
+			want:  "error",
+		},
+		{
+			name:  "unrecognized keys fall through to severity fallback",
+			attrs: map[string]any{"event.outcome": "bogus", "outcome": "bogus", "severity_number": float64(9)},
+			want:  "success",
+		},
+		{
+			name:  "unrecognized first key alone still yields unknown",
+			attrs: map[string]any{"event.outcome": "bogus"},
+			want:  "unknown",
+		},
+		{
+			name:  "recognized first key still wins over second key",
+			attrs: map[string]any{"event.outcome": "success", "outcome": "error"},
+			want:  "success",
+		},
+		{
+			name:  "canceled alias is normalized to cancelled",
+			attrs: map[string]any{"event.outcome": "bogus", "outcome": "canceled"},
+			want:  "cancelled",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := outcomeFromAttrs(tt.attrs); got != tt.want {
+				t.Fatalf("outcomeFromAttrs(%v) = %q, want %q", tt.attrs, got, tt.want)
+			}
+		})
+	}
 }
