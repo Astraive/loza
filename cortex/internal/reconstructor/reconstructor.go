@@ -395,6 +395,21 @@ func (r *IncidentReconstructor) buildCausalChain(view *models.GraphView) []*mode
 	return events
 }
 
+// numericAttribute reads a numeric attribute from an attribute map and coerces
+// it to float64. Attribute maps may be populated from JSON (float64) or from
+// native metric producers (float32), so both representations are accepted to
+// keep anomaly scoring and symptom extraction consistent for the same value.
+func numericAttribute(attrs map[string]interface{}, key string) (float64, bool) {
+	switch v := attrs[key].(type) {
+	case float64:
+		return v, true
+	case float32:
+		return float64(v), true
+	default:
+		return 0, false
+	}
+}
+
 // signalScore computes a signal density score for an event node.
 // Higher scores indicate more relevant/signal-dense events.
 func (r *IncidentReconstructor) signalScore(node *models.Node) float64 {
@@ -408,8 +423,8 @@ func (r *IncidentReconstructor) signalScore(node *models.Node) float64 {
 		if anomaly, ok := node.Attributes["anomaly"].(bool); ok && anomaly {
 			return 0.9
 		}
-		if value, ok := node.Attributes["value"].(float64); ok {
-			if threshold, ok := node.Attributes["threshold"].(float64); ok && value > threshold {
+		if value, ok := numericAttribute(node.Attributes, "value"); ok {
+			if threshold, ok := numericAttribute(node.Attributes, "threshold"); ok && value > threshold {
 				return 0.85
 			}
 		}
@@ -459,12 +474,7 @@ func (r *IncidentReconstructor) extractSymptoms(events []*models.CausalEvent) []
 				metricName = m
 			}
 
-			var value float64
-			if v, ok := event.Attributes["value"].(float64); ok {
-				value = v
-			} else if v, ok := event.Attributes["value"].(float32); ok {
-				value = float64(v)
-			}
+			value, _ := numericAttribute(event.Attributes, "value")
 
 			symptomType := models.SymptomTypeLatencySpike
 			if metricName == "error" || metricName == "error_rate" {
