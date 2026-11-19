@@ -28,6 +28,10 @@ func sendFrameOrFail(t fataler, write func(int, []byte) error, messageType int, 
 	if err := write(messageType, data); err != nil {
 		t.Fatalf("write websocket frame: %v", err)
 	}
+// isReadLimitCloseError reports whether err is the CloseMessageTooBig close
+// error the server sends when a frame exceeds its configured read limit.
+func isReadLimitCloseError(err error) bool {
+	return websocket.IsCloseError(err, websocket.CloseMessageTooBig)
 }
 
 func TestWebSocket_ReadLimitRejectsLargeFrames(t *testing.T) {
@@ -37,9 +41,13 @@ func TestWebSocket_ReadLimitRejectsLargeFrames(t *testing.T) {
 	ts := httptest.NewServer(handler)
 	defer ts.Close()
 
-	// Connect via WebSocket
+	// Connect via WebSocket. Use a write buffer larger than the 1MB read limit
+	// so the oversized payload is sent as a single frame; with the default 4KB
+	// buffer the message is fragmented and the read limit is never exercised.
+	dialer := *websocket.DefaultDialer
+	dialer.WriteBufferSize = 2 << 20
 	wsURL := "ws" + strings.TrimPrefix(ts.URL, "http")
-	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	conn, _, err := dialer.Dial(wsURL, nil)
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
@@ -56,6 +64,12 @@ func TestWebSocket_ReadLimitRejectsLargeFrames(t *testing.T) {
 	// Bound the read so a missing rejection fails fast instead of hanging.
 	if err := conn.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
 		t.Fatalf("set read deadline: %v", err)
+	err = conn.WriteMessage(websocket.TextMessage, []byte(`{"action":"healthz","event":`+bigPayload+`}`))
+	if err != nil {
+		// The server closes the connection as soon as it reads the oversized
+		// frame header, so the client may be mid-write when the socket is torn
+		// down. The close error read below is the authoritative signal.
+		t.Logf("write interrupted by server close: %v", err)
 	}
 
 	// The server closes the connection with 1009 (message too big) when the
@@ -63,6 +77,34 @@ func TestWebSocket_ReadLimitRejectsLargeFrames(t *testing.T) {
 	_, _, err = conn.ReadMessage()
 	if !websocket.IsCloseError(err, websocket.CloseMessageTooBig) {
 		t.Fatalf("expected read-limit close (%d), got: %v", websocket.CloseMessageTooBig, err)
+	if err == nil {
+		t.Fatal("expected connection to be closed due to read limit violation")
+	}
+	// Require the specific close code for an oversized message so an unrelated
+	// error (timeout, reset, protocol error) cannot pass this test.
+	if !isReadLimitCloseError(err) {
+		t.Fatalf("expected CloseMessageTooBig close error from read limit violation, got: %v", err)
+	}
+}
+
+func TestIsReadLimitCloseError(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"no error", nil, false},
+		{"message too big", &websocket.CloseError{Code: websocket.CloseMessageTooBig}, true},
+		{"normal closure", &websocket.CloseError{Code: websocket.CloseNormalClosure}, false},
+		{"abnormal closure", &websocket.CloseError{Code: websocket.CloseAbnormalClosure}, false},
+		{"unrelated error", errors.New("connection reset by peer"), false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isReadLimitCloseError(tt.err); got != tt.want {
+				t.Fatalf("isReadLimitCloseError(%v) = %v, want %v", tt.err, got, tt.want)
+			}
+		})
 	}
 }
 
