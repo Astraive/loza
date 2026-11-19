@@ -137,4 +137,54 @@ describe('Timing boundaries', () => {
       assert.equal(timerEvent.timers.length, 1);
     });
   });
+
+  // The shared extractStatusCode helper is the single source of truth for
+  // status-code parsing; all three handles must observe identical behaviour.
+  it('extracts numeric status codes and keeps other attrs consistent across handles', () => {
+    withClock(setNow => {
+      const event = new Event({ event: 'timed', service: 'svc' }, 'svc', 'test');
+      setNow(1010);
+      const process = event.startProcess('step');
+      const group = event.startGroup('phase');
+      const timer = event.startTimer('span');
+      setNow(1020);
+
+      // A numeric status code is lifted out of attrs; a non-numeric one stays an attr.
+      process.finish(Int('status_code', 201), String('detail', 'value'), String('status_code', 'oops'));
+      group.finish(Int('status_code', 202), String('detail', 'value'), String('status_code', 'oops'));
+      timer.stop(Int('status_code', 203), String('detail', 'value'), String('status_code', 'oops'));
+
+      for (const [entry, code] of [
+        [event.processes[0], 201],
+        [event.groups[0], 202],
+        [event.timers[0], 203],
+      ] as const) {
+        assert.equal(entry.status_code, code);
+        assert.equal(entry.attrs?.detail, 'value');
+        // The last non-numeric status_code overwrites the regular attr of the same key.
+        assert.equal(entry.attrs?.status_code, 'oops');
+      }
+    });
+  });
+
+  it('omits status_code consistently when it is absent, zero, or non-numeric', () => {
+    withClock(setNow => {
+      const event = new Event({ event: 'timed', service: 'svc' }, 'svc', 'test');
+      setNow(1010);
+      const process = event.startProcess('step');
+      const group = event.startGroup('phase');
+      const timer = event.startTimer('span');
+      setNow(1020);
+
+      // Zero is treated as "no status code"; a string status_code is kept as an attr.
+      process.finish(Int('status_code', 0));
+      group.finish(String('status_code', '500'));
+      timer.stop();
+
+      assert.equal('status_code' in event.processes[0], false);
+      assert.equal('status_code' in event.groups[0], false);
+      assert.equal(event.groups[0].attrs?.status_code, '500');
+      assert.equal('status_code' in event.timers[0], false);
+    });
+  });
 });

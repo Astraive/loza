@@ -26,17 +26,23 @@ export interface TimerEntry {
   attrs?: Record<string, any>;
 }
 
-function extractStatusCode(attrs: Record<string, any>): { code: number; rest: Record<string, any> } {
+/**
+ * Split timing attrs into a numeric status code and the remaining attributes.
+ * Shared by process/group `finish` and timer `stop` so the parsing stays consistent.
+ */
+function extractStatusCode(attrs: any[]): { code: number; extra: Record<string, any> } {
   let code = 0;
-  const rest: Record<string, any> = {};
-  for (const [k, v] of Object.entries(attrs)) {
-    if (k === 'status_code' && typeof v === 'number') {
-      code = v;
-    } else {
-      rest[k] = v;
+  const extra: Record<string, any> = {};
+  for (const a of attrs) {
+    if (a && a.key) {
+      if (a.key === 'status_code' && typeof a.value === 'number') {
+        code = a.value;
+      } else {
+        extra[a.key] = a.value;
+      }
     }
   }
-  return { code, rest };
+  return { code, extra };
 }
 
 /** Collect Attr-shaped objects into entry attrs and an optional status code. */
@@ -77,6 +83,7 @@ export class ProcessHandle {
     const now = Date.now();
     const endedMs = now - (this._event.startedAt || now);
     const { extra, statusCode } = collectAttrs([...this._attrs, ...attrs]);
+    const { code: statusCode, extra } = extractStatusCode(attrs);
     const entry: ProcessEntry = {
       step: this._step,
       name: this._name,
@@ -116,6 +123,7 @@ export class TimerHandle {
   stop(...attrs: any[]): void {
     const durationMs = Date.now() - this._startedAt;
     const { extra, statusCode } = collectAttrs([...this._attrs, ...attrs]);
+    const { code: statusCode, extra } = extractStatusCode(attrs);
     const entry: TimerEntry = {
       name: this._name,
       duration_ms: durationMs,
@@ -176,6 +184,7 @@ export class GroupHandle {
     const now = Date.now();
     const endedMs = now - (this._event.startedAt || now);
     const { extra, statusCode } = collectAttrs([...this._attrs, ...attrs]);
+    const { code: statusCode, extra } = extractStatusCode(attrs);
     const entry: GroupEntry = {
       name: this._name,
       started_at_ms: this._startedAtMs,
