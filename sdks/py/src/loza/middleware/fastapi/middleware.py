@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 import time
 from typing import Callable
 
@@ -67,7 +68,16 @@ class Middleware:
             FinishError(ctx, exc, Bool("panic", True))
             raise
         finally:
-            Emit(ctx)
+            # Telemetry delivery must never change application behaviour. If
+            # Emit fails while an application exception is propagating, an
+            # exception raised here would supersede and hide the real error.
+            try:
+                Emit(ctx)
+            except Exception as exc:
+                try:
+                    print(f"[loza] emit error: {exc}", file=sys.stderr)
+                except Exception:
+                    pass
 
 
 def _header(scope, wanted):
