@@ -66,3 +66,36 @@ func TestMiddlewareRecoversPanicAndUsesConfiguredEvent(t *testing.T) {
 		t.Fatalf("panicErr = %q", got)
 	}
 }
+
+// TestMiddlewareRePanicWithRecoveryDisabledStillEmits verifies that a started
+// event is finished and emitted even when the panic is propagated to the caller
+// because panic recovery is disabled (MASS-0497 / issue #721).
+func TestMiddlewareRePanicWithRecoveryDisabledStillEmits(t *testing.T) {
+	store := configureGin(t, false)
+	ginpkg.SetMode(ginpkg.TestMode)
+	r := ginpkg.New()
+	r.Use(Middleware(Config{Event: "gin.norecov"}))
+	r.GET("/panic", func(*ginpkg.Context) { panic("boom") })
+	req := httptest.NewRequest(http.MethodGet, "/panic", nil)
+	rr := httptest.NewRecorder()
+
+	func() {
+		defer func() {
+			if rec := recover(); rec != "boom" {
+				t.Fatalf("propagated panic = %v, want boom", rec)
+			}
+		}()
+		r.ServeHTTP(rr, req)
+	}()
+
+	if err := loza.Flush(context.Background()); err != nil {
+		t.Fatalf("Flush: %v", err)
+	}
+	if store.Len() != 1 {
+		t.Fatalf("events = %d, want 1", store.Len())
+	}
+	ev := store.Events()[0]
+	if ev.Event != "gin.norecov" || ev.Error == nil {
+		t.Fatalf("panic event = %+v", ev)
+	}
+}

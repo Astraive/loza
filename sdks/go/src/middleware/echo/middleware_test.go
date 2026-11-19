@@ -159,5 +159,34 @@ func TestMiddlewareLogsEmitFailures(t *testing.T) {
 	}
 	if logEvent.Error == nil || logEvent.Error.Message != "sink write failed" {
 		t.Fatalf("log error = %+v", logEvent.Error)
+// TestMiddlewareRePanicWithRecoveryDisabledStillEmits verifies that a started
+// event is finished and emitted even when the panic is propagated to the caller
+// because panic recovery is disabled (MASS-0497 / issue #721).
+func TestMiddlewareRePanicWithRecoveryDisabledStillEmits(t *testing.T) {
+	store := configureEcho(t, false)
+	e := echopkg.New()
+	e.Use(Middleware(Config{Event: "echo.norecov"}))
+	e.GET("/panic", func(echopkg.Context) error { panic("boom") })
+	req := httptest.NewRequest(http.MethodGet, "/panic", nil)
+	rr := httptest.NewRecorder()
+
+	func() {
+		defer func() {
+			if rec := recover(); rec != "boom" {
+				t.Fatalf("propagated panic = %v, want boom", rec)
+			}
+		}()
+		e.ServeHTTP(rr, req)
+	}()
+
+	if err := loza.Flush(context.Background()); err != nil {
+		t.Fatalf("Flush: %v", err)
+	}
+	if store.Len() != 1 {
+		t.Fatalf("events = %d, want 1", store.Len())
+	}
+	ev := store.Events()[0]
+	if ev.Event != "echo.norecov" || ev.Error == nil {
+		t.Fatalf("panic event = %+v", ev)
 	}
 }

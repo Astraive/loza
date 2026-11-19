@@ -44,6 +44,11 @@ func MiddlewareWithConfig(cfg Config) echopkg.MiddlewareFunc {
 			defer func() {
 				if rec := recover(); rec != nil {
 					if !loza.PanicRecoveryEnabled() {
+						// The panic is intentionally propagated to the caller, but the
+						// event started above must still be finished and emitted so it
+						// is not orphaned when recovery is disabled.
+						loza.FinishError(ctx, panicErr{value: rec}, loza.Int("status_code", http.StatusInternalServerError))
+						_ = loza.Emit(ctx)
 						panic(rec)
 					}
 					if !c.Response().Committed {

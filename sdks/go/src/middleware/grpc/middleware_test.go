@@ -145,6 +145,50 @@ func TestRecoveredPanicIsNotLeakedToGRPCClients(t *testing.T) {
 	if !logged {
 		t.Fatal("panic value was not recorded in server-side telemetry")
 	}
+// TestInterceptorsRePanicWithRecoveryDisabledStillEmit verifies that a started
+// event is finished and emitted even when the panic is propagated to the caller
+// because panic recovery is disabled (MASS-0497 / issue #721).
+func TestInterceptorsRePanicWithRecoveryDisabledStillEmit(t *testing.T) {
+	store := configureGRPC(t, false)
+	info := &grpcpkg.UnaryServerInfo{FullMethod: "/demo.Service/Call"}
+
+	func() {
+		defer func() {
+			if rec := recover(); rec != "unary boom" {
+				t.Fatalf("propagated unary panic = %v, want unary boom", rec)
+			}
+		}()
+		_, _ = UnaryInterceptor(Config{Event: "grpc.unary.norecov"})(
+			context.Background(), nil, info,
+			func(context.Context, any) (any, error) { panic("unary boom") },
+		)
+	}()
+
+	streamInfo := &grpcpkg.StreamServerInfo{FullMethod: "/demo.Service/Stream"}
+	stream := fakeStream{ctx: context.Background()}
+	func() {
+		defer func() {
+			if rec := recover(); rec != "stream boom" {
+				t.Fatalf("propagated stream panic = %v, want stream boom", rec)
+			}
+		}()
+		_ = StreamInterceptor(Config{Event: "grpc.stream.norecov"})(
+			nil, stream, streamInfo,
+			func(any, grpcpkg.ServerStream) error { panic("stream boom") },
+		)
+	}()
+
+	if err := loza.Flush(context.Background()); err != nil {
+		t.Fatalf("Flush: %v", err)
+	}
+	if store.Len() != 2 {
+		t.Fatalf("events = %d, want 2", store.Len())
+	}
+	for _, ev := range store.Events() {
+		if ev.Error == nil {
+			t.Fatalf("panic event missing error: %+v", ev)
+		}
+	}
 }
 
 func TestStreamInterceptorEmitsSuccessAndError(t *testing.T) {

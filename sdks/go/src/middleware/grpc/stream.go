@@ -63,6 +63,18 @@ func StreamInterceptorWithConfig(cfg Config) grpc.StreamServerInterceptor {
 				err = status.Error(codes.Internal, "internal server error")
 				return
 			}
+		if !loza.PanicRecoveryEnabled() {
+			defer func() {
+				if rec := recover(); rec != nil {
+					// The panic is intentionally propagated to the caller, but the
+					// event started above must still be finished and emitted so it
+					// is not orphaned when recovery is disabled.
+					loza.FinishError(evCtx, fmt.Errorf("panic: %v", rec), loza.Int("status_code", int(codes.Unknown)))
+					_ = loza.Emit(evCtx)
+					panic(rec)
+				}
+			}()
+			err := handler(srv, wrapped)
 			if err != nil {
 				st, _ := status.FromError(err)
 				loza.FinishError(evCtx, err, loza.Int("status_code", int(st.Code())))
