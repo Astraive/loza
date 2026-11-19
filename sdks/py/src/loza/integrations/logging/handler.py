@@ -5,6 +5,11 @@ from typing import Any
 
 from ... import Error, Info, Warn
 
+# Keys whose ``log.<key>`` form is reserved for canonical LogRecord metadata.
+# Extras carrying one of these names are skipped when mapping ``record.__dict__``
+# so the canonical fields below are never silently overwritten by user data.
+_RESERVED_LOG_EXTRA_KEYS = frozenset({"logger", "module", "function", "line"})
+
 
 class LozaHandler(logging.Handler):
     """Bridge Python logging records into LOZA immediate events."""
@@ -28,8 +33,12 @@ class LozaHandler(logging.Handler):
     def _attrs(self, record: logging.LogRecord) -> dict[str, Any]:
         reserved = set(logging.makeLogRecord({}).__dict__)
         attrs = {
-            f"log.{key}": value for key, value in record.__dict__.items() if key not in reserved and _json_safe(value)
+            f"log.{key}": value
+            for key, value in record.__dict__.items()
+            if key not in reserved and key not in _RESERVED_LOG_EXTRA_KEYS and _json_safe(value)
         }
+        # Canonical ``log.*`` fields are reserved and take precedence over any
+        # same-named user extra (see ``_RESERVED_LOG_EXTRA_KEYS``).
         attrs["log.logger"] = record.name
         attrs["log.module"] = record.module
         attrs["log.function"] = record.funcName
