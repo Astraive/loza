@@ -5,8 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"reflect"
 	"testing"
 	"time"
+	"unsafe"
 
 	"github.com/astraive/loza/collector/internal/eventbus"
 	"github.com/twmb/franz-go/pkg/kerr"
@@ -20,6 +22,63 @@ func (e errTypeA) Error() string { return e.msg }
 type errTypeB struct{ msg string }
 
 func (e errTypeB) Error() string { return e.msg }
+	"github.com/twmb/franz-go/pkg/kgo"
+)
+
+// clientRetryConfig creates a franz-go client from opts and reads back the
+// effective record/request retry limits from its internal config. franz-go
+// does not expose these values publicly, so reflection is used to assert the
+// options produced by clientOpts are actually applied.
+func clientRetryConfig(t *testing.T, opts ...kgo.Opt) (recordRetries, requestRetries int64) {
+	t.Helper()
+	client, err := kgo.NewClient(opts...)
+	if err != nil {
+		t.Fatalf("new franz-go client: %v", err)
+	}
+	defer client.Close()
+
+	cfg := reflect.ValueOf(client).Elem().FieldByName("cfg")
+	if !cfg.IsValid() {
+		t.Fatal("franz-go client config field not found")
+	}
+	readInt64 := func(name string) int64 {
+		f := cfg.FieldByName(name)
+		if !f.IsValid() {
+			t.Fatalf("franz-go config field %q not found", name)
+		}
+		return reflect.NewAt(f.Type(), unsafe.Pointer(f.UnsafeAddr())).Elem().Int()
+	}
+	return readInt64("recordRetries"), readInt64("retries")
+}
+
+func TestClientOptsAppliesMaxRetries(t *testing.T) {
+	const maxRetries = 7
+	recordRetries, requestRetries := clientRetryConfig(t, clientOpts(eventbus.KafkaConfig{
+		Brokers:    []string{"127.0.0.1:9092"},
+		Topic:      "loza.events.raw",
+		MaxRetries: maxRetries,
+	})...)
+	if recordRetries != maxRetries {
+		t.Errorf("record retries = %d, want %d", recordRetries, maxRetries)
+	}
+	if requestRetries != maxRetries {
+		t.Errorf("request retries = %d, want %d", requestRetries, maxRetries)
+	}
+}
+
+func TestClientOptsLeavesDefaultsWhenMaxRetriesUnset(t *testing.T) {
+	wantRecordRetries, wantRequestRetries := clientRetryConfig(t, kgo.SeedBrokers("127.0.0.1:9092"))
+	recordRetries, requestRetries := clientRetryConfig(t, clientOpts(eventbus.KafkaConfig{
+		Brokers: []string{"127.0.0.1:9092"},
+		Topic:   "loza.events.raw",
+	})...)
+	if recordRetries != wantRecordRetries {
+		t.Errorf("record retries = %d, want default %d", recordRetries, wantRecordRetries)
+	}
+	if requestRetries != wantRequestRetries {
+		t.Errorf("request retries = %d, want default %d", requestRetries, wantRequestRetries)
+	}
+}
 
 func TestKafkaRequiresBrokers(t *testing.T) {
 	ctx := context.Background()
