@@ -28,6 +28,41 @@ func TestEnsureSpecAssetsValidatesLocally(t *testing.T) {
 	})
 }
 
+// TestEventSchemaPathUsesSharedHelper guards against reintroducing a separate
+// first-existing implementation in fetch_spec.go: EventSchemaPath must resolve
+// paths with the same shared firstExisting helper used by ValidateSpecAssets.
+func TestEventSchemaPathUsesSharedHelper(t *testing.T) {
+	t.Run("prefers spec layout when it exists", func(t *testing.T) {
+		root := t.TempDir()
+		primary := filepath.Join(root, "spec", "schemas", "json", "event.schema.json")
+		writeFile(t, primary)
+
+		// Both layouts exist; the shared helper must select the first existing one.
+		writeFile(t, filepath.Join(root, "schema", "event.schema.json"))
+		if got := EventSchemaPath(root); got != primary {
+			t.Fatalf("EventSchemaPath = %q, want %q", got, primary)
+		}
+	})
+
+	t.Run("falls back to alternate layout", func(t *testing.T) {
+		root := t.TempDir()
+		alternate := filepath.Join(root, "schema", "event.schema.json")
+		writeFile(t, alternate)
+
+		if got := EventSchemaPath(root); got != alternate {
+			t.Fatalf("EventSchemaPath = %q, want %q", got, alternate)
+		}
+	})
+
+	t.Run("returns first path when none exist", func(t *testing.T) {
+		root := t.TempDir()
+		want := filepath.Join(root, "spec", "schemas", "json", "event.schema.json")
+		if got := EventSchemaPath(root); got != want {
+			t.Fatalf("EventSchemaPath = %q, want %q", got, want)
+		}
+	})
+}
+
 // TestEnsureSpecAssetsRejectsPartialRepo guards against a future change that
 // silently treats a partially populated spec repo as valid.
 func TestEnsureSpecAssetsRejectsPartialRepo(t *testing.T) {
@@ -53,5 +88,15 @@ func TestEnsureSpecAssetsRejectsPartialRepo(t *testing.T) {
 
 	if err := EnsureSpecAssets(partial); err == nil {
 		t.Fatal("expected an error for a spec repo missing all but one required asset")
+	}
+}
+
+func writeFile(t *testing.T, path string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(path, []byte("{}"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
 	}
 }
