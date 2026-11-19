@@ -50,6 +50,16 @@ func loadVersion() string {
 	return fallbackVersion
 }
 
+// errorRate returns the ratio of errors to total requests. When no requests
+// were recorded it returns 0 instead of NaN, which would otherwise be printed
+// as an invalid error rate and compare false against every threshold.
+func errorRate(errors, total int64) float64 {
+	if total <= 0 {
+		return 0
+	}
+	return float64(errors) / float64(total)
+}
+
 type Result struct {
 	StatusCode int
 	Duration   time.Duration
@@ -816,7 +826,7 @@ func main() {
 		totalErrors += tr.ErrorReqs
 		totalRPS += tr.RPS
 		status := "PASS"
-		if tr.ErrorReqs > 0 && float64(tr.ErrorReqs)/float64(tr.TotalReqs) > 0.01 {
+		if tr.ErrorReqs > 0 && errorRate(tr.ErrorReqs, tr.TotalReqs) > 0.01 {
 			status = "FAIL"
 		}
 		fmt.Printf("%-55s RPS: %8.1f  Errors: %6d/%6d  P95: %v  [%s]\n",
@@ -824,7 +834,7 @@ func main() {
 	}
 	fmt.Printf("\nTotal Requests: %d\n", totalReqs)
 	fmt.Printf("Total Errors:   %d\n", totalErrors)
-	fmt.Printf("Error Rate:     %.4f%%\n", float64(totalErrors)/float64(totalReqs)*100)
+	fmt.Printf("Error Rate:     %.4f%%\n", errorRate(totalErrors, totalReqs)*100)
 
 	// Write JSON results to the configured path, reporting failures honestly.
 	results := map[string]any{
@@ -840,4 +850,9 @@ func main() {
 	if !writeAndReportJSONResults(os.Stdout, *jsonOutputPath, results) {
 		os.Exit(1)
 	}
+		"error_rate":  errorRate(totalErrors, totalReqs) * 100,
+		"tests":       jsonResults,
+	}, "", "  ")
+	os.WriteFile("/e/astraive/loza/docs/stress-test-results.json", jsonData, 0644)
+	fmt.Println("\nJSON results written to docs/stress-test-results.json")
 }

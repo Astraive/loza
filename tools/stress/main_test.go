@@ -257,5 +257,31 @@ func TestRunLoadTestTotalsFromCollectedResults(t *testing.T) {
 	}
 	if byStatus != tr.TotalReqs {
 		t.Errorf("sum(StatusCodes)=%d, want TotalReqs=%d", byStatus, tr.TotalReqs)
+	"math"
+	"testing"
+)
+
+func TestErrorRate(t *testing.T) {
+	tests := []struct {
+		name          string
+		errors, total int64
+		want          float64
+	}{
+		{name: "no results collected", errors: 0, total: 0, want: 0},
+		{name: "no errors", errors: 0, total: 100, want: 0},
+		{name: "half errors", errors: 5, total: 10, want: 0.5},
+		{name: "all errors", errors: 7, total: 7, want: 1},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := errorRate(tt.errors, tt.total)
+			if math.IsNaN(got) || math.IsInf(got, 0) {
+				t.Fatalf("errorRate(%d, %d) = %v; want a finite value", tt.errors, tt.total, got)
+			}
+			if got != tt.want {
+				t.Errorf("errorRate(%d, %d) = %v, want %v", tt.errors, tt.total, got, tt.want)
+			}
+		})
 	}
 }
