@@ -135,7 +135,9 @@ func outcomeFromAttrs(attrs map[string]any) string {
 				}
 				return v
 			default:
-				return "unknown"
+				// An unrecognized value on one key must not abort the
+				// remaining candidates or the severity fallback.
+				continue
 			}
 		}
 	}
