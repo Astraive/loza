@@ -235,6 +235,8 @@ export {
   append, enrich, set, merge, del, get, getGroup,
   checkpoint, process, startProcess, finishProcess, finishProcessError,
   startGroup, finishGroup, finishGroupError,
+  // facade group() aliased to avoid clashing with the group Attr constructor
+  group as groupHandle,
   timer, startTimer, stopTimer,
   finish, finishError, emit, runEvent, run, fromRequest,
   flush, shutdown, drain, pause, resume, queueSize, health,

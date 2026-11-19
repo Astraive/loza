@@ -5,11 +5,11 @@ import {
   loza, configure, reset, startEvent, append, enrich, finish, finishError, emit,
   checkpoint, set, get, del, getGroup, merge, shutdown,
   startProcess, finishProcess, finishProcessError,
-  startGroup, finishGroup, finishGroupError, timer, stopTimer,
+  startGroup, finishGroup, finishGroupError, groupHandle, timer, stopTimer,
   defaultLogger, MemorySink,
   production, dev, test as testPreset,
   stdoutSink, memorySink, noopSink,
-  userId, cartId, featureFlag, int,
+  userId, cartId, featureFlag, int, group,
   EventView, ConfigBuilder,
   createLoza, alias,
 } from '../src/index.ts';
@@ -117,6 +117,19 @@ describe('Facade', () => {
     assert.equal(ctx.processes.length, 2);
     assert.equal(ctx.groups.length, 2);
     assert.equal(ctx.timers.length, 1);
+  });
+
+  it('group facade helper is reachable from the package root via groupHandle', () => {
+    configure(dev('test'));
+    const ctx = startEvent({ event: 'test' });
+    const handle = groupHandle(ctx, 'public.group', int('n', 1));
+    assert.ok(handle);
+    assert.equal(typeof handle.finish, 'function');
+    finishGroup(handle);
+    assert.equal(ctx.groups.length, 1);
+    assert.equal(ctx.groups[0].name, 'public.group');
+    // The root-level `group` remains the Attr constructor, not the facade helper.
+    assert.equal(group('k', []).kind, 'group');
   });
 
   it('defaultLogger returns Logger instance', () => {
