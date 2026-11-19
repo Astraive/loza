@@ -54,7 +54,7 @@ class Engine:
         to the benchmark-required ``Context`` shape.
         """
         body = {
-            "incident_id": signal.get("incident_id", signal.get("signal_id", "")),
+            "incident_id": signal.get("incident_id") or signal.get("signal_id") or "",
             "mode": mode,
         }
         resp = self._post("/reconstruct", body)
