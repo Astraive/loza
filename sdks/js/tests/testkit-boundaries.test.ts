@@ -31,6 +31,7 @@ import { String, SensitiveString, resetClock } from '../src/core/event.ts';
 // timestamps are pinned via setIdGenerator/setClock, so this literal is stable.
 const EXPECTED_CHECKPOINT_EVENT =
   '{"schema_version":"v1","event_version":"v1","event_id":"00000000-0000-7000-8000-000000000002","request_id":"00000000-0000-7000-8000-000000000002","timestamp":"2023-11-14T22:13:20.000Z","service":"test","event":"checkpoint","kind":"event","level":"info","event_state":"finished","outcome":"success","environment":"test","runtime":"node","finished_at":"2023-11-14T22:13:20.000Z","attrs":{"secret":"[REDACTED]"},"checkpoints":[{"name":"started","at_ms":0}]}';
+import { String, SensitiveString, _now, resetClock } from '../src/core/event.ts';
 
 describe('Testkit boundaries', () => {
   it('creates test loggers and captures emitted events', async () => {
@@ -191,6 +192,14 @@ describe('Testkit boundaries', () => {
     assert.equal(setClock(clock), clock);
     assert.equal(setClock(() => 20)(), 20);
     resetForTest();
+    const clock = new FakeClock(500);
+    // The helper returns the clock it installed, and a real FakeClock must be
+    // wired into the core clock so that _now() reflects its value.
+    assert.equal(setClock(clock), clock);
+    assert.equal(_now(), 500);
+    clock.advance(25);
+    assert.equal(_now(), 525);
+    resetClock();
   });
 
   it('imports only the type actually used from core/event', () => {
