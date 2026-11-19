@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import random
 import threading
 import time
@@ -21,6 +22,8 @@ def sample_none() -> Sampler:
 
 
 def sample_random(rate: float) -> Sampler:
+    if not math.isfinite(rate):
+        raise ValueError(f"sampling rate must be finite, got {rate!r}")
     bounded = max(0.0, min(1.0, rate))
     return lambda event: random.random() < bounded
 
