@@ -19,6 +19,11 @@ import (
 	"github.com/astraive/loza/cortex/internal/config"
 )
 
+// collectorStartAttempts bounds how many freshly selected ports the test will
+// try before giving up. Each attempt is cheap unless the collector genuinely
+// fails to start, and it keeps a TOCTOU port steal from making the test flaky.
+const collectorStartAttempts = 5
+
 func TestRunSourceOfTruthSyncAgainstLiveCollector(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping live collector integration test in short mode")
@@ -37,26 +42,40 @@ func TestRunSourceOfTruthSyncAgainstLiveCollector(t *testing.T) {
 		t.Fatalf("build live collector binary: %v", err)
 	}
 
-	port := freePort(t)
 	duckdbPath := filepath.Join(t.TempDir(), "collector-live.duckdb")
-	cmd := exec.Command(collectorBin, "run", "-c", "loza-collector.defaults.yaml", "--addr", fmt.Sprintf("127.0.0.1:%d", port), "--duckdb-path", duckdbPath)
-	cmd.Dir = collectorDir
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-
-	_, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	if err := cmd.Start(); err != nil {
-		t.Fatalf("start live collector: %v", err)
+	var cmd *exec.Cmd
+	var cmdDone <-chan error
+	var baseURL string
+	// freePort releases the port before the collector binds it, so another
+	// process can claim it in between. Retry with a fresh port whenever the
+	// collector exits before becoming healthy instead of failing the test.
+	if err := retryOnPortConflict(collectorStartAttempts, func(attempt int) (bool, error) {
+		port := freePort(t)
+		candidateURL := fmt.Sprintf("http://127.0.0.1:%d", port)
+		candidate := exec.Command(collectorBin, "run", "-c", "loza-collector.defaults.yaml", "--addr", fmt.Sprintf("127.0.0.1:%d", port), "--duckdb-path", duckdbPath)
+		candidate.Dir = collectorDir
+		candidate.Stdout = os.Stdout
+		candidate.Stderr = os.Stderr
+		if err := candidate.Start(); err != nil {
+			return false, fmt.Errorf("start live collector: %w", err)
+		}
+		exited := make(chan error, 1)
+		go func() { exited <- candidate.Wait() }()
+		if !waitForCollectorOrExit(t, candidateURL+"/health", exited) {
+			_ = candidate.Process.Kill()
+			<-exited
+			t.Logf("collector exited before binding port %d (attempt %d/%d); retrying with a new port", port, attempt, collectorStartAttempts)
+			return false, nil
+		}
+		cmd, cmdDone, baseURL = candidate, exited, candidateURL
+		return true, nil
+	}); err != nil {
+		t.Fatalf("live collector never bound a free port: %v", err)
 	}
 	defer func() {
-		cancel()
 		_ = cmd.Process.Kill()
-		_, _ = cmd.Process.Wait()
+		<-cmdDone
 	}()
-
-	baseURL := fmt.Sprintf("http://127.0.0.1:%d", port)
-	waitForCollector(t, baseURL+"/health")
 
 	postCollectorEvent(t, baseURL, map[string]any{
 		"id":         "evt-pre",
@@ -127,20 +146,37 @@ func freePort(t *testing.T) int {
 	return l.Addr().(*net.TCPAddr).Port
 }
 
-func waitForCollector(t *testing.T, healthURL string) {
+// waitForCollectorOrExit polls healthURL and returns false as soon as the
+// collector process exits, which is the signal that it could not bind the
+// selected port (typically because another process claimed it). It returns
+// true once the collector reports healthy, and fails the test only when the
+// process stays alive but never becomes healthy before the deadline.
+func waitForCollectorOrExit(t *testing.T, healthURL string, exited <-chan error) bool {
 	t.Helper()
 	deadline := time.Now().Add(20 * time.Second)
 	for time.Now().Before(deadline) {
+		select {
+		case <-exited:
+			return false
+		default:
+		}
 		resp, err := http.Get(healthURL)
 		if err == nil {
 			_ = resp.Body.Close()
 			if resp.StatusCode == http.StatusOK {
-				return
+				// Guard against the process dying between bind and health check.
+				select {
+				case <-exited:
+					return false
+				default:
+				}
+				return true
 			}
 		}
 		time.Sleep(250 * time.Millisecond)
 	}
 	t.Fatalf("collector did not become healthy: %s", healthURL)
+	return false
 }
 
 func postCollectorEvent(t *testing.T, baseURL string, event map[string]any) {
