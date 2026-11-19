@@ -73,10 +73,18 @@ func Run(t *testing.T, opts Options) {
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
 		err := sink.WriteEvent(ctx, []byte(`{"event_id":"evt_conf_cancel","event":"conformance.cancel"}`), nil)
-		if err != nil && !errors.Is(err, context.Canceled) {
-			t.Fatalf("expected nil or context.Canceled, got %v", err)
+		if !reportsCancelled(err) {
+			t.Fatalf("expected context.Canceled from a pre-cancelled context, got %v", err)
 		}
 	})
+}
+
+// reportsCancelled reports whether err demonstrates that a sink honored a
+// pre-cancelled context. Only an error wrapping context.Canceled counts: a nil
+// error means the sink ignored cancellation and still wrote the event, so it
+// must not satisfy the context_cancellation contract.
+func reportsCancelled(err error) bool {
+	return errors.Is(err, context.Canceled)
 }
 
 func writeEvent(t testing.TB, sink collectorevent.Sink, timeout time.Duration, payload string) {
