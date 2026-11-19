@@ -61,29 +61,41 @@ def validate_native_metadata(component: str, manifest: dict[str, Any], manifest_
     if component == "sdk-js":
         package_json = root / "package.json"
         if package_json.exists():
-            package_data = json.loads(package_json.read_text(encoding="utf-8"))
-            if package_data.get("name") != NPM_PACKAGE:
-                errors.append(f"{component}: sdks/js/package.json name must be {NPM_PACKAGE!r}, not {package_data.get('name')!r}")
-            if package_data.get("version") != version:
-                errors.append(f"{component}: sdks/js/package.json version must match manifest version {version}")
+            try:
+                package_data = json.loads(package_json.read_text(encoding="utf-8"))
+            except (ValueError, json.JSONDecodeError, tomllib.TOMLDecodeError) as exc:
+                errors.append(f"{component}: failed to parse sdks/js/package.json: {exc}")
+            else:
+                if package_data.get("name") != NPM_PACKAGE:
+                    errors.append(f"{component}: sdks/js/package.json name must be {NPM_PACKAGE!r}, not {package_data.get('name')!r}")
+                if package_data.get("version") != version:
+                    errors.append(f"{component}: sdks/js/package.json version must match manifest version {version}")
 
     if component == "sdk-py":
         pyproject = root / "pyproject.toml"
         if pyproject.exists():
-            project = tomllib.loads(pyproject.read_text(encoding="utf-8")).get("project", {})
-            if project.get("name") != "loza":
-                errors.append(f"{component}: sdks/py/pyproject.toml project.name must be 'loza'")
-            if project.get("version") != version:
-                errors.append(f"{component}: sdks/py/pyproject.toml version must match manifest version {version}")
+            try:
+                project = tomllib.loads(pyproject.read_text(encoding="utf-8")).get("project", {})
+            except (ValueError, json.JSONDecodeError, tomllib.TOMLDecodeError) as exc:
+                errors.append(f"{component}: failed to parse sdks/py/pyproject.toml: {exc}")
+            else:
+                if project.get("name") != "loza":
+                    errors.append(f"{component}: sdks/py/pyproject.toml project.name must be 'loza'")
+                if project.get("version") != version:
+                    errors.append(f"{component}: sdks/py/pyproject.toml version must match manifest version {version}")
 
     if component == "sdk-rs":
         cargo_toml = root / "Cargo.toml"
         if cargo_toml.exists():
-            package = tomllib.loads(cargo_toml.read_text(encoding="utf-8")).get("package", {})
-            if package.get("name") != "loza":
-                errors.append(f"{component}: sdks/rs/Cargo.toml package.name must be 'loza'")
-            if package.get("version") != version:
-                errors.append(f"{component}: sdks/rs/Cargo.toml version must match manifest version {version}")
+            try:
+                package = tomllib.loads(cargo_toml.read_text(encoding="utf-8")).get("package", {})
+            except (ValueError, json.JSONDecodeError, tomllib.TOMLDecodeError) as exc:
+                errors.append(f"{component}: failed to parse sdks/rs/Cargo.toml: {exc}")
+            else:
+                if package.get("name") != "loza":
+                    errors.append(f"{component}: sdks/rs/Cargo.toml package.name must be 'loza'")
+                if package.get("version") != version:
+                    errors.append(f"{component}: sdks/rs/Cargo.toml version must match manifest version {version}")
 
     return errors
 

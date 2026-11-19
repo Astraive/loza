@@ -116,5 +116,42 @@ class SemverValidationTests(unittest.TestCase):
         self.assertEqual(changed_components.parse_semver(version, "loza"), (1, 2, 3, version))
 
 
+class MalformedNativeMetadataTests(unittest.TestCase):
+    def assert_parse_error_collected(
+        self, component: str, filename: str, malformed_content: str, manifest_name: str
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            package_root = Path(temporary_directory)
+            (package_root / filename).write_text(malformed_content, encoding="utf-8")
+            manifest = {
+                "kind": "sdk",
+                "version": "0.3.0",
+                "paths": {"root": package_root.as_posix()},
+            }
+
+            errors = validate_manifests.validate_native_metadata(
+                component, manifest, package_root / manifest_name
+            )
+
+        self.assertEqual(len(errors), 1)
+        self.assertIn("failed to parse", errors[0])
+        self.assertIn(filename, errors[0])
+
+    def test_malformed_package_json_is_collected(self) -> None:
+        self.assert_parse_error_collected(
+            "sdk-js", "package.json", "{ this is not valid json", "loza-js.yaml"
+        )
+
+    def test_malformed_pyproject_toml_is_collected(self) -> None:
+        self.assert_parse_error_collected(
+            "sdk-py", "pyproject.toml", "[project\nname = 'loza'", "loza-py.yaml"
+        )
+
+    def test_malformed_cargo_toml_is_collected(self) -> None:
+        self.assert_parse_error_collected(
+            "sdk-rs", "Cargo.toml", "[package\nname = 'loza'", "loza-rs.yaml"
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
