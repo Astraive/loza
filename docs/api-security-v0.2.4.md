@@ -1,9 +1,16 @@
 # API Security Audit Report -- Loza v0.2.4
 
+> [!WARNING]
+> **Status: HISTORICAL — applies to v0.2.4 only.** This report is a point-in-time snapshot retained for audit history; its findings and verdicts may have been remediated in later releases. Do not use it to triage current risk. For the current security posture and the list of still-open findings, see [Security](security.md) and [Open security findings](open-security-findings.md). Current release: **0.4.1** ([CHANGELOG.md](../CHANGELOG.md)).
+
 **Date**: 2026-05-28
 **Scope**: All API endpoints across collector, cortex, CLI, LQL, SDKs, Lozana, eventbus, spec
 **Methodology**: Manual code review of all source files, OWASP API Security Top 10 2023 mapping
 **Auditor**: API Security Specialist Agent
+
+## Disposition of findings (verified against current `main`, 2026-11-17)
+
+The findings table below is unchanged from the original report, but the following have been fixed since v0.2.4: #1 (blueprint DuckDB type allowlist), #2 (multi-key middleware on `/status`), #3 (collector GraphQL query depth limit, added in v0.2.5 as `maxGraphQLDepth = 10`), #5 (HSTS header), #6 (deprecated `X-XSS-Protection` header removed), #13 (SDK version stamping), and the LQL `wasm.ts` issue in lozana. Finding #9 (collector GraphQL request body size limit) and #15 (`AuditLogger` not wired into auth middleware) remain open and are tracked in [Open security findings](open-security-findings.md). Re-verify any other finding before treating it as current.
 
 ---
 

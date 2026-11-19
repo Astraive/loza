@@ -1,5 +1,8 @@
 # LOZA
 
+<!-- current-release: 0.4.1 -->
+<!-- Kept in sync with the top entry in CHANGELOG.md and checked by scripts/check_docs_versions.py. -->
+
 <p align="center">
   <img src="http://github.com/Astraive/loza/blob/main/assets/branding/loza-horizontal.png?raw=true" alt="Loza" width="320">
 </p>

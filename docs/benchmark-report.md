@@ -1,10 +1,18 @@
 # Loza v0.2.0 Pre-Release Benchmark Report
 
+> [!WARNING]
+> **Status: HISTORICAL — applies to v0.2.4 only.** This report is a point-in-time snapshot retained for audit history; its findings and verdicts may have been remediated in later releases. Do not use it to triage current risk. For the current security posture and the list of still-open findings, see [Security](security.md) and [Open security findings](open-security-findings.md). Current release: **0.4.1** ([CHANGELOG.md](../CHANGELOG.md)).
+
 **Date:** 2026-05-27
 **Branch:** main
 **Commit:** e6780e6
 **Environment:** Local (Windows 11, MINGW64)
 **Machine:** Intel Core i7-13650HX (14 cores / 20 threads), 16 GB RAM
+
+## Reconciliation notes (added 2026-11-17)
+
+- **Version discrepancy:** the title says "v0.2.0" although this report covers the v0.2.4-era tree; the original title is preserved here for audit integrity. The current release is 0.4.1.
+- **Conformance contradiction:** FINDING-007 below says `spec/conformance/runner.py` is missing, while `regression-report.md` from the same date/commit reports 48/48 checks PASS using that runner. The runner exists on current `main` and is executed by `.github/workflows/spec-ci.yml`, so FINDING-007 is **RESOLVED** and the regression result is the accurate one.
 
 ---
 
@@ -325,6 +333,8 @@ The Rust SDK (`loza/sdks/rs`) has no `[[bench]]` targets in `Cargo.toml`. The be
 **Recommendation:** Run benchmarks with `GOGC=off` or `GOMEMLIMIT` to isolate GC effects. Consider running with `-benchtime=5s` for more stable results.
 
 ### FINDING-007: Cross-SDK Conformance Runner Missing
+
+> **Status: RESOLVED (post-v0.2.4).** `spec/conformance/runner.py` now exists and is run by `.github/workflows/spec-ci.yml`; this finding is retained only for historical context.
 
 **Severity:** Medium
 **Category:** Build/Test
