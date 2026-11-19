@@ -3,6 +3,8 @@ from __future__ import annotations
 import hashlib
 import hmac
 
+import pytest
+
 import loza
 
 _SECRET = b"typed-helper-test-secret"
@@ -60,3 +62,18 @@ def test_group_nested_key_over_conflicting_scalar():
 
     # The existing last-writer-wins behavior for leaf keys is preserved.
     assert loza.Group(loza.Int("a", 1), loza.Int("a", 3)).value == {"a": 3}
+def test_enum_rejects_value_outside_allowed_set():
+    with pytest.raises(ValueError):
+        loza.enum_("color", "purple", "red", "green", "blue")
+
+
+def test_enum_accepts_value_inside_allowed_set():
+    attr = loza.enum_("color", "red", "red", "green", "blue")
+    assert attr.key == "color"
+    assert attr.value == "red"
+
+
+def test_enum_without_allowed_values_remains_unvalidated():
+    attr = loza.enum_("color", "purple")
+    assert attr.key == "color"
+    assert attr.value == "purple"

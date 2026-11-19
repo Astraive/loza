@@ -123,6 +123,8 @@ def map_(key: str, value: dict) -> Attr:
 
 
 def enum_(key: str, value: str, *allowed: str) -> Attr:
+    if allowed and value not in allowed:
+        raise ValueError(f"enum value {value!r} for {key!r} is not one of {allowed!r}")
     return String(key, value)
 
 
