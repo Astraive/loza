@@ -84,3 +84,24 @@ def test_golden_test_update_flag_creates_and_compares(tmp_path):
     # Re-running with update=True rebaselines an existing golden.
     golden_test(str(target), {"event": "test", "message": "changed"}, update=True)
     assert golden_test(str(target), {"event": "test", "message": "changed"}) is True
+def test_snapshot_event_is_independent_of_later_event_mutation():
+    event = {
+        "event_id": "evt_1",
+        "timestamp": "2026-01-01T00:00:00Z",
+        "event": "test",
+        "context": {"user": {"id": 1}, "tags": ["a", "b"]},
+    }
+
+    snap = loza.snapshot_event(event)
+
+    assert "event_id" not in snap
+    assert "timestamp" not in snap
+
+    # Mutating nested values in the original event must not alter the snapshot.
+    event["context"]["user"]["id"] = 2
+    event["context"]["tags"].append("c")
+    event["context"]["new"] = "value"
+
+    assert snap["context"] == {"user": {"id": 1}, "tags": ["a", "b"]}
+    assert snap["context"]["user"] is not event["context"]["user"]
+    assert snap["context"]["tags"] is not event["context"]["tags"]

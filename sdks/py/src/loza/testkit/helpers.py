@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import json
 from pathlib import Path
 from collections.abc import Callable
@@ -72,7 +73,7 @@ def snapshot_event(event: dict[str, Any]) -> dict[str, Any]:
     snap = {}
     for k, v in event.items():
         if k not in ("event_id", "timestamp", "request_id", "trace_id", "span_id", "duration_ms"):
-            snap[k] = v
+            snap[k] = copy.deepcopy(v)
     return snap
 
 
