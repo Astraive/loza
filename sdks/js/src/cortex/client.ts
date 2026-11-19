@@ -282,7 +282,7 @@ export class CortexClient {
         headers,
         timeout: this.timeout,
       }, (res) => {
-        let data = '';
+        const chunks: Buffer[] = [];
         let bytes = 0;
         res.on('data', (chunk: Buffer) => {
           bytes += chunk.length;
@@ -290,7 +290,7 @@ export class CortexClient {
             req.destroy(new Error(`response exceeds ${this.maxResponseBytes} bytes`));
             return;
           }
-          data += chunk.toString();
+          chunks.push(chunk);
         });
         res.on('end', () => {
           const statusCode = res.statusCode || 0;
@@ -299,6 +299,7 @@ export class CortexClient {
             return;
           }
           resolve({ statusCode, body: data });
+          resolve({ statusCode: res.statusCode || 0, body: Buffer.concat(chunks).toString('utf8') });
         });
       });
 

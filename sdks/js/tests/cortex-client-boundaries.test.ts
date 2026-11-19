@@ -164,6 +164,29 @@ describe('Cortex client boundaries', () => {
       res.statusCode = 500;
       res.setHeader('content-type', 'application/json');
       res.end(JSON.stringify({ error: 'bad api key' }));
+  it('preserves multi-byte UTF-8 characters split across response chunks', async () => {
+    const body = JSON.stringify({
+      incident_id: 'incident 🚀 fire',
+      timestamp: '2026-01-01T00:00:00Z',
+      confidence: 0.5,
+      note: 'café ☕',
+    });
+    const payload = Buffer.from(body, 'utf8');
+    // 🚀 is a 4-byte UTF-8 sequence (F0 9F 9A 80). Split one byte into it so a
+    // per-chunk toString() would decode two broken halves as replacement chars.
+    const rocketByteOffset = Buffer.byteLength(body.slice(0, body.indexOf('🚀')), 'utf8');
+    const splitAt = rocketByteOffset + 1;
+
+    const server = http.createServer((_req, res) => {
+      res.statusCode = 200;
+      res.setHeader('content-type', 'application/json');
+      res.setHeader('content-length', payload.length);
+      res.write(payload.subarray(0, splitAt));
+      // A gap forces the two halves to arrive as distinct 'data' events.
+      setTimeout(() => {
+        res.write(payload.subarray(splitAt));
+        res.end();
+      }, 50);
     });
     const gate = Promise.withResolvers<void>();
     server.once('error', gate.reject);
@@ -190,6 +213,13 @@ describe('Cortex client boundaries', () => {
       // Health/readiness probes still resolve to false rather than throwing.
       assert.equal(await client.health(), false);
       assert.equal(await client.ready(), false);
+    try {
+      const address = server.address();
+      if (!address || typeof address === 'string') throw new Error('missing address');
+      const client = new CortexClient({ url: `http://127.0.0.1:${address.port}` });
+      const result = await client.reconstruct('incident');
+      assert.equal(result.incident_id, 'incident 🚀 fire');
+      assert.equal((result as any).note, 'café ☕');
     } finally {
       await stopCortex(server);
     }
