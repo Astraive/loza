@@ -35,23 +35,23 @@ func Run(t *testing.T, opts Options) {
 		opts.LargePayloadBytes = 256 * 1024
 	}
 
-	t.Run("open_close", func(t *testing.T) {
+	t.Run(opts.Name+"/open_close", func(t *testing.T) {
 		sink := opts.Factory(t)
 		closeSink(t, sink, opts.Timeout)
 	})
-	t.Run("write_one_event", func(t *testing.T) {
+	t.Run(opts.Name+"/write_one_event", func(t *testing.T) {
 		sink := opts.Factory(t)
 		defer closeSink(t, sink, opts.Timeout)
 		writeEvent(t, sink, opts.Timeout, `{"event_id":"evt_conf_one","event":"conformance.one"}`)
 	})
-	t.Run("write_batch_serial", func(t *testing.T) {
+	t.Run(opts.Name+"/write_batch_serial", func(t *testing.T) {
 		sink := opts.Factory(t)
 		defer closeSink(t, sink, opts.Timeout)
 		for i := 0; i < 3; i++ {
 			writeEvent(t, sink, opts.Timeout, fmt.Sprintf(`{"event_id":"evt_conf_batch_%d","event":"conformance.batch"}`, i))
 		}
 	})
-	t.Run("flush", func(t *testing.T) {
+	t.Run(opts.Name+"/flush", func(t *testing.T) {
 		sink := opts.Factory(t)
 		defer closeSink(t, sink, opts.Timeout)
 		ctx, cancel := context.WithTimeout(context.Background(), opts.Timeout)
@@ -60,14 +60,14 @@ func Run(t *testing.T, opts Options) {
 			t.Fatalf("flush: %v", err)
 		}
 	})
-	t.Run("large_payload", func(t *testing.T) {
+	t.Run(opts.Name+"/large_payload", func(t *testing.T) {
 		sink := opts.Factory(t)
 		defer closeSink(t, sink, opts.Timeout)
 		payload := `{"event_id":"evt_conf_large","event":"conformance.large","attrs":{"blob":"` +
 			strings.Repeat("x", opts.LargePayloadBytes) + `"}}`
 		writeEvent(t, sink, opts.Timeout, payload)
 	})
-	t.Run("context_cancellation", func(t *testing.T) {
+	t.Run(opts.Name+"/context_cancellation", func(t *testing.T) {
 		sink := opts.Factory(t)
 		defer closeSink(t, sink, opts.Timeout)
 		ctx, cancel := context.WithCancel(context.Background())
