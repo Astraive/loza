@@ -738,7 +738,7 @@ func Dev() Config {
 			MaxAttrCount:        512,
 			DropOversizedEvents: true,
 		},
-		IDGen: globalIDGen,
+		IDGen: getGlobalIDGen(),
 		Clock: realClock{},
 	}
 }
@@ -787,7 +787,7 @@ func Production() Config {
 			MaxAttrCount:        512,
 			DropOversizedEvents: true,
 		},
-		IDGen: globalIDGen,
+		IDGen: getGlobalIDGen(),
 		Clock: realClock{},
 	}
 }
@@ -829,7 +829,7 @@ func Test() Config {
 			MaxAttrCount:        512,
 			DropOversizedEvents: true,
 		},
-		IDGen: globalIDGen,
+		IDGen: getGlobalIDGen(),
 		Clock: realClock{},
 	}
 }
@@ -1057,7 +1057,7 @@ func NewClient(cfg Config) (*Logger, error) {
 			MaxAttrCount:        512,
 			DropOversizedEvents: true,
 		},
-		IDGen: globalIDGen,
+		IDGen: getGlobalIDGen(),
 		Clock: realClock{},
 	}
 

@@ -63,7 +63,7 @@ func (l *Logger) WithSchema(schema Schema) (*Logger, error) {
 // applyConfigDefaults fills zero-value Config fields with sensible defaults.
 func applyConfigDefaults(cfg *Config) {
 	if cfg.IDGen == nil {
-		cfg.IDGen = globalIDGen
+		cfg.IDGen = getGlobalIDGen()
 	}
 	if cfg.Clock == nil {
 		cfg.Clock = realClock{}

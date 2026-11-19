@@ -24,10 +24,29 @@ type uuidV7Gen struct {
 
 var globalIDGen = &uuidV7Gen{}
 
+// globalIDGenMu guards access to globalIDGen. ResetForTest swaps the global
+// generator, so readers must never observe a torn/unsynchronized write.
+var globalIDGenMu sync.RWMutex
+
+// getGlobalIDGen returns the current global generator under a read lock.
+func getGlobalIDGen() *uuidV7Gen {
+	globalIDGenMu.RLock()
+	g := globalIDGen
+	globalIDGenMu.RUnlock()
+	return g
+}
+
+// setGlobalIDGen replaces the global generator under a write lock.
+func setGlobalIDGen(g *uuidV7Gen) {
+	globalIDGenMu.Lock()
+	globalIDGen = g
+	globalIDGenMu.Unlock()
+}
+
 // NewUUIDv7 generates a new UUIDv7 string using the global generator.
 // IDs are monotonically increasing within the same millisecond.
 func NewUUIDv7() string {
-	return globalIDGen.newID()
+	return getGlobalIDGen().newID()
 }
 
 // NewID implements IDGenerator.

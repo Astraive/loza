@@ -366,7 +366,7 @@ func Disabled() Config {
 			ExpandDotKeys: true,
 		},
 		DuplicateFieldPolicy: CanonicalWins,
-		IDGen:                globalIDGen,
+		IDGen:                getGlobalIDGen(),
 		Clock:                realClock{},
 	}
 }
