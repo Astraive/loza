@@ -25,6 +25,12 @@ function runGoldenFileChecks(filePath: string): void {
   assert.equal(goldenTest(filePath, '{"event":"one"}'), true);
   assert.equal(goldenTest(filePath, '{"event":"two"}'), false);
 }
+import { String, SensitiveString, resetClock } from '../src/core/event.ts';
+
+// Canonical snapshot for the deterministic checkpoint event below. Ids and
+// timestamps are pinned via setIdGenerator/setClock, so this literal is stable.
+const EXPECTED_CHECKPOINT_EVENT =
+  '{"schema_version":"v1","event_version":"v1","event_id":"00000000-0000-7000-8000-000000000002","request_id":"00000000-0000-7000-8000-000000000002","timestamp":"2023-11-14T22:13:20.000Z","service":"test","event":"checkpoint","kind":"event","level":"info","event_state":"finished","outcome":"success","environment":"test","runtime":"node","finished_at":"2023-11-14T22:13:20.000Z","attrs":{"secret":"[REDACTED]"},"checkpoints":[{"name":"started","at_ms":0}]}';
 
 describe('Testkit boundaries', () => {
   it('creates test loggers and captures emitted events', async () => {
@@ -55,6 +61,8 @@ describe('Testkit boundaries', () => {
 
   it('tracks testkit events and supports assertions', async () => {
     clearEvents();
+    setClock(() => 1700000000000);
+    setIdGenerator(() => '00000000-0000-7000-8000-000000000002');
     const kit = testkit();
     const event = kit.logger.startEvent({ event: 'checkpoint' });
     event.checkpoint('started');
@@ -71,7 +79,9 @@ describe('Testkit boundaries', () => {
     expectAttr(encoded, 'event', 'checkpoint');
     assertRedacted(encoded, 'attrs.secret');
     assertHasCheckpoint(encoded, 'started');
-    snapshotEvent(encoded, JSON.stringify(JSON.parse(encoded)));
+    // Compare against a committed literal snapshot rather than a value derived
+    // from the event under test; the latter is a guaranteed tautology.
+    snapshotEvent(encoded, EXPECTED_CHECKPOINT_EVENT);
     assert.throws(() => assertEvent(encoded, 'missing', true), /not found/);
     assert.throws(() => assertEvent(encoded, 'event', 'other'), /expected/);
     assert.throws(() => assertRedacted(encoded, 'event'), /expected/);
@@ -80,6 +90,8 @@ describe('Testkit boundaries', () => {
     clearEvents();
     assert.equal(events().length, 0);
     assert.equal(lastEvent(), undefined);
+    resetForTest();
+    resetClock();
   });
 
   it('isolates captured events between independent testkit instances', async () => {
