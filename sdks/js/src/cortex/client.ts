@@ -73,14 +73,19 @@ export function normalizeGraphView(gv: any): void {
   }
 }
 
-/** Normalize Remediation: trim strings, normalize timestamp. */
+/**
+ * Normalize Remediation: trim strings, normalize a supplied timestamp.
+ *
+ * Optional fields that the caller omitted are left untouched — they are never
+ * injected as '' or as the current time into a caller-owned object.
+ */
 export function normalizeRemediation(r: any): void {
   if (!r) return;
-  r.remediation_id = (r.remediation_id || '').trim();
+  if (r.remediation_id !== undefined) r.remediation_id = (r.remediation_id || '').trim();
   r.incident_id = (r.incident_id || '').trim();
   r.action = (r.action || '').trim();
-  r.operator = (r.operator || '').trim();
-  r.timestamp = normalizeTimestamp(r.timestamp);
+  if (r.operator !== undefined) r.operator = (r.operator || '').trim();
+  if (r.timestamp !== undefined) r.timestamp = normalizeTimestamp(r.timestamp);
 }
 
 // --- Validation ---
@@ -207,9 +212,11 @@ export class CortexClient {
 
   /** Record remediation action. */
   async recordRemediation(data: Remediation): Promise<void> {
-    normalizeRemediation(data);
-    validateRemediation(data);
-    await this.post('/feedback/remediation', data);
+    // Normalize a copy so the caller-owned object is never mutated in place.
+    const normalized: Remediation = { ...data };
+    normalizeRemediation(normalized);
+    validateRemediation(normalized);
+    await this.post('/feedback/remediation', normalized);
   }
 
   /** Record incident feedback. */
