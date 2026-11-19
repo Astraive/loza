@@ -175,6 +175,9 @@ func (ev *SignatureEvolver) OnMatched(ctx context.Context, signatureID string) e
 }
 
 // onAliasRegistered cascades renames to all signatures referencing the old name.
+// Signatures created before the alias became valid (validFrom) are left untouched:
+// a future-dated alias must not retroactively rewrite historical signatures. A
+// zero validFrom means the alias has always been valid, so nothing is skipped.
 func (ev *SignatureEvolver) onAliasRegistered(ctx context.Context, from, to string, validFrom time.Time) {
 	sigs, err := ev.signatureStore.List(ctx, 10000)
 	if err != nil {
@@ -184,6 +187,10 @@ func (ev *SignatureEvolver) onAliasRegistered(ctx context.Context, from, to stri
 
 	updated := 0
 	for _, sig := range sigs {
+		if sig.CreatedAt.Before(validFrom) {
+			continue
+		}
+
 		changed := false
 		for i, role := range sig.ServiceRoles {
 			if role == from {
