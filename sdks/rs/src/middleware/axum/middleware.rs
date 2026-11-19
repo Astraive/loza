@@ -4,6 +4,7 @@ pub fn middleware_name() -> &'static str {
 
 #[cfg(feature = "axum")]
 pub mod axum_impl {
+    use crate::middleware::axum::response::ResponseCapture;
     use crate::{Logger, Params};
     use axum::extract::{MatchedPath, Request};
     use crate::{EventContext, LozaError, Logger, Params};
@@ -113,10 +114,14 @@ pub mod axum_impl {
 
         let res = next.run(req).await;
 
-        let status = res.status().as_u16();
+        let capture = ResponseCapture::from_response(&res);
+        let status = capture.status();
         let elapsed = started.elapsed().as_millis() as u64;
         let outcome = if status >= 500 { "error" } else { "success" };
         append_response_attrs(&logger, &mut ctx, status, elapsed as i64);
+        crate::Append(&mut ctx, crate::Int("status_code", status as i64));
+        crate::Append(&mut ctx, crate::Int("response_bytes", capture.bytes() as i64));
+        crate::Append(&mut ctx, crate::Int("duration_ms", elapsed as i64));
         let _ = logger.finish(&mut ctx, outcome);
         let _ = logger.emit(&ctx);
         crate::Append(&mut ctx, crate::Int("status_code", status as i64));
