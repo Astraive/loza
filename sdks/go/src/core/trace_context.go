@@ -3,9 +3,10 @@ package core
 import (
 	cr "crypto/rand"
 	"encoding/hex"
-	"fmt"
 	"math/rand/v2"
 	"sync"
+	"sync/atomic"
+	"time"
 )
 
 // W3C Trace Context support for distributed tracing.
@@ -16,8 +17,13 @@ import (
 // These IDs are unique identifiers, not cryptographic secrets, so a fast PRNG is appropriate.
 // The PRNG is seeded from crypto/rand at init time for uniqueness across processes.
 var (
-	traceRand   *rand.Rand
-	traceRandMu sync.Mutex
+	traceRand       *rand.Rand
+	traceRandMu     sync.Mutex
+	fallbackCounter atomic.Uint64
+
+	// readEntropy is the entropy source used when the process PRNG is
+	// unavailable. It is a variable so tests can simulate entropy failure.
+	readEntropy = cr.Read
 )
 
 func init() {
@@ -26,6 +32,35 @@ func init() {
 	var seed [32]byte
 	if _, err := cr.Read(seed[:]); err == nil {
 		traceRand = rand.New(rand.NewChaCha8(seed))
+	}
+}
+
+// isAllZero reports whether every byte in b is zero.
+func isAllZero(b []byte) bool {
+	for _, v := range b {
+		if v != 0 {
+			return false
+		}
+	}
+	return true
+}
+
+// fillFallback fills b with a best-effort, guaranteed-non-zero value for the
+// extremely rare case where both crypto/rand and the process PRNG are
+// unavailable. It mixes the current time with an atomic counter so successive
+// fallbacks differ; it is not cryptographically secure, but it never produces
+// the reserved all-zero ID that W3C Trace Context forbids.
+func fillFallback(b []byte) {
+	n := uint64(time.Now().UnixNano())
+	c := fallbackCounter.Add(1)
+	for i := range b {
+		shift := uint(8 * (i % 8))
+		b[i] = byte(n>>shift) ^ byte(c>>shift)
+	}
+	// W3C Trace Context reserves the all-zero ID. Guarantee we never emit it,
+	// even in the impossible case that the mixed value above is all zeros.
+	if isAllZero(b) {
+		b[len(b)-1] = byte(c | 1)
 	}
 }
 
@@ -47,11 +82,8 @@ func GenerateTraceContext() TraceContext {
 		traceRandMu.Unlock()
 	} else {
 		traceRandMu.Unlock()
-		if _, err := cr.Read(buf[:]); err != nil {
-			return TraceContext{
-				TraceID: fmt.Sprintf("%032x", 0),
-				SpanID:  fmt.Sprintf("%016x", 0),
-			}
+		if _, err := readEntropy(buf[:]); err != nil {
+			fillFallback(buf[:])
 		}
 	}
 	return TraceContext{
@@ -74,8 +106,8 @@ func GenerateTraceID() string {
 		traceRandMu.Unlock()
 	} else {
 		traceRandMu.Unlock()
-		if _, err := cr.Read(b[:]); err != nil {
-			return fmt.Sprintf("%032x", 0)
+		if _, err := readEntropy(b[:]); err != nil {
+			fillFallback(b[:])
 		}
 	}
 	return hex.EncodeToString(b[:])
@@ -95,8 +127,8 @@ func GenerateSpanID() string {
 		traceRandMu.Unlock()
 	} else {
 		traceRandMu.Unlock()
-		if _, err := cr.Read(b[:]); err != nil {
-			return fmt.Sprintf("%016x", 0)
+		if _, err := readEntropy(b[:]); err != nil {
+			fillFallback(b[:])
 		}
 	}
 	return hex.EncodeToString(b[:])
