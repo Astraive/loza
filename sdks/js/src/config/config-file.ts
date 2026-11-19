@@ -49,12 +49,8 @@ export function parseSimpleYAML(content: string): YamlRecord {
     const key = trimmed.slice(0, colonIdx).trim();
     const rawValue = trimmed.slice(colonIdx + 1).trim();
 
-    // Strip inline comments
-    let value = rawValue;
-    const commentIdx = value.indexOf('#');
-    if (commentIdx > 0) {
-      value = value.slice(0, commentIdx).trim();
-    }
+    // Strip inline comments without truncating values that contain '#'
+    const value = stripInlineComment(rawValue);
 
     const current = stack[stack.length - 1].obj;
 
@@ -69,6 +65,41 @@ export function parseSimpleYAML(content: string): YamlRecord {
   }
 
   return root;
+}
+
+/**
+ * Strip a YAML inline comment from a scalar value.
+ *
+ * A `#` only starts a comment when it is preceded by whitespace, and never
+ * while inside a single- or double-quoted scalar. An interior `#` such as
+ * `ab#cd` is part of the value and must be preserved.
+ */
+function stripInlineComment(value: string): string {
+  let quote: '"' | "'" | null = null;
+
+  for (let i = 0; i < value.length; i++) {
+    const ch = value[i];
+
+    if (quote !== null) {
+      if (ch === quote) {
+        // '' is an escaped quote in single quotes; \" in double quotes.
+        if (quote === "'" && value[i + 1] === "'") {
+          i++;
+        } else if (!(quote === '"' && value[i - 1] === '\\')) {
+          quote = null;
+        }
+      }
+      continue;
+    }
+
+    if (ch === '"' || ch === "'") {
+      quote = ch;
+    } else if (ch === '#' && i > 0 && /\s/.test(value[i - 1])) {
+      return value.slice(0, i).trimEnd();
+    }
+  }
+
+  return value;
 }
 
 /** Parse a YAML scalar value (string, boolean, integer). */
