@@ -315,7 +315,9 @@ pub fn fatal_event(message: impl Into<String>) -> Result<String, LozaError> {
 // --- Context helpers ---
 
 pub fn FromContext(ctx: &EventContext) -> Option<&EventContext> {
-    core::event::from_context(ctx)
+    // The public `Option` return is retained for parity with the Go/Python SDKs
+    // and backwards compatibility; the Rust helper always has a context.
+    Some(core::event::from_context(ctx))
 }
 
 pub fn HasEvent(ctx: &EventContext) -> bool {
