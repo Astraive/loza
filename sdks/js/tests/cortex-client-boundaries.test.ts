@@ -58,6 +58,52 @@ describe('Cortex client boundaries', () => {
     assert.throws(() => validateFeedback({ incident_id: 'id' }), /outcome/);
   });
 
+  it('does not inject optional fields into caller-owned remediation objects', async () => {
+    // Direct normalization must not add omitted optional fields.
+    const direct: any = { incident_id: ' inc ', action: ' restart ' };
+    normalizeRemediation(direct);
+    assert.deepEqual(Object.keys(direct).sort(), ['action', 'incident_id']);
+    assert.equal(direct.incident_id, 'inc');
+    assert.equal(direct.action, 'restart');
+    assert.equal('remediation_id' in direct, false);
+    assert.equal('operator' in direct, false);
+    assert.equal('timestamp' in direct, false);
+
+    // recordRemediation must leave the caller's object untouched and must not
+    // send values for optional fields that were omitted.
+    const bodies: string[] = [];
+    const server = http.createServer((req, res) => {
+      let body = '';
+      req.on('data', chunk => { body += chunk.toString(); });
+      req.on('end', () => {
+        bodies.push(body);
+        res.statusCode = 200;
+        res.end('{}');
+      });
+    });
+    const gate = Promise.withResolvers<void>();
+    server.once('error', gate.reject);
+    server.listen(0, '127.0.0.1', () => gate.resolve());
+    await gate.promise;
+    const address = server.address();
+    if (!address || typeof address === 'string') throw new Error('missing address');
+    try {
+      const client = new CortexClient({ url: `http://127.0.0.1:${address.port}` });
+      const data: any = { incident_id: ' inc ', action: ' restart ' };
+      await client.recordRemediation(data);
+      assert.deepEqual(data, { incident_id: ' inc ', action: ' restart ' });
+      assert.equal(bodies.length, 1);
+      const sent = JSON.parse(bodies[0]);
+      assert.equal(sent.incident_id, 'inc');
+      assert.equal(sent.action, 'restart');
+      assert.equal('remediation_id' in sent, false);
+      assert.equal('operator' in sent, false);
+      assert.equal('timestamp' in sent, false);
+    } finally {
+      await new Promise<void>((resolve, reject) => server.close(err => err ? reject(err) : resolve()));
+    }
+  });
+
   it('calls health, readiness, ingest, graph, reconstruction, and feedback APIs', async () => {
     const { server, url } = await startCortex();
     try {
