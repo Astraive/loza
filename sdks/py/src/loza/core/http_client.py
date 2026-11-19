@@ -156,7 +156,7 @@ class CollectorClient:
             return {self.auth_header: self.api_key}
         if self.username or self.password:
             token = base64.b64encode(f"{self.username}:{self.password}".encode("utf-8")).decode("ascii")
-            return {"Authorization": f"Basic {token}"}
+            return {self.auth_header: f"Basic {token}"}
         return {}
 
     def envelope(self, encoded_events: Iterable[str]) -> bytes:
