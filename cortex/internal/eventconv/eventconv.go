@@ -81,8 +81,8 @@ func FromRawMap(raw map[string]any, defaultProvenance string) (*models.Event, er
 		http.Method = getString(httpRaw, "method")
 		http.Path = getString(httpRaw, "path")
 		http.Route = getString(httpRaw, "route")
-		if sc, ok := getFloat(httpRaw, "status_code"); ok {
-			http.StatusCode = int(sc)
+		if sc, ok := getStatusCode(httpRaw, "status_code"); ok {
+			http.StatusCode = sc
 		}
 		http.ClientIP = getString(httpRaw, "client_ip")
 		http.UserAgent = getString(httpRaw, "user_agent")
@@ -327,6 +327,44 @@ func getFloat(m map[string]any, key string) (float64, bool) {
 		}
 	}
 	return 0, false
+}
+
+// getStatusCode extracts an HTTP status code from a map. Unlike getFloat it
+// accepts numeric strings, rejects fractional values instead of truncating
+// them, and only returns codes within the valid HTTP range (100-599).
+func getStatusCode(m map[string]any, key string) (int, bool) {
+	value, ok := m[key]
+	if !ok {
+		return 0, false
+	}
+
+	var code int64
+	switch val := value.(type) {
+	case float64:
+		if math.IsNaN(val) || math.IsInf(val, 0) || val != math.Trunc(val) {
+			return 0, false
+		}
+		code = int64(val)
+	case int:
+		code = int64(val)
+	case int32:
+		code = int64(val)
+	case int64:
+		code = val
+	case string:
+		parsed, err := strconv.ParseInt(strings.TrimSpace(val), 10, 64)
+		if err != nil {
+			return 0, false
+		}
+		code = parsed
+	default:
+		return 0, false
+	}
+
+	if code < 100 || code > 599 {
+		return 0, false
+	}
+	return int(code), true
 }
 
 // extractError creates an EventError from a raw map

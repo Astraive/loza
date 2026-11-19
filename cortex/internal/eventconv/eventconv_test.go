@@ -36,6 +36,24 @@ func TestFromRawMapPreservesFractionalSecondsFromNumericTimestamp(t *testing.T) 
 			wantSec:   -2,
 			wantNsec:  500000000,
 		},
+import "testing"
+
+func TestFromRawMapHTTPStatusCode(t *testing.T) {
+	tests := []struct {
+		name  string
+		value any
+		want  int
+	}{
+		{name: "numeric string", value: "500", want: 500},
+		{name: "numeric string with whitespace", value: " 201 ", want: 201},
+		{name: "json number", value: float64(404), want: 404},
+		{name: "int", value: int(200), want: 200},
+		{name: "int64", value: int64(204), want: 204},
+		{name: "fractional number is not truncated", value: float64(500.9), want: 0},
+		{name: "below valid range", value: "99", want: 0},
+		{name: "above valid range", value: float64(600), want: 0},
+		{name: "duration string is not a status code", value: "500ms", want: 0},
+		{name: "non-numeric string", value: "internal server error", want: 0},
 	}
 
 	for _, tt := range tests {
@@ -217,5 +235,28 @@ func TestFromRawMapPlainNumericLifecycleStrings(t *testing.T) {
 	tm := event.Timers[0]
 	if tm.DurationMs != 750 || tm.StatusCode != 203 {
 		t.Errorf("timer = %+v, want duration=750 status=203", tm)
+	}
+}
+			raw := map[string]any{
+				"id":        "evt-1",
+				"timestamp": "2024-01-02T03:04:05Z",
+				"kind":      "http",
+				"service":   "checkout",
+				"http": map[string]any{
+					"status_code": tt.value,
+				},
+			}
+
+			event, err := FromRawMap(raw, "collector")
+			if err != nil {
+				t.Fatalf("FromRawMap() error = %v", err)
+			}
+			if event.HTTP == nil {
+				t.Fatal("FromRawMap() returned event with nil HTTP context")
+			}
+			if got := event.HTTP.StatusCode; got != tt.want {
+				t.Errorf("HTTP.StatusCode = %d, want %d", got, tt.want)
+			}
+		})
 	}
 }
