@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"context"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -50,6 +51,53 @@ func TestExecuteWebSocketAction_IngestBatchIsNotRoleGated(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), `unknown websocket action "ingest_batch"`) {
 		t.Fatalf("expected unknown-action error, got %v", err)
+func TestWebSocket_CheckOriginAllowlist(t *testing.T) {
+	upgrader := newCortexWSUpgrader([]string{"https://app.example.com"})
+
+	check := func(origin string) bool {
+		req := httptest.NewRequest(http.MethodGet, "/ws", nil)
+		if origin != "" {
+			req.Header.Set("Origin", origin)
+		}
+		return upgrader.CheckOrigin(req)
+	}
+
+	allowed := []string{
+		"", // Non-browser clients without an Origin header.
+		"https://app.example.com",
+		"http://localhost",
+		"http://localhost:8080",
+		"http://127.0.0.1",
+		"http://127.0.0.1:9000",
+		"http://[::1]",
+		"http://[::1]:3000",
+	}
+	for _, origin := range allowed {
+		if !check(origin) {
+			t.Errorf("CheckOrigin(%q) = false, want true", origin)
+		}
+	}
+
+	// Crafted origins that a HasPrefix check would wrongly accept, plus
+	// origins that differ in scheme, host, userinfo, path or port.
+	denied := []string{
+		"http://localhost:80@evil.com",
+		"http://localhost:8080@evil.com",
+		"http://localhost.evil.com",
+		"http://localhost:evil.com",
+		"http://127.0.0.1.evil.com",
+		"http://127.0.0.1.evil.com:8080",
+		"http://[::1].evil.com",
+		"http://evil.com",
+		"https://localhost:8080",
+		"http://user@localhost",
+		"http://localhost/path",
+		"https://app.example.com.evil.com",
+	}
+	for _, origin := range denied {
+		if check(origin) {
+			t.Errorf("CheckOrigin(%q) = true, want false", origin)
+		}
 	}
 }
 
