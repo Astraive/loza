@@ -1,5 +1,5 @@
 // Integration tests for Rust SDK with collector
-use loza::{Config, New, Params};
+use loza::{Config, New, Params, LOZA_SPEC_VERSION};
 use serde_json::Value;
 
 #[test]
@@ -168,8 +168,8 @@ fn test_schema_version_set() {
     let payload = logger.emit(&ctx).unwrap();
 
     let event: Value = serde_json::from_str(&payload).unwrap();
-    // Schema version should be canonical (0.2.0)
-    assert!(event.get("schema_version").is_some());
+    // Schema version should be canonical (v1)
+    assert_eq!(event["schema_version"], LOZA_SPEC_VERSION);
 }
 
 #[test]

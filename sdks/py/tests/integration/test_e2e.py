@@ -171,8 +171,23 @@ def test_schema_version_set() -> None:
     payload = logger.emit(ctx)
 
     event = json.loads(payload)
-    # Schema version should be canonical (0.2.0)
-    assert "schema_version" in event
+    # Schema version should be canonical (v1)
+    assert event["schema_version"] == loza.LOZA_SPEC_VERSION
+
+
+def test_schema_version_is_canonical_value() -> None:
+    """Regression: emitted events must carry the exact documented canonical value.
+
+    Checking only for key presence lets a wrong or empty schema_version pass.
+    Pin the literal canonical value so a regression in the constant is caught too.
+    """
+    logger = loza.New(loza.Test("schema_test"))
+
+    ctx = logger.start_event(loza.Params(event="schema_event"))
+    logger.finish(ctx, "success")
+    event = json.loads(logger.emit(ctx))
+
+    assert event["schema_version"] == "v1"
 
 
 def test_collector_http_interface() -> None:
