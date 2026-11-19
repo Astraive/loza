@@ -17,6 +17,7 @@ import (
 	"github.com/astraive/loza/cortex/internal/graph"
 	"github.com/astraive/loza/cortex/internal/learner"
 	"github.com/astraive/loza/cortex/internal/matcher"
+	"github.com/astraive/loza/cortex/internal/metrics"
 	"github.com/astraive/loza/cortex/internal/middleware"
 	"github.com/astraive/loza/cortex/internal/models"
 	"github.com/astraive/loza/cortex/internal/processor"
@@ -31,9 +32,6 @@ import (
 
 // cortexVersion is the current version of the cortex service.
 var cortexVersion = lozacortex.Version
-
-// maxGraphDepth caps the depth parameter for graph queries to prevent abuse.
-const maxGraphDepth = 100
 
 // defaultMaxBodyBytes is the fallback body size limit when config.MaxBodyBytes is 0.
 const defaultMaxBodyBytes = 10 * 1024 * 1024 // 10MB
@@ -468,13 +466,18 @@ func writeReconstructError(w http.ResponseWriter, err error) {
 }
 
 func graphDepth(r *http.Request) (int, error) {
-	const defaultDepth = 3
 	raw := r.URL.Query().Get("depth")
 	if raw == "" {
-		return defaultDepth, nil
+		return defaultGraphDepth, nil
 	}
 	depth, err := strconv.Atoi(raw)
-	if err != nil || depth < 1 || depth > maxGraphDepth {
+	if err != nil || depth < 1 {
+		return 0, fmt.Errorf("depth must be between 1 and %d", maxGraphDepth)
+	}
+	// HTTP keeps rejecting out-of-range depths (its documented 400 contract),
+	// but the limit itself comes from the shared clampDepth helper.
+	if _, overLimit := clampDepth(depth); overLimit {
+		metrics.GraphDepthOverLimit.WithLabelValues(depthTransportHTTP).Inc()
 		return 0, fmt.Errorf("depth must be between 1 and %d", maxGraphDepth)
 	}
 	return depth, nil

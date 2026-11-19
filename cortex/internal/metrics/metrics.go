@@ -128,5 +128,11 @@ var (
 			Help: "Total number of events dropped because a subscriber buffer was full",
 		},
 		[]string{"subscription"},
+	GraphDepthOverLimit = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "cortex_graph_depth_over_limit_total",
+			Help: "Total number of graph requests whose traversal depth exceeded the shared maximum (rejected or clamped), by transport",
+		},
+		[]string{"transport"},
 	)
 )
