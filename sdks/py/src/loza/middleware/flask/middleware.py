@@ -9,9 +9,10 @@ from ... import Bool, Emit, Enrich, Finish, FinishError, Int, Params, StartHTTPE
 class Middleware:
     """Flask/WSGI middleware that captures request lifecycle as one LOZA wide event."""
 
-    def __init__(self, app=None, service: str = "") -> None:
+    def __init__(self, app=None, service: str = "", **config) -> None:
         self.app = app
         self.service = service
+        self.config = config
 
     def wrap_scope(self, environ: dict) -> object:
         return StartHTTPEvent(

@@ -439,3 +439,27 @@ def test_starlette_middleware_without_app_raises_configuration_error() -> None:
         with pytest.raises(RuntimeError, match="no wrapped ASGI app"):
             asyncio.run(instance(scope, receive, send))
         assert sent == []
+def test_flask_middleware_factory_accepts_extra_config() -> None:
+    from loza.middleware.flask import middleware
+
+    def app(_environ, start_response):
+        start_response("200 OK", [])
+        return [b"ok"]
+
+    # The factory forwards **config to the constructor; arbitrary keys must be
+    # accepted rather than raising "unexpected keyword argument" (issue #846).
+    instance = middleware(app, service="checkout", debug=True, sample_rate=0.5)
+
+    assert instance.app is app
+    assert instance.service == "checkout"
+    assert instance.config == {"debug": True, "sample_rate": 0.5}
+
+
+def test_flask_middleware_factory_still_accepts_service_only() -> None:
+    from loza.middleware.flask import middleware
+
+    instance = middleware(service="checkout")
+
+    assert instance.app is None
+    assert instance.service == "checkout"
+    assert instance.config == {}
