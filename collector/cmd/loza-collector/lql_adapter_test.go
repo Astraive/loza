@@ -5,6 +5,9 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"io"
 	"os"
 	"path/filepath"
@@ -50,6 +53,32 @@ func TestLQLStdioCompilerRejectsConcurrentRequests(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "exactly one concurrent request") {
 		t.Fatalf("expected sequential stdio validation error, got %v", err)
+	}
+}
+
+// TestNoDeadEscapeLQLStringHelper guards issue #481 (MASS-0109): escapeLQLString
+// was declared in lql_adapter.go but never referenced anywhere in the collector
+// tree. Assert the unused helper stays removed so it cannot silently reappear.
+func TestNoDeadEscapeLQLStringHelper(t *testing.T) {
+	const dead = "escapeLQLString"
+	entries, err := os.ReadDir(".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".go") {
+			continue
+		}
+		fset := token.NewFileSet()
+		file, err := parser.ParseFile(fset, entry.Name(), nil, 0)
+		if err != nil {
+			t.Fatalf("parse %s: %v", entry.Name(), err)
+		}
+		for _, decl := range file.Decls {
+			if fn, ok := decl.(*ast.FuncDecl); ok && fn.Name.Name == dead {
+				t.Fatalf("%s reintroduces dead helper %s", entry.Name(), dead)
+			}
+		}
 	}
 }
 
