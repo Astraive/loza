@@ -1,6 +1,7 @@
 package fiber
 
 import (
+	"context"
 	"errors"
 	"fmt"
 
@@ -52,6 +53,7 @@ func MiddlewareWithConfig(cfg Config) fiberpkg.Handler {
 				// make Fiber's error handler disclose it in the response body.
 				status := effectiveStatus(perr)
 				_ = c.SendStatus(status)
+				enrichRoute(ctx, c)
 				loza.FinishError(ctx, perr, loza.Int("status_code", status))
 				_ = loza.Emit(ctx)
 				err = nil
@@ -59,13 +61,7 @@ func MiddlewareWithConfig(cfg Config) fiberpkg.Handler {
 		}()
 
 		err = c.Next()
-		route := ""
-		if c.Route() != nil {
-			route = c.Route().Path
-		}
-		if route != "" {
-			loza.Enrich(ctx, loza.String("route", route))
-		}
+		enrichRoute(ctx, c)
 		if err != nil {
 			status := effectiveStatus(err)
 			c.Status(status)
@@ -90,6 +86,20 @@ func effectiveStatus(err error) int {
 		return fiberErr.Code
 	}
 	return fiberpkg.StatusInternalServerError
+}
+
+// enrichRoute attaches the matched fiber route to the event when available.
+// It is shared by the normal and panic paths so route enrichment is not skipped
+// when a handler panics and control unwinds before the post-Next code. Route is
+// a canonical field, so it must be Set (not Enriched) to survive emit-time
+// duplicate-field processing.
+func enrichRoute(ctx context.Context, c *fiberpkg.Ctx) {
+	if c.Route() == nil {
+		return
+	}
+	if route := c.Route().Path; route != "" {
+		_ = loza.Set(ctx, loza.Route(route))
+	}
 }
 
 type panicErr struct {
