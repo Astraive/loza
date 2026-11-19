@@ -141,4 +141,61 @@ func TestUnsubscribeRemovesOnlyMatchingSubscription(t *testing.T) {
 		t.Fatalf("remaining subscriber received %d event(s); want 1", got)
 	}
 	bus.Unsubscribe("incident-A", chB)
+	"github.com/astraive/loza/cortex/internal/metrics"
+	"github.com/astraive/loza/cortex/internal/models"
+	"github.com/prometheus/client_golang/prometheus/testutil"
+	"github.com/stretchr/testify/require"
+)
+
+func droppedCount(subscription string) float64 {
+	return testutil.ToFloat64(metrics.EventBusDroppedEvents.WithLabelValues(subscription))
+}
+
+// TestPublishFullSubscriberBuffersAreCounted verifies that events lost to a
+// full subscriber buffer are reported instead of being silently discarded.
+func TestPublishFullSubscriberBuffersAreCounted(t *testing.T) {
+	baselineWildcard := droppedCount("wildcard")
+	baselineIncident := droppedCount("incident")
+	baselineService := droppedCount("service")
+
+	bus := New().WithBufferSize(1)
+	wildcard := bus.Subscribe("")
+	incident := bus.Subscribe("incident-1")
+	service := bus.Subscribe("svc-1")
+
+	event := &models.Event{
+		ID:         "event-1",
+		IncidentID: "incident-1",
+		Service:    "svc-1",
+	}
+
+	// The first publish fills every one-byte subscriber buffer.
+	bus.Publish(event)
+	require.Len(t, wildcard, 1)
+	require.Len(t, incident, 1)
+	require.Len(t, service, 1)
+	require.Equal(t, baselineWildcard, droppedCount("wildcard"))
+	require.Equal(t, baselineIncident, droppedCount("incident"))
+	require.Equal(t, baselineService, droppedCount("service"))
+
+	// The second publish cannot be delivered and must be counted on all three
+	// drop paths rather than disappearing without a trace.
+	bus.Publish(event)
+	require.Len(t, wildcard, 1, "no event may be appended to a full buffer")
+	require.Equal(t, baselineWildcard+1, droppedCount("wildcard"))
+	require.Equal(t, baselineIncident+1, droppedCount("incident"))
+	require.Equal(t, baselineService+1, droppedCount("service"))
+}
+
+// TestPublishWithBufferCapacityDoesNotCountDrops ensures the counter is not
+// incremented on the normal, successful delivery path.
+func TestPublishWithBufferCapacityDoesNotCountDrops(t *testing.T) {
+	baseline := droppedCount("wildcard")
+
+	bus := New().WithBufferSize(4)
+	ch := bus.Subscribe("")
+	bus.Publish(&models.Event{ID: "event-1"})
+
+	require.Len(t, ch, 1)
+	require.Equal(t, baseline, droppedCount("wildcard"))
 }
