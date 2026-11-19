@@ -25,6 +25,7 @@ actix-web = { version = "4", optional = true }
 axum = { version = "0.7", optional = true }
 tower = { version = "0.4", optional = true }
 hyper = { version = "1", optional = true }
+tracing = { version = "0.1", optional = true }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt"] }
@@ -32,4 +33,4 @@ tokio = { version = "1", features = ["macros", "rt"] }
 [features]
 default = []
 actix = ["dep:actix-web", "dep:futures-util"]
-axum = ["dep:axum", "dep:tower", "dep:hyper"]
+axum = ["dep:axum", "dep:tower", "dep:hyper", "dep:tracing"]
