@@ -12,6 +12,16 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+const (
+	// defaultListPageSize is the number of events fetched per EventStore.List call
+	// when the configured page size is not positive.
+	defaultListPageSize = 1000
+	// defaultMaxEvents bounds the number of events scanned in a single analysis
+	// run when the configured maximum is not positive. It is deliberately well
+	// above the old hard-coded 10,000 single-page cap.
+	defaultMaxEvents = 100000
+)
+
 // Config holds correlation analysis parameters.
 type Config struct {
 	Enabled                   bool          `yaml:"enabled"`
@@ -19,6 +29,8 @@ type Config struct {
 	CoOccurrenceWindow        time.Duration `yaml:"co_occurrence_window"`
 	DeploymentAdjacencyWindow time.Duration `yaml:"deployment_adjacency_window"`
 	MinCoOccurrenceCount      int           `yaml:"min_co_occurrence_count"`
+	ListPageSize              int           `yaml:"list_page_size"`
+	MaxEvents                 int           `yaml:"max_events"`
 }
 
 // DefaultConfig returns sensible defaults.
@@ -29,17 +41,21 @@ func DefaultConfig() Config {
 		CoOccurrenceWindow:        5 * time.Minute,
 		DeploymentAdjacencyWindow: 30 * time.Minute,
 		MinCoOccurrenceCount:      3,
+		ListPageSize:              defaultListPageSize,
+		MaxEvents:                 defaultMaxEvents,
 	}
 }
 
 // FromConfig creates a Config from the cortex config file values.
-func FromConfig(enabled bool, analysisInterval, coOccurrenceWindow, deploymentAdjacencyWindow time.Duration, minCoOccurrenceCount int) Config {
+func FromConfig(enabled bool, analysisInterval, coOccurrenceWindow, deploymentAdjacencyWindow time.Duration, minCoOccurrenceCount, listPageSize, maxEvents int) Config {
 	return Config{
 		Enabled:                   enabled,
 		AnalysisInterval:          analysisInterval,
 		CoOccurrenceWindow:        coOccurrenceWindow,
 		DeploymentAdjacencyWindow: deploymentAdjacencyWindow,
 		MinCoOccurrenceCount:      minCoOccurrenceCount,
+		ListPageSize:              listPageSize,
+		MaxEvents:                 maxEvents,
 	}
 }
 
@@ -100,7 +116,7 @@ func (a *Analyzer) runAnalysis(ctx context.Context) {
 }
 
 func (a *Analyzer) analyze(ctx context.Context) error {
-	events, err := a.eventStore.List(ctx, 10000, 0)
+	recent, err := a.listRecentEvents(ctx)
 	if err != nil {
 		return fmt.Errorf("list events for correlation analysis: %w", err)
 	}
@@ -116,6 +132,7 @@ func (a *Analyzer) analyze(ctx context.Context) error {
 		if e.Timestamp.After(cutoff) {
 			recent = append(recent, e)
 		}
+		return err
 	}
 	if len(recent) == 0 {
 		return nil
@@ -125,6 +142,50 @@ func (a *Analyzer) analyze(ctx context.Context) error {
 		a.synthesizeCoOccurrence(ctx, recent),
 		a.synthesizeDeploymentAdjacency(ctx, recent),
 	)
+}
+
+// listRecentEvents pages through the event store so that events beyond a single
+// page are not silently dropped. The page size and the overall scan bound are
+// configurable; non-positive values fall back to the package defaults so that
+// an older configuration file cannot reintroduce a tiny, hard-coded cap.
+func (a *Analyzer) listRecentEvents(ctx context.Context) ([]*models.Event, error) {
+	pageSize := a.cfg.ListPageSize
+	if pageSize <= 0 {
+		pageSize = defaultListPageSize
+	}
+	maxEvents := a.cfg.MaxEvents
+	if maxEvents <= 0 {
+		maxEvents = defaultMaxEvents
+	}
+
+	cutoff := time.Now().Add(-a.cfg.CoOccurrenceWindow * 2)
+	var recent []*models.Event
+	for offset := 0; offset < maxEvents; {
+		limit := pageSize
+		if remaining := maxEvents - offset; limit > remaining {
+			limit = remaining
+		}
+
+		page, err := a.eventStore.List(ctx, limit, offset)
+		if err != nil {
+			return nil, fmt.Errorf("list events for correlation analysis (offset %d): %w", offset, err)
+		}
+		if len(page) == 0 {
+			break
+		}
+		for _, e := range page {
+			if e.Timestamp.After(cutoff) {
+				recent = append(recent, e)
+			}
+		}
+
+		offset += len(page)
+		// A short page means the store has no more events to return.
+		if len(page) < limit {
+			break
+		}
+	}
+	return recent, nil
 }
 
 // synthesizeCoOccurrence creates co_occurred edges between events from different

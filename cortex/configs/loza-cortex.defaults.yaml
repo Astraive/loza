@@ -113,6 +113,8 @@ correlation:
   co_occurrence_window: 5m
   deployment_adjacency_window: 30m
   min_co_occurrence_count: 3
+  list_page_size: 1000
+  max_events: 100000
 
 reconstructor:
   fast:

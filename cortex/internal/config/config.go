@@ -160,6 +160,8 @@ type CorrelationConfig struct {
 	CoOccurrenceWindow        time.Duration `yaml:"co_occurrence_window"`
 	DeploymentAdjacencyWindow time.Duration `yaml:"deployment_adjacency_window"`
 	MinCoOccurrenceCount      int           `yaml:"min_co_occurrence_count"`
+	ListPageSize              int           `yaml:"list_page_size"`
+	MaxEvents                 int           `yaml:"max_events"`
 }
 
 // ReconstructorConfig contains reconstruction settings

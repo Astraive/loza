@@ -3,6 +3,8 @@ package correlation
 import (
 	"context"
 	"errors"
+	"fmt"
+	"reflect"
 	"testing"
 	"time"
 
@@ -67,6 +69,145 @@ func (s *failingGraphStore) GetEdges(context.Context, string, string) ([]*models
 }
 func (s *failingGraphStore) Traverse(context.Context, string, models.TraversalOptions) (*models.GraphView, error) {
 	return nil, nil
+}
+
+// pagedEventStore serves offset-based pages from an in-memory slice. Embedding
+// the interface satisfies the unrelated EventStore methods that analysis never
+// calls, while List is overridden to mimic the real stores' pagination.
+type pagedEventStore struct {
+	storage.EventStore
+	events  []*models.Event
+	limits  []int
+	offsets []int
+}
+
+func (s *pagedEventStore) List(_ context.Context, limit, offset int) ([]*models.Event, error) {
+	s.limits = append(s.limits, limit)
+	s.offsets = append(s.offsets, offset)
+	if offset >= len(s.events) {
+		return nil, nil
+	}
+	end := offset + limit
+	if end > len(s.events) {
+		end = len(s.events)
+	}
+	return s.events[offset:end], nil
+}
+
+type recordingGraphStore struct {
+	storage.GraphStore
+	edges []*models.Edge
+}
+
+func (s *recordingGraphStore) SaveEdge(_ context.Context, edge *models.Edge) error {
+	s.edges = append(s.edges, edge)
+	return nil
+}
+
+func TestAnalyzeScansEventsBeyondFirstPage(t *testing.T) {
+	// The old implementation issued a single List(ctx, 10000, 0) call. Place the
+	// two correlated anomalies at indexes 10000 and 10003: with the old code
+	// neither is fetched, so no co_occurred edge is produced.
+	const (
+		pageSize  = 1000
+		maxEvents = 10005
+		oldCap    = 10000
+	)
+	timestamp := time.Now().Add(-time.Minute)
+	events := make([]*models.Event, maxEvents)
+	for i := range events {
+		events[i] = &models.Event{
+			ID:        fmt.Sprintf("filler-%d", i),
+			Service:   "worker",
+			Kind:      models.EventKindLog,
+			Timestamp: timestamp,
+			Raw:       map[string]any{"level": "info"},
+		}
+	}
+	events[oldCap] = &models.Event{
+		ID: "anomaly-a", Service: "api", Kind: models.EventKindIncidentSignal, Timestamp: timestamp,
+	}
+	events[oldCap+3] = &models.Event{
+		ID: "anomaly-b", Service: "db", Kind: models.EventKindIncidentSignal, Timestamp: timestamp,
+	}
+
+	store := &pagedEventStore{events: events}
+	graph := &recordingGraphStore{}
+	cfg := DefaultConfig()
+	cfg.ListPageSize = pageSize
+	cfg.MaxEvents = maxEvents
+	analyzer := NewAnalyzer(cfg, store, graph)
+
+	if err := analyzer.analyze(context.Background()); err != nil {
+		t.Fatalf("analyze: %v", err)
+	}
+	if len(store.offsets) <= 1 {
+		t.Fatalf("expected paginated List calls, got offsets %v", store.offsets)
+	}
+	var reachedOldCap bool
+	for _, offset := range store.offsets {
+		if offset >= oldCap {
+			reachedOldCap = true
+		}
+	}
+	if !reachedOldCap {
+		t.Fatalf("expected a List call at or beyond offset %d, got %v", oldCap, store.offsets)
+	}
+
+	var found bool
+	for _, edge := range graph.edges {
+		if edge.Type != models.EdgeTypeCoOccurred {
+			continue
+		}
+		if (edge.FromNodeID == "anomaly-a" && edge.ToNodeID == "anomaly-b") ||
+			(edge.FromNodeID == "anomaly-b" && edge.ToNodeID == "anomaly-a") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected co_occurred edge for anomalies past the old %d-event cap, got %d edges", oldCap, len(graph.edges))
+	}
+}
+
+func TestAnalyzeRespectsConfiguredPaginationLimits(t *testing.T) {
+	now := time.Now()
+	events := make([]*models.Event, 20)
+	for i := range events {
+		events[i] = &models.Event{ID: fmt.Sprintf("event-%d", i), Service: "svc", Timestamp: now}
+	}
+	store := &pagedEventStore{events: events}
+	cfg := DefaultConfig()
+	cfg.ListPageSize = 2
+	cfg.MaxEvents = 5
+	analyzer := NewAnalyzer(cfg, store, &recordingGraphStore{})
+
+	if err := analyzer.analyze(context.Background()); err != nil {
+		t.Fatalf("analyze: %v", err)
+	}
+	if want := []int{0, 2, 4}; !reflect.DeepEqual(store.offsets, want) {
+		t.Fatalf("offsets = %v, want %v", store.offsets, want)
+	}
+	// The final request is clamped to the remaining allowance.
+	if want := []int{2, 2, 1}; !reflect.DeepEqual(store.limits, want) {
+		t.Fatalf("limits = %v, want %v", store.limits, want)
+	}
+}
+
+func TestAnalyzeFallsBackToDefaultLimitsForNonPositiveConfig(t *testing.T) {
+	store := &pagedEventStore{events: []*models.Event{
+		{ID: "event-0", Service: "svc", Timestamp: time.Now()},
+	}}
+	cfg := DefaultConfig()
+	cfg.ListPageSize = 0
+	cfg.MaxEvents = -1
+	analyzer := NewAnalyzer(cfg, store, &recordingGraphStore{})
+
+	if err := analyzer.analyze(context.Background()); err != nil {
+		t.Fatalf("analyze: %v", err)
+	}
+	if len(store.limits) != 1 || store.limits[0] != defaultListPageSize {
+		t.Fatalf("expected fallback page size %d, got limits %v", defaultListPageSize, store.limits)
+	}
 }
 
 func TestSynthesizeCoOccurrenceReturnsPersistenceErrors(t *testing.T) {
