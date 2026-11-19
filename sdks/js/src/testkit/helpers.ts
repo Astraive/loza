@@ -168,6 +168,8 @@ export function setClock(clock: FakeClock | (() => number)): FakeClock | (() => 
     _setClock(clock);
   } else if (clock && typeof (clock as FakeClock).now === 'function') {
     _setClock(() => (clock as FakeClock).now());
+  } else {
+    throw new Error('setClock: expected a function or an object with a now() method');
   }
   return clock;
 }
