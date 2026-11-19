@@ -625,9 +625,12 @@ func (s *DuckDBTopologyStore) SaveAlias(ctx context.Context, alias *models.Servi
 }
 
 func (s *DuckDBTopologyStore) GetAlias(ctx context.Context, alias string, timestamp string) (*models.ServiceAlias, error) {
+	ts, err := time.Parse(time.RFC3339, timestamp)
+	if err != nil {
+		return nil, fmt.Errorf("invalid timestamp %q: %w", timestamp, err)
+	}
 	var a models.ServiceAlias
-	ts, _ := time.Parse(time.RFC3339, timestamp)
-	err := s.db.QueryRowContext(ctx,
+	err = s.db.QueryRowContext(ctx,
 		"SELECT id, alias, canonical, valid_from, valid_to, created_at FROM topology_aliases WHERE alias = ? AND valid_from <= ? AND (valid_to IS NULL OR valid_to > ?) ORDER BY valid_from DESC LIMIT 1",
 		alias, ts, ts).Scan(&a.ID, &a.Alias, &a.Canonical, &a.ValidFrom, &a.ValidTo, &a.CreatedAt)
 	return &a, err
