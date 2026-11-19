@@ -50,6 +50,12 @@ type sink struct {
 	// putObjectFn is the upload primitive. It is a field so tests can inject
 	// failures; production sinks always use (*sink).putObject.
 	putObjectFn func(context.Context, []byte) error
+	closeOnce sync.Once
+	// closeErr holds the result of the final flush performed by Close. It is
+	// written exactly once inside closeOnce.Do and read after Do returns, so
+	// sync.Once's memory barriers make it safe for every Close caller.
+	closeErr error
+	wg       sync.WaitGroup
 }
 
 // New creates a GCS sink.
@@ -145,6 +151,15 @@ func (s *sink) Close(ctx context.Context) error {
 	// buffer, so a subsequent Close retries it instead of reporting success
 	// while data is still stranded. Once the buffer is empty, Close is a no-op.
 	return s.flushBatch(ctx)
+	s.closeOnce.Do(func() {
+		s.mu.Lock()
+		s.closed = true
+		s.mu.Unlock()
+		close(s.stop)
+		s.wg.Wait()
+		s.closeErr = s.flushBatch(ctx)
+	})
+	return s.closeErr
 }
 
 func (s *sink) flushLoop() {
