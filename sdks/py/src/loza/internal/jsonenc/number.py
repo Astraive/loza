@@ -26,4 +26,6 @@ def clamp_int(value: int, minimum: int | None = None, maximum: int | None = None
 
 
 def duration_ms(seconds: float) -> int:
+    if not math.isfinite(seconds):
+        return 0
     return max(0, int(seconds * 1000))
