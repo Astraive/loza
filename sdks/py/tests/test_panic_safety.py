@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 
 import loza
 
@@ -77,50 +79,97 @@ def test_sink_write_failure_doesnt_crash() -> None:
 
 
 def test_invalid_duplicate_policy_rejected() -> None:
-    """Verify invalid duplicate policies are rejected."""
-    try:
-        # Try to create logger with None policy
-        logger = loza.New(loza.Test("test").with_duplicate_policy(None))
-        # If it doesn't raise, continue
-        ctx = logger.start_event(loza.Params(event="test"))
-        logger.finish(ctx, "success")
-    except (TypeError, ValueError, AttributeError):
-        # Expected to reject invalid policy
-        pass
+    """A None duplicate policy must be handled gracefully, not panic.
+
+    ``None`` means "no override" and falls back to the default policy. The
+    previous test passed unconditionally on that path, so assert the logger
+    still emits a valid event instead of silently letting anything through.
+    """
+    logger = loza.New(loza.Test("test").with_duplicate_policy(None))
+    ctx = logger.start_event(loza.Params(event="test"))
+    logger.finish(ctx, "success")
+
+    payload = logger.emit(ctx)
+    assert payload, "None duplicate policy must not suppress event emission"
+    assert json.loads(payload) is not None
 
 
 def test_invalid_sampler_rejected() -> None:
-    """Verify invalid samplers are rejected."""
-    try:
-        # Try to create logger with None sampler
-        logger = loza.New(loza.Test("test").with_sampler(None))
-        ctx = logger.start_event(loza.Params(event="test"))
-        logger.finish(ctx, "success")
-    except (TypeError, ValueError, AttributeError):
-        # Expected to reject invalid sampler
-        pass
+    """A None sampler must fall back to the default sampler, not panic."""
+    logger = loza.New(loza.Test("test").with_sampler(None))
+    ctx = logger.start_event(loza.Params(event="test"))
+    logger.finish(ctx, "success")
+
+    payload = logger.emit(ctx)
+    assert payload, "None sampler must not suppress event emission"
+    assert json.loads(payload) is not None
 
 
 def test_invalid_schema_rejected() -> None:
-    """Verify invalid schemas are rejected."""
-    try:
-        logger = loza.New(loza.Test("test").with_schema(None))
-        ctx = logger.start_event(loza.Params(event="test"))
-        logger.finish(ctx, "success")
-    except (TypeError, ValueError, AttributeError):
-        # Expected to reject invalid schema
-        pass
+    """A None schema must fall back to the default schema, not panic."""
+    logger = loza.New(loza.Test("test").with_schema(None))
+    ctx = logger.start_event(loza.Params(event="test"))
+    logger.finish(ctx, "success")
+
+    payload = logger.emit(ctx)
+    assert payload, "None schema must not suppress event emission"
+    assert json.loads(payload) is not None
 
 
 def test_invalid_redactor_rejected() -> None:
-    """Verify invalid redactors are rejected."""
-    try:
-        logger = loza.New(loza.Test("test").with_redactor(None))
+    """A None redactor must fall back to the default redactor, not panic."""
+    logger = loza.New(loza.Test("test").with_redactor(None))
+    ctx = logger.start_event(loza.Params(event="test"))
+    logger.finish(ctx, "success")
+
+    payload = logger.emit(ctx)
+    assert payload, "None redactor must not suppress event emission"
+    assert json.loads(payload) is not None
+
+
+def test_none_config_overrides_resolve_to_safe_defaults() -> None:
+    """Regression: None overrides must resolve to working defaults.
+
+    The four invalid-config tests above used to pass on an unconditional
+    no-raise path, so a logger left with a None sampler, redactor or schema
+    would only panic later during emit. Assert the defaults are actually
+    resolved and that the full start/finish/emit pipeline still works.
+    """
+    logger = loza.New(
+        loza.Test("test")
+        .with_duplicate_policy(None)
+        .with_sampler(None)
+        .with_schema(None)
+        .with_redactor(None)
+    )
+
+    assert logger._config.sampler is not None
+    assert logger._config.redactor is not None
+    assert logger._config.schema is not None
+    assert logger._config.duplicate_policy is not None
+
+    ctx = logger.start_event(loza.Params(event="test"))
+    logger.finish(ctx, "success")
+    payload = logger.emit(ctx)
+    assert payload
+    assert json.loads(payload) is not None
+
+
+@pytest.mark.parametrize(
+    "option",
+    ["with_sampler", "with_redactor", "with_schema"],
+)
+def test_non_callable_config_values_are_rejected(option: str) -> None:
+    """Genuinely invalid config values must raise a known error, not panic.
+
+    Unlike ``None`` (which means "use the default"), a non-callable value can
+    never be a valid sampler/redactor/schema and must be surfaced as an error.
+    """
+    with pytest.raises((TypeError, ValueError, AttributeError)):
+        logger = loza.New(getattr(loza.Test("test"), option)("not-callable"))
         ctx = logger.start_event(loza.Params(event="test"))
         logger.finish(ctx, "success")
-    except (TypeError, ValueError, AttributeError):
-        # Expected to reject invalid redactor
-        pass
+        logger.emit(ctx)
 
 
 def test_finish_twice_handled() -> None:
