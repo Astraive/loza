@@ -67,6 +67,28 @@ func TestSampleRateLimitedInitialBurst(t *testing.T) {
 	if accepted != 1 {
 		t.Fatalf("fresh limiter accepted %d events before refill, want 1", accepted)
 	}
+func TestSampleRandomNaNRate(t *testing.T) {
+	// A NaN rate compares false against every bound, so an unguarded switch
+	// falls through to rand.Float64() < NaN (always false) and silently drops
+	// all events. It must be handled explicitly and deterministically.
+	s := SampleRandom(math.NaN())
+	for i := 0; i < 1000; i++ {
+		if s.ShouldSample(nil) {
+			t.Fatalf("NaN rate should drop every event, but event %d was sampled", i)
+		}
+	}
+
+	// NaN is treated like a non-positive rate; other rates keep their behavior.
+	for _, rate := range []float64{0, -1, math.Inf(-1)} {
+		if SampleRandom(rate).ShouldSample(nil) {
+			t.Fatalf("SampleRandom(%v) should drop events", rate)
+		}
+	}
+	for _, rate := range []float64{1, math.Inf(1)} {
+		if !SampleRandom(rate).ShouldSample(nil) {
+			t.Fatalf("SampleRandom(%v) should keep events", rate)
+		}
+	}
 }
 
 func TestSampleByHeader(t *testing.T) {

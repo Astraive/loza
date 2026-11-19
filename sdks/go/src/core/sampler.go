@@ -34,9 +34,14 @@ func SampleNone() Sampler {
 }
 
 // SampleRandom keeps approximately rate of events (0..1).
+//
+// A NaN rate is invalid: because every comparison with NaN is false, leaving it
+// unchecked would fall through to rand.Float64() < rate, which is always false
+// and silently drops every event. NaN is therefore handled explicitly and
+// treated like a non-positive rate, dropping every event.
 func SampleRandom(rate float64) Sampler {
 	switch {
-	case rate <= 0:
+	case math.IsNaN(rate) || rate <= 0:
 		return SampleNone()
 	case rate >= 1:
 		return SampleAll()
