@@ -32,8 +32,12 @@ func TestEnrichHelpersAddAllowListedTraceAndBaggageAttrs(t *testing.T) {
 		t.Fatalf("trace attrs = %#v", traceAttrs)
 	}
 	ctx = loza.StartEvent(ctx, loza.Params{Event: "otel.enrich"})
-	EnrichTrace(ctx)
-	EnrichBaggage(ctx, " tenant ")
+	if err := EnrichTrace(ctx); err != nil {
+		t.Fatalf("EnrichTrace: %v", err)
+	}
+	if err := EnrichBaggage(ctx, " tenant "); err != nil {
+		t.Fatalf("EnrichBaggage: %v", err)
+	}
 	if err := loza.Finish(ctx, "success"); err != nil {
 		t.Fatalf("Finish: %v", err)
 	}
@@ -62,6 +66,10 @@ func TestEnrichHelpersIgnoreMissingTraceBaggageAndAllowlist(t *testing.T) {
 	if attrs := TraceAttrs(context.Background()); attrs != nil {
 		t.Fatalf("invalid trace attrs = %#v", attrs)
 	}
-	EnrichTrace(nil)
-	EnrichBaggage(nil, "tenant")
+	if err := EnrichTrace(nil); err != nil {
+		t.Fatalf("EnrichTrace(nil): %v", err)
+	}
+	if err := EnrichBaggage(nil, "tenant"); err != nil {
+		t.Fatalf("EnrichBaggage(nil): %v", err)
+	}
 }
