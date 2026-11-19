@@ -38,6 +38,14 @@ type MemoryKeyCache struct {
 	maxEntries      int
 	stopCleanup     chan struct{}
 	cleanupWG       sync.WaitGroup
+	entries          map[string]*cacheEntry
+	mu               sync.RWMutex
+	defaultTTL       time.Duration
+	negativeTTL      time.Duration
+	cleanupInterval  time.Duration
+	stopCleanup      chan struct{}
+	closeOnce        sync.Once
+	cleanupWG        sync.WaitGroup
 }
 
 // NewMemoryKeyCache creates a new cache with the given TTLs and the default
@@ -156,8 +164,11 @@ func (c *MemoryKeyCache) Invalidate(keyID string) {
 }
 
 // Close stops the background cleanup goroutine and waits for it to exit.
+// It is safe to call Close multiple times and from multiple goroutines.
 func (c *MemoryKeyCache) Close() {
-	close(c.stopCleanup)
+	c.closeOnce.Do(func() {
+		close(c.stopCleanup)
+	})
 	c.cleanupWG.Wait()
 }
 
