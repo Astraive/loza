@@ -229,6 +229,9 @@ func encodeLQLParameters(parameters map[string]any) map[string]any {
 			kind = "bool"
 		case int, int8, int16, int32, int64:
 			kind = "int"
+		case json.Number:
+			// Exact integer beyond int64, kept as a raw JSON number to avoid float rounding.
+			kind = "int"
 		case float32, float64:
 			kind = "float"
 		}
