@@ -11,8 +11,13 @@ pub mod axum_impl {
     use axum::extract::Request;
     use axum::middleware::Next;
     use axum::response::Response;
+    use std::convert::Infallible;
+    use std::future::Future;
+    use std::pin::Pin;
     use std::sync::Arc;
+    use std::task::{Context, Poll};
     use std::time::Instant;
+    use tower::{Layer, Service};
 
     // Enrichment must go through the middleware's configured logger so that its
     // settings (e.g. duplicate_policy) are honored. The free `crate::Append`
@@ -44,6 +49,14 @@ pub mod axum_impl {
     }
 
     #[allow(dead_code)]
+    /// A usable axum/tower layer that records an `http.request` event per request.
+    ///
+    /// ```ignore
+    /// let app = Router::new()
+    ///     .route("/health", get(handler))
+    ///     .layer(LozaLayer::new(logger, "checkout"));
+    /// ```
+    #[derive(Clone)]
     pub struct LozaLayer {
         logger: Arc<Logger>,
         service_name: String,
@@ -77,11 +90,62 @@ pub mod axum_impl {
     }
 
     pub async fn loza_middleware(
+    impl<S> Layer<S> for LozaLayer {
+        type Service = LozaService<S>;
+
+        fn layer(&self, inner: S) -> Self::Service {
+            LozaService {
+                inner,
+                logger: self.logger.clone(),
+                service_name: self.service_name.clone(),
+            }
+        }
+    }
+
+    /// Service produced by [`LozaLayer`]; wraps the inner service with request telemetry.
+    #[derive(Clone)]
+    pub struct LozaService<S> {
+        inner: S,
+        logger: Arc<Logger>,
+        service_name: String,
+    }
+
+    impl<S> Service<Request> for LozaService<S>
+    where
+        S: Service<Request, Response = Response> + Clone + Send + 'static,
+        S::Future: Send + 'static,
+    {
+        type Response = Response;
+        type Error = S::Error;
+        type Future = Pin<Box<dyn Future<Output = Result<Response, S::Error>> + Send>>;
+
+        fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+            self.inner.poll_ready(cx)
+        }
+
+        fn call(&mut self, req: Request) -> Self::Future {
+            // Use the ready inner service for this call, leaving a fresh clone behind.
+            let clone = self.inner.clone();
+            let mut inner = std::mem::replace(&mut self.inner, clone);
+            let logger = self.logger.clone();
+            let service_name = self.service_name.clone();
+            Box::pin(run_with_telemetry(logger, service_name, req, move |req| {
+                inner.call(req)
+            }))
+        }
+    }
+
+    /// Shared telemetry path for both the `from_fn` middleware and the tower layer.
+    async fn run_with_telemetry<F, Fut, E>(
         logger: Arc<Logger>,
         service_name: String,
         req: Request,
-        next: Next,
-    ) -> Response {
+        call: F,
+    ) -> Result<Response, E>
+    where
+        F: FnOnce(Request) -> Fut,
+        Fut: Future<Output = Result<Response, E>>,
+    {
         let method = req.method().to_string();
         let path = req.uri().path().to_string();
         // Prefer the matched route template (e.g. "/users/:id") over the raw
@@ -112,10 +176,14 @@ pub mod axum_impl {
 
         append_request_attrs(&logger, &mut ctx, &user_agent, &remote_ip);
 
-        let res = next.run(req).await;
+        let res = call(req).await;
 
         let capture = ResponseCapture::from_response(&res);
         let status = capture.status();
+        let status = match &res {
+            Ok(response) => response.status().as_u16(),
+            Err(_) => 500,
+        };
         let elapsed = started.elapsed().as_millis() as u64;
         let outcome = if status >= 500 { "error" } else { "success" };
         append_response_attrs(&logger, &mut ctx, status, elapsed as i64);
@@ -213,5 +281,16 @@ pub mod axum_impl {
                 "expected the emit failure to be surfaced, got {err}"
             );
         }
+    pub async fn loza_middleware(
+        logger: Arc<Logger>,
+        service_name: String,
+        req: Request,
+        next: Next,
+    ) -> Response {
+        run_with_telemetry(logger, service_name, req, |req| async move {
+            Ok::<_, Infallible>(next.run(req).await)
+        })
+        .await
+        .expect("axum's Next is infallible")
     }
 }
