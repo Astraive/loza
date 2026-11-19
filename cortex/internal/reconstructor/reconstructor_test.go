@@ -524,3 +524,45 @@ func TestReconstructAdaptiveExcludesOwnSignature(t *testing.T) {
 		t.Fatalf("expected historical signature as most similar, got %+v", result.SimilarIncidents[0])
 	}
 }
+func TestExtractSymptomsLogLevels(t *testing.T) {
+	r := &IncidentReconstructor{}
+
+	tests := []struct {
+		name        string
+		attributes  map[string]interface{}
+		wantSymptom bool
+	}{
+		{name: "error", attributes: map[string]interface{}{"level": "error"}, wantSymptom: true},
+		{name: "ERROR", attributes: map[string]interface{}{"level": "ERROR"}, wantSymptom: true},
+		{name: "err", attributes: map[string]interface{}{"level": "err"}, wantSymptom: true},
+		{name: "fatal", attributes: map[string]interface{}{"level": "fatal"}, wantSymptom: true},
+		{name: "FATAL uppercase", attributes: map[string]interface{}{"level": "FATAL"}, wantSymptom: true},
+		{name: "critical severity", attributes: map[string]interface{}{"severity": "critical"}, wantSymptom: true},
+		{name: "CRITICAL severity uppercase", attributes: map[string]interface{}{"severity": "CRITICAL"}, wantSymptom: true},
+		{name: "warn", attributes: map[string]interface{}{"level": "warn"}, wantSymptom: false},
+		{name: "info with info severity", attributes: map[string]interface{}{"level": "info", "severity": "info"}, wantSymptom: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			event := &models.CausalEvent{
+				Kind:       string(models.EventKindLog),
+				Service:    "svc-a",
+				Attributes: tt.attributes,
+			}
+			symptoms := r.extractSymptoms([]*models.CausalEvent{event})
+			if tt.wantSymptom {
+				if len(symptoms) != 1 {
+					t.Fatalf("expected 1 symptom, got %d: %+v", len(symptoms), symptoms)
+				}
+				if symptoms[0].Type != models.SymptomTypeErrorRate {
+					t.Fatalf("expected error_rate symptom, got %s", symptoms[0].Type)
+				}
+				return
+			}
+			if len(symptoms) != 0 {
+				t.Fatalf("expected no symptoms, got %d: %+v", len(symptoms), symptoms)
+			}
+		})
+	}
+}

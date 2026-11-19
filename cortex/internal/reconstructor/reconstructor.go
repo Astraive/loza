@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/astraive/loza/cortex/internal/graph"
@@ -490,12 +491,14 @@ func (r *IncidentReconstructor) extractSymptoms(events []*models.CausalEvent) []
 		if event.Kind == "log" || event.Kind == string(models.EventKindLog) {
 			level := ""
 			if l, ok := event.Attributes["level"].(string); ok {
-				level = l
+				level = strings.ToLower(l)
 			} else if l, ok := event.Attributes["severity"].(string); ok {
-				level = l
+				level = strings.ToLower(l)
 			}
 
-			if level != "error" && level != "ERROR" && level != "err" {
+			switch level {
+			case "error", "err", "fatal", "critical":
+			default:
 				continue
 			}
 
