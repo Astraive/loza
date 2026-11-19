@@ -139,30 +139,14 @@ func (c *Client) Reconstruct(ctx context.Context, incidentID, mode string) (*Inc
 		"incident_id": incidentID,
 		"mode":        mode,
 	}
-	var result IncidentContext
-	if err := c.postJSON(ctx, "/reconstruct", body, &result); err != nil {
-		return nil, err
-	}
-	NormalizeIncidentContext(&result)
-	if err := ValidateIncidentContext(&result); err != nil {
-		return nil, err
-	}
-	return &result, nil
+	return c.postIncidentContext(ctx, "/reconstruct", body)
 }
 
 // ReconstructIncident reconstructs an incident using the URL-path variant.
 func (c *Client) ReconstructIncident(ctx context.Context, incidentID, mode string) (*IncidentContext, error) {
 	body := map[string]string{"mode": mode}
 	path := "/incidents/" + url.PathEscape(incidentID) + "/reconstruct"
-	var result IncidentContext
-	if err := c.postJSON(ctx, path, body, &result); err != nil {
-		return nil, err
-	}
-	NormalizeIncidentContext(&result)
-	if err := ValidateIncidentContext(&result); err != nil {
-		return nil, err
-	}
-	return &result, nil
+	return c.postIncidentContext(ctx, path, body)
 }
 
 // ServiceGraph fetches the dependency graph for a service.
@@ -217,8 +201,8 @@ func (c *Client) SimilarIncidents(ctx context.Context, incidentID string) ([]map
 		"incident_id": incidentID,
 		"mode":        "fast",
 	}
-	var result IncidentContext
-	if err := c.postJSON(ctx, "/reconstruct", body, &result); err != nil {
+	result, err := c.postIncidentContext(ctx, "/reconstruct", body)
+	if err != nil {
 		return nil, err
 	}
 	return result.SimilarIncidents, nil
@@ -231,6 +215,22 @@ func (c *Client) IngestBatch(ctx context.Context, events []map[string]any) error
 }
 
 // --- internal helpers ---
+
+// postIncidentContext POSTs to a reconstruction endpoint and returns the
+// decoded IncidentContext after the same normalize/validate sequence. Every
+// /reconstruct decode path must use this helper so malformed responses are
+// rejected consistently instead of leaking through a single caller.
+func (c *Client) postIncidentContext(ctx context.Context, path string, body any) (*IncidentContext, error) {
+	var result IncidentContext
+	if err := c.postJSON(ctx, path, body, &result); err != nil {
+		return nil, err
+	}
+	NormalizeIncidentContext(&result)
+	if err := ValidateIncidentContext(&result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
 
 func (c *Client) newRequest(ctx context.Context, method, path string, body io.Reader) (*http.Request, error) {
 	req, err := http.NewRequestWithContext(ctx, method, c.endpoint+path, body)
