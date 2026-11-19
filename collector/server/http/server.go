@@ -99,6 +99,24 @@ func AuthorizedCollectorFromContext(ctx context.Context) (AuthorizedCollector, b
 	return scope, ok
 }
 
+// reservedPublicGetPaths are the GET routes BuildMux registers
+// unconditionally (or their fixed aliases). A configurable path that reuses
+// one of them would cause http.ServeMux to panic at startup with a duplicate
+// registration, so configurable routes must skip these.
+var reservedPublicGetPaths = map[string]struct{}{
+	"/health":  {},
+	"/healthz": {},
+	"/ready":   {},
+	"/readyz":  {},
+	"/version": {},
+	"/status":  {},
+}
+
+func isReservedPublicGetPath(path string) bool {
+	_, reserved := reservedPublicGetPaths[path]
+	return reserved
+}
+
 // BuildMux constructs the HTTP route table. Collector data routes are
 // registered under /collectors/{collector}/... and passed through
 // collectorProtect. Legacy routes are registered only when defaultCollector is
@@ -253,7 +271,9 @@ func BuildMux(ingestPath, healthPath, readyPath, metricsPath string, metricsEnab
 	}
 
 	// ── Metrics (protected by default) ───────────────────────────────────
-	if metricsEnabled && metricsHandler != nil && metricsPath != "" {
+	// Skip reserved public routes, mirroring the healthPath/readyPath guards,
+	// so a colliding metricsPath cannot trigger a duplicate-registration panic.
+	if metricsEnabled && metricsHandler != nil && metricsPath != "" && !isReservedPublicGetPath(metricsPath) {
 		if protect != nil {
 			register("GET "+metricsPath, protect(metricsHandler, "events:read"))
 		} else {
