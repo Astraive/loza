@@ -22,6 +22,11 @@ export function setPath(root: Record<string, any>, key: string, value: any): voi
     cur = cur[part];
   }
   cur[parts[parts.length - 1]] = value;
+import { setSafePath } from './prototype-safe.ts';
+
+/** Set a value at a dot-separated path in an object (prototype-pollution safe). */
+export function setPath(root: Record<string, any>, key: string, value: any): void {
+  setSafePath(root, key, value);
 }
 
 /** Get a value at a dot-separated path in an object. */
