@@ -252,9 +252,33 @@ fn test_concurrent_emissions() {
         handles.push(handle);
     }
 
+    join_workers(handles);
+}
+
+/// Joins every worker thread, propagating a worker panic instead of silently
+/// discarding the `join()` result.
+fn join_workers(handles: Vec<std::thread::JoinHandle<()>>) {
     for handle in handles {
-        let _ = handle.join();
+        handle.join().expect("worker thread panicked");
     }
+}
+
+#[test]
+fn test_worker_panic_is_not_swallowed() {
+    // A panic inside a spawned worker must surface when the handle is joined.
+    // With the old `let _ = handle.join();` pattern this test would fail
+    // because the panic would be silently discarded.
+    let handle = std::thread::spawn(|| {
+        panic!("intentional worker panic");
+    });
+
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        join_workers(vec![handle]);
+    }));
+    assert!(
+        result.is_err(),
+        "a worker thread panic must not be silently swallowed"
+    );
 }
 
 #[test]
