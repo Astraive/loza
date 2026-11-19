@@ -2,10 +2,12 @@ package loadgen
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -95,5 +97,58 @@ func TestRunRejectsNonPositiveWorkers(t *testing.T) {
 				t.Fatalf("expected zero report on error, got %+v", report)
 			}
 		})
+	}
+}
+
+func TestRunRejectsNonPositiveBatchSize(t *testing.T) {
+	for _, batchSize := range []int{-1, 0} {
+		t.Run(fmt.Sprintf("batchsize_%d", batchSize), func(t *testing.T) {
+			cfg := RunnerConfig{
+				URL:       "http://127.0.0.1:9308",
+				Events:    10,
+				Workers:   2,
+				BatchSize: batchSize,
+				BodySize:  16,
+			}
+			_, err := Run(context.Background(), cfg)
+			if err == nil {
+				t.Fatalf("Run with batch size %d: expected an error, got nil", batchSize)
+			}
+			if !strings.Contains(err.Error(), "batch size") {
+				t.Fatalf("Run with batch size %d: expected a batch size error, got %q", batchSize, err)
+			}
+		})
+	}
+}
+
+func TestRunBatchesEventsWithPositiveBatchSize(t *testing.T) {
+	var mu sync.Mutex
+	requests := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		requests++
+		mu.Unlock()
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	cfg := RunnerConfig{
+		URL:       srv.URL,
+		Events:    10,
+		Workers:   1,
+		BatchSize: 5,
+		BodySize:  16,
+	}
+	report, err := Run(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("Run with valid batch size: %v", err)
+	}
+	if report.Accepted != 10 {
+		t.Fatalf("expected 10 accepted events, got %d", report.Accepted)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if requests != 2 {
+		t.Fatalf("expected 2 batched requests, got %d", requests)
 	}
 }
