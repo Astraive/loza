@@ -17,6 +17,20 @@ class StructlogProcessor:
 
 
 def bind_loza(logger):
+    """Attach the Loza processor to structlog and return ``logger``.
+
+    Unlike Loguru, structlog has no per-logger ``add`` hook: processors are
+    installed on the active configuration with ``structlog.configure``. This
+    helper therefore prepends a :class:`StructlogProcessor` to the configured
+    processor chain so log records are actually mirrored into Loza. The call is
+    idempotent (existing Loza processors are not duplicated) and the original
+    logger is returned for chaining/drop-in compatibility.
+    """
+    import structlog
+
+    processors = list(structlog.get_config().get("processors") or ())
+    if not any(isinstance(item, StructlogProcessor) for item in processors):
+        structlog.configure(processors=[StructlogProcessor(), *processors])
     return logger
 
 
