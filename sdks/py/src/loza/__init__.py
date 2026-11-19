@@ -822,6 +822,10 @@ def bind_event(ctx: EventContext) -> Logger:
     return _default.bind_event(ctx)
 
 
+def unbind_event() -> EventContext | None:
+    return _default.unbind_event()
+
+
 def wrap(ctx: EventContext, fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
     return _default.wrap(ctx, fn, *args, **kwargs)
 
@@ -993,6 +997,7 @@ CloneEvent = clone_event
 LinkEvent = link_event
 CurrentEvent = current_event
 BindEvent = bind_event
+UnbindEvent = unbind_event
 Wrap = wrap
 RunEvent = run_event
 Run = run
@@ -1336,6 +1341,7 @@ __all__ = [
     "link_event",
     "current_event",
     "bind_event",
+    "unbind_event",
     "wrap",
     "run_event",
     "run",
@@ -1408,6 +1414,7 @@ __all__ = [
     "LinkEvent",
     "CurrentEvent",
     "BindEvent",
+    "UnbindEvent",
     "Wrap",
     "RunEvent",
     "Run",
