@@ -94,12 +94,6 @@ class Engine:
         except URLError as exc:
             raise RuntimeError(f"cortex connection error: {exc}") from exc
 
-    def _get(self, path: str) -> dict:
-        url = f"{self.cortex_url}{path}"
-        req = urllib.request.Request(url, method="GET")
-        with urllib.request.urlopen(req, timeout=10.0) as resp:
-            return json.loads(resp.read())
-
     def _map_response(self, resp: dict) -> Context:
         """Map cortex IncidentContext response to benchmark Context shape."""
         # Related events
