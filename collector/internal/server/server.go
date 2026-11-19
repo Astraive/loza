@@ -131,6 +131,9 @@ func (ms *MultiServer) closeStopCh() {
 func (ms *MultiServer) IsReady() bool {
 	ms.mu.Lock()
 	defer ms.mu.Unlock()
+	if !ms.started || ms.stopped || len(ms.servers) == 0 {
+		return false
+	}
 	for _, srv := range ms.servers {
 		if !srv.IsReady() {
 			return false

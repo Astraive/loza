@@ -818,3 +818,56 @@ func TestGRPCServerStartCtxCancelStopsWithOpenStream(t *testing.T) {
 		t.Fatal("Start did not return after lifecycle context cancellation with an open stream")
 	}
 }
+
+type stubServer struct {
+	ready bool
+}
+
+func (*stubServer) Name() string                { return "stub" }
+func (*stubServer) Addr() string                { return "127.0.0.1:0" }
+func (s *stubServer) IsReady() bool             { return s.ready }
+func (*stubServer) Start(context.Context) error { return nil }
+func (*stubServer) Stop(context.Context) error  { return nil }
+
+func TestMultiServerIsReady(t *testing.T) {
+	state := &mockState{ready: true, healthy: true}
+
+	t.Run("before run", func(t *testing.T) {
+		ms := NewMultiServer(Config{}, state)
+		assert.False(t, ms.IsReady(), "must not report ready before Run creates listeners")
+	})
+
+	t.Run("all servers disabled", func(t *testing.T) {
+		ms := NewMultiServer(Config{HTTP: HTTPConfig{Enabled: false}, GRPC: GRPCConfig{Enabled: false}, GraphQL: GraphQLConfig{Enabled: false}}, state)
+		require.NoError(t, ms.Run(context.Background()))
+		assert.False(t, ms.IsReady(), "must not report ready when no server is enabled")
+	})
+
+	t.Run("started and ready", func(t *testing.T) {
+		ms := NewMultiServer(Config{}, state)
+		ms.mu.Lock()
+		ms.started = true
+		ms.servers = []Server{&stubServer{ready: true}}
+		ms.mu.Unlock()
+		assert.True(t, ms.IsReady())
+	})
+
+	t.Run("server not ready", func(t *testing.T) {
+		ms := NewMultiServer(Config{}, state)
+		ms.mu.Lock()
+		ms.started = true
+		ms.servers = []Server{&stubServer{ready: false}}
+		ms.mu.Unlock()
+		assert.False(t, ms.IsReady())
+	})
+
+	t.Run("after stop", func(t *testing.T) {
+		ms := NewMultiServer(Config{}, state)
+		ms.mu.Lock()
+		ms.started = true
+		ms.stopped = true
+		ms.servers = []Server{&stubServer{ready: true}}
+		ms.mu.Unlock()
+		assert.False(t, ms.IsReady(), "must not report ready after shutdown")
+	})
+}
