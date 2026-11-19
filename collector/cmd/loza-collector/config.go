@@ -5,6 +5,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"log"
 	"os"
 	"regexp"
 	"strconv"
@@ -237,11 +238,7 @@ func applyEnvOverrides(fc *fileConfig) error {
 			*dst = strings.ToLower(v)
 		}
 	}
-	setCSV := func(key string, dst *[]string) {
-		v, ok := get(key)
-		if !ok {
-			return
-		}
+	parseCSV := func(v string) []string {
 		parts := strings.Split(v, ",")
 		out := make([]string, 0, len(parts))
 		for _, part := range parts {
@@ -249,7 +246,31 @@ func applyEnvOverrides(fc *fileConfig) error {
 				out = append(out, trimmed)
 			}
 		}
-		*dst = out
+		return out
+	}
+	setCSV := func(key string, dst *[]string) {
+		if v, ok := get(key); ok {
+			*dst = parseCSV(v)
+		}
+	}
+	// resolveEnvWithAlias resolves a setting from a canonical env name and a
+	// deprecated backward-compatible alias. The canonical name always wins and
+	// every fallback or conflict is logged so precedence is never silent.
+	resolveEnvWithAlias := func(canonical, alias, field string) (string, bool) {
+		canonicalValue, hasCanonical := get(canonical)
+		aliasValue, hasAlias := get(alias)
+		switch {
+		case hasCanonical && hasAlias:
+			log.Printf("config: %s and deprecated alias %s both set for %s; using %s=%q", canonical, alias, field, canonical, canonicalValue)
+			return canonicalValue, true
+		case hasCanonical:
+			return canonicalValue, true
+		case hasAlias:
+			log.Printf("config: using deprecated alias %s for %s; prefer %s", alias, field, canonical)
+			return aliasValue, true
+		default:
+			return "", false
+		}
 	}
 
 	setString("COLLECTOR_ADDR", &fc.Collector.Addr)
@@ -511,12 +532,17 @@ func applyEnvOverrides(fc *fileConfig) error {
 	setString("LOZA_EVENTBUS_NATS_STREAM", &fc.EventBus.NATS.Stream)
 	setString("LOZA_EVENTBUS_NATS_SUBJECT", &fc.EventBus.NATS.Subject)
 	setString("LOZA_EVENTBUS_NATS_DURABLE", &fc.EventBus.NATS.Durable)
-	setCSV("LOZA_EVENTBUS_KAFKA_BROKERS", &fc.EventBus.Kafka.Brokers)
-	setString("LOZA_EVENTBUS_KAFKA_TOPIC", &fc.EventBus.Kafka.Topic)
-	setString("LOZA_EVENTBUS_KAFKA_GROUP", &fc.EventBus.Kafka.ConsumerGroup)
-	setCSV("LOZA_KAFKA_BROKERS", &fc.EventBus.Kafka.Brokers)
-	setString("LOZA_KAFKA_TOPIC", &fc.EventBus.Kafka.Topic)
-	setString("LOZA_KAFKA_GROUP", &fc.EventBus.Kafka.ConsumerGroup)
+	// LOZA_EVENTBUS_KAFKA_* is the canonical name; LOZA_KAFKA_* is a deprecated
+	// alias kept for backward compatibility (see resolveEnvWithAlias).
+	if v, ok := resolveEnvWithAlias("LOZA_EVENTBUS_KAFKA_BROKERS", "LOZA_KAFKA_BROKERS", "eventbus.kafka.brokers"); ok {
+		fc.EventBus.Kafka.Brokers = parseCSV(v)
+	}
+	if v, ok := resolveEnvWithAlias("LOZA_EVENTBUS_KAFKA_TOPIC", "LOZA_KAFKA_TOPIC", "eventbus.kafka.topic"); ok {
+		fc.EventBus.Kafka.Topic = v
+	}
+	if v, ok := resolveEnvWithAlias("LOZA_EVENTBUS_KAFKA_GROUP", "LOZA_KAFKA_GROUP", "eventbus.kafka.consumer_group"); ok {
+		fc.EventBus.Kafka.ConsumerGroup = v
+	}
 
 	if fc.Auth.Value == "" && fc.Auth.ValueEnv != "" {
 		fc.Auth.Value = strings.TrimSpace(os.Getenv(fc.Auth.ValueEnv))
