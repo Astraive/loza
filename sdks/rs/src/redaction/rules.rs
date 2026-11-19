@@ -140,13 +140,13 @@ fn walk(value: &mut Value, keys: &[&str], mode: &RedactionMode) {
                         }
                         RedactionMode::Mask => {
                             let text = hash_input(&map[&key]);
-                            let masked = if text.len() <= 4 {
+                            let chars: Vec<char> = text.chars().collect();
+                            let masked = if chars.len() <= 4 {
                                 "****".to_string()
                             } else {
-                                let chars: Vec<char> = text.chars().collect();
                                 let prefix: String = chars[..2].iter().collect();
                                 let suffix: String = chars[chars.len() - 2..].iter().collect();
-                                let stars = "*".repeat(chars.len() - 4);
+                                let stars = "*".repeat(chars.len().saturating_sub(4));
                                 format!("{prefix}{stars}{suffix}")
                             };
                             map.insert(key, Value::String(masked));
@@ -240,5 +240,38 @@ mod tests {
         ]);
 
         let _ = redact(value, &redactor);
+    }
+
+    fn mask(value: &str) -> String {
+        let input = serde_json::json!({ "password": value });
+        let masked = redact(
+            input,
+            &RedactorConfig::MaskKeys(vec!["password".to_string()]),
+        );
+        masked["password"].as_str().unwrap().to_string()
+    }
+
+    #[test]
+    fn mask_multibyte_values_shorter_than_four_chars_do_not_panic() {
+        // "密码" is 6 UTF-8 bytes but only 2 chars. The old byte-length guard
+        // let it through, underflowing `chars.len() - 4`.
+        assert_eq!(mask("密码"), "****");
+        assert_eq!(mask("密码x"), "****"); // 7 bytes, 3 chars
+        assert_eq!(mask("密码xy"), "****"); // 8 bytes, 4 chars
+    }
+
+    #[test]
+    fn mask_multibyte_values_longer_than_four_chars_use_char_count() {
+        // Star count follows scalar count, not UTF-8 byte count.
+        assert_eq!(mask("a密码bcd"), "a密**cd");
+        assert_eq!(mask("密码测试abc"), "密码***bc");
+    }
+
+    #[test]
+    fn mask_ascii_behavior_is_unchanged() {
+        assert_eq!(mask("abc"), "****");
+        assert_eq!(mask("abcd"), "****");
+        assert_eq!(mask("abcde"), "ab*de");
+        assert_eq!(mask("abcdef"), "ab**ef");
     }
 }
