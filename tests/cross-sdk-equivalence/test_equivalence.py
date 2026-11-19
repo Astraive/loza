@@ -129,6 +129,34 @@ def require_unique_event(events: list[dict], marker: str) -> dict | None:
         )
         return None
     return events[0]
+# Storage is asynchronous: an acknowledged emit is not immediately queryable.
+# Poll with a short interval up to a bounded deadline instead of a fixed sleep.
+POLL_INTERVAL_SECONDS = 0.05
+POLL_DEADLINE_SECONDS = 5.0
+
+
+def wait_for_event(marker, query_fn=None, *, interval=POLL_INTERVAL_SECONDS,
+                   deadline=POLL_DEADLINE_SECONDS, sleep_fn=time.sleep,
+                   clock_fn=time.monotonic):
+    """Poll until an event with ``marker`` is queryable, or the deadline passes.
+
+    Repeatedly calls ``query_fn(marker)`` (``query_events`` by default). Fast
+    storage returns on the first poll; slow storage is retried at a short
+    interval. Returns the rows found, or an empty list on timeout. ``sleep_fn``
+    and ``clock_fn`` are injectable so the behaviour is deterministically
+    testable without real waiting or a live collector.
+    """
+    if query_fn is None:
+        query_fn = query_events
+    timeout_at = clock_fn() + deadline
+    while True:
+        events = query_fn(marker)
+        if events:
+            return events
+        remaining = timeout_at - clock_fn()
+        if remaining <= 0:
+            return []
+        sleep_fn(min(interval, remaining))
 
 
 def canonical_match(projected: dict, expected: dict) -> bool:
@@ -172,15 +200,15 @@ def main():
 
     print(f"  Emit response: {json.dumps(result)}")
 
-    # Wait briefly for storage
-    time.sleep(0.5)
-
-    # Query and verify
+    # Poll until storage has the event instead of assuming a fixed delay
     print("Querying stored events...")
     events = query_events(marker)
     found = require_unique_event(events, marker)
     if found is None:
         print(f"FAIL: Expected exactly one event for marker={marker}, got {len(events)}")
+    events = wait_for_event(marker)
+    if not events:
+        print(f"FAIL: No events found for marker={marker}")
         sys.exit(1)
 
     print("  Found matching event. Verifying canonical fields...")
@@ -225,6 +253,8 @@ def main():
         events = query_events(release_marker)
         release_found = require_unique_event(events, release_marker)
         if release_found is not None and canonical_match(release_found, release_event):
+        events = wait_for_event(release_marker)
+        if events and canonical_match(events[0], release_event):
             print("  PASS: Release event accepted and stored")
         else:
             record_failure("Release event was not found in projected storage")
@@ -280,6 +310,8 @@ def main():
         events = query_events(domain_marker)
         domain_found = require_unique_event(events, domain_marker)
         if domain_found is not None and canonical_match(domain_found, domain_event):
+        events = wait_for_event(domain_marker)
+        if events and canonical_match(events[0], domain_event):
             print("  PASS: Domain helper fields preserved in projected storage")
         else:
             record_failure("Domain event was not found in projected storage")
