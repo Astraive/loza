@@ -134,5 +134,44 @@ func TestRateLimiterMiddlewareIgnoresSpoofedXFFForPerIPLimit(t *testing.T) {
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusTooManyRequests {
 		t.Fatalf("expected rate limit rejection for shared client bucket, got %d", rec.Code)
+	"testing"
+	"time"
+)
+
+func TestRateLimiterStopStopsCleanup(t *testing.T) {
+	rl := NewRateLimiter(60, 60)
+
+	rl.Stop()
+
+	select {
+	case <-rl.done:
+		// Background cleanup goroutine exited.
+	case <-time.After(2 * time.Second):
+		t.Fatal("cleanup goroutine did not exit after Stop")
+	}
+}
+
+func TestRateLimiterStopIsIdempotent(t *testing.T) {
+	rl := NewRateLimiter(60, 60)
+
+	// Repeated and concurrent Stop calls must not panic or block.
+	done := make(chan struct{})
+	go func() {
+		rl.Stop()
+		rl.Stop()
+		rl.Stop()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Stop blocked when called repeatedly")
+	}
+
+	select {
+	case <-rl.done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("cleanup goroutine did not exit after Stop")
 	}
 }

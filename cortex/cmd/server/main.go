@@ -92,9 +92,12 @@ func main() {
 	addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)
 	log.Info().Str("addr", addr).Msg("Starting HTTP server")
 
+	cortexServer := httpserver.New(cfg, stor)
+	defer cortexServer.Stop()
+
 	httpSrv := &http.Server{
 		Addr:         addr,
-		Handler:      httpserver.Handler(cfg, stor),
+		Handler:      cortexServer.Router(),
 		ReadTimeout:  cfg.Server.ReadTimeout,
 		WriteTimeout: cfg.Server.WriteTimeout,
 	}
