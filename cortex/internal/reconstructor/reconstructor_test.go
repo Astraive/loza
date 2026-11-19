@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"math"
 	"testing"
 	"time"
 
@@ -522,5 +523,89 @@ func TestReconstructAdaptiveExcludesOwnSignature(t *testing.T) {
 	}
 	if result.SimilarIncidents[0].IncidentID != "historic-1" {
 		t.Fatalf("expected historical signature as most similar, got %+v", result.SimilarIncidents[0])
+// TestSignalScoreNumericAttributeTypes verifies that threshold-exceedance
+// scoring works for both float64 (JSON decoded) and float32 (native metric)
+// attribute values. Previously only float64 was scored, so a float32
+// observation produced a lower signal density than the equivalent float64
+// observation even though extractSymptoms accepted float32.
+func TestSignalScoreNumericAttributeTypes(t *testing.T) {
+	r := &IncidentReconstructor{}
+
+	tests := []struct {
+		name       string
+		attributes map[string]interface{}
+		want       float64
+	}{
+		{
+			name:       "float64 value above float64 threshold",
+			attributes: map[string]interface{}{"value": 0.9, "threshold": 0.8},
+			want:       0.85,
+		},
+		{
+			name:       "float32 value above float32 threshold",
+			attributes: map[string]interface{}{"value": float32(0.9), "threshold": float32(0.8)},
+			want:       0.85,
+		},
+		{
+			name:       "float32 value above float64 threshold",
+			attributes: map[string]interface{}{"value": float32(0.9), "threshold": 0.8},
+			want:       0.85,
+		},
+		{
+			name:       "float64 value above float32 threshold",
+			attributes: map[string]interface{}{"value": 0.9, "threshold": float32(0.8)},
+			want:       0.85,
+		},
+		{
+			name:       "float32 value below threshold",
+			attributes: map[string]interface{}{"value": float32(0.5), "threshold": float32(0.8)},
+			want:       0.3,
+		},
+		{
+			name:       "non-numeric value falls back",
+			attributes: map[string]interface{}{"value": "0.9", "threshold": 0.8},
+			want:       0.3,
+		},
+		{
+			name:       "anomaly flag takes precedence over threshold",
+			attributes: map[string]interface{}{"anomaly": true, "value": float32(0.1), "threshold": float32(0.8)},
+			want:       0.9,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			node := &models.Node{
+				Type:       models.NodeTypeMetric,
+				Attributes: tt.attributes,
+			}
+			if got := r.signalScore(node); got != tt.want {
+				t.Fatalf("signalScore() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestExtractSymptomsFloat32Value guards that routing extractSymptoms through
+// the shared numeric helper still coerces float32 values to the observed
+// value, keeping it consistent with signalScore.
+func TestExtractSymptomsFloat32Value(t *testing.T) {
+	r := &IncidentReconstructor{}
+	attrs := map[string]interface{}{
+		"metric_name": "error_rate",
+		"anomaly":     true,
+		"value":       float32(0.9),
+	}
+
+	symptoms := r.extractSymptoms([]*models.CausalEvent{{
+		Kind:       string(models.EventKindMetric),
+		Service:    "svc-a",
+		Attributes: attrs,
+	}})
+	if len(symptoms) != 1 {
+		t.Fatalf("expected 1 symptom, got %d", len(symptoms))
+	}
+	if math.Abs(symptoms[0].Observed-0.9) > 1e-6 {
+		t.Fatalf("symptom Observed = %v, want 0.9", symptoms[0].Observed)
 	}
 }
