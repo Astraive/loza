@@ -85,3 +85,22 @@ def test_public_dsn_routes_and_redacts_bearer_capability() -> None:
     assert dsn.otlp_url == "https://example.com:443/collectors/public-collector/otlp/logs"
     assert dsn.tail_ws_url == "wss://example.com:443/collectors/public-collector/tail"
     assert capability not in repr(dsn)
+
+
+def test_resolve_endpoint_removed_in_favor_of_config_resolver() -> None:
+    """Regression for MASS-0641.
+
+    ``dsn.resolve_endpoint`` was an unreferenced env-var resolver duplicating
+    the live resolution path in ``config._resolve_endpoint_source``. It must
+    stay removed, while the real resolver keeps resolving loza:// DSNs.
+    """
+    import loza.core.dsn as dsn_module
+    from loza.core.config import Config, _resolve_endpoint_source
+
+    assert not hasattr(dsn_module, "resolve_endpoint")
+
+    cfg = Config()
+    _resolve_endpoint_source(cfg, "loza://user:pass@example.com/tenant?env=prod", include_credentials=True)
+    assert cfg.collector_endpoint == "https://example.com:443"
+    assert cfg.collector_name == "tenant"
+    assert cfg.environment == "prod"
