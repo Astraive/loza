@@ -43,7 +43,7 @@ func SchemaCommand(cfg config.Config, args []string) error {
 		fmt.Println("Event validated successfully")
 		return nil
 	case "fetch":
-		return schema.FetchSpec(cfg.SpecRepoPath)
+		return schema.EnsureSpecAssets(cfg.SpecRepoPath)
 	case "list":
 		body, err := client.FetchSchema(cfg.CollectorURL)
 		if err != nil {
