@@ -5,6 +5,8 @@ import importlib
 import json
 from types import SimpleNamespace
 
+import pytest
+
 import loza
 import pytest
 from loza.middleware.asgi import Middleware
@@ -362,3 +364,29 @@ def test_django_middleware_uses_route_resolved_during_view_dispatch() -> None:
     payload = json.loads(sink.events[0])
     assert payload["path"] == "/users/7/"
     assert payload["route"] == "users/<int:pk>/"
+def test_starlette_middleware_without_app_raises_configuration_error() -> None:
+    """An unconfigured Starlette middleware must not silently violate the ASGI protocol."""
+    from loza.middleware.starlette import Middleware as StarletteMiddleware
+    from loza.middleware.starlette import middleware as starlette_middleware
+
+    async def receive() -> dict:
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    scope = {
+        "type": "http",
+        "method": "GET",
+        "path": "/health",
+        "headers": [],
+        "client": ("127.0.0.1", 1234),
+    }
+
+    # Both the class default and the factory default build an instance with app=None.
+    for instance in (StarletteMiddleware(), starlette_middleware()):
+        sent: list[dict] = []
+
+        async def send(message: dict) -> None:
+            sent.append(message)
+
+        with pytest.raises(RuntimeError, match="no wrapped ASGI app"):
+            asyncio.run(instance(scope, receive, send))
+        assert sent == []
