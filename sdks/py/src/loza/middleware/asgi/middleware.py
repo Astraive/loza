@@ -4,6 +4,7 @@ import time
 from typing import Any, Awaitable, Callable
 
 from ... import Bool, Emit, Enrich, Finish, FinishError, Int, Params, StartHTTPEvent, String
+from .response import ResponseCapture
 
 
 class Middleware:
@@ -45,17 +46,15 @@ class Middleware:
             await self.app(scope, receive, send)
             return
 
-        status_code = 500
-        response_bytes = 0
+        capture = ResponseCapture()
         started = time.perf_counter()
         ctx: object | None = None
 
         async def capture_send(message: dict[str, Any]) -> None:
-            nonlocal status_code, response_bytes
             if message.get("type") == "http.response.start":
-                status_code = int(message.get("status", 200))
+                capture.record(status_code=int(message.get("status", 200)))
             elif message.get("type") == "http.response.body":
-                response_bytes += len(message.get("body", b""))
+                capture.record(body_bytes=len(message.get("body", b"")))
             await send(message)
 
         try:
@@ -71,6 +70,9 @@ class Middleware:
                 ctx,
                 "error" if status_code >= 500 else "success",
                 Int("response_bytes", response_bytes),
+                "error" if capture.status_code >= 500 else "success",
+                Int("status_code", capture.status_code),
+                Int("response_bytes", capture.bytes),
                 Int("duration_ms", int((time.perf_counter() - started) * 1000)),
             )
         except BaseException as exc:

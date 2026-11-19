@@ -115,6 +115,46 @@ def test_asgi_middleware_emits_error_event_when_route_resolver_raises() -> None:
         assert payload["http"]["route"] == "/boom"
 
     asyncio.run(run())
+def test_response_capture_accumulates_without_reset() -> None:
+    from loza.middleware.asgi.response import ResponseCapture
+
+    capture = ResponseCapture()
+    assert capture.status_code == 500
+    assert capture.bytes == 0
+
+    capture.record(status_code=201)
+    capture.record(body_bytes=2)
+    capture.record(body_bytes=3)
+
+    assert capture.status_code == 201
+    assert capture.bytes == 5
+
+
+def test_asgi_middleware_uses_response_capture() -> None:
+    """ResponseCapture is wired into the middleware instead of being orphaned."""
+    import importlib
+
+    # importlib is needed because the `middleware` function re-exported by
+    # loza.middleware.asgi shadows the submodule attribute of the same name.
+    asgi_middleware = importlib.import_module("loza.middleware.asgi.middleware")
+
+    captured: list[object] = []
+    original = asgi_middleware.ResponseCapture
+
+    class SpyCapture(original):
+        def __init__(self, *args, **kwargs) -> None:
+            super().__init__(*args, **kwargs)
+            captured.append(self)
+
+    asgi_middleware.ResponseCapture = SpyCapture
+    try:
+        asyncio.run(_run_app([]))
+    finally:
+        asgi_middleware.ResponseCapture = original
+
+    assert len(captured) == 1
+    assert captured[0].status_code == 201
+    assert captured[0].bytes == 2
 
 
 def test_flask_middleware_streams_response_without_buffering() -> None:
