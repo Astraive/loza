@@ -106,6 +106,32 @@ func TestDLQ(t *testing.T) {
 	}
 }
 
+func TestPublishDLQNilReason(t *testing.T) {
+	bus, err := New(context.Background(), eventbus.Config{
+		DLQTopic: "dlq",
+	})
+	if err != nil {
+		t.Fatalf("new bus: %v", err)
+	}
+	defer bus.Close(context.Background())
+
+	memBus := bus.(*Bus)
+	env := eventbus.Envelope{ID: "dlq-nil", Event: "failed", Timestamp: time.Now(), Body: []byte(`{}`)}
+
+	// A nil reason must not panic (the error parameter is nilable).
+	if err := memBus.PublishDLQ(context.Background(), env, nil); err != nil {
+		t.Fatalf("publish dlq with nil reason: %v", err)
+	}
+
+	msgs := memBus.DLQMessages()
+	if len(msgs) != 1 {
+		t.Fatalf("expected 1 DLQ message, got %d", len(msgs))
+	}
+	if got := msgs[0].Headers["dlq_reason"]; got != eventbus.DLQReasonUnknown {
+		t.Fatalf("expected default dlq_reason %q, got %q", eventbus.DLQReasonUnknown, got)
+	}
+}
+
 func TestPublishAfterClose(t *testing.T) {
 	bus, err := New(context.Background(), eventbus.Config{})
 	if err != nil {
