@@ -145,7 +145,14 @@ func (rl *KeyRateLimiter) getOrCreateEventLimiter(keyID string, epm int) *rate.L
 	}
 
 	eps := rate.Limit(float64(epm) / 60.0)
-	limiter = rate.NewLimiter(eps, epm/10+1)
+	// A single ingest request may carry up to a full minute's worth of events
+	// (subject to collector.max_events_per_request), so the bucket must be able
+	// to hold an entire legitimate batch. With a burst of epm/10+1, ReserveN
+	// rejects any count larger than the burst outright, which permanently
+	// blocks large batches even when the key is far under its per-minute quota.
+	// Sizing the burst to epm keeps the same per-minute budget while allowing
+	// any batch that fits within it; batches larger than epm are still rejected.
+	limiter = rate.NewLimiter(eps, epm)
 	rl.eventLimiters[keyID] = limiter
 	rl.lastSeen[keyID] = time.Now()
 	return limiter
