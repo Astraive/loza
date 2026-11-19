@@ -66,6 +66,32 @@ See [Authentication](authentication.md) and [Authorization](authorization.md) fo
 
 JWT and mTLS appear in configuration and backlog material, but they are not the current HTTP ingest contract to rely on for release usage.
 
+## Cortex TLS (HTTP and gRPC)
+
+The Cortex server applies the top-level `tls` block to both its HTTP API and its
+gRPC listener. When `tls.enabled: true`, both listeners use TLS with the same
+settings; an incomplete or invalid configuration fails startup instead of
+silently falling back to plaintext.
+
+```yaml
+tls:
+  enabled: true
+  cert_file: /etc/loza/tls/server.pem
+  key_file: /etc/loza/tls/server-key.pem
+  min_version: "1.2"      # "1.2" (default) or "1.3"
+  mutual_tls: true
+  client_ca_file: /etc/loza/tls/ca.pem
+```
+
+- `cert_file` and `key_file` must contain a valid certificate chain and private
+  key; both are loaded and validated during startup.
+- `min_version` enforces the minimum negotiated TLS version (`1.2` or `1.3`)
+  on both listeners.
+- `mutual_tls` requires clients to present a certificate signed by a CA in
+  `client_ca_file` on both listeners.
+- With `tls.enabled: false` (the bundled default), both listeners serve
+  plaintext; terminate TLS at a trusted proxy or ingress in that mode.
+
 ## Reliability Modes
 
 The collector currently supports:

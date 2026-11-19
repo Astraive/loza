@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -566,6 +567,20 @@ func (s *Server) Start(addr string) error {
 		WriteTimeout: 30 * time.Second,
 	}
 
+	var tlsCfg *tls.Config
+	if s.config != nil {
+		var err error
+		tlsCfg, err = config.BuildTLSConfig(s.config.TLS)
+		if err != nil {
+			return err
+		}
+	}
+	srv.TLSConfig = tlsCfg
+	if tlsCfg != nil {
+		// The certificate chain is preloaded into TLSConfig, so ServeTLS uses
+		// the in-memory certificates and enforces the configured TLS settings.
+		return srv.ListenAndServeTLS("", "")
+	}
 	return srv.ListenAndServe()
 }
 
