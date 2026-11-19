@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 import time
 
 from ... import Bool, Emit, Enrich, Finish, FinishError, Int, Params, StartHTTPEvent, String
@@ -58,6 +59,12 @@ class LozaMiddleware:
             if route:
                 ctx.params.route = route
             Emit(ctx)
+            try:
+                Emit(ctx)
+            except Exception as exc:
+                # Telemetry must never change the HTTP outcome or mask an
+                # in-flight exception from the request handler.
+                print(f"[loza] django middleware emit error: {exc}", file=sys.stderr)
 
 
 def middleware(get_response=None, **config):
