@@ -47,6 +47,7 @@ type sink struct {
 	closed    bool
 	stop      chan struct{}
 	closeOnce sync.Once
+	closeErr  error
 	wg        sync.WaitGroup
 	// inflight tracks pushes whose batches have already been handed out of
 	// s.batch by appendEntry. Close waits on it so every in-flight push has
@@ -176,7 +177,6 @@ func (s *sink) Flush(ctx context.Context) error {
 }
 
 func (s *sink) Close(ctx context.Context) error {
-	var closeErr error
 	s.closeOnce.Do(func() {
 		// Set closed under the same lock that hands out batches for a push.
 		// After this point appendEntry cannot register new in-flight pushes,
@@ -196,8 +196,12 @@ func (s *sink) Close(ctx context.Context) error {
 		// so the final Flush below actually drains those entries.
 		s.inflight.Wait()
 		closeErr = s.Flush(ctx)
+		// Store the flush result on the sink so it is published to every
+		// Close caller. sync.Once.Do guarantees all callers return only after
+		// the winning call finishes, so this write is visible to all of them.
+		s.closeErr = s.Flush(ctx)
 	})
-	return closeErr
+	return s.closeErr
 }
 
 // finalFlush performs the one and only flush of a closing sink. It must not

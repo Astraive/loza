@@ -134,6 +134,7 @@ func TestFlushRestoreOnFailure(t *testing.T) {
 // flush them again. The fix reports the drop explicitly and keeps the sink
 // free of unflushable entries.
 func TestCloseFinalFlushFailureDropsExplicitly(t *testing.T) {
+func TestCloseReturnsFlushErrorToAllCallers(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusBadGateway)
 		_, _ = w.Write([]byte("upstream down"))
@@ -393,5 +394,33 @@ func TestCloseWaitsForInflightWriteEvent(t *testing.T) {
 	defer tr.mu.Unlock()
 	if !tr.okWithEntry {
 		t.Fatalf("restored batch was never pushed by Close's final Flush (calls=%d)", tr.calls)
+	// Leave a batch pending so the flush performed by Close fails upstream.
+	if err := s.WriteEvent(context.Background(), []byte(`{"event":"close.flush"}`), nil); err != nil {
+		t.Fatalf("write event: %v", err)
+	}
+
+	const callers = 8
+	start := make(chan struct{})
+	errs := make([]error, callers)
+	var wg sync.WaitGroup
+	wg.Add(callers)
+	for i := 0; i < callers; i++ {
+		go func(i int) {
+			defer wg.Done()
+			<-start
+			errs[i] = s.Close(context.Background())
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+
+	for i, err := range errs {
+		if err == nil {
+			t.Errorf("Close caller %d got nil; want flush error propagated to every caller", i)
+			continue
+		}
+		if !strings.Contains(err.Error(), "502") {
+			t.Errorf("Close caller %d got unexpected error: %v", i, err)
+		}
 	}
 }
