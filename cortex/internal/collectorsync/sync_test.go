@@ -234,3 +234,55 @@ func TestRunSourceOfTruthSyncHaltsOnUnrecoverableCursor(t *testing.T) {
 		t.Fatalf("corrupt cursor must halt before replay, processed %v", ids)
 	}
 }
+
+func TestSortAndDedupeEventsKeepsDistinctEventsWithSameID(t *testing.T) {
+	ts := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	first := &models.Event{
+		ID: "shared-id", EventID: "shared-id", Timestamp: ts,
+		Service: "checkout", Event: "charge", Raw: map[string]any{"seq": "one"},
+	}
+	second := &models.Event{
+		ID: "shared-id", EventID: "shared-id", Timestamp: ts,
+		Service: "payments", Event: "refund", Raw: map[string]any{"seq": "two"},
+	}
+
+	got := sortAndDedupeEvents([]*models.Event{second, first}, collectorbridge.Cursor{})
+	if len(got) != 2 {
+		t.Fatalf("expected both distinct events sharing an ID to be kept, got %d: %+v", len(got), got)
+	}
+	services := map[string]bool{}
+	for _, event := range got {
+		services[event.Service] = true
+	}
+	if !services["checkout"] || !services["payments"] {
+		t.Fatalf("expected both distinct payloads to survive dedupe, got %v", services)
+	}
+}
+
+func TestSortAndDedupeEventsKeepsDistinctEmptyIDEventsWithSameTimestamp(t *testing.T) {
+	ts := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	first := &models.Event{Timestamp: ts, Service: "alpha", Raw: map[string]any{"seq": "one"}}
+	second := &models.Event{Timestamp: ts, Service: "beta", Raw: map[string]any{"seq": "two"}}
+
+	got := sortAndDedupeEvents([]*models.Event{first, second}, collectorbridge.Cursor{})
+	if len(got) != 2 {
+		t.Fatalf("expected both empty-ID events at the same timestamp to be kept, got %d: %+v", len(got), got)
+	}
+}
+
+func TestSortAndDedupeEventsStillCollapsesExactDuplicates(t *testing.T) {
+	ts := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	original := &models.Event{
+		ID: "evt-1", EventID: "evt-1", Timestamp: ts,
+		Service: "checkout", Event: "charge", Raw: map[string]any{"seq": "one"},
+	}
+	duplicate := &models.Event{
+		ID: "evt-1", EventID: "evt-1", Timestamp: ts,
+		Service: "checkout", Event: "charge", Raw: map[string]any{"seq": "one"},
+	}
+
+	got := sortAndDedupeEvents([]*models.Event{original, duplicate}, collectorbridge.Cursor{})
+	if len(got) != 1 {
+		t.Fatalf("expected exact duplicates to collapse to one event, got %d: %+v", len(got), got)
+	}
+}
