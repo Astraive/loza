@@ -180,3 +180,109 @@ func TestBuildMuxUsesLogWriteScopeForCanonicalOTLPLogs(t *testing.T) {
 		t.Fatalf("canonical OTLP log permission = %q, want logs:write", requiredPermission)
 	}
 }
+
+// TestBuildMuxIngestPathCollisionDoesNotPanic reproduces the startup panic
+// that occurred when the configured ingest path matched a built-in POST
+// route. The guard used to exclude only /events and /ingest, so any other
+// built-in POST pattern registered the same method+pattern twice and Go 1.22
+// ServeMux panicked.
+func TestBuildMuxIngestPathCollisionDoesNotPanic(t *testing.T) {
+	collidingPaths := []string{
+		"/events",
+		"/ingest",
+		"/events/batch",
+		"/events/ndjson",
+		"/validate",
+		"/otlp/logs",
+		"/query",
+		"/keys",
+		"/dlq/replay",
+	}
+	for _, defaultCollector := range []string{"", "default"} {
+		for _, ingestPath := range collidingPaths {
+			t.Run("default="+defaultCollector+"_ingest="+ingestPath, func(t *testing.T) {
+				defer func() {
+					if r := recover(); r != nil {
+						t.Fatalf("BuildMux panicked for ingestPath %q (defaultCollector %q): %v", ingestPath, defaultCollector, r)
+					}
+				}()
+				handlers := &routeTestHandlers{}
+				_ = BuildMux(ingestPath, "/health", "/ready", "/metrics", false, nil, nil, handlers, nil, nil, defaultCollector)
+			})
+		}
+	}
+}
+
+// TestBuildMuxCustomProbePathsCollisionDoesNotPanic covers the same duplicate
+// registration class for the health, ready and metrics configurable paths,
+// which previously relied on incomplete hardcoded exclusion lists as well.
+func TestBuildMuxCustomProbePathsCollisionDoesNotPanic(t *testing.T) {
+	metricsHandler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	cases := []struct {
+		name    string
+		health  string
+		ready   string
+		metrics string
+		enabled bool
+	}{
+		{name: "health_equals_ready_builtin", health: "/ready"},
+		{name: "ready_equals_health_builtin", ready: "/health"},
+		{name: "health_equals_data_route", health: "/status"},
+		{name: "ready_equals_version", ready: "/version"},
+		{name: "metrics_equals_health", metrics: "/health", enabled: true},
+		{name: "health_and_ready_same_custom_path", health: "/probe", ready: "/probe"},
+	}
+	for _, defaultCollector := range []string{"", "default"} {
+		for _, tc := range cases {
+			t.Run("default="+defaultCollector+"_"+tc.name, func(t *testing.T) {
+				defer func() {
+					if r := recover(); r != nil {
+						t.Fatalf("BuildMux panicked for %s (defaultCollector %q): %v", tc.name, defaultCollector, r)
+					}
+				}()
+				handlers := &routeTestHandlers{}
+				_ = BuildMux("", tc.health, tc.ready, tc.metrics, tc.enabled, metricsHandler, nil, handlers, nil, nil, defaultCollector)
+			})
+		}
+	}
+}
+
+// TestBuildMuxRegistersNonCollidingIngestPath verifies the custom ingest path
+// is still registered when it does not collide with a built-in route.
+func TestBuildMuxRegistersNonCollidingIngestPath(t *testing.T) {
+	collectorProtect := func(next http.Handler, _ string, resolve CollectorResolver, _ CollectorRouteMode) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			collector, ok := resolve(r)
+			if !ok {
+				http.Error(w, "Forbidden", http.StatusForbidden)
+				return
+			}
+			next.ServeHTTP(w, r.WithContext(WithAuthorizedCollector(r.Context(), collector, "dev")))
+		})
+	}
+
+	handlers := &routeTestHandlers{}
+	mux := BuildMux("/custom/ingest", "/health", "/ready", "/metrics", false, nil, nil, handlers, nil, collectorProtect, "")
+
+	response := httptest.NewRecorder()
+	mux.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/collectors/orders/custom/ingest", nil))
+	if response.Code != http.StatusOK {
+		t.Fatalf("custom canonical ingest status = %d, want %d", response.Code, http.StatusOK)
+	}
+	if !handlers.seen {
+		t.Fatal("custom canonical ingest route did not reach the ingest handler")
+	}
+
+	handlers = &routeTestHandlers{}
+	mux = BuildMux("/custom/ingest", "/health", "/ready", "/metrics", false, nil, nil, handlers, nil, collectorProtect, "default")
+	response = httptest.NewRecorder()
+	mux.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/custom/ingest", nil))
+	if response.Code != http.StatusOK {
+		t.Fatalf("custom legacy ingest status = %d, want %d", response.Code, http.StatusOK)
+	}
+	if !handlers.seen {
+		t.Fatal("custom legacy ingest route did not reach the ingest handler")
+	}
+}
