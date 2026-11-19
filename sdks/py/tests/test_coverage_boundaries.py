@@ -1146,3 +1146,49 @@ def test_legacy_config_environment_and_attr_helpers(monkeypatch: pytest.MonkeyPa
         attrs.rag_retrieval_latency(1),
     ]
     assert all(item.key for item in values)
+
+
+def test_cortex_reconstruct_methods_share_response_mapping(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Both reconstruct endpoints map the same response to the same IncidentContext."""
+    full_payload = {
+        "incident_id": "inc-1",
+        "timestamp": "2026-01-01T00:00:00Z",
+        "causal_chain": [{"event_id": "e1"}],
+        "related_services": ["api", "db"],
+        "symptoms": [{"code": "s1"}],
+        "suggested_actions": [{"action": "restart"}],
+        "confidence": 0.87,
+        "similar_incidents": [{"incident_id": "past"}],
+        "explain": "because",
+        "explain_report": {"summary": "ok"},
+    }
+    cortex = cortex_client.CortexClient("https://cortex")
+    seen_bodies: list[dict] = []
+
+    def _fake_post(path: str, body: dict | None = None) -> dict:
+        seen_bodies.append(body or {})
+        return dict(full_payload)
+
+    monkeypatch.setattr(cortex, "_post", _fake_post)
+    via_body = cortex.reconstruct("inc-1", mode="deep")
+    via_url = cortex.reconstruct_incident("inc-1", mode="deep")
+
+    assert via_body == via_url
+    assert via_body.incident_id == "inc-1"
+    assert via_body.confidence == 0.87
+    assert via_body.causal_chain == full_payload["causal_chain"]
+    assert via_body.similar_incidents == full_payload["similar_incidents"]
+    assert via_body.explain_report == full_payload["explain_report"]
+    # Only the request path/body differs between the two public APIs.
+    assert seen_bodies[0] == {"incident_id": "inc-1", "mode": "deep"}
+    assert seen_bodies[1] == {"mode": "deep"}
+
+    # Defaults and the incident_id fallback must also stay in lockstep.
+    monkeypatch.setattr(cortex, "_post", lambda path, body=None: {})
+    empty_body = cortex.reconstruct("fallback-id")
+    empty_url = cortex.reconstruct_incident("fallback-id")
+    assert empty_body == empty_url
+    assert empty_body.incident_id == "fallback-id"
+    assert empty_body.causal_chain == []
+    assert empty_body.confidence == 0.0
+    assert empty_body.similar_incidents is None

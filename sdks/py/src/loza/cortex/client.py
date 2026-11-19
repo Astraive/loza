@@ -98,6 +98,27 @@ class CortexClient:
         with urllib.request.urlopen(req, timeout=self.timeout) as resp:
             return self._read_response(resp).decode("utf-8")
 
+    @staticmethod
+    def _to_incident_context(resp: dict, incident_id: str) -> IncidentContext:
+        """Map a reconstruct response payload to an ``IncidentContext``.
+
+        Both public reconstruction endpoints return the same response shape, so
+        the response-to-model mapping lives in one place to prevent the two
+        code paths from drifting as fields or defaults evolve.
+        """
+        return IncidentContext(
+            incident_id=resp.get("incident_id", incident_id),
+            timestamp=resp.get("timestamp", ""),
+            causal_chain=resp.get("causal_chain", []),
+            related_services=resp.get("related_services", []),
+            symptoms=resp.get("symptoms", []),
+            suggested_actions=resp.get("suggested_actions", []),
+            confidence=resp.get("confidence", 0.0),
+            similar_incidents=resp.get("similar_incidents"),
+            explain=resp.get("explain", ""),
+            explain_report=resp.get("explain_report"),
+        )
+
     def reconstruct(
         self,
         incident_id: str,
@@ -110,18 +131,7 @@ class CortexClient:
             mode: Reconstruction mode - "fast" (pattern match) or "deep" (full causal analysis).
         """
         resp = self._post("/reconstruct", {"incident_id": incident_id, "mode": mode})
-        return IncidentContext(
-            incident_id=resp.get("incident_id", incident_id),
-            timestamp=resp.get("timestamp", ""),
-            causal_chain=resp.get("causal_chain", []),
-            related_services=resp.get("related_services", []),
-            symptoms=resp.get("symptoms", []),
-            suggested_actions=resp.get("suggested_actions", []),
-            confidence=resp.get("confidence", 0.0),
-            similar_incidents=resp.get("similar_incidents"),
-            explain=resp.get("explain", ""),
-            explain_report=resp.get("explain_report"),
-        )
+        return self._to_incident_context(resp, incident_id)
 
     def reconstruct_incident(
         self,
@@ -130,18 +140,7 @@ class CortexClient:
     ) -> IncidentContext:
         """Reconstruct an incident using the URL-param variant."""
         resp = self._post(f"/incidents/{quote(incident_id, safe='')}/reconstruct", {"mode": mode})
-        return IncidentContext(
-            incident_id=resp.get("incident_id", incident_id),
-            timestamp=resp.get("timestamp", ""),
-            causal_chain=resp.get("causal_chain", []),
-            related_services=resp.get("related_services", []),
-            symptoms=resp.get("symptoms", []),
-            suggested_actions=resp.get("suggested_actions", []),
-            confidence=resp.get("confidence", 0.0),
-            similar_incidents=resp.get("similar_incidents"),
-            explain=resp.get("explain", ""),
-            explain_report=resp.get("explain_report"),
-        )
+        return self._to_incident_context(resp, incident_id)
 
     def service_graph(
         self,
