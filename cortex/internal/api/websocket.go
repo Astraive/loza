@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"net/url"
+	"strconv"
 	"strings"
 
 	"github.com/astraive/loza/cortex/internal/eventconv"
@@ -28,15 +30,41 @@ func newCortexWSUpgrader(allowedOrigins []string) websocket.Upgrader {
 					return true
 				}
 			}
-			// Allow localhost for development (exact match with port, not prefix)
-			if origin == "http://localhost" || strings.HasPrefix(origin, "http://localhost:") ||
-				origin == "http://127.0.0.1" || strings.HasPrefix(origin, "http://127.0.0.1:") ||
-				origin == "http://[::1]" || strings.HasPrefix(origin, "http://[::1]:") {
+			// Allow loopback origins for development. Compare the parsed scheme and
+			// host exactly (with an optional numeric port) rather than matching a
+			// string prefix: values like "http://localhost:80@evil.com" put the
+			// real host in userinfo and must not be treated as localhost.
+			if isDevelopmentLoopbackOrigin(origin) {
 				return true
 			}
 			return false
 		},
 	}
+}
+
+// isDevelopmentLoopbackOrigin reports whether origin is a plain http Origin for
+// a loopback host, optionally followed by a numeric port. The origin is parsed
+// instead of prefix-matched so that crafted values such as
+// "http://localhost:80@evil.com" (userinfo) or "http://localhost:evil.com"
+// (non-numeric port) cannot bypass the allowlist.
+func isDevelopmentLoopbackOrigin(origin string) bool {
+	u, err := url.Parse(origin)
+	if err != nil || !strings.EqualFold(u.Scheme, "http") || u.User != nil ||
+		u.Path != "" || u.RawQuery != "" || u.Fragment != "" {
+		return false
+	}
+
+	host := strings.ToLower(u.Hostname())
+	if host != "localhost" && host != "127.0.0.1" && host != "::1" {
+		return false
+	}
+
+	if port := u.Port(); port != "" {
+		if _, err := strconv.Atoi(port); err != nil {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *Server) WebSocketHandler() http.Handler {
