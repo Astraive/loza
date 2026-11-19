@@ -1,22 +1,16 @@
 use loza::Config;
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Mutex, MutexGuard, OnceLock};
 
 #[test]
 fn env_overrides_file_defaults() {
-    let _guard = env_lock().lock().expect("env lock");
-    std::env::set_var("LOZA_SERVICE_VERSION", "9.9.9");
-    std::env::set_var("LOZA_ENVIRONMENT", "staging");
-    std::env::set_var("LOZA_REGION", "ap-south-1");
-    std::env::set_var("LOZA_COLLECTOR_ENDPOINT", "http://collector.example/events");
-    std::env::set_var("LOZA_ASYNC_ENABLED", "true");
+    let _lock = lock_env();
+    let _version = EnvRestore::set("LOZA_SERVICE_VERSION", "9.9.9");
+    let _environment = EnvRestore::set("LOZA_ENVIRONMENT", "staging");
+    let _region = EnvRestore::set("LOZA_REGION", "ap-south-1");
+    let _endpoint = EnvRestore::set("LOZA_COLLECTOR_ENDPOINT", "http://collector.example/events");
+    let _async = EnvRestore::set("LOZA_ASYNC_ENABLED", "true");
 
     let cfg = Config::test("checkout");
-
-    std::env::remove_var("LOZA_SERVICE_VERSION");
-    std::env::remove_var("LOZA_ENVIRONMENT");
-    std::env::remove_var("LOZA_REGION");
-    std::env::remove_var("LOZA_COLLECTOR_ENDPOINT");
-    std::env::remove_var("LOZA_ASYNC_ENABLED");
 
     assert_eq!(cfg.version, "9.9.9");
     assert_eq!(cfg.environment, "test");
@@ -188,6 +182,34 @@ fn https_and_explicit_local_insecure_credentialed_sinks_are_allowed() {
         local.validate().is_ok(),
         "explicit insecure local sinks should remain usable"
     );
+/// Restores an environment variable to its prior value when dropped.
+struct EnvRestore {
+    key: &'static str,
+    previous: Option<std::ffi::OsString>,
+}
+
+impl EnvRestore {
+    fn set(key: &'static str, value: &str) -> Self {
+        let previous = std::env::var_os(key);
+        std::env::set_var(key, value);
+        Self { key, previous }
+    }
+}
+
+impl Drop for EnvRestore {
+    fn drop(&mut self) {
+        match &self.previous {
+            Some(value) => std::env::set_var(self.key, value),
+            None => std::env::remove_var(self.key),
+        }
+    }
+}
+
+/// Acquire the env-test mutex, recovering it if an earlier panic poisoned it.
+fn lock_env() -> MutexGuard<'static, ()> {
+    env_lock()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 fn env_lock() -> &'static Mutex<()> {
