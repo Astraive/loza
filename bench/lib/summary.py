@@ -5,7 +5,7 @@ import argparse
 import json
 import os
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 
@@ -33,7 +33,7 @@ def render_markdown(results: list[dict]) -> str:
     lines = [
         "# Benchmark Summary",
         "",
-        f"Generated: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')}",
+        f"Generated: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}",
         "",
     ]
 
