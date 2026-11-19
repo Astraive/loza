@@ -131,5 +131,92 @@ func TestPprofMuxGuardsEveryHandler(t *testing.T) {
 	mux.ServeHTTP(w, r)
 	if w.Code != http.StatusOK {
 		t.Fatalf("loopback GET /debug/pprof/ = %d, want 200", w.Code)
+	"bytes"
+	"log"
+	"net"
+	"net/http"
+	"regexp"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+)
+
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+func capturePprofLogs(t *testing.T) *syncBuffer {
+	t.Helper()
+	logs := &syncBuffer{}
+	previous := log.Writer()
+	log.SetOutput(logs)
+	t.Cleanup(func() { log.SetOutput(previous) })
+	return logs
+}
+
+func waitForPprofLog(t *testing.T, logs *syncBuffer, want string) string {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if out := logs.String(); strings.Contains(out, want) {
+			return out
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for %q in logs; got %q", want, logs.String())
+	return ""
+}
+
+func TestRegisterAndServePprofLogsBindFailure(t *testing.T) {
+	logs := capturePprofLogs(t)
+
+	// Reserve a loopback port so the pprof listener cannot bind to it.
+	occupied, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("reserve port: %v", err)
+	}
+	defer occupied.Close()
+
+	RegisterAndServePprof(occupied.Addr().String())
+
+	out := waitForPprofLog(t, logs, "pprof server failed")
+	if strings.Contains(out, "pprof listening") {
+		t.Fatalf("success logged despite bind failure: %q", out)
+	}
+}
+
+func TestRegisterAndServePprofServesAfterBind(t *testing.T) {
+	logs := capturePprofLogs(t)
+
+	RegisterAndServePprof("127.0.0.1:0")
+
+	out := waitForPprofLog(t, logs, "pprof listening on ")
+	match := regexp.MustCompile(`pprof listening on (\S+)`).FindStringSubmatch(out)
+	if match == nil {
+		t.Fatalf("no bound address in log: %q", out)
+	}
+
+	client := &http.Client{Timeout: 2 * time.Second}
+	resp, err := client.Get("http://" + match[1] + "/debug/pprof/")
+	if err != nil {
+		t.Fatalf("GET pprof index: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET pprof index status = %d, want %d", resp.StatusCode, http.StatusOK)
 	}
 }

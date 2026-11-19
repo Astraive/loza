@@ -75,7 +75,14 @@ func RegisterAndServePprof(addr string) {
 	addr = loopbackAddr(addr)
 	mux := newPprofMux()
 	go func() {
-		log.Printf("pprof listening on %s", addr)
-		_ = http.ListenAndServe(addr, mux)
+		ln, err := net.Listen("tcp", addr)
+		if err != nil {
+			log.Printf("pprof server failed to listen on %s: %v", addr, err)
+			return
+		}
+		log.Printf("pprof listening on %s", ln.Addr())
+		if err := http.Serve(ln, mux); err != nil {
+			log.Printf("pprof server failed: %v", err)
+		}
 	}()
 }
