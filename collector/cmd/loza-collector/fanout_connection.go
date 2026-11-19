@@ -11,6 +11,9 @@ func applyFanoutConnection(output *collectorFanoutOutput, cfg collectorConfig) e
 		if connection.name != name {
 			continue
 		}
+		if !connection.enabled {
+			continue
+		}
 		backend := connection.backend
 		outputType := output.sinkType
 		if outputType == "" {
