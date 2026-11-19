@@ -219,6 +219,9 @@ func New(cfg Config, primary collectorevent.Sink, secondary []NamedSink, fallbac
 			Addr:     cfg.DedupeRedisAddr,
 			Password: cfg.DedupeRedisPassword,
 			DB:       cfg.DedupeRedisDB,
+			// Required so contexts passed to Redis commands (e.g. the bounded
+			// dedupe context in isDuplicate) actually cancel socket I/O.
+			ContextTimeoutEnabled: true,
 		})
 		pingCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
@@ -326,7 +329,7 @@ func (p *Processor) Process(ctx context.Context, raw []byte) Result {
 	if p.cfg.DedupeEnabled {
 		eventID, ok := validation.ExtractStringPath(raw, p.cfg.DedupeKey)
 		if ok {
-			duplicate, dedupeErr := p.isDuplicate(eventID)
+			duplicate, dedupeErr := p.isDuplicate(ctx, eventID)
 			if dedupeErr != nil {
 				return Result{Err: fmt.Errorf("%w: %v", ErrDedupeUnavailable, dedupeErr)}
 			}
@@ -657,7 +660,12 @@ func (p *Processor) writeDLQ(raw []byte, err error) {
 // maxDedupeEntries caps the in-memory dedupe map to prevent unbounded growth.
 const maxDedupeEntries = 100_000
 
-func (p *Processor) isDuplicate(value string) (bool, error) {
+// redisDedupeTimeout bounds each Redis dedupe operation so a slow or hung
+// Redis cannot block Process indefinitely. It is derived from the caller's
+// context so cancellation and earlier deadlines still take precedence.
+const redisDedupeTimeout = 3 * time.Second
+
+func (p *Processor) isDuplicate(ctx context.Context, value string) (bool, error) {
 	if strings.TrimSpace(value) == "" {
 		return false, nil
 	}
@@ -666,7 +674,9 @@ func (p *Processor) isDuplicate(value string) (bool, error) {
 		if strings.TrimSpace(p.dedupePrefix) != "" {
 			key = p.dedupePrefix + value
 		}
-		ok, err := p.redisClient.SetNX(context.Background(), key, "1", p.cfg.DedupeWindow).Result()
+		dedupeCtx, cancel := context.WithTimeout(ctx, redisDedupeTimeout)
+		defer cancel()
+		ok, err := p.redisClient.SetNX(dedupeCtx, key, "1", p.cfg.DedupeWindow).Result()
 		if err != nil {
 			return false, err
 		}
