@@ -19,6 +19,7 @@ from ...core.http_client import (
     _build_ingest_body,
     _collector_response_outcome,
     _open_with_redirect_guard,
+    _decode_event,
     _parse_collector_response_body,
     _parse_retry_after,
     _retry_delay,
@@ -83,6 +84,13 @@ class HTTPBatchSink:
         headers: dict[str, str] = {}
 
         if self.ndjson:
+            if not events_list:
+                raise ValueError("collector batch must contain at least one event")
+            # NDJSON sends raw lines rather than an envelope, but must reject
+            # empty batches and malformed events just like the JSON path so
+            # invalid payloads are not silently shipped to the collector.
+            for encoded in events_list:
+                _decode_event(encoded)
             payload = "\n".join(e.rstrip() for e in events_list).encode("utf-8")
             headers["content-type"] = "application/x-ndjson"
         else:

@@ -591,6 +591,9 @@ def test_http_batch_auth_and_response_paths(monkeypatch: pytest.MonkeyPatch) -> 
     ndjson = HTTPBatchSink("https://collector/events", ndjson=True, enable_compression=False)
     monkeypatch.setattr(httpbatch_module, "_open_with_redirect_guard", lambda *_args, **_kwargs: _Response(b"{}"))
     ndjson.write_batch(["one\n", "two"])
+    monkeypatch.setattr(httpbatch_module.urllib.request, "urlopen", lambda *_args, **_kwargs: _Response(b"{}"))
+    ndjson_event = '{"timestamp":"2025-01-01T00:00:00Z","schema_version":"v1","event_version":"v1","event_id":"e","service":"s","event":"x","kind":"event"}'
+    ndjson.write_batch([ndjson_event + "\n", ndjson_event])
     with pytest.raises(ValueError):
         HTTPBatchSink("http://remote.example/events", username="u", password="p")
     monkeypatch.setattr(
