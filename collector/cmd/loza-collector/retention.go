@@ -94,7 +94,10 @@ func (s *collectorState) deleteBySize(ctx context.Context, db *sql.DB) error {
 	if err != nil {
 		return err
 	}
-	var currentSize int64
+	// SUM over an empty table returns a single NULL row, which cannot be scanned
+	// into int64. A nullable target leaves Int64 at zero in that case, which the
+	// limit check below treats as "under the limit".
+	var currentSize sql.NullInt64
 	err = db.QueryRowContext(ctx, "SELECT SUM(octet_length(raw)) FROM "+tableIdent).Scan(&currentSize)
 	if err != nil && err != sql.ErrNoRows {
 		return err
@@ -105,6 +108,11 @@ func (s *collectorState) deleteBySize(ctx context.Context, db *sql.DB) error {
 	}
 
 	excessSize := currentSize - s.config().retentionMaxSize
+	if currentSize.Int64 <= s.cfg.retentionMaxSize {
+		return nil
+	}
+
+	excessSize := currentSize.Int64 - s.cfg.retentionMaxSize
 	query := fmt.Sprintf(`
 		DELETE FROM %s
 		WHERE event_id IN (
