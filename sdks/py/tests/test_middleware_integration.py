@@ -64,6 +64,55 @@ def test_starlette_middleware_records_status_code() -> None:
     from loza.middleware.starlette import Middleware as StarletteMiddleware
 
     asyncio.run(_run_app([], StarletteMiddleware))
+def test_asgi_middleware_emits_error_event_when_route_resolver_raises() -> None:
+    """A failing resolver must not bypass the one-wide-event-per-request lifecycle."""
+
+    async def run() -> None:
+        app_called = False
+
+        async def app(scope, receive, send):
+            nonlocal app_called
+            app_called = True
+
+        def broken_resolver(scope):
+            raise RuntimeError("route resolver failed")
+
+        sink = loza.MemorySink()
+        loza.Configure(loza.Test("checkout").with_sink(sink))
+        middleware = Middleware(app, service="checkout", route_resolver=broken_resolver)
+
+        async def send(message: dict) -> None:
+            return None
+
+        try:
+            await middleware(
+                {
+                    "type": "http",
+                    "method": "GET",
+                    "path": "/boom",
+                    "headers": [(b"user-agent", b"pytest")],
+                    "client": ("127.0.0.1", 1234),
+                },
+                _receive,
+                send,
+            )
+        except RuntimeError as exc:
+            assert str(exc) == "route resolver failed"
+        else:  # pragma: no cover
+            raise AssertionError("resolver error should propagate to the caller")
+
+        assert app_called is False
+        assert len(sink.events) == 1
+        payload = json.loads(sink.events[0])
+        assert payload["kind"] == "http"
+        assert payload["outcome"] == "error"
+        assert payload["error"]["type"] == "RuntimeError"
+        assert payload["error"]["message"] == "route resolver failed"
+        assert payload["attrs"]["panic"] is True
+        assert payload["http"]["path"] == "/boom"
+        assert payload["http"]["route"] == "/boom"
+
+    asyncio.run(run())
 
 
 def test_flask_middleware_streams_response_without_buffering() -> None:
