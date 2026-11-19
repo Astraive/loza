@@ -35,7 +35,7 @@ pub fn request_id(ctx: &EventContext) -> &str {
 }
 
 pub fn id(event: &EventContext) -> &str {
-    &event.event_id
+    event_id(event)
 }
 
 pub fn is_finished(event: &EventContext) -> bool {
@@ -67,4 +67,24 @@ pub fn params_from_http(method: &str, path: &str, route: Option<&str>) -> Params
     params.path = Some(path.to_string());
     params.route = route.map(str::to_string);
     params
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn id_delegates_to_event_id() {
+        let mut event = EventContext::new("svc", Params::new("test.event"));
+
+        // Both helpers read the same source of truth.
+        assert_eq!(id(&event), event_id(&event));
+        assert_eq!(id(&event), event.event_id);
+
+        // A change to the underlying field is observed through both helpers,
+        // confirming `id` no longer keeps its own duplicate implementation.
+        event.event_id = "evt_updated".to_string();
+        assert_eq!(id(&event), "evt_updated");
+        assert_eq!(id(&event), event_id(&event));
+    }
 }
