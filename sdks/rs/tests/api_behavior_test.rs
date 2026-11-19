@@ -1,3 +1,4 @@
+use loza::core::SpanContext;
 use loza::{
     AnySampler, CollectorSink, Config, ContextCarrier, EventContext, HashString, MarkSensitive,
     New, NotSampler, Params, SampleErrors, SampleRandom, SensitiveString, SinkConfig, StartEvent,
@@ -80,6 +81,50 @@ fn context_carrier_parses_traceparent() {
         Some("0af7651916cd43dd8448eb211c80319c")
     );
     assert_eq!(carrier.span_id.as_deref(), Some("b7ad6b7169203331"));
+}
+
+#[test]
+fn context_carrier_rejects_spec_invalid_traceparents() {
+    // W3C Trace Context reserves version `ff` and forbids all-zero ids.
+    for invalid in [
+        "ff-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01",
+        "FF-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01",
+        "00-00000000000000000000000000000000-b7ad6b7169203331-01",
+        "00-0af7651916cd43dd8448eb211c80319c-0000000000000000-01",
+        "00-00000000000000000000000000000000-0000000000000000-01",
+    ] {
+        assert!(
+            ContextCarrier::from_traceparent(invalid).is_none(),
+            "spec-invalid traceparent was accepted: {invalid}"
+        );
+    }
+
+    // A non-reserved future version and uppercase hex remain valid.
+    assert!(ContextCarrier::from_traceparent(
+        "01-0AF7651916CD43DD8448EB211C80319C-B7AD6B7169203331-01"
+    )
+    .is_some());
+}
+
+#[test]
+fn span_context_rejects_spec_invalid_traceparents() {
+    for invalid in [
+        "ff-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01",
+        "FF-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01",
+        "00-00000000000000000000000000000000-b7ad6b7169203331-01",
+        "00-0af7651916cd43dd8448eb211c80319c-0000000000000000-01",
+        "00-00000000000000000000000000000000-0000000000000000-01",
+    ] {
+        assert!(
+            SpanContext::from_traceparent(invalid).is_none(),
+            "spec-invalid traceparent was accepted: {invalid}"
+        );
+    }
+
+    assert!(SpanContext::from_traceparent(
+        "01-0AF7651916CD43DD8448EB211C80319C-B7AD6B7169203331-01"
+    )
+    .is_some());
 }
 
 #[test]
