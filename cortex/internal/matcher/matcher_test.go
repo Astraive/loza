@@ -3,6 +3,7 @@ package matcher
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -297,6 +298,44 @@ func TestUpdateSignatureOccurrenceIncrementOnce(t *testing.T) {
 			}
 		})
 	}
+// stampedeStore counts List calls concurrently and can hold the first one
+// open so a window for concurrent cache misses can be created deterministically.
+type stampedeStore struct {
+	fakeSignatureStore
+
+	mu        sync.Mutex
+	listCalls int
+	block     bool
+	entered   chan struct{}
+	release   chan struct{}
+	items     []*models.IncidentSignature
+}
+
+func (s *stampedeStore) List(_ context.Context, limit int) ([]*models.IncidentSignature, error) {
+	s.mu.Lock()
+	s.listCalls++
+	block := s.block
+	s.mu.Unlock()
+
+	if block {
+		select {
+		case s.entered <- struct{}{}:
+		default:
+		}
+		<-s.release
+	}
+
+	out := append([]*models.IncidentSignature(nil), s.items...)
+	if limit > 0 && len(out) > limit {
+		out = out[:limit]
+	}
+	return out, nil
+}
+
+func (s *stampedeStore) calls() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.listCalls
 }
 
 func TestNewConfiguredSignatureMatcher(t *testing.T) {
@@ -362,5 +401,66 @@ func TestFindSimilarUsesCacheAndInvalidatesOnWrite(t *testing.T) {
 	}
 	if store.listCalls != 2 {
 		t.Fatalf("expected cache invalidation after write, got %d store list calls", store.listCalls)
+	}
+}
+
+func TestLoadCandidatesSingleFlight(t *testing.T) {
+	const workers = 8
+
+	store := &stampedeStore{
+		block:   true,
+		entered: make(chan struct{}, 1),
+		release: make(chan struct{}),
+		items: []*models.IncidentSignature{
+			{SignatureID: "a", FeatureVector: []float64{1, 1}},
+		},
+	}
+	m := NewSignatureMatcherWithEngine(store, NewGoMatcher(1), config.MatcherConfig{
+		CacheSize: 10,
+		CacheTTL:  time.Minute,
+	})
+
+	ctx := context.Background()
+	start := make(chan struct{})
+	ready := make(chan struct{}, workers)
+	errs := make(chan error, workers)
+
+	var wg sync.WaitGroup
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			ready <- struct{}{}
+			<-start
+			if _, err := m.loadCandidates(ctx); err != nil {
+				errs <- err
+			}
+		}()
+	}
+	for i := 0; i < workers; i++ {
+		<-ready
+	}
+	close(start)
+
+	select {
+	case <-store.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("expected a candidate List call")
+	}
+
+	// Keep the first List in flight until every other worker has reached the
+	// refresh path. With the single-flight lock they wait for it and reuse the
+	// repopulated cache; without it they all issue their own List.
+	time.Sleep(100 * time.Millisecond)
+	close(store.release)
+
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Fatalf("loadCandidates: %v", err)
+	}
+
+	if got := store.calls(); got != 1 {
+		t.Fatalf("expected exactly one List call for concurrent cache misses, got %d", got)
 	}
 }
