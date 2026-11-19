@@ -1,6 +1,5 @@
 import { Logger } from '../core/logger.ts';
 import { MemorySink } from '../sinks/standard-sinks.ts';
-import type { Event, Attr, Params } from '../core/event.ts';
 import { resetUUIDGenerator, setUUIDGenerator } from '../core/uuidv7.ts';
 import { setClock as _setClock, resetClock } from '../core/event.ts';
 import fs from 'node:fs';
@@ -10,12 +9,18 @@ export interface TestLoggerResult {
   sink: MemorySink;
 }
 
+/** Logger configuration fields supported by {@link testLogger}. */
+export interface TestLoggerConfig {
+  service?: string;
+  environment?: string;
+}
+
 /** Creates a logger configured for tests plus its backing memory sink. */
-export function testLogger(config?: Partial<Params>): TestLoggerResult {
+export function testLogger(config?: TestLoggerConfig): TestLoggerResult {
   const sink = new MemorySink();
   const logger = new Logger({
     service: config?.service || 'test',
-    environment: 'test',
+    environment: config?.environment || 'test',
     sink,
   });
   return { logger, sink };
