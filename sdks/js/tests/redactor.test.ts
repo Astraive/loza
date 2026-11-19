@@ -88,4 +88,24 @@ describe('Redactor', () => {
       assert.equal(result.attrs[key], '[REDACTED]', `expected ${key} to be redacted`);
     }
   });
+
+  it('defaultRedactor redacts delimiter-free compound keys', () => {
+    const r = defaultRedactor();
+    const compoundKeys = [
+      'accesstoken', 'refreshtoken', 'privatekey', 'clientsecret',
+      'accessToken', 'refreshToken', 'privateKey', 'clientSecret',
+    ];
+    for (const key of compoundKeys) {
+      const result = r({ attrs: { [key]: 'value' } });
+      assert.equal(result.attrs[key], '[REDACTED]', `expected ${key} to be redacted`);
+    }
+  });
+
+  it('redactKeys also matches delimiter-free forms of custom keys', () => {
+    const r = redactKeys('access_token', 'client_secret');
+    const result = r({ attrs: { accesstoken: 'a', clientsecret: 'b', name: 'c' } });
+    assert.equal(result.attrs.accesstoken, '[REDACTED]');
+    assert.equal(result.attrs.clientsecret, '[REDACTED]');
+    assert.equal(result.attrs.name, 'c');
+  });
 });

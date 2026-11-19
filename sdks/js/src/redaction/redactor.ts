@@ -19,9 +19,16 @@ const DEFAULT_KEYS: Set<string> = new Set([
   'api_key', 'apikey', 'auth', 'authorization', 'credential', 'private_key', 'client_secret',
 ]);
 
+/** Canonical form used for delimiter-free matching: lowercase with . _ - removed. */
+function withoutDelimiters(key: string): string {
+  return key.toLowerCase().replace(/[._-]+/g, '');
+}
+
 /** Case-insensitive key match against a set.
- *  Checks the full key and every segment split by . _ or -.
- *  This handles both dotted paths (user.password) and compound names (credit_card_number). */
+ *  Checks the full key and every segment split by . _ or -, then compares the
+ *  delimiter-free canonical form. This handles dotted paths (user.password),
+ *  compound names (credit_card_number), camelCase (refreshToken) and
+ *  delimiter-free concatenations (refreshtoken) alike. */
 function matchesKey(key: string, keys: Set<string>): boolean {
   const lower = key.toLowerCase();
   if (keys.has(lower)) return true;
@@ -29,6 +36,12 @@ function matchesKey(key: string, keys: Set<string>): boolean {
   const segments = lower.split(/[._-]+/);
   for (const segment of segments) {
     if (keys.has(segment)) return true;
+  }
+  // Compound keys may drop delimiters entirely (e.g. access_token -> accesstoken,
+  // refreshToken -> refreshtoken). Compare canonical forms so these still match.
+  const canonical = withoutDelimiters(key);
+  for (const candidate of keys) {
+    if (withoutDelimiters(candidate) === canonical) return true;
   }
   return false;
 }
