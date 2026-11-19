@@ -108,7 +108,7 @@ func runEventWithStarter(ctx context.Context, params Params, fn EventFunc, start
 			if err == nil {
 				err = emitErr
 			} else {
-				err = fmt.Errorf("%w; emit failed: %v", err, emitErr)
+				err = fmt.Errorf("%w; emit failed: %w", err, emitErr)
 			}
 		}
 	}()
