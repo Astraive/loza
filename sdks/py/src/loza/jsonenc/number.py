@@ -32,3 +32,4 @@ def duration_ms(seconds: float) -> int:
     if not math.isfinite(seconds):
         return 0
     return max(0, int(seconds * 1000))
+    return max(0, int(round(seconds * 1000)))
