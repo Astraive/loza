@@ -308,14 +308,17 @@ class Pipeline:
     def _write_batch(self, encoded_events: list[str], *, buffer_on_failure: bool = True) -> bool:
         if not encoded_events:
             return True
-        errors = [
+        no_sinks = not self.sinks
+        errors: list[Exception] = [
             error for sink in self.sinks if (error := self._write_sink_with_retry(sink, encoded_events)) is not None
         ]
+        if no_sinks:
+            errors.append(RuntimeError("no sinks configured"))
         if errors:
             self.stats.failed += len(encoded_events)
             self.stats.last_error = "; ".join(str(error) for error in errors)
             if self._metrics is not None:
-                self._metrics.on_event_dropped("transport")
+                self._metrics.on_event_dropped("no_sinks" if no_sinks else "transport")
             if buffer_on_failure and self.offline_buffer is not None:
                 for encoded in encoded_events:
                     self.offline_buffer.append(encoded)
