@@ -23,7 +23,11 @@ func TestSlogHandlerConvertsAllValueKindsAndGroups(t *testing.T) {
 		stdslog.AnyValue(struct{ Name string }{"custom"}),
 	}
 	for i, value := range values {
-		attr := h.toAttr(stdslog.Any("field", value))
+		attrs := h.toAttr(stdslog.Any("field", value))
+		if len(attrs) != 1 {
+			t.Fatalf("value %d converted to %d attrs, want 1: %#v", i, len(attrs), attrs)
+		}
+		attr := attrs[0]
 		if attr.Key != "field" || attr.Value == nil {
 			t.Fatalf("value %d converted to %#v", i, attr)
 		}

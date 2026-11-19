@@ -86,6 +86,65 @@ func TestNestedWithGroupMergesSegments(t *testing.T) {
 			WithAttrs([]stdslog.Attr{stdslog.String("y", "2")}),
 	)
 	logger.InfoContext(context.Background(), "nested")
+// Regression test for MASS-0476: an empty-key group must be flattened into the
+// enclosing attr list instead of becoming Attr{Key:"", Value:[]loza.Attr}.
+func TestToAttrInlinesEmptyKeyGroup(t *testing.T) {
+	h := Handler()
+	got := h.toAttr(stdslog.Group("",
+		stdslog.String("user", "alice"),
+		stdslog.Int("count", 3),
+	))
+	if len(got) != 2 {
+		t.Fatalf("empty-key group converted to %d attrs, want 2: %#v", len(got), got)
+	}
+	if v, ok := findString(got, "user"); !ok || v != "alice" {
+		t.Fatalf("inlined user attr = %q (ok=%v); %#v", v, ok, got)
+	}
+	for _, a := range got {
+		if a.Key == "" {
+			t.Fatalf("empty-key group wrapper was not inlined: %#v", a)
+		}
+	}
+}
+
+// The same inlining must apply when an empty-key group is nested inside a
+// named group: its children become children of the named group.
+func TestToAttrInlinesNestedEmptyKeyGroup(t *testing.T) {
+	h := Handler()
+	got := h.toAttr(stdslog.Group("outer",
+		stdslog.String("keep", "yes"),
+		stdslog.Group("", stdslog.String("inner", "value")),
+	))
+	if len(got) != 1 || got[0].Key != "outer" {
+		t.Fatalf("named group conversion = %#v", got)
+	}
+	children, ok := got[0].Value.([]loza.Attr)
+	if !ok {
+		t.Fatalf("named group value = %#v", got[0].Value)
+	}
+	if v, ok := findString(children, "inner"); !ok || v != "value" {
+		t.Fatalf("nested empty-key group was not inlined: %#v", children)
+	}
+	for _, a := range children {
+		if a.Key == "" {
+			t.Fatalf("empty-key wrapper inside named group: %#v", a)
+		}
+	}
+}
+
+func TestSlogHandlerInlinesEmptyKeyGroupAttrs(t *testing.T) {
+	sink, store := loza.MemorySink()
+	cfg := loza.Test().WithSink(sink)
+	if err := loza.Configure(cfg); err != nil {
+		t.Fatalf("configure: %v", err)
+	}
+	t.Cleanup(func() { _ = loza.Shutdown(context.Background()) })
+
+	logger := stdslog.New(Handler())
+	// "method" and "path" are canonical loza keys, so use namespaced keys to
+	// assert on custom attrs without the duplicate-field policy dropping them.
+	logger.InfoContext(context.Background(), "request",
+		stdslog.Group("", stdslog.String("http_method", "GET"), stdslog.String("http_path", "/")))
 
 	if store.Len() != 1 {
 		t.Fatalf("expected one emitted event, got %d", store.Len())
@@ -119,6 +178,17 @@ func countKey(attrs []loza.Attr, key string) int {
 		}
 	}
 	return n
+	if v, ok := findString(attrs, "http_method"); !ok || v != "GET" {
+		t.Fatalf("empty-key group children missing from event attrs: %#v", attrs)
+	}
+	if v, ok := findString(attrs, "http_path"); !ok || v != "/" {
+		t.Fatalf("empty-key group children missing from event attrs: %#v", attrs)
+	}
+	for _, a := range attrs {
+		if a.Key == "" {
+			t.Fatalf("emitted event contains empty-key attr: %#v", a)
+		}
+	}
 }
 
 func findGroup(attrs []loza.Attr, key string) ([]loza.Attr, bool) {
