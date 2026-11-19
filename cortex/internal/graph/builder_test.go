@@ -121,9 +121,74 @@ func TestTraverseGraph(t *testing.T) {
 	if len(view.Nodes) != 2 {
 		t.Fatalf("expected 2 nodes, got %d", len(view.Nodes))
 	}
-	if len(view.Edges) != 2 {
-		t.Fatalf("expected 2 edges, got %d", len(view.Edges))
+	// e2 targets n3, which is beyond MaxDepth and therefore not in the view;
+	// returning it would leave a dangling edge reference.
+	if len(view.Edges) != 1 {
+		t.Fatalf("expected 1 edge, got %d", len(view.Edges))
 	}
+	if view.Edges[0].ID != "e1" {
+		t.Fatalf("expected edge e1, got %s", view.Edges[0].ID)
+	}
+	assertEdgesResolveToNodes(t, view)
+}
+
+// assertEdgesResolveToNodes verifies that every edge in a view references
+// nodes that are also present in that view.
+func assertEdgesResolveToNodes(t *testing.T, view *models.GraphView) {
+	t.Helper()
+	nodeIDs := make(map[string]struct{}, len(view.Nodes))
+	for _, node := range view.Nodes {
+		nodeIDs[node.ID] = struct{}{}
+	}
+	for _, edge := range view.Edges {
+		for _, endpoint := range []string{edge.FromNodeID, edge.ToNodeID} {
+			if _, ok := nodeIDs[endpoint]; !ok {
+				t.Errorf("edge %q references node %q which is not in the view", edge.ID, endpoint)
+			}
+		}
+	}
+}
+
+func TestTraverseGraphOmitsDanglingEdges(t *testing.T) {
+	now := time.Now()
+	windowMin := now.Add(-time.Minute)
+	store := &fakeGraphStore{
+		nodes: map[string]*models.Node{
+			"n1":  {ID: "n1", Type: models.NodeTypeIncident, Label: "n1", CreatedAt: now},
+			"n2":  {ID: "n2", Type: models.NodeTypeMetric, Label: "n2", CreatedAt: now.Add(time.Second)},
+			"n3":  {ID: "n3", Type: models.NodeTypeLog, Label: "n3", CreatedAt: now.Add(2 * time.Second)},
+			"old": {ID: "old", Type: models.NodeTypeLog, Label: "old", CreatedAt: now.Add(-time.Hour)},
+		},
+		edges: map[string][]*models.Edge{
+			"n1": {
+				{ID: "e1", FromNodeID: "n1", ToNodeID: "n2", Type: models.EdgeTypeDependsOn, Weight: 1},
+				{ID: "e-old", FromNodeID: "n1", ToNodeID: "old", Type: models.EdgeTypeDependsOn, Weight: 1},
+				{ID: "e-missing", FromNodeID: "n1", ToNodeID: "missing", Type: models.EdgeTypeDependsOn, Weight: 1},
+			},
+			"n2": {
+				{ID: "e2", FromNodeID: "n2", ToNodeID: "n3", Type: models.EdgeTypeDependsOn, Weight: 1},
+			},
+		},
+	}
+
+	view, err := NewBuilder(store).TraverseGraph(context.Background(), "n1", models.TraversalOptions{
+		MaxDepth:      2,
+		TimeWindowMin: &windowMin,
+	})
+	if err != nil {
+		t.Fatalf("traverse: %v", err)
+	}
+
+	if len(view.Nodes) != 2 {
+		t.Fatalf("expected 2 nodes, got %d", len(view.Nodes))
+	}
+	if len(view.Edges) != 1 {
+		t.Fatalf("expected 1 edge, got %d", len(view.Edges))
+	}
+	if view.Edges[0].ID != "e1" {
+		t.Fatalf("expected edge e1, got %s", view.Edges[0].ID)
+	}
+	assertEdgesResolveToNodes(t, view)
 }
 
 func TestGraphLookupPreservesNotFoundAndStorageErrors(t *testing.T) {
