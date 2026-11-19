@@ -93,6 +93,11 @@ impl SpanContext {
         if version.eq_ignore_ascii_case("ff")
             || trace_id.bytes().all(|byte| byte == b'0')
             || span_id.bytes().all(|byte| byte == b'0')
+        // W3C Trace Context: `ff` is a reserved/invalid version, and the
+        // all-zero trace-id and span-id are explicitly invalid.
+        if version.eq_ignore_ascii_case("ff")
+            || trace_id.bytes().all(|b| b == b'0')
+            || span_id.bytes().all(|b| b == b'0')
         {
             return None;
         }
@@ -185,5 +190,41 @@ mod tests {
         assert_eq!(parts[1], TRACE_ID);
         assert_ne!(parts[2], SPAN_ID);
         assert_eq!(parts[3], "00");
+    fn accepts_valid_traceparent() {
+        let ctx = SpanContext::from_traceparent(&format!("00-{TRACE_ID}-{SPAN_ID}-01"))
+            .expect("valid traceparent should parse");
+        assert_eq!(ctx.trace_id.as_deref(), Some(TRACE_ID));
+        assert_eq!(ctx.span_id.as_deref(), Some(SPAN_ID));
+    }
+
+    #[test]
+    fn rejects_reserved_ff_version() {
+        assert!(SpanContext::from_traceparent(&format!("ff-{TRACE_ID}-{SPAN_ID}-01")).is_none());
+    }
+
+    #[test]
+    fn rejects_uppercase_ff_version() {
+        assert!(SpanContext::from_traceparent(&format!("FF-{TRACE_ID}-{SPAN_ID}-01")).is_none());
+    }
+
+    #[test]
+    fn rejects_all_zero_trace_id() {
+        let trace_id = "0".repeat(32);
+        assert!(SpanContext::from_traceparent(&format!("00-{trace_id}-{SPAN_ID}-01")).is_none());
+    }
+
+    #[test]
+    fn rejects_all_zero_span_id() {
+        let span_id = "0".repeat(16);
+        assert!(SpanContext::from_traceparent(&format!("00-{TRACE_ID}-{span_id}-01")).is_none());
+    }
+
+    #[test]
+    fn rejects_reported_spec_invalid_example() {
+        // Evidence from MASS-0784 / issue #231.
+        assert!(SpanContext::from_traceparent(
+            "ff-00000000000000000000000000000000-0000000000000000-00"
+        )
+        .is_none());
     }
 }
