@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -91,6 +92,45 @@ func TestDLQListHitsCollectorAPI(t *testing.T) {
 	cfg := config.Config{CollectorURL: srv.URL}
 	if err := DLQCommand(context.Background(), cfg, []string{"list"}); err != nil {
 		t.Fatalf("dlq list: %v", err)
+	}
+}
+
+func TestDLQCommandsEscapeIDInRequestPath(t *testing.T) {
+	tests := []struct {
+		subcommand string
+		method     string
+		suffix     string
+	}{
+		{"show", http.MethodGet, ""},
+		{"delete", http.MethodDelete, ""},
+		{"replay", http.MethodPost, "/replay"},
+	}
+	id := "../../events/by-tenant/x"
+
+	for _, tc := range tests {
+		t.Run(tc.subcommand, func(t *testing.T) {
+			var gotPath string
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				gotPath = r.URL.EscapedPath()
+				if r.Method != tc.method {
+					t.Errorf("method = %s, want %s", r.Method, tc.method)
+				}
+				_, _ = w.Write([]byte(`{"ok":true}`))
+			}))
+			defer srv.Close()
+
+			cfg := config.Config{CollectorURL: srv.URL}
+			if _, err := captureStdout(t, func() error {
+				return DLQCommand(context.Background(), cfg, []string{tc.subcommand, id})
+			}); err != nil {
+				t.Fatalf("dlq %s: %v", tc.subcommand, err)
+			}
+
+			want := "/dlq/" + url.PathEscape(id) + tc.suffix
+			if gotPath != want {
+				t.Fatalf("path = %q, want %q", gotPath, want)
+			}
+		})
 	}
 }
 
