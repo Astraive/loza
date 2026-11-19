@@ -134,6 +134,15 @@ describe('Cortex client boundaries', () => {
     } finally {
       await stopCortex(server);
     }
+  it('reports validation errors for null graph elements instead of throwing TypeError', () => {
+    assert.throws(() => validateGraphView({ nodes: [null], edges: [] }), /node 0 missing 'id'/);
+    assert.throws(() => validateGraphView({ nodes: [undefined], edges: [] }), /node 0 missing 'id'/);
+    assert.throws(() => validateGraphView({ nodes: [], edges: [null] }), /edge 0 missing 'source' or 'from_node_id'/);
+    assert.throws(() => validateGraphView({ nodes: [], edges: [undefined] }), /edge 0 missing 'source' or 'from_node_id'/);
+    const graph = { nodes: [null, { id: ' node ' }] };
+    assert.doesNotThrow(() => normalizeGraphView(graph));
+    assert.equal(graph.nodes[1].id, 'node');
+    assert.throws(() => validateGraphView(graph), /node 0 missing 'id'/);
   });
 
   it('calls health, readiness, ingest, graph, reconstruction, and feedback APIs', async () => {
