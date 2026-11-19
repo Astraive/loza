@@ -5,6 +5,7 @@ from typing import Any, Awaitable, Callable
 
 from ... import Bool, Emit, Enrich, Finish, FinishError, Int, Params, StartHTTPEvent, String
 from .response import ResponseCapture
+from ... import Emit, Enrich, Finish, FinishError, Int, Params, StartHTTPEvent, String
 
 
 class Middleware:
@@ -84,6 +85,7 @@ class Middleware:
                 # the raw path so the failure is still recorded and emitted.
                 ctx = self._event_context(scope, scope.get("path", ""))
             FinishError(ctx, exc, Bool("panic", True))
+            FinishError(ctx, exc)
             raise
         finally:
             if ctx is not None:
