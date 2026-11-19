@@ -81,4 +81,47 @@ func TestParseEventsNormalPayloadDoesNotReturnSentinel(t *testing.T) {
 	if errors.Is(err, ErrPayloadTooLarge) {
 		t.Fatal("unexpected ErrPayloadTooLarge for a small payload")
 	}
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+// errReader emits data once, then fails with err on the next Read.
+type errReader struct {
+	data []byte
+	err  error
+	sent bool
+}
+
+func (r *errReader) Read(p []byte) (int, error) {
+	if !r.sent {
+		r.sent = true
+		return copy(p, r.data), nil
+	}
+	return 0, r.err
+}
+
+func TestParseNDJSON(t *testing.T) {
+	events, err := ParseNDJSON([]byte("  {\"id\":\"1\"}  \n\n{\"id\":\"2\"}\n"))
+	require.NoError(t, err)
+	assert.Equal(t, [][]byte{
+		[]byte(`{"id":"1"}`),
+		[]byte(`{"id":"2"}`),
+	}, events)
+}
+
+// TestParseNDJSONReaderPropagatesScanError reproduces the reported behavior:
+// when Scan stops because of a read error (rather than a clean EOF), the
+// scanner error must be returned instead of silently accepting partial lines.
+func TestParseNDJSONReaderPropagatesScanError(t *testing.T) {
+	wantErr := errors.New("simulated read failure")
+	r := &errReader{
+		data: []byte("{\"id\":\"1\"}\n"),
+		err:  wantErr,
+	}
+
+	events, err := parseNDJSONReader(r)
+	require.ErrorIs(t, err, wantErr)
+	assert.Empty(t, events, "partial results must not be returned on a scan error")
 }
