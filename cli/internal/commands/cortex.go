@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -115,6 +114,11 @@ func RunCortexIngest(ctx context.Context, cfg config.Config, args []string) erro
 			return err
 		}
 		events = fetched
+		var err error
+		events, err = client.FetchEventsFromURL(ctx, url)
+		if err != nil {
+			return err
+		}
 	}
 
 	if len(events) == 0 {

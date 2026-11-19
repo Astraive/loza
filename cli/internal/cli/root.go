@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 
 	lozacli "github.com/astraive/loza/cli"
@@ -236,6 +237,18 @@ func Run(args []string) error {
 	if cfg.Cortex != nil && cfg.Cortex.APIKey != "" {
 		client.SetConfigAPIKey(cfg.Cortex.APIKey)
 	}
+
+	// Bind credentials and arbitrary fetches to the hosts configured for this
+	// CLI invocation. Anything else (e.g. an attacker-controlled --url) is
+	// refused instead of receiving LOZA_API_KEY or being contacted at all.
+	origins := []string{cfg.CollectorURL}
+	if cfg.Cortex != nil && strings.TrimSpace(cfg.Cortex.URL) != "" {
+		origins = append(origins, cfg.Cortex.URL)
+	}
+	if cortexURL := strings.TrimSpace(os.Getenv("LOZA_CORTEX_URL")); cortexURL != "" {
+		origins = append(origins, cortexURL)
+	}
+	client.SetAllowedOrigins(origins...)
 
 	switch args[0] {
 	case "cortex":

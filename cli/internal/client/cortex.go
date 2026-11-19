@@ -5,11 +5,45 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"path/filepath"
 	"strings"
+	"time"
 )
+
+const defaultEventFetchTimeout = 15 * time.Second
+
+// FetchEventsFromURL fetches an NDJSON array of events from a URL supplied via
+// the cortex ingest --url flag. The origin must be in the configured allowlist
+// (SSRF protection), and the request is bounded by both a context and a client
+// timeout. Non-2xx responses are surfaced as errors rather than silently
+// treated as "no events".
+func FetchEventsFromURL(ctx context.Context, rawURL string) ([]map[string]any, error) {
+	if !IsAllowedURL(rawURL) {
+		return nil, fmt.Errorf("refusing to fetch events from %q: host is not in the configured allowlist", rawURL)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("fetch events request: %w", err)
+	}
+	httpClient := &http.Client{Timeout: defaultEventFetchTimeout}
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("fetch events: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		return nil, fmt.Errorf("fetch events returned status %d", resp.StatusCode)
+	}
+	var events []map[string]any
+	decoder := json.NewDecoder(io.LimitReader(resp.Body, maxCLIResponseBytes+1))
+	if err := decoder.Decode(&events); err != nil {
+		return nil, fmt.Errorf("decode fetched events: %w", err)
+	}
+	return events, nil
+}
 
 // RunCortexCommand executes the local cortex binary from the cortex repo.
 func RunCortexCommand(ctx context.Context, cortexRepoPath string, args []string) error {

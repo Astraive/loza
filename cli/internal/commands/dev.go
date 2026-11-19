@@ -42,14 +42,21 @@ func DevCommand(ctx context.Context, cfg config.Config, _ []string) error {
 
 	// Wait for collector to be ready before starting cortex
 	collectorURL := collectorHealthURL(cfg)
+	// Wait for collector to be ready before starting cortex.
+	// Bound every probe with both a client timeout and the caller's context.
+	collectorURL := "http://localhost:9308/health"
+	probeClient := &http.Client{Timeout: 2 * time.Second}
 	fmt.Println("Waiting for collector to be ready...")
 	for i := 0; i < 30; i++ {
 		time.Sleep(1 * time.Second)
-		resp, err := http.Get(collectorURL)
-		if err == nil {
-			resp.Body.Close()
-			if resp.StatusCode == http.StatusOK {
-				break
+		req, reqErr := http.NewRequestWithContext(ctx, http.MethodGet, collectorURL, nil)
+		if reqErr == nil {
+			resp, err := probeClient.Do(req)
+			if err == nil {
+				resp.Body.Close()
+				if resp.StatusCode == http.StatusOK {
+					break
+				}
 			}
 		}
 		if i == 29 {
