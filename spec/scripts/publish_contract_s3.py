@@ -19,7 +19,7 @@ import hashlib
 import json
 import os
 import sys
-import time
+import uuid
 from pathlib import Path
 import argparse
 
@@ -73,7 +73,7 @@ def main() -> int:
         cf = boto3.client("cloudfront")
         print(f"Creating CloudFront invalidation for distribution {distro}")
         paths = {"Quantity": len(uploaded), "Items": [f"/{k}" for k in uploaded]}
-        cf.create_invalidation(DistributionId=distro, InvalidationBatch={"Paths": paths, "CallerReference": str(int(time.time()))})
+        cf.create_invalidation(DistributionId=distro, InvalidationBatch={"Paths": paths, "CallerReference": str(uuid.uuid4())})
         print("Invalidation requested")
 
     print("Done")
