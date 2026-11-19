@@ -221,7 +221,12 @@ func SampleRoutes(routes ...string) Sampler {
 // bucket, so it cannot emit an initial burst of `rate` events before any time
 // has elapsed; the remaining budget accrues over the window.
 func SampleRateLimited(rate float64, window time.Duration) Sampler {
-	if rate <= 0 || window <= 0 {
+	// NaN and infinities are not valid bucket sizes. Comparisons involving NaN
+	// are always false, so without an explicit check the guard below would be
+	// skipped and a NaN token count would make every ShouldSample call succeed.
+	// Treat any non-finite (or non-positive) rate as an invalid configuration
+	// and drop all events instead.
+	if math.IsNaN(rate) || math.IsInf(rate, 0) || rate <= 0 || window <= 0 {
 		return SampleNone()
 	}
 	return &rateLimitedSampler{
