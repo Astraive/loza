@@ -321,6 +321,9 @@ func IsPublicCredentialUsername(username string) bool {
 }
 
 // isLocalhost returns true for localhost, 127.0.0.1, or ::1.
+// DNS hostnames are case-insensitive, so matching is case-insensitive too.
 func isLocalhost(host string) bool {
-	return host == "localhost" || host == "127.0.0.1" || host == "::1"
+	return strings.EqualFold(host, "localhost") ||
+		strings.EqualFold(host, "127.0.0.1") ||
+		strings.EqualFold(host, "::1")
 }

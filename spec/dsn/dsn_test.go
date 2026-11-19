@@ -505,6 +505,55 @@ func TestParseAcceptsValidCollectorSlugs(t *testing.T) {
 			want := "https://host:443/collectors/" + slug + "/events"
 			if dsn.EventsURL != want {
 				t.Fatalf("EventsURL = %q, want %q", dsn.EventsURL, want)
+// DNS hostnames are case-insensitive, so mixed/uppercase spellings of
+// localhost must take the same TLS/port defaults as lowercase "localhost".
+func TestParseLocalhostHostnameCaseInsensitive(t *testing.T) {
+	tests := []struct {
+		input    string
+		wantHost string
+		wantBase string
+		wantWS   string
+		wantTLS  bool
+		wantPort int
+	}{
+		{
+			input:    "loza://LOCALHOST/demo",
+			wantHost: "LOCALHOST",
+			wantTLS:  false,
+			wantPort: 9308,
+			wantBase: "http://LOCALHOST:9308",
+			wantWS:   "ws://LOCALHOST:9308",
+		},
+		{
+			input:    "loza://LocalHost/demo?tls=auto",
+			wantHost: "LocalHost",
+			wantTLS:  false,
+			wantPort: 9308,
+			wantBase: "http://LocalHost:9308",
+			wantWS:   "ws://LocalHost:9308",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			got, err := Parse(tt.input)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.Host != tt.wantHost {
+				t.Errorf("Host = %q, want %q", got.Host, tt.wantHost)
+			}
+			if got.TLS != tt.wantTLS {
+				t.Errorf("TLS = %v, want %v", got.TLS, tt.wantTLS)
+			}
+			if got.Port != tt.wantPort {
+				t.Errorf("Port = %d, want %d", got.Port, tt.wantPort)
+			}
+			if got.BaseURL != tt.wantBase {
+				t.Errorf("BaseURL = %q, want %q", got.BaseURL, tt.wantBase)
+			}
+			if got.TailWSURL != tt.wantWS+"/collectors/demo/tail" {
+				t.Errorf("TailWSURL = %q, want %q", got.TailWSURL, tt.wantWS+"/collectors/demo/tail")
 			}
 		})
 	}
