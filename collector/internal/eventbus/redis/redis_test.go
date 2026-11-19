@@ -6,6 +6,8 @@ import (
 	"errors"
 	"sync"
 	"sync/atomic"
+	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -13,6 +15,75 @@ import (
 	"github.com/astraive/loza/collector/internal/eventbus"
 	goredis "github.com/redis/go-redis/v9"
 )
+
+// redisErrorStub mimics a go-redis server reply so we can exercise wrapped
+// errors without a live Redis instance.
+type redisErrorStub string
+
+func (e redisErrorStub) Error() string { return string(e) }
+func (e redisErrorStub) RedisError()   {}
+
+// TestIsBusyGroupErr is the regression test for the BUSYGROUP detection used
+// by both New and Subscribe. The wrapped-reply cases fail with the old exact
+// string comparison that New used (and that isBusyGroupErr inherited).
+func TestIsBusyGroupErr(t *testing.T) {
+	const exact = "BUSYGROUP Consumer Group name already exists"
+
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"nil", nil, false},
+		{"exact message", errors.New(exact), true},
+		{"prefix variant", errors.New(exact + " (driver variant)"), true},
+		{"wrapped redis reply", fmt.Errorf("create group: %w", redisErrorStub(exact)), true},
+		{"ERR prefixed reply", redisErrorStub("ERR " + exact), true},
+		{"unrelated error", errors.New("WRONGTYPE Operation against a key"), false},
+		{"other BUSY code", redisErrorStub("BUSYKEY Target key name already exists"), false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isBusyGroupErr(tt.err); got != tt.want {
+				t.Fatalf("isBusyGroupErr(%v) = %v, want %v", tt.err, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestNewPreexistingGroup verifies the real New code path: starting with a
+// group that already exists must not fail. This exercises the New call site
+// that previously used a brittle exact-string comparison.
+func TestNewPreexistingGroup(t *testing.T) {
+	m := miniredis.RunT(t)
+	defer m.Close()
+
+	ctx := context.Background()
+	const stream = "loza.test.events"
+	const group = "loza-test-group"
+
+	setup := goredis.NewClient(&goredis.Options{Addr: m.Addr()})
+	defer setup.Close()
+	if err := setup.XGroupCreateMkStream(ctx, stream, group, "0").Err(); err != nil {
+		t.Fatalf("pre-create group: %v", err)
+	}
+
+	bus, err := New(ctx, eventbus.Config{
+		Type:          "redis",
+		Topic:         stream,
+		ConsumerGroup: group,
+		Redis: eventbus.RedisConfig{
+			Addr:   m.Addr(),
+			Stream: stream,
+			Group:  group,
+		},
+	})
+	if err != nil {
+		t.Fatalf("New with pre-existing group: %v", err)
+	}
+	defer bus.Close(ctx)
+}
 
 func TestRedisRequiresConnection(t *testing.T) {
 	_, err := New(context.Background(), eventbus.Config{
