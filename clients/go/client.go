@@ -215,7 +215,9 @@ func newConfigError(message string) error {
 }
 
 func isLocalhost(host string) bool {
-	return host == "localhost" || host == "127.0.0.1" || host == "::1"
+	return strings.EqualFold(host, "localhost") ||
+		strings.EqualFold(host, "127.0.0.1") ||
+		strings.EqualFold(host, "::1")
 }
 
 // Query forwards source and typed named parameters to Collector's scoped route.

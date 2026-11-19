@@ -64,6 +64,12 @@ func TestParseLozaDSNResolvesDefaultsAndOverrides(t *testing.T) {
 			env: "default",
 		},
 		{
+			name: "uppercase localhost auto port",
+			dsn: "loza://LOCALHOST/demo",
+			baseURL: "http://LOCALHOST:9308",
+			env: "default",
+		},
+		{
 			name: "explicit tls port and IPv6",
 			dsn: "loza://user:secret@[::1]:9443/demo?tls=true&transport=http",
 			baseURL: "https://[::1]:9443",
