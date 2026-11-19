@@ -73,8 +73,13 @@ func applyConfigDefaults(cfg *Config) {
 		enc.ExpandDotKeys = cfg.FieldNaming.ExpandDotKeys
 		cfg.Encoder = enc
 	} else if !cfg.FieldNaming.ExpandDotKeys {
-		if enc, ok := cfg.Encoder.(*JSONEventEncoder); ok {
-			enc.ExpandDotKeys = false
+		if enc, ok := cfg.Encoder.(*JSONEventEncoder); ok && enc.ExpandDotKeys {
+			// The encoder is caller-owned and may be shared across configs or
+			// loggers. Mutating it in place would silently change encoding
+			// behavior for every other owner. Work on a copy instead.
+			encCopy := *enc
+			encCopy.ExpandDotKeys = false
+			cfg.Encoder = &encCopy
 		}
 	}
 	if cfg.Sink != nil && len(cfg.Sinks) == 0 {
