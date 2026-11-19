@@ -9,11 +9,43 @@ import (
 )
 
 func TestParseLevel(t *testing.T) {
-	if got := parseLevel("debug"); got != zerolog.DebugLevel {
-		t.Fatalf("expected debug level, got %v", got)
+	tests := []struct {
+		name    string
+		input   string
+		want    zerolog.Level
+		wantErr bool
+	}{
+		{name: "debug", input: "debug", want: zerolog.DebugLevel},
+		{name: "info", input: "info", want: zerolog.InfoLevel},
+		{name: "warn", input: "warn", want: zerolog.WarnLevel},
+		{name: "error", input: "error", want: zerolog.ErrorLevel},
+		{name: "case insensitive", input: "DEBUG", want: zerolog.DebugLevel},
+		{name: "surrounding whitespace", input: " warn ", want: zerolog.WarnLevel},
+		{name: "unknown level returns error", input: "unknown", want: zerolog.InfoLevel, wantErr: true},
+		{name: "typo returns error", input: "warnd", want: zerolog.InfoLevel, wantErr: true},
+		{name: "empty level returns error", input: "", want: zerolog.InfoLevel, wantErr: true},
 	}
-	if got := parseLevel("unknown"); got != zerolog.InfoLevel {
-		t.Fatalf("expected info fallback, got %v", got)
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := parseLevel(tt.input)
+			if got != tt.want {
+				t.Fatalf("parseLevel(%q) level = %v, want %v", tt.input, got, tt.want)
+			}
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("parseLevel(%q) error = %v, wantErr %v", tt.input, err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestParseLevelUnknownErrorMentionsValue(t *testing.T) {
+	_, err := parseLevel("bogus")
+	if err == nil {
+		t.Fatal("expected an error for an unknown level")
+	}
+	if !strings.Contains(err.Error(), "bogus") {
+		t.Fatalf("expected error to name the invalid level, got %q", err)
 	}
 }
 
