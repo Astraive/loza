@@ -716,6 +716,21 @@ func TestHTTPTransport_IsRetryableError(t *testing.T) {
 			retryable: false,
 		},
 		{
+			name:      "wrapped timeout error",
+			err:       fmt.Errorf("dial: %w", &timeoutError{}),
+			retryable: true,
+		},
+		{
+			name:      "multiply wrapped timeout error",
+			err:       fmt.Errorf("request failed: %w", fmt.Errorf("dial: %w", &timeoutError{})),
+			retryable: true,
+		},
+		{
+			name:      "wrapped non-timeout network error",
+			err:       fmt.Errorf("dial: %w", &temporaryError{}),
+			retryable: false,
+		},
+		{
 			name:      "generic error",
 			err:       errors.New("generic error"),
 			retryable: false,

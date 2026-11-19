@@ -3,6 +3,7 @@ package core
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -192,8 +193,10 @@ func readHTTPTransportResponse(body io.Reader) ([]byte, error) {
 
 // isRetryableError determines if an error is retryable.
 func (t *HTTPTransport) isRetryableError(err error) bool {
-	// Network errors are generally retryable
-	if netErr, ok := err.(net.Error); ok {
+	// Network errors are generally retryable. Use errors.As so that wrapped
+	// transport errors (e.g. fmt.Errorf("dial: %w", netErr)) are also detected.
+	var netErr net.Error
+	if errors.As(err, &netErr) {
 		return netErr.Timeout()
 	}
 	return false
