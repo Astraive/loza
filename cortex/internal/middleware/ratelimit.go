@@ -23,6 +23,9 @@ type RateLimiter struct {
 	mu             sync.Mutex
 	cleanupTick    *time.Ticker
 	trustedProxies []*net.IPNet
+	stopCh         chan struct{}
+	stopOnce       sync.Once
+	done           chan struct{}
 }
 
 // RateLimiterOption configures the RateLimiter.
@@ -41,12 +44,25 @@ func NewRateLimiter(perAPIKeyRPM, perIPRPM int, opts ...RateLimiterOption) *Rate
 		apiKeys:      make(map[string]*clientLimiter),
 		ips:          make(map[string]*clientLimiter),
 		cleanupTick:  time.NewTicker(5 * time.Minute),
+		stopCh:       make(chan struct{}),
+		done:         make(chan struct{}),
 	}
 	for _, o := range opts {
 		o(rl)
 	}
 	go rl.cleanup()
 	return rl
+}
+
+// Stop stops the background cleanup goroutine and its ticker. It is safe to
+// call Stop multiple times and from multiple goroutines; every limiter that
+// was created should be stopped when it is no longer needed so its goroutine
+// and ticker are released.
+func (rl *RateLimiter) Stop() {
+	rl.stopOnce.Do(func() {
+		rl.cleanupTick.Stop()
+		close(rl.stopCh)
+	})
 }
 
 func (rl *RateLimiter) getAPIKeyLimiter(key string) *rate.Limiter {
@@ -84,20 +100,26 @@ func (rl *RateLimiter) getIPLimiter(ip string) *rate.Limiter {
 }
 
 func (rl *RateLimiter) cleanup() {
-	for range rl.cleanupTick.C {
-		rl.mu.Lock()
-		cutoff := time.Now().Add(-10 * time.Minute)
-		for key, cl := range rl.apiKeys {
-			if cl.lastSeen.Before(cutoff) {
-				delete(rl.apiKeys, key)
+	defer close(rl.done)
+	for {
+		select {
+		case <-rl.cleanupTick.C:
+			rl.mu.Lock()
+			cutoff := time.Now().Add(-10 * time.Minute)
+			for key, cl := range rl.apiKeys {
+				if cl.lastSeen.Before(cutoff) {
+					delete(rl.apiKeys, key)
+				}
 			}
-		}
-		for ip, cl := range rl.ips {
-			if cl.lastSeen.Before(cutoff) {
-				delete(rl.ips, ip)
+			for ip, cl := range rl.ips {
+				if cl.lastSeen.Before(cutoff) {
+					delete(rl.ips, ip)
+				}
 			}
+			rl.mu.Unlock()
+		case <-rl.stopCh:
+			return
 		}
-		rl.mu.Unlock()
 	}
 }
 

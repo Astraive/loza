@@ -142,6 +142,14 @@ func NewServer(cfg *config.Config, stor storage.Storage) *Server {
 	return s
 }
 
+// Stop releases background resources owned by the server. It stops the rate
+// limiter's cleanup goroutine and ticker if rate limiting is enabled.
+func (s *Server) Stop() {
+	if s.rateLimit != nil {
+		s.rateLimit.Stop()
+	}
+}
+
 func (s *Server) Router() http.Handler {
 	r := chi.NewRouter()
 
@@ -561,6 +569,7 @@ func (s *Server) Start(addr string) error {
 
 func StartServer(cfg *config.Config, stor storage.Storage) error {
 	srv := NewServer(cfg, stor)
+	defer srv.Stop()
 	addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)
 	return srv.Start(addr)
 }
