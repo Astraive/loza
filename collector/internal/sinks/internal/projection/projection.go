@@ -100,6 +100,10 @@ func parsePath(path string) ([]pathSegment, error) {
 					// Nested index segment, e.g. matrix[0][1].
 				default:
 					return nil, fmt.Errorf("invalid path %q: missing separator after index", path)
+			if i < len(path) && path[i] == '.' {
+				i++
+				if i >= len(path) {
+					return nil, fmt.Errorf("invalid path %q: trailing dot", path)
 				}
 			}
 		default:
