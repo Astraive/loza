@@ -66,6 +66,16 @@ curl -fsSL https://raw.githubusercontent.com/astraive/loza/main/cli/install/inst
 irm https://raw.githubusercontent.com/astraive/loza/main/cli/install/install.ps1 | iex
 ```
 
+### Release verification
+
+Both installers pin downloads to the official `astraive/loza` GitHub release over HTTPS and verify the archive's SHA-256 against the `<asset>.sha256` sidecar published with every release before installing anything. A missing, malformed, mismatched, or wrong-asset checksum aborts the install; so does a non-HTTPS or non-GitHub download URL. The `LOZA_REPO` override is accepted only when it names that same official repository — it cannot redirect the installer to an arbitrary repository. Set `LOZA_INSTALL_DIR` to change the install location.
+
+For a manual install, download the archive and its `.sha256` sidecar from the release page and verify them yourself:
+
+```bash
+sha256sum -c loza_<version>_<os>_<arch>.tar.gz.sha256
+```
+
 ## Install SDKs
 
 ```bash

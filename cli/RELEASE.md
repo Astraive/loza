@@ -54,6 +54,17 @@ The CLI is a single binary. Distribute via:
 - `go install github.com/astraive/loza/cli/cmd/loza@latest`
 - Build from source: `go build -o loza.exe ./cmd/loza`
 
+### Release assets and verification
+
+The `publish-cli` workflow publishes one archive per platform plus a
+`<archive>.sha256` sidecar containing `<sha256>  <archive-name>` and an
+SLSA build attestation. Both install scripts download the sidecar from the
+same HTTPS GitHub release and verify the archive's SHA-256 before installing;
+they refuse to install on a missing, malformed, or mismatched checksum. Do not
+publish a CLI release without the `.sha256` sidecars — installers fail closed
+when they are absent. `LOZA_REPO` is restricted to the official release
+repository so an override cannot redirect downloads to a third party.
+
 ## Post-release
 
 1. Verify `loza doctor` reports all checks passing.
