@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -96,6 +97,12 @@ func TestRunEventPanicPreservesErrorIdentity(t *testing.T) {
 	cfg.Sinks = []Sink{sink}
 	cfg.PanicRecovery = true
 
+// setupRunEventLogger installs a logger with a capture sink as the default and
+// returns a cleanup that restores the previous default.
+func setupRunEventLogger(t *testing.T) {
+	t.Helper()
+	cfg := Test()
+	cfg.Sinks = []Sink{&captureSink{}}
 	l, err := New(cfg)
 	if err != nil {
 		t.Fatalf("new logger: %v", err)
@@ -152,3 +159,51 @@ func TestPanicRunErrorUnwrapNonError(t *testing.T) {
 		t.Fatalf("Unwrap of nil receiver: got=%v want=nil", got)
 	}
 }
+	prev := Default()
+	SetDefault(l)
+	t.Cleanup(func() { SetDefault(prev) })
+}
+
+// TestRunEventPropagatesFinishError verifies that a failure to record the
+// outcome in the deferred Finish is returned to the caller instead of being
+// silently discarded. The event is emitted inside fn so it is already closed
+// when the wrapper's deferred Finish runs, which makes Finish return an
+// EventClosedError.
+func TestRunEventPropagatesFinishError(t *testing.T) {
+	setupRunEventLogger(t)
+
+	err := RunEvent(context.Background(), Params{Event: "finish.error"}, func(ctx context.Context) error {
+		return Default().Emit(ctx)
+	})
+	if err == nil {
+		t.Fatalf("expected Finish failure to be propagated, got nil")
+	}
+
+	var closed *EventClosedError
+	if !errors.As(err, &closed) {
+		t.Fatalf("expected EventClosedError, got %T: %v", err, err)
+	}
+}
+
+// TestRunEventPreservesApplicationErrorWhenFinishFails verifies that combining
+// a Finish failure into the named return does not lose the original error from
+// fn; both remain observable to the caller.
+func TestRunEventPreservesApplicationErrorWhenFinishFails(t *testing.T) {
+	setupRunEventLogger(t)
+
+	appErr := errors.New("boom")
+	err := RunEvent(context.Background(), Params{Event: "finish.error.with.fn"}, func(ctx context.Context) error {
+		_ = Default().Emit(ctx)
+		return appErr
+	})
+	if err == nil {
+		t.Fatalf("expected an error")
+	}
+	if !errors.Is(err, appErr) {
+		t.Fatalf("expected application error to be preserved, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "finish failed") {
+		t.Fatalf("expected Finish failure to be combined into the error, got %v", err)
+	}
+}
+
