@@ -1,6 +1,12 @@
 import http from 'node:http';
 import https from 'node:https';
 
+/** Loopback hosts are the only plaintext endpoints where sending a credential is safe. */
+function isLoopbackHost(hostname: string): boolean {
+  const host = hostname.replace(/^\[|\]$/g, '');
+  return host === 'localhost' || host === '127.0.0.1' || host === '::1';
+}
+
 export interface CortexClientOptions {
   url: string;
   apiKey?: string;
@@ -157,6 +163,13 @@ export class CortexClient {
     this.apiKey = opts.apiKey || '';
     this.timeout = opts.timeout || 5000;
     this.maxResponseBytes = opts.maxResponseBytes || 10 * 1024 * 1024;
+    // Fail fast rather than transmitting the API key in cleartext to a remote host.
+    if (this.apiKey) {
+      const endpoint = new URL(this.url);
+      if (endpoint.protocol === 'http:' && !isLoopbackHost(endpoint.hostname)) {
+        throw new Error('invalid CortexClient options: API keys require HTTPS (HTTP is allowed only for localhost)');
+      }
+    }
   }
 
   /** Check if cortex is healthy. */
@@ -254,7 +267,8 @@ export class CortexClient {
       const mod = isHttps ? https : http;
 
       const headers: Record<string, string> = {};
-      if (this.apiKey) headers['x-api-key'] = this.apiKey;
+      // Never attach the credential to a non-TLS request to a remote host.
+      if (this.apiKey && (isHttps || isLoopbackHost(url.hostname))) headers['x-api-key'] = this.apiKey;
       if (body) {
         headers['Content-Type'] = contentType || 'application/json';
         headers['Content-Length'] = Buffer.byteLength(body).toString();

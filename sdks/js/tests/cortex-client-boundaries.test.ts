@@ -80,6 +80,30 @@ describe('Cortex client boundaries', () => {
         res.statusCode = 200;
         res.end('{}');
       });
+  it('does not transmit the API key to a plaintext remote host', () => {
+    // Regression: an http:// URL used to send x-api-key without TLS.
+    assert.throws(
+      () => new CortexClient({ url: 'http://example.com', apiKey: 'secret' }),
+      /require HTTPS/,
+    );
+    assert.throws(
+      () => new CortexClient({ url: 'http://cortex.internal:9308/', apiKey: 'secret' }),
+      /require HTTPS/,
+    );
+    // No credential, TLS, and loopback endpoints remain allowed.
+    assert.doesNotThrow(() => new CortexClient({ url: 'http://example.com' }));
+    assert.doesNotThrow(() => new CortexClient({ url: 'https://example.com', apiKey: 'secret' }));
+    assert.doesNotThrow(() => new CortexClient({ url: 'http://localhost:9308', apiKey: 'secret' }));
+    assert.doesNotThrow(() => new CortexClient({ url: 'http://127.0.0.1:9308', apiKey: 'secret' }));
+    assert.doesNotThrow(() => new CortexClient({ url: 'http://[::1]:9308', apiKey: 'secret' }));
+  });
+
+  it('still sends the API key header to an allowed loopback endpoint', async () => {
+    let seenKey: string | undefined;
+    const server = http.createServer((req, res) => {
+      seenKey = req.headers['x-api-key'] as string | undefined;
+      res.statusCode = 200;
+      res.end('{}');
     });
     const gate = Promise.withResolvers<void>();
     server.once('error', gate.reject);
@@ -101,6 +125,14 @@ describe('Cortex client boundaries', () => {
       assert.equal('timestamp' in sent, false);
     } finally {
       await new Promise<void>((resolve, reject) => server.close(err => err ? reject(err) : resolve()));
+    try {
+      const address = server.address();
+      if (!address || typeof address === 'string') throw new Error('missing address');
+      const client = new CortexClient({ url: `http://127.0.0.1:${address.port}`, apiKey: 'secret' });
+      assert.equal(await client.health(), true);
+      assert.equal(seenKey, 'secret');
+    } finally {
+      await stopCortex(server);
     }
   });
 
