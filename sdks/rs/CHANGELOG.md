@@ -19,6 +19,12 @@ All notable changes to the LOZA Rust SDK are documented in this file.
   tables and did not provide real redaction. Set `LOZA_HASH_SECRET` to a stable
   secret shared by all producers when hashes must remain comparable across
   processes or restarts; when it is unset, a random per-process key is used.
+### Security
+
+- Scope the default storage/spool directory to the current user instead of a
+  fixed name in the shared temp dir, and add `create_default_storage_dir()` to
+  create it with `0700` permissions while refusing symlinks. `default_storage_dir()`
+  keeps its `PathBuf` return type; call the new creation helper before writing.
 
 ## [0.3.4] - 2026-08-26
 
