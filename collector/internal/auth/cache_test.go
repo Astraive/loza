@@ -192,3 +192,56 @@ func TestMemoryKeyCache_InvalidateKeepsListConsistent(t *testing.T) {
 		t.Fatal("expected k3 to remain cached")
 	}
 }
+
+// Regression test for MASS-0151: a non-positive defaultTTL used to be assigned
+// directly to cleanupInterval, making time.NewTicker panic in the cleanup
+// goroutine and crash the process. Non-positive TTLs must now be clamped.
+func TestMemoryKeyCache_NonPositiveTTLsAreClamped(t *testing.T) {
+	tests := []struct {
+		name        string
+		defaultTTL  time.Duration
+		negativeTTL time.Duration
+	}{
+		{name: "zero", defaultTTL: 0, negativeTTL: 0},
+		{name: "negative", defaultTTL: -time.Second, negativeTTL: -time.Second},
+		{name: "zero default negative only", defaultTTL: 0, negativeTTL: 5 * time.Second},
+		{name: "positive default negative only", defaultTTL: 10 * time.Second, negativeTTL: 0},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cache := NewMemoryKeyCache(tt.defaultTTL, tt.negativeTTL)
+			defer cache.Close()
+
+			wantDefault := tt.defaultTTL
+			if wantDefault <= 0 {
+				wantDefault = defaultCacheTTL
+			}
+			wantNegative := tt.negativeTTL
+			if wantNegative <= 0 {
+				wantNegative = defaultNegativeTTL
+			}
+
+			if cache.defaultTTL != wantDefault {
+				t.Errorf("defaultTTL = %v, want %v", cache.defaultTTL, wantDefault)
+			}
+			if cache.negativeTTL != wantNegative {
+				t.Errorf("negativeTTL = %v, want %v", cache.negativeTTL, wantNegative)
+			}
+			// The cleanup interval drives time.NewTicker and must stay positive.
+			if cache.cleanupInterval <= 0 {
+				t.Fatalf("cleanupInterval = %v, want a positive duration", cache.cleanupInterval)
+			}
+
+			// The clamped cache must remain fully functional.
+			cache.Set("k", &KeyRecord{KeyID: "k"}, 0)
+			if _, ok := cache.Get("k"); !ok {
+				t.Error("expected cache hit with clamped default TTL")
+			}
+			cache.SetNegative("k_missing")
+			if _, ok := cache.Get("k_missing"); ok {
+				t.Error("expected miss for negative cache entry with clamped negative TTL")
+			}
+		})
+	}
+}

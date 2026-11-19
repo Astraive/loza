@@ -11,6 +11,13 @@ import (
 // submitted by unauthenticated clients.
 const defaultMaxCacheEntries = 10000
 
+// Fallback TTLs used when a non-positive value is supplied to NewMemoryKeyCache.
+// They mirror the collector's configured defaults (5m cache / 30s negative).
+const (
+	defaultCacheTTL    = 5 * time.Minute
+	defaultNegativeTTL = 30 * time.Second
+)
+
 type cacheEntry struct {
 	record   *KeyRecord
 	expires  time.Time
@@ -43,10 +50,19 @@ func NewMemoryKeyCache(defaultTTL, negativeTTL time.Duration) *MemoryKeyCache {
 // NewMemoryKeyCacheWithMaxEntries creates a new cache with the given TTLs and a
 // cap on the number of entries. Inserts beyond maxEntries evict the least
 // recently used entry. A maxEntries <= 0 selects the default cap.
+// Non-positive TTLs are clamped to safe defaults; in particular this keeps the
+// cleanup interval positive so time.NewTicker cannot panic in the cleanup goroutine.
 func NewMemoryKeyCacheWithMaxEntries(defaultTTL, negativeTTL time.Duration, maxEntries int) *MemoryKeyCache {
 	if maxEntries <= 0 {
 		maxEntries = defaultMaxCacheEntries
 	}
+	if defaultTTL <= 0 {
+		defaultTTL = defaultCacheTTL
+	}
+	if negativeTTL <= 0 {
+		negativeTTL = defaultNegativeTTL
+	}
+
 	c := &MemoryKeyCache{
 		entries:         make(map[string]*cacheEntry),
 		lru:             list.New(),
