@@ -562,9 +562,80 @@ export function health(sink: Sink): { name: string; status: 'healthy' } {
   return { name: sink.name(), status: 'healthy' };
 }
 
+/** Options accepted by {@link kafkaSink}. */
+export interface KafkaSinkOptions {
+  endpoint?: string;
+  apiKey?: string;
+  username?: string;
+  password?: string;
+  authHeader?: string;
+  sdkName?: string;
+  sdkVersion?: string;
+  service?: string;
+  topic?: string;
+  timeout?: number;
+  retries?: number;
+  baseDelay?: number;
+  maxDelay?: number;
+  enableCompression?: boolean;
+  ndjson?: boolean;
+  batchSize?: number;
+  flushIntervalMs?: number;
+  statsHandler?: StatsHandler;
+}
+
+const KAFKA_SINK_OPTION_KEYS = new Set<keyof KafkaSinkOptions>([
+  'endpoint', 'apiKey', 'username', 'password', 'authHeader', 'sdkName',
+  'sdkVersion', 'service', 'topic', 'timeout', 'retries', 'baseDelay',
+  'maxDelay', 'enableCompression', 'ndjson', 'batchSize', 'flushIntervalMs',
+  'statsHandler',
+]);
+
+/**
+ * Send events to the collector with Kafka routing metadata.
+ *
+ * This is a thin wrapper over HTTPBatchSink: the collector must have a Kafka
+ * sink configured to route events by the `topic`/`service` metadata. All HTTP
+ * batch options (credentials, timeouts, retries, ...) are forwarded to the
+ * underlying sink, and `topic` is used as the routing `service` (matching the
+ * Python SDK's `kafka_sink`). Unsupported keys are rejected rather than
+ * silently discarded.
+ */
 export function kafkaSink(config?: Record<string, unknown>): Sink {
-  const endpoint = (config?.endpoint as string) || 'http://127.0.0.1:9308/events';
-  return new HTTPBatchSink({ endpoint });
+  const raw = config ?? {};
+  const unsupported = Object.keys(raw)
+    .filter(key => !KAFKA_SINK_OPTION_KEYS.has(key as keyof KafkaSinkOptions))
+    .sort();
+  if (unsupported.length > 0) {
+    throw new Error(
+      `invalid kafka sink options: unsupported key(s): ${unsupported.join(', ')}. ` +
+      `Supported keys: ${[...KAFKA_SINK_OPTION_KEYS].sort().join(', ')}`
+    );
+  }
+
+  const endpoint = (raw.endpoint as string) || 'http://127.0.0.1:9308/events';
+  const topic = raw.topic as string | undefined;
+  const service = topic || (raw.service as string | undefined) || '';
+
+  return new HTTPBatchSink({
+    endpoint,
+    service,
+    apiKey: raw.apiKey as string | undefined,
+    username: raw.username as string | undefined,
+    password: raw.password as string | undefined,
+    authHeader: raw.authHeader as string | undefined,
+    sdkName: raw.sdkName as string | undefined,
+    sdkVersion: raw.sdkVersion as string | undefined,
+    timeout: raw.timeout as number | undefined,
+    retries: raw.retries as number | undefined,
+    baseDelay: raw.baseDelay as number | undefined,
+    maxDelay: raw.maxDelay as number | undefined,
+    enableCompression: raw.enableCompression as boolean | undefined,
+    ndjson: raw.ndjson as boolean | undefined,
+    batchSize: raw.batchSize as number | undefined,
+    flushIntervalMs: raw.flushIntervalMs as number | undefined,
+    statsHandler: raw.statsHandler as StatsHandler | undefined,
+  });
 }
 
 export function httpSink(opts: HTTPBatchSinkOptions): HTTPBatchSink {
