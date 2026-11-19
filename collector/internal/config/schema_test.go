@@ -252,3 +252,64 @@ schema_governance:
 	assert.Equal(t, 7*time.Second, cfg.Collector.ReadHeaderTimeout)
 	assert.Equal(t, int64(4), cfg.Limits.MaxEventBytes)
 }
+
+func TestFindDefaultsFileRejectsRelativeOverride(t *testing.T) {
+	t.Setenv(defaultsEnvVar, filepath.Join("..", "planted", defaultsFileName))
+
+	_, err := findDefaultsFile()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "must be absolute")
+}
+
+func TestFindDefaultsFileRejectsTraversalOverride(t *testing.T) {
+	dir := t.TempDir()
+	plant := filepath.Join(dir, "planted.yaml")
+	require.NoError(t, os.WriteFile(plant, []byte("auth:\n  enabled: false\n"), 0o644))
+
+	t.Setenv(defaultsEnvVar, dir+string(filepath.Separator)+"safe"+string(filepath.Separator)+".."+string(filepath.Separator)+"planted.yaml")
+	_, err := findDefaultsFile()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "traversal")
+}
+
+func TestFindDefaultsFileRejectsWorldWritableOverride(t *testing.T) {
+	dir := t.TempDir()
+	plant := filepath.Join(dir, "planted.yaml")
+	require.NoError(t, os.WriteFile(plant, []byte("auth:\n  enabled: false\n"), 0o644))
+	require.NoError(t, os.Chmod(plant, 0o666))
+
+	t.Setenv(defaultsEnvVar, plant)
+	_, err := findDefaultsFile()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "insecure permissions")
+}
+
+func TestFindDefaultsFilePrefersTrustedPathOverCWD(t *testing.T) {
+	dir := t.TempDir()
+	trusted := filepath.Join(dir, "trusted.yaml")
+	planted := filepath.Join(dir, defaultsFileName)
+	require.NoError(t, os.WriteFile(trusted, []byte("collector:\n  addr: \":10001\"\n"), 0o600))
+	require.NoError(t, os.WriteFile(planted, []byte("collector:\n  addr: \":10002\"\nauth:\n  enabled: false\n"), 0o600))
+
+	origTrusted, origCWD := defaultsTrustedPaths, defaultsCWDCandidates
+	t.Cleanup(func() {
+		defaultsTrustedPaths, defaultsCWDCandidates = origTrusted, origCWD
+	})
+	defaultsTrustedPaths = []string{trusted}
+	defaultsCWDCandidates = []string{planted}
+
+	t.Setenv(defaultsEnvVar, "")
+	got, err := findDefaultsFile()
+	require.NoError(t, err)
+	assert.Equal(t, trusted, got, "a trusted absolute path must win over a CWD-relative planted file")
+}
+
+func TestDefaultDoesNotLoadInsecureOverride(t *testing.T) {
+	dir := t.TempDir()
+	plant := filepath.Join(dir, "planted.yaml")
+	require.NoError(t, os.WriteFile(plant, []byte("auth:\n  enabled: false\n"), 0o644))
+	require.NoError(t, os.Chmod(plant, 0o666))
+
+	t.Setenv(defaultsEnvVar, plant)
+	assert.Panics(t, func() { Default() }, "Default must fail closed on an unsafe defaults source")
+}
