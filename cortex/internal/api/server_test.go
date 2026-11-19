@@ -732,5 +732,84 @@ func TestHandleSimilarIncidentsWithoutSignatureReturnsEmpty(t *testing.T) {
 	}
 	if calls := server.match.(*similarIncidentMatcher).callCount; calls != 0 {
 		t.Fatalf("FindSimilar called %d times, want 0", calls)
+func readinessCorrelationState(t *testing.T, srv *Server) string {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	srv.Readyz(rec, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+	var payload struct {
+		Checks map[string]string `json:"checks"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode readyz response: %v (%s)", err, rec.Body.String())
+	}
+	return payload.Checks["correlation_analyzer"]
+}
+
+func TestReadyzReportsAnalyzerNotConfigured(t *testing.T) {
+	srv := &Server{config: &config.Config{}, ready: true}
+	if got := readinessCorrelationState(t, srv); got != "not configured" {
+		t.Fatalf("correlation_analyzer = %q, want %q", got, "not configured")
+	}
+}
+
+func TestStartAnalyzerRunsWithManagedContextAndReportsState(t *testing.T) {
+	cfg := config.Default()
+	cfg.Storage.DuckDB.Path = filepath.Join(t.TempDir(), "cortex.duckdb")
+	cfg.Correlation.Enabled = true
+	cfg.Correlation.AnalysisInterval = time.Minute
+	cfg.Correlation.CoOccurrenceWindow = 5 * time.Minute
+	cfg.Correlation.DeploymentAdjacencyWindow = 30 * time.Minute
+	stor, err := storage.NewStorage(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stor.Close()
+
+	srv := NewServer(cfg, stor)
+	if got := readinessCorrelationState(t, srv); got != "stopped" {
+		t.Fatalf("correlation_analyzer before start = %q, want %q", got, "stopped")
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := srv.StartAnalyzer(ctx)
+
+	deadline := time.Now().Add(time.Second)
+	for srv.analyzer.State() != "running" && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if got := readinessCorrelationState(t, srv); got != "running" {
+		t.Fatalf("correlation_analyzer while running = %q, want %q", got, "running")
+	}
+
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("analyzer did not stop after context cancellation")
+	}
+	if got := readinessCorrelationState(t, srv); got != "stopped" {
+		t.Fatalf("correlation_analyzer after stop = %q, want %q", got, "stopped")
+	}
+}
+
+func TestStartAnalyzerDisabledReturnsClosedDone(t *testing.T) {
+	cfg := config.Default()
+	cfg.Storage.DuckDB.Path = filepath.Join(t.TempDir(), "cortex.duckdb")
+	cfg.Correlation.Enabled = false
+	stor, err := storage.NewStorage(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stor.Close()
+
+	srv := NewServer(cfg, stor)
+	done := srv.StartAnalyzer(context.Background())
+	select {
+	case <-done:
+	default:
+		t.Fatal("expected already-closed done channel for disabled analyzer")
+	}
+	if got := readinessCorrelationState(t, srv); got != "disabled" {
+		t.Fatalf("correlation_analyzer = %q, want %q", got, "disabled")
 	}
 }

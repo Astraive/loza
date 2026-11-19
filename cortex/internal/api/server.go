@@ -141,6 +141,28 @@ func (s *Server) Stop() {
 	if s.rateLimit != nil {
 		s.rateLimit.Stop()
 	}
+// StartAnalyzer launches the correlation analyzer under ctx and returns a channel
+// that is closed once the analyzer has fully stopped. The caller owns ctx and must
+// cancel it to trigger graceful shutdown of the analyzer.
+func (s *Server) StartAnalyzer(ctx context.Context) <-chan struct{} {
+	done := make(chan struct{})
+	if s.analyzer == nil || !s.analyzer.Enabled() {
+		close(done)
+		return done
+	}
+	go func() {
+		defer close(done)
+		s.analyzer.Run(ctx)
+	}()
+	return done
+}
+
+// analyzerState reports the correlation analyzer lifecycle state for status checks.
+func (s *Server) analyzerState() string {
+	if s.analyzer == nil {
+		return "not configured"
+	}
+	return string(s.analyzer.State())
 }
 
 func (s *Server) Router() http.Handler {
@@ -242,6 +264,9 @@ func (s *Server) Readyz(w http.ResponseWriter, r *http.Request) {
 		ready = false
 		checks["processor"] = "not initialized"
 	}
+
+	// Report the correlation analyzer lifecycle state (informational).
+	checks["correlation_analyzer"] = s.analyzerState()
 
 	// Verify storage is responsive with a lightweight query.
 	if s.incidents == nil {

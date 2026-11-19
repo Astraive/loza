@@ -84,6 +84,13 @@ func main() {
 	defer stopSignals()
 
 	syncProcessor := newSyncProcessor(cfg, stor)
+	// Single server construction path: build the Cortex server once, start its
+	// correlation analyzer under the managed process context, and reuse its
+	// router for the HTTP server below.
+	cortexSrv := httpserver.New(cfg, stor)
+	analyzerDone := cortexSrv.StartAnalyzer(processCtx)
+
+	syncProcessor := processor.NewEventProcessor(stor.Events(), stor.Topology(), stor.Graph())
 	syncDone := startCollectorSync(processCtx, cfg.Collector, syncProcessor)
 	if cfg.Collector.SourceOfTruth && cfg.Collector.Mode == "pull" {
 		log.Info().
@@ -115,6 +122,7 @@ func main() {
 	httpSrv := &http.Server{
 		Addr:         addr,
 		Handler:      cortexServer.Router(),
+		Handler:      cortexSrv.Router(),
 		ReadTimeout:  cfg.Server.ReadTimeout,
 		WriteTimeout: cfg.Server.WriteTimeout,
 		TLSConfig:    tlsCfg,
@@ -171,6 +179,9 @@ func main() {
 	if err := httpSrv.Shutdown(shutdownCtx); err != nil {
 		log.Error().Err(err).Msg("Server shutdown error")
 	}
+
+	<-analyzerDone
+	log.Info().Msg("Correlation analyzer stopped")
 
 	<-syncDone
 	log.Info().Msg("Collector source-of-truth sync stopped")
