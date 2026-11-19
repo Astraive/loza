@@ -147,11 +147,11 @@ func hasWriterRole(ctx context.Context) bool {
 		// No auth context means auth is disabled; allow (matches HTTP middleware behavior)
 		return true
 	}
-	roleHierarchy := map[string]int{
-		"reader": 1,
-		"writer": 2,
-		"admin":  3,
+	// Fail closed: an unrecognized role on either side denies access.
+	currentLevel, currentOK := middleware.RoleLevel(result.Role)
+	requiredLevel, requiredOK := middleware.RoleLevel("writer")
+	if !currentOK || !requiredOK {
+		return false
 	}
-	currentLevel := roleHierarchy[result.Role]
-	return currentLevel >= roleHierarchy["writer"]
+	return currentLevel >= requiredLevel
 }

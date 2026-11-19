@@ -145,6 +145,7 @@ func TestRequireRole(t *testing.T) {
 }
 
 func TestRequireRoleRejectsUnknownRequiredRole(t *testing.T) {
+func TestAuthorizeRoleFailsClosedOnUnknownRoles(t *testing.T) {
 	auth := NewAuth(&config.AuthenticationConfig{Enabled: true})
 
 	tests := []struct {
@@ -159,6 +160,19 @@ func TestRequireRoleRejectsUnknownRequiredRole(t *testing.T) {
 		{name: "valid admin required role allowed", requiredRole: "admin", currentRole: "admin", want: http.StatusOK},
 		{name: "empty current role denied", requiredRole: "reader", currentRole: "", want: http.StatusForbidden},
 		{name: "unknown current role denied", requiredRole: "reader", currentRole: "superuser", want: http.StatusForbidden},
+		callerRole   string
+		want         bool
+	}{
+		{name: "admin satisfies admin", requiredRole: "admin", callerRole: "admin", want: true},
+		{name: "admin satisfies writer", requiredRole: "writer", callerRole: "admin", want: true},
+		{name: "writer does not satisfy admin", requiredRole: "admin", callerRole: "writer", want: false},
+		{name: "reader does not satisfy writer", requiredRole: "writer", callerRole: "reader", want: false},
+		// Unknown role on either side must deny.
+		{name: "unknown required role", requiredRole: "admni", callerRole: "admin", want: false},
+		{name: "unknown caller role", requiredRole: "admin", callerRole: "hacker", want: false},
+		{name: "both roles unknown", requiredRole: "admni", callerRole: "hacker", want: false},
+		{name: "empty required role", requiredRole: "", callerRole: "admin", want: false},
+		{name: "empty caller role", requiredRole: "admin", callerRole: "", want: false},
 	}
 
 	for _, tc := range tests {
@@ -178,5 +192,63 @@ func TestRequireRoleRejectsUnknownRequiredRole(t *testing.T) {
 				t.Fatalf("status = %d, want %d", rec.Code, tc.want)
 			}
 		})
+	}
+}
+			r := httptest.NewRequest(http.MethodGet, "/", nil)
+			r = r.WithContext(WithAuthResult(r.Context(), &AuthResult{Authorized: true, Role: tc.callerRole}))
+			if got := auth.authorizeRole(r, tc.requiredRole); got != tc.want {
+				t.Fatalf("authorizeRole(required=%q, caller=%q) = %v, want %v", tc.requiredRole, tc.callerRole, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestAuthorizeRoleWithoutAuthResultDenies(t *testing.T) {
+	auth := NewAuth(&config.AuthenticationConfig{Enabled: true})
+	r := httptest.NewRequest(http.MethodGet, "/", nil)
+	if auth.authorizeRole(r, "reader") {
+		t.Fatal("expected deny when no auth result is present in the context")
+	}
+}
+
+func TestRequireRoleUnknownCallerRoleDenied(t *testing.T) {
+	// An unrecognized role can reach the auth context from an external identity
+	// provider even if config validation was bypassed. It must be denied.
+	auth := NewAuth(&config.AuthenticationConfig{
+		Enabled: true,
+		APIKeys: []config.APIKey{{Name: "key", Key: "secret", Role: "hacker"}},
+	})
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set("X-API-Key", "secret")
+	rec := httptest.NewRecorder()
+	auth.Middleware(auth.RequireRole("admin")(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want %d for unknown caller role", rec.Code, http.StatusForbidden)
+	}
+}
+
+func TestRequireRoleRejectsInvalidRequiredRoleAtRegistration(t *testing.T) {
+	auth := NewAuth(&config.AuthenticationConfig{Enabled: true})
+	defer func() {
+		if recover() == nil {
+			t.Fatal("expected RequireRole to fail fast on an invalid required role")
+		}
+	}()
+	auth.RequireRole("admni")
+}
+
+func TestIsValidRole(t *testing.T) {
+	for _, role := range []string{"reader", "writer", "admin"} {
+		if !IsValidRole(role) {
+			t.Errorf("IsValidRole(%q) = false, want true", role)
+		}
+	}
+	for _, role := range []string{"", "admni", "READER", "hacker"} {
+		if IsValidRole(role) {
+			t.Errorf("IsValidRole(%q) = true, want false", role)
+		}
 	}
 }
