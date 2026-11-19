@@ -28,6 +28,8 @@ function resolveSink(cfg: Config): Sink | null {
       service: cfg.service,
       batchSize: cfg.batchSize,
       flushIntervalMs: cfg.flushIntervalMs,
+      maxQueueSize: cfg.async.queueSize,
+      overflowPolicy: cfg.async.overflowPolicy,
       retries: cfg.maxRetries,
       baseDelay: 100,
       maxDelay: cfg.maxBackoffMs,

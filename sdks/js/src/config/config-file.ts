@@ -298,6 +298,10 @@ export function mergeFileConfig(base: Config, raw: YamlRecord): Config {
     if (a.maxBatchBytes !== undefined && typeof a.maxBatchBytes === 'number') async.maxBatchBytes = a.maxBatchBytes;
     if (a.flush_interval_ms !== undefined && typeof a.flush_interval_ms === 'number') async.flushIntervalMs = a.flush_interval_ms;
     if (a.flushIntervalMs !== undefined && typeof a.flushIntervalMs === 'number') async.flushIntervalMs = a.flushIntervalMs;
+    const overflow = a.overflow_policy ?? a.overflowPolicy;
+    if (overflow === 'drop-oldest' || overflow === 'drop-newest' || overflow === 'block') {
+      async.overflowPolicy = overflow;
+    }
     cfg.async = async;
   }
 

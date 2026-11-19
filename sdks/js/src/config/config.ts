@@ -1,5 +1,6 @@
 import type { Logger } from '../core/logger.ts';
 import type { Sink } from '../sinks/sink.ts';
+import type { OverflowPolicy } from '../sinks/standard-sinks.ts';
 import type { Redactor } from '../redaction/redactor.ts';
 import { defaultRedactor } from '../redaction/redactor.ts';
 import type { Sampler } from '../sampling/sampler.ts';
@@ -68,6 +69,8 @@ export function validateConfig(cfg: Config): Config {
 export interface AsyncConfig {
   enabled: boolean;
   queueSize: number;
+  /** Policy applied when the bounded batch buffer is full. */
+  overflowPolicy: OverflowPolicy;
   workers: number;
   maxBatchBytes: number;
   flushIntervalMs: number;
@@ -199,6 +202,7 @@ export function defaultConfig(): Config {
     async: {
       enabled: false,
       queueSize: 8192,
+      overflowPolicy: 'drop-oldest',
       workers: 1,
       maxBatchBytes: 256 * 1024,
       flushIntervalMs: 100,
@@ -274,6 +278,7 @@ export interface ConfigOptions {
   strict?: boolean;
   async?: boolean;
   asyncQueueSize?: number;
+  overflowPolicy?: OverflowPolicy;
   workers?: number;
   batchSize?: number;
   flushIntervalMs?: number;
@@ -399,6 +404,7 @@ export class ConfigBuilder implements Config {
   withRetry(retries: number): this { this.maxRetries = retries; return this; }
   withTimeout(ms: number): this { this.timeoutMs = ms; return this; }
   withQueueSize(size: number): this { this.async.queueSize = size; return this; }
+  withOverflowPolicy(policy: OverflowPolicy): this { this.async.overflowPolicy = policy; return this; }
   withLogger(logger: Logger): this { this.logger = logger; return this; }
   disabled(): Config { return { ...this, sink: null, sampler: sampleNone() }; }
   build(): Config { return validateConfig({ ...this }); }
@@ -426,6 +432,7 @@ export function withOptions(base: Config, opts: ConfigOptions): Config {
   if (opts.strict !== undefined) cfg.strict = opts.strict;
   if (opts.async !== undefined) cfg.async = { ...cfg.async, enabled: opts.async };
   if (opts.asyncQueueSize !== undefined) cfg.async = { ...cfg.async, enabled: true, queueSize: opts.asyncQueueSize };
+  if (opts.overflowPolicy !== undefined) cfg.async = { ...cfg.async, overflowPolicy: opts.overflowPolicy };
   if (opts.workers !== undefined) cfg.async = { ...cfg.async, workers: opts.workers };
   if (opts.batchSize !== undefined) cfg.batchSize = opts.batchSize;
   if (opts.flushIntervalMs !== undefined) cfg.flushIntervalMs = opts.flushIntervalMs;
@@ -475,3 +482,5 @@ export function WithRetry(retries: number): ConfigOption { return cfg => { cfg.m
 export function WithTimeout(ms: number): ConfigOption { return cfg => { cfg.timeoutMs = ms; return cfg; }; }
 export function WithQueueSize(size: number): ConfigOption { return cfg => { cfg.async.queueSize = size; return cfg; }; }
 export function WithLogger(logger: Logger): ConfigOption { return cfg => withOptions(cfg, { logger }); }
+export function WithOverflowPolicy(policy: OverflowPolicy): ConfigOption { return cfg => withOptions(cfg, { overflowPolicy: policy }); }
+export function WithLogger(_logger: Logger): ConfigOption { return cfg => cfg; }

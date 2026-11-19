@@ -10,6 +10,23 @@ import { isLocalhost, isPublicDSNUsername } from '../config/dsn.ts';
 import { SDK_VERSION } from '../config/version.ts';
 const gzipAsync = promisify(zlibGzip);
 
+/** Policy applied when the batch buffer reaches its configured capacity. */
+export type OverflowPolicy = 'drop-oldest' | 'drop-newest' | 'block';
+
+/** Observable counters describing batch-buffer overflow. */
+export interface SinkMetrics {
+  /** Events currently waiting in the buffer. */
+  queued: number;
+  /** Maximum number of events the buffer may hold (async.queueSize). */
+  capacity: number;
+  /** Total events shed to keep the buffer bounded. */
+  dropped: number;
+  /** Events shed because the buffer was full when a new event arrived. */
+  droppedOnOverflow: number;
+  /** Events shed while re-queuing a batch after a delivery failure. */
+  droppedOnDeliveryFailure: number;
+}
+
 /** Stats handler for collector acknowledgements. */
 export interface StatsHandler {
   onCollectorAck?(data: {
@@ -18,6 +35,7 @@ export interface StatsHandler {
     requestId: string;
     deduped: number;
   }): void;
+  onBufferOverflow?(info: { dropped: number; policy: OverflowPolicy }): void;
 }
 
 export interface DeliveryFailureHandler extends StatsHandler {
@@ -178,6 +196,13 @@ export class HTTPBatchSink implements Sink {
   private enableCompression: boolean;
   private ndjson: boolean;
   private buffer: string[] = [];
+  private maxQueueSize: number;
+  private overflowPolicy: OverflowPolicy;
+  private blockTimeoutMs: number;
+  private _droppedEvents = 0;
+  private _droppedOnOverflow = 0;
+  private _droppedOnDeliveryFailure = 0;
+  private spaceWaiters: Array<() => void> = [];
   private flushTimer: ReturnType<typeof setTimeout> | null = null;
   private flushTail: Promise<void> = Promise.resolve();
   private closed = false;
@@ -203,6 +228,14 @@ export class HTTPBatchSink implements Sink {
     ndjson?: boolean;
     batchSize?: number;
     flushIntervalMs?: number;
+    /** Maximum events buffered while waiting for delivery (async.queueSize). */
+    maxQueueSize?: number;
+    /** Alias for maxQueueSize. */
+    queueSize?: number;
+    /** What to do when the buffer is full. Defaults to drop-oldest. */
+    overflowPolicy?: OverflowPolicy;
+    /** How long the block policy waits for capacity before shedding an event (ms). */
+    blockTimeoutMs?: number;
     statsHandler?: StatsHandler;
   }) {
     this.endpoint = opts.endpoint;
@@ -236,6 +269,10 @@ export class HTTPBatchSink implements Sink {
     this.maxDelay = opts.maxDelay ?? 30000;
     this.enableCompression = opts.enableCompression ?? true;
     this.ndjson = opts.ndjson ?? false;
+    const capacity = opts.maxQueueSize ?? opts.queueSize ?? 8192;
+    this.maxQueueSize = Number.isFinite(capacity) && capacity > 0 ? Math.floor(capacity) : 8192;
+    this.overflowPolicy = opts.overflowPolicy ?? 'drop-oldest';
+    this.blockTimeoutMs = opts.blockTimeoutMs ?? 1000;
     this.batchSize = opts.batchSize || 50;
     this.flushIntervalMs = opts.flushIntervalMs || 5000;
     this.statsHandler = opts.statsHandler || null;
@@ -248,12 +285,97 @@ export class HTTPBatchSink implements Sink {
 
   async write(encoded: string): Promise<void> {
     if (this.closed) throw new Error('httpbatch sink is closed');
-    this.buffer.push(encoded);
+
+    if (this.overflowPolicy === 'block') {
+      // Backpressure: wait for a flush to free capacity. If no space becomes
+      // available (e.g. a sustained outage) shed this event rather than block
+      // the caller forever, and surface the drop through metrics.
+      if (!(await this.ensureRoom())) {
+        this.recordDrop(1, 'overflow');
+      } else {
+        this.buffer.push(encoded);
+      }
+    } else if (this.buffer.length >= this.maxQueueSize) {
+      if (this.overflowPolicy === 'drop-newest') {
+        this.recordDrop(1, 'overflow');
+      } else {
+        // drop-oldest: evict the oldest buffered event to make room.
+        this.buffer.shift();
+        this.buffer.push(encoded);
+        this.recordDrop(1, 'overflow');
+      }
+    } else {
+      this.buffer.push(encoded);
+    }
+
     if (this.buffer.length >= this.batchSize) {
       await this.flush();
     } else {
       this.scheduleFlush();
     }
+  }
+
+  /** Wait until the buffer has free capacity; false means the wait timed out. */
+  private async ensureRoom(): Promise<boolean> {
+    while (this.buffer.length >= this.maxQueueSize) {
+      if (this.closed) return false;
+      const acquired = await new Promise<boolean>((resolve) => {
+        let settled = false;
+        let timer: ReturnType<typeof setTimeout>;
+        const finish = (ok: boolean) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          this.spaceWaiters = this.spaceWaiters.filter(w => w !== waiter);
+          resolve(ok);
+        };
+        const waiter = () => finish(true);
+        timer = setTimeout(() => finish(false), Math.max(this.blockTimeoutMs, 1));
+        this.spaceWaiters.push(waiter);
+      });
+      if (!acquired) return false;
+    }
+    return true;
+  }
+
+  /** Wake buffered writers after a flush frees capacity or the sink closes. */
+  private notifySpace(): void {
+    if (this.spaceWaiters.length === 0) return;
+    const waiters = this.spaceWaiters;
+    this.spaceWaiters = [];
+    for (const wake of waiters) wake();
+  }
+
+  private recordDrop(count: number, source: 'overflow' | 'delivery-failure'): void {
+    if (count <= 0) return;
+    this._droppedEvents += count;
+    if (source === 'overflow') this._droppedOnOverflow += count;
+    else this._droppedOnDeliveryFailure += count;
+    try {
+      (this.statsHandler as DeliveryFailureHandler | null)?.onBufferOverflow?.({
+        dropped: count,
+        policy: this.overflowPolicy,
+      });
+    } catch { /* stats callbacks cannot break delivery */ }
+  }
+
+  /** Re-queue a failed batch without ever growing past the configured capacity. */
+  private restoreFailedBatch(events: string[]): number {
+    const combined = [...events, ...this.buffer];
+    if (combined.length <= this.maxQueueSize) {
+      this.buffer = combined;
+      return 0;
+    }
+    const dropped = combined.length - this.maxQueueSize;
+    if (this.overflowPolicy === 'drop-newest') {
+      // Keep the oldest events (the failed batch and events buffered before it).
+      combined.length = this.maxQueueSize;
+    } else {
+      // drop-oldest (and the block fallback): keep the freshest events.
+      combined.splice(0, dropped);
+    }
+    this.buffer = combined;
+    return dropped;
   }
 
   flush(): Promise<void> {
@@ -271,6 +393,7 @@ export class HTTPBatchSink implements Sink {
 
     const events = this.buffer;
     this.buffer = [];
+    this.notifySpace();
     try {
       const envelope = this.ndjson
         ? events.join('\n')
@@ -321,7 +444,8 @@ export class HTTPBatchSink implements Sink {
       }
       if (lastError) throw new Error(`collector send failed: ${lastError.message}`);
     } catch (error) {
-      this.buffer = [...events, ...this.buffer];
+      const dropped = this.restoreFailedBatch(events);
+      if (dropped > 0) this.recordDrop(dropped, 'delivery-failure');
       throw error;
     }
   }
@@ -329,6 +453,7 @@ export class HTTPBatchSink implements Sink {
   async drain(): Promise<void> {
     this.closed = true;
     this.pause();
+    this.notifySpace();
     await this.flush();
   }
   pause(): void {
@@ -343,6 +468,20 @@ export class HTTPBatchSink implements Sink {
   queueSize(): number {
     return this.buffer.length;
   }
+
+  /** Observable buffer metrics, including events shed by the overflow policy. */
+  get metrics(): SinkMetrics {
+    return {
+      queued: this.buffer.length,
+      capacity: this.maxQueueSize,
+      dropped: this._droppedEvents,
+      droppedOnOverflow: this._droppedOnOverflow,
+      droppedOnDeliveryFailure: this._droppedOnDeliveryFailure,
+    };
+  }
+
+  /** Total events shed to keep the buffer bounded. */
+  get droppedEvents(): number { return this._droppedEvents; }
 
   async close(): Promise<void> {
     await this.drain();
@@ -493,6 +632,14 @@ export interface HTTPBatchSinkOptions {
   ndjson?: boolean;
   batchSize?: number;
   flushIntervalMs?: number;
+  /** Maximum events buffered while waiting for delivery (async.queueSize). */
+  maxQueueSize?: number;
+  /** Alias for maxQueueSize. */
+  queueSize?: number;
+  /** What to do when the buffer is full. Defaults to drop-oldest. */
+  overflowPolicy?: OverflowPolicy;
+  /** How long the block policy waits for capacity before shedding an event (ms). */
+  blockTimeoutMs?: number;
   statsHandler?: StatsHandler;
 }
 
