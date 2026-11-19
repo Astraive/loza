@@ -107,6 +107,31 @@ func AuthorizedCollectorFromContext(ctx context.Context) (AuthorizedCollector, b
 func BuildMux(ingestPath, healthPath, readyPath, metricsPath string, metricsEnabled bool, metricsHandler http.Handler, tailWebSocketHandler http.Handler, handlers PublicHandlerSet, protect RouteProtector, collectorProtect CollectorRouteProtector, defaultCollector string) *http.ServeMux {
 	mux := http.NewServeMux()
 	defaultCollector = strings.TrimSpace(defaultCollector)
+
+	// registeredPatterns records every pattern registered on the mux. Go 1.22's
+	// ServeMux panics when the same method+pattern is registered twice, so all
+	// registrations go through the reserve/register helpers below. Configurable
+	// paths are registered last and skipped when they would collide with a
+	// built-in route.
+	registeredPatterns := make(map[string]struct{})
+	reserve := func(pattern string) bool {
+		if _, exists := registeredPatterns[pattern]; exists {
+			return false
+		}
+		registeredPatterns[pattern] = struct{}{}
+		return true
+	}
+	register := func(pattern string, h http.Handler) {
+		if reserve(pattern) {
+			mux.Handle(pattern, h)
+		}
+	}
+	registerFunc := func(pattern string, fn http.HandlerFunc) {
+		if reserve(pattern) {
+			mux.HandleFunc(pattern, fn)
+		}
+	}
+
 	scopedOperationUnsupported := func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusBadRequest)
@@ -129,12 +154,12 @@ func BuildMux(ingestPath, healthPath, readyPath, metricsPath string, metricsEnab
 			return next
 		}
 
-		mux.Handle(method+" /collectors/{collector}"+pattern, wrap(canonical, func(r *http.Request) (string, bool) {
+		register(method+" /collectors/{collector}"+pattern, wrap(canonical, func(r *http.Request) (string, bool) {
 			collector := strings.TrimSpace(r.PathValue("collector"))
 			return collector, collector != ""
 		}, CanonicalCollectorRoute))
 		if defaultCollector != "" {
-			mux.Handle(method+" "+pattern, wrap(legacy, func(*http.Request) (string, bool) {
+			register(method+" "+pattern, wrap(legacy, func(*http.Request) (string, bool) {
 				return defaultCollector, true
 			}, LegacyCollectorRoute))
 		}
@@ -144,9 +169,9 @@ func BuildMux(ingestPath, healthPath, readyPath, metricsPath string, metricsEnab
 	}
 
 	// ── Ingest (events:write) ────────────────────────────────────────────
-	if ingestPath != "" && ingestPath != "/events" && ingestPath != "/ingest" {
-		dataRoute("POST", ingestPath, http.HandlerFunc(handlers.HandleIngest), "events:write", "events:write")
-	}
+	// The configurable ingest path is registered at the end of BuildMux, once
+	// every built-in data route is known, so it can be skipped when it would
+	// collide with one of them (see below).
 	dataRoute("POST", "/events", http.HandlerFunc(handlers.HandleIngest), "events:write", "events:write")
 	dataRoute("POST", "/ingest", http.HandlerFunc(handlers.HandleIngest), "events:write", "events:write")
 	dataRoute("POST", "/events/batch", http.HandlerFunc(handlers.HandleIngest), "events:write", "events:write")
@@ -155,17 +180,13 @@ func BuildMux(ingestPath, healthPath, readyPath, metricsPath string, metricsEnab
 	registerDataRoute("POST", "/otlp/logs", http.HandlerFunc(scopedOperationUnsupported), http.HandlerFunc(handlers.HandleOTLPLogs), "logs:write", "logs:write")
 
 	// ── Public (no auth) ─────────────────────────────────────────────────
-	if healthPath != "" && healthPath != "/health" && healthPath != "/healthz" {
-		mux.HandleFunc("GET "+healthPath, handlers.HandleHealth)
-	}
-	mux.HandleFunc("GET /health", handlers.HandleHealth)
-	mux.HandleFunc("GET /healthz", handlers.HandleHealth)
-	if readyPath != "" && readyPath != "/ready" && readyPath != "/readyz" {
-		mux.HandleFunc("GET "+readyPath, handlers.HandleReady)
-	}
-	mux.HandleFunc("GET /ready", handlers.HandleReady)
-	mux.HandleFunc("GET /readyz", handlers.HandleReady)
-	mux.HandleFunc("GET /version", handlers.HandleVersion)
+	// Custom health/ready paths are registered at the end of BuildMux so
+	// built-in routes always win a collision instead of causing a panic.
+	registerFunc("GET /health", handlers.HandleHealth)
+	registerFunc("GET /healthz", handlers.HandleHealth)
+	registerFunc("GET /ready", handlers.HandleReady)
+	registerFunc("GET /readyz", handlers.HandleReady)
+	registerFunc("GET /version", handlers.HandleVersion)
 	dataRoute("GET", "/status", http.HandlerFunc(handlers.HandleStatus), "status:read", "events:read")
 
 	// ── Read endpoints ───────────────────────────────────────────────────
@@ -234,10 +255,27 @@ func BuildMux(ingestPath, healthPath, readyPath, metricsPath string, metricsEnab
 	// ── Metrics (protected by default) ───────────────────────────────────
 	if metricsEnabled && metricsHandler != nil && metricsPath != "" {
 		if protect != nil {
-			mux.Handle("GET "+metricsPath, protect(metricsHandler, "events:read"))
+			register("GET "+metricsPath, protect(metricsHandler, "events:read"))
 		} else {
-			mux.Handle("GET "+metricsPath, metricsHandler)
+			register("GET "+metricsPath, metricsHandler)
 		}
+	}
+
+	// ── Custom configurable paths ────────────────────────────────────────
+	// Register these last so every built-in route is already reserved. The
+	// register/registerFunc helpers silently skip a pattern that is already
+	// taken, so a config value such as routes.ingest=/validate can no longer
+	// trigger a duplicate-registration panic at startup. Previously the guard
+	// excluded only /events and /ingest for ingest, and a couple of built-ins
+	// for health and ready, leaving all other collisions unguarded.
+	if ingestPath != "" {
+		dataRoute("POST", ingestPath, http.HandlerFunc(handlers.HandleIngest), "events:write", "events:write")
+	}
+	if healthPath != "" {
+		registerFunc("GET "+healthPath, handlers.HandleHealth)
+	}
+	if readyPath != "" {
+		registerFunc("GET "+readyPath, handlers.HandleReady)
 	}
 
 	if v := strings.ToLower(strings.TrimSpace(os.Getenv("LOZA_ENABLE_PPROF"))); v == "1" || v == "true" {
