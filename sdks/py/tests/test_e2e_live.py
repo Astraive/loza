@@ -36,12 +36,34 @@ def _collector_reachable(url: str = COLLECTOR_URL, timeout: float = 2.0) -> bool
         sock.close()
 
 
-pytestmark = pytest.mark.skipif(
+_COLLECTOR_SKIP = pytest.mark.skipif(
     not _collector_reachable(),
     reason=f"loza-collector not running at {COLLECTOR_URL}",
 )
 
+EVENT_COUNT = 3
+SERVICE_NAME = "e2e-test-service"
 
+
+def _expected_events(count: int = EVENT_COUNT) -> list[dict]:
+    """Build the events emitted by the E2E test, for query-row verification."""
+    return [
+        {"event": f"e2e.test.event_{i}", "service": SERVICE_NAME, "outcome": "success"}
+        for i in range(count)
+    ]
+
+
+def _missing_expected_events(rows, expected_events):
+    """Return expected events that are absent from collector query ``rows``."""
+    seen = {(row.get("event"), row.get("service"), row.get("outcome")) for row in rows}
+    return [
+        event
+        for event in expected_events
+        if (event["event"], event["service"], event["outcome"]) not in seen
+    ]
+
+
+@_COLLECTOR_SKIP
 def test_e2e_collector_pipeline():
     """Send events through HTTPBatchSink and verify collector receives them."""
     assert INGEST_API_KEY, "LOZA_API_KEY is required for authenticated collector E2E"
@@ -50,11 +72,11 @@ def test_e2e_collector_pipeline():
     print("\n=== E2E Test: HTTPBatchSink -> loza-collector ===\n")
 
     # 1. Create logger with collector sink
-    config = loza.Production("e2e-test-service").with_collector_endpoint(COLLECTOR_URL).with_api_key(INGEST_API_KEY)
+    config = loza.Production(SERVICE_NAME).with_collector_endpoint(COLLECTOR_URL).with_api_key(INGEST_API_KEY)
     logger = loza.New(config)
 
     # 2. Emit 3 events
-    for i in range(3):
+    for i in range(EVENT_COUNT):
         ctx = logger.start_event(
             loza.Params(
                 event=f"e2e.test.event_{i}",
@@ -87,19 +109,18 @@ def test_e2e_collector_pipeline():
     print(f"  Collector accepted count: {accepted}")
     assert accepted >= 3, f"Expected >=3 accepted, got {accepted}"
 
-    # Also verify via /query (if DuckDB available)
-    # Fall back to checking accepted count
-    e2e_events = []
-    for i in range(3):
-        e2e_events.append({"event": f"e2e.test.event_{i}", "service": "e2e-test-service", "outcome": "success"})
+    # Build the events we expect to find in the collector so the /query
+    # fallback verification below is real rather than a dead list.
+    expected_events = _expected_events()
     print("  Collector accepted >= 3 events: OK\n")
 
     # Verify collector has events in DuckDB via query endpoint
+    rows = []
     try:
         query_req = urllib.request.Request(
             f"{COLLECTOR_URL}/query",
             data=json.dumps(
-                {"sql": "SELECT event, service, outcome FROM events WHERE service = 'e2e-test-service' LIMIT 10"}
+                {"sql": f"SELECT event, service, outcome FROM events WHERE service = '{SERVICE_NAME}' LIMIT 10"}
             ).encode(),
             headers={"Authorization": f"Bearer {ADMIN_API_KEY}", "content-type": "application/json"},
             method="POST",
@@ -112,6 +133,14 @@ def test_e2e_collector_pipeline():
             print(f"    OK: {row.get('event')} | service={row.get('service')} | outcome={row.get('outcome')}")
     except Exception as e:
         print(f"  DuckDB query skipped: {e}")
+
+    # Fallback verification: when DuckDB rows are available, confirm every
+    # emitted event actually landed in the collector. Otherwise the accepted
+    # count assertion above remains the source of truth.
+    if rows:
+        missing = _missing_expected_events(rows, expected_events)
+        assert not missing, f"Expected events missing from collector query rows: {missing}"
+        print(f"  All {len(expected_events)} expected events present in DuckDB query rows")
 
     # 5. CollectorClient health/ready/version/status
     from loza.core.http_client import CollectorClient
@@ -134,6 +163,38 @@ def test_e2e_collector_pipeline():
     print(f"  Collector status: {st.get('status')} | uptime: {st.get('uptime_seconds')}s | accepted: {accepted}")
 
     print("\n=== E2E PASSED ===")
+
+
+def test_expected_events_matches_emitted_events():
+    """The expected-event list mirrors the events the E2E test emits."""
+    events = _expected_events()
+    assert len(events) == EVENT_COUNT
+    assert events[0] == {"event": "e2e.test.event_0", "service": SERVICE_NAME, "outcome": "success"}
+    assert events[-1] == {
+        "event": f"e2e.test.event_{EVENT_COUNT - 1}",
+        "service": SERVICE_NAME,
+        "outcome": "success",
+    }
+
+
+def test_missing_expected_events_detects_absent_event():
+    """Verification reports an emitted event that is missing from query rows."""
+    expected = _expected_events()
+    rows = [
+        {"event": "e2e.test.event_0", "service": SERVICE_NAME, "outcome": "success"},
+        {"event": "e2e.test.event_1", "service": SERVICE_NAME, "outcome": "success"},
+        {"unrelated": "row"},
+    ]
+    assert _missing_expected_events(rows, expected) == [expected[2]]
+
+
+def test_missing_expected_events_empty_when_all_present():
+    """Verification passes when every emitted event is present in query rows."""
+    rows = [
+        {"event": f"e2e.test.event_{i}", "service": SERVICE_NAME, "outcome": "success"}
+        for i in range(EVENT_COUNT)
+    ]
+    assert _missing_expected_events(rows, _expected_events()) == []
 
 
 if __name__ == "__main__":
