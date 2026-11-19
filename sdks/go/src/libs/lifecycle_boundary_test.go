@@ -67,3 +67,36 @@ func TestFlushAllAndCloseAllSkipTypedNil(t *testing.T) {
 		t.Fatalf("FlushAll(typed nil + real) = %v, want %v", err, flushErr)
 	}
 }
+
+// typedNilFlusher deliberately dereferences its receiver in Flush so that a
+// typed-nil value stored in the Flusher interface panics if it is ever called.
+type typedNilFlusher struct{ hit bool }
+
+func (f *typedNilFlusher) Flush(context.Context) error {
+	f.hit = true
+	return nil
+}
+
+// typedNilCloser is the Closer analogue of typedNilFlusher.
+type typedNilCloser struct{ hit bool }
+
+func (c *typedNilCloser) Close(context.Context) error {
+	c.hit = true
+	return nil
+}
+
+func TestFlushAllSkipsTypedNil(t *testing.T) {
+	ctx := context.Background()
+	var nilFlusher *typedNilFlusher
+	if err := libs.FlushAll(ctx, nilFlusher, testFlusher{}); err != nil {
+		t.Fatalf("FlushAll with typed nil = %v, want nil", err)
+	}
+}
+
+func TestCloseAllSkipsTypedNil(t *testing.T) {
+	ctx := context.Background()
+	var nilCloser *typedNilCloser
+	if err := libs.CloseAll(ctx, nilCloser, testCloser{}); err != nil {
+		t.Fatalf("CloseAll with typed nil = %v, want nil", err)
+	}
+}
