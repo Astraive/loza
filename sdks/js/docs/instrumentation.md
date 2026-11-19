@@ -887,6 +887,8 @@ Sampling controls **which events are emitted**. Dropped events are silently disc
 | `sampleRateLimited(rate, windowMs)` | Token-bucket rate limiter |
 | `sampleByHeader(header, value?)` | Keep events where an HTTP header matches |
 
+> **Rate validation:** `sampleRandom(rate)` and its alias `sampleRate(rate)` require a finite number in the inclusive range `0.0`–`1.0`. Out-of-range values throw a `RangeError`, and non-finite/non-numeric values throw a `TypeError` at sampler creation. Previously such values were accepted silently and changed sampling behavior; clamp or validate configuration values before passing them in.
+
 **Combinators:**
 
 | Combinator | Description |
