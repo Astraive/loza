@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"math/big"
 	"os"
 	"strconv"
 	"strings"
@@ -30,6 +31,13 @@ func parseQueryParameter(raw string) (string, any, error) {
 	}
 	if integer, err := strconv.ParseInt(value, 10, 64); err == nil {
 		return key, integer, nil
+	}
+	// An integer outside the int64 range must not fall through to ParseFloat:
+	// float64 cannot represent every integer exactly and would round the value.
+	// json.Number keeps the exact digits when the parameter is marshaled for the
+	// collector (see encodeLQLParameters for the matching type tag).
+	if integer, ok := new(big.Int).SetString(value, 10); ok {
+		return key, json.Number(integer.String()), nil
 	}
 	if decimal, err := strconv.ParseFloat(value, 64); err == nil {
 		return key, decimal, nil
