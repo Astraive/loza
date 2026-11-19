@@ -54,6 +54,47 @@ func TestPostIngestRetriesRetryableCollectorResponse(t *testing.T) {
 	}
 }
 
+func TestPostIngestExhaustedRetriesReturnWrappedError(t *testing.T) {
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		w.Header().Set("Retry-After", "0")
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = w.Write([]byte(`{"status":"partial","accepted":0,"rejected":0,"invalid":0,"errors":[{"code":"rate_limited","message":"still busy","retryable":true}]}`))
+	}))
+	defer srv.Close()
+
+	payload := []byte(`{"api_version":"v1","source":{"sdk":"loza-cli","version":"1.0.0","service":"checkout"},"events":[{"schema_version":"v1","event_version":"v1","timestamp":"2026-05-12T00:00:00Z","event_id":"evt_1","service":"checkout","event":"checkout.request","kind":"http"}]}`)
+	err := PostIngest(srv.URL, "application/json", payload)
+	if err == nil {
+		t.Fatal("expected exhausted retries to fail")
+	}
+	if !strings.Contains(err.Error(), "collector send failed") {
+		t.Fatalf("expected wrapped exhausted-retry error, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "still busy") {
+		t.Fatalf("expected wrapped error to retain collector reason, got %v", err)
+	}
+	if hits.Load() != 3 {
+		t.Fatalf("expected 3 attempts before giving up, got %d", hits.Load())
+	}
+}
+
+func TestPostIngestExhaustedNetworkErrorsReturnWrappedError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	url := srv.URL
+	srv.Close()
+
+	payload := []byte(`{"api_version":"v1","source":{"sdk":"loza-cli","version":"1.0.0","service":"checkout"},"events":[{"schema_version":"v1","event_version":"v1","timestamp":"2026-05-12T00:00:00Z","event_id":"evt_1","service":"checkout","event":"checkout.request","kind":"http"}]}`)
+	err := PostIngest(url, "application/json", payload)
+	if err == nil {
+		t.Fatal("expected exhausted network retries to fail")
+	}
+	if !strings.Contains(err.Error(), "collector send failed") {
+		t.Fatalf("expected wrapped exhausted-retry error, got %v", err)
+	}
+}
+
 func TestTestSinkPostsToCollectorEndpoint(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
