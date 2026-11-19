@@ -546,9 +546,16 @@ def _merge_file_config(base: Config, file_cfg: Config) -> Config:
 
 
 def _merge_code_config(base: Config, code: Config) -> Config:
-    """Apply code config values (highest precedence). Non-default values override."""
+    """Apply code config values (highest precedence). Non-default values override.
+
+    Nested config objects are merged a field at a time so that values supplied by
+    lower-precedence layers (file/env) are preserved for sub-fields the caller did
+    not explicitly override.
+    """
     if code.service:
         base.service = code.service
+    if code.alias:
+        base.alias = code.alias
     if code.version:
         base.version = code.version
     if code.environment and code.environment != "development":
@@ -584,15 +591,62 @@ def _merge_code_config(base: Config, code: Config) -> Config:
         base.schema = code.schema
     if code.checkpoint_emit_immediately is not _UNSET_FALSE:
         base.checkpoint_emit_immediately = bool(code.checkpoint_emit_immediately)
+    if code.deployment_id:
+        base.deployment_id = code.deployment_id
+    if code.include_host:
+        base.include_host = code.include_host
+    if code.max_checkpoints != 32:
+        base.max_checkpoints = code.max_checkpoints
+    if code.panic_recovery:
+        base.panic_recovery = code.panic_recovery
+    if code.exit_on_fatal:
+        base.exit_on_fatal = code.exit_on_fatal
+    if code.release:
+        base.release = code.release
+    if code.namespace:
+        base.namespace = code.namespace
+    if code.otel_bridge:
+        base.otel_bridge = code.otel_bridge
+    if code.retry:
+        base.retry = code.retry
+    if code.timeout != 0.0:
+        base.timeout = code.timeout
+    if code.logger is not None:
+        base.logger = code.logger
+
     if code.async_config.enabled is not _UNSET_FALSE:
         base.async_config.enabled = bool(code.async_config.enabled)
     if code.async_config.queue_size != 8192:
         base.async_config.queue_size = code.async_config.queue_size
     if code.async_config.workers != 1:
         base.async_config.workers = code.async_config.workers
+    if code.async_config.max_batch_bytes != 256 * 1024:
+        base.async_config.max_batch_bytes = code.async_config.max_batch_bytes
+    if code.async_config.flush_interval_ms != 5000:
+        base.async_config.flush_interval_ms = code.async_config.flush_interval_ms
+    if code.async_config.batch_size != 100:
+        base.async_config.batch_size = code.async_config.batch_size
+
+    if not code.security.redact_by_default:
+        base.security.redact_by_default = code.security.redact_by_default
+    if code.security.allow_pii:
+        base.security.allow_pii = code.security.allow_pii
+    if code.security.max_field_bytes != 4096:
+        base.security.max_field_bytes = code.security.max_field_bytes
+    if code.security.max_event_bytes != 256 * 1024:
+        base.security.max_event_bytes = code.security.max_event_bytes
+    if code.security.max_attr_count != 512:
+        base.security.max_attr_count = code.security.max_attr_count
+    if not code.security.drop_oversized_events:
+        base.security.drop_oversized_events = code.security.drop_oversized_events
     if code.security.hash_salt:
         base.security.hash_salt = code.security.hash_salt
     _overlay_missing_config_fields(base, code, _MERGED_EXTRA_FIELDS)
+
+    if code.field_naming.policy != ExpandDotKeys:
+        base.field_naming.policy = code.field_naming.policy
+    if code.field_naming.custom_mapper is not None:
+        base.field_naming.custom_mapper = code.field_naming.custom_mapper
     return base
 
 
