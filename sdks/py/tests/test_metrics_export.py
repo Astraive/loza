@@ -106,27 +106,34 @@ def test_sink_latency_recorded() -> None:
 
 
 def test_rejection_reason_tracked() -> None:
-    """Verify rejection reasons are tracked."""
-    logger = loza.New(loza.Test("test"))
+    """Verify rejection reasons are tracked when an oversized event is dropped."""
+    metrics = loza.NewMetricsCollector()
+    logger = loza.New(loza.Test("test").with_metrics(metrics))
 
-    # Emit oversized event that will be dropped/truncated
+    # Enrich stores the attribute without raising; rejection happens at emit time.
     ctx = logger.start_event(loza.Params(event="large_event"))
-
-    # Add large attribute
     huge_value = "x" * 10_000_000
-    try:
-        logger.enrich(ctx, loza.String("huge", huge_value))
-    except Exception:
-        # Expected to be rejected or truncated
-        pass
-
+    logger.enrich(ctx, loza.String("huge", huge_value))
     logger.finish(ctx, "success")
     payload = logger.emit(ctx)
 
-    # Event should still emit, potentially with truncation indicator
-    if payload:
-        event = json.loads(payload)
-        assert event is not None
+    # The oversized event is dropped and its reason is recorded unconditionally.
+    assert payload == ""
+    assert metrics.snapshot()["counter_vecs"]["events_dropped_total"]["oversized_event"] == 1
+
+
+def test_rejection_reason_exported() -> None:
+    """Verify the tracked rejection reason is present in the Prometheus export."""
+    metrics = loza.NewMetricsCollector()
+    logger = loza.New(loza.Test("test").with_metrics(metrics))
+
+    ctx = logger.start_event(loza.Params(event="large_event"))
+    logger.enrich(ctx, loza.String("huge", "x" * 10_000_000))
+    logger.finish(ctx, "success")
+    logger.emit(ctx)
+
+    rendered = loza.RenderPrometheus(metrics)
+    assert 'loza_sdk_events_dropped_total{reason="oversized_event"} 1' in rendered
 
 
 def test_error_event_tracking() -> None:
