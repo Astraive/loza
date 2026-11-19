@@ -165,13 +165,46 @@ def test_multiple_outcomes_tracked() -> None:
     logger = loza.New(loza.Test("test"))
 
     outcomes = ["success", "error", "success", "partial"]
+    emitted = []
     for outcome in outcomes:
         ctx = logger.start_event(loza.Params(event=outcome))
         logger.finish(ctx, outcome)
-        logger.emit(ctx)
+        emitted.append((outcome, logger.emit(ctx)))
 
-    # All outcomes should emit without error
-    assert True
+    # Every outcome must produce a real payload carrying that outcome; the test
+    # must fail if any emission is dropped or errors out.
+    assert len(emitted) == len(outcomes)
+    for expected, payload in emitted:
+        assert payload, f"no payload emitted for outcome {expected!r}"
+        assert json.loads(payload)["outcome"] == expected
+
+
+def test_multiple_outcomes_written_to_sink() -> None:
+    """Every tracked outcome is delivered to the sink exactly once and in order."""
+
+    class RecordingSink:
+        def __init__(self):
+            self.events = []
+
+        def write(self, payload: str) -> None:
+            self.events.append(json.loads(payload))
+
+        def flush(self) -> None:
+            pass
+
+        def close(self) -> None:
+            pass
+
+    sink = RecordingSink()
+    logger = loza.New(loza.Test("test").with_sink(sink))
+
+    outcomes = ["success", "error", "success", "partial"]
+    for outcome in outcomes:
+        ctx = logger.start_event(loza.Params(event=outcome))
+        logger.finish(ctx, outcome)
+        assert logger.emit(ctx), f"emission dropped for outcome {outcome!r}"
+
+    assert [event["outcome"] for event in sink.events] == outcomes
 
 
 def test_concurrent_emissions_tracked() -> None:
