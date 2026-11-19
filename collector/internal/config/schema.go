@@ -584,20 +584,37 @@ var defaultsCWDCandidates = []string{
 	filepath.Join("..", "..", defaultsFileName),
 }
 
+// Default returns the bundled collector defaults.
+//
+// Deprecated: startup paths must use LoadDefaults so that a missing or malformed
+// defaults file is surfaced as a descriptive error. This shim is retained for
+// library and test compatibility; it never panics, but it cannot report why the
+// defaults were unavailable and falls back to an empty Config.
 func Default() Config {
+	cfg, err := LoadDefaults()
+	if err != nil {
+		return Config{}
+	}
+	return cfg
+}
+
+// LoadDefaults reads and parses the bundled collector defaults file. It returns
+// a descriptive error when the file cannot be located, read, or parsed so that
+// callers can fail cleanly at startup instead of crashing with a stack trace.
+func LoadDefaults() (Config, error) {
 	path, err := findDefaultsFile()
 	if err != nil {
-		panic(err)
+		return Config{}, fmt.Errorf("resolve collector defaults: %w", err)
 	}
 	raw, err := os.ReadFile(path)
 	if err != nil {
-		panic(fmt.Errorf("read collector defaults %s: %w", path, err))
+		return Config{}, fmt.Errorf("read collector defaults %s: %w", path, err)
 	}
 	var cfg Config
 	if err := yaml.Unmarshal(raw, &cfg); err != nil {
-		panic(fmt.Errorf("parse collector defaults %s: %w", path, err))
+		return Config{}, fmt.Errorf("parse collector defaults %s: %w", path, err)
 	}
-	return cfg
+	return cfg, nil
 }
 
 // loadStrict parses exactly one YAML config document into cfg, rejecting

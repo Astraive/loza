@@ -159,7 +159,10 @@ func loadWorkerConfigFromArgs(args []string) (workerConfig, error) {
 		}
 	})
 
-	fc := collectorconfig.Default()
+	fc, err := collectorconfig.LoadDefaults()
+	if err != nil {
+		return workerConfig{}, err
+	}
 	if err := loadWorkerFileConfig(&fc, cfgFile, cfgFileExplicit); err != nil {
 		return workerConfig{}, err
 	}
