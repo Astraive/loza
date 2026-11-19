@@ -785,12 +785,18 @@ def _parse_simple_yaml(content: str) -> dict[str, Any]:
     return root
 
 
+_TRUE_SCALARS = frozenset({"true", "yes", "on"})
+_FALSE_SCALARS = frozenset({"false", "no", "off"})
+
+
 def _parse_scalar(value: str) -> Any:
     if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
         value = value[1:-1]
     lower = value.lower()
-    if lower in {"true", "false"}:
-        return lower == "true"
+    if lower in _TRUE_SCALARS:
+        return True
+    if lower in _FALSE_SCALARS:
+        return False
     if value.isdigit():
         return int(value)
     return value
