@@ -1405,3 +1405,62 @@ func TestRunCortexReconstructRejectsInvalidMode(t *testing.T) {
 		t.Fatalf("expected a usage error naming --mode, got %v", err)
 	}
 }
+
+func TestDebugCortexReportsMetricsFetchError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/healthz", "/readyz":
+			w.WriteHeader(http.StatusOK)
+		case "/metrics":
+			http.Error(w, "metrics temporarily unavailable", http.StatusInternalServerError)
+		default:
+			t.Errorf("unexpected cortex path %s", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	cfg := config.Config{Cortex: &config.CortexConfig{URL: srv.URL}}
+	out, err := captureStdout(t, func() error {
+		return DebugCommand(context.Background(), cfg, []string{"cortex"})
+	})
+	if err != nil {
+		t.Fatalf("debug cortex: %v", err)
+	}
+	if !strings.Contains(out, "Key Metrics unavailable") {
+		t.Fatalf("expected metrics fetch warning in output, got %s", out)
+	}
+	if !strings.Contains(out, "cortex returned 500") {
+		t.Fatalf("expected underlying error detail in output, got %s", out)
+	}
+}
+
+func TestDebugCortexShowsMetricsOnSuccess(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/healthz", "/readyz":
+			w.WriteHeader(http.StatusOK)
+		case "/metrics":
+			_, _ = w.Write([]byte("# HELP cortex_events_total total events\nloza_cortex_events_total 42\n"))
+		default:
+			t.Errorf("unexpected cortex path %s", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	cfg := config.Config{Cortex: &config.CortexConfig{URL: srv.URL}}
+	out, err := captureStdout(t, func() error {
+		return DebugCommand(context.Background(), cfg, []string{"cortex"})
+	})
+	if err != nil {
+		t.Fatalf("debug cortex: %v", err)
+	}
+	if !strings.Contains(out, "Key Metrics") {
+		t.Fatalf("expected Key Metrics section in output, got %s", out)
+	}
+	if !strings.Contains(out, "loza_cortex_events_total 42") {
+		t.Fatalf("expected metric line in output, got %s", out)
+	}
+	if strings.Contains(out, "Key Metrics unavailable") {
+		t.Fatalf("did not expect metrics warning on success, got %s", out)
+	}
+}
