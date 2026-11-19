@@ -18,6 +18,13 @@ type fakeGraphStore struct {
 	nodeErr    error
 	edgeErr    error
 	saveErr    error
+	nodes         map[string]*models.Node
+	edges         map[string][]*models.Edge
+	savedNodes    []*models.Node
+	savedEdges    []*models.Edge
+	nodeErr       error
+	edgeErr       error
+	getEdgesCalls int
 }
 
 func (f *fakeGraphStore) SaveNode(_ context.Context, node *models.Node) error {
@@ -62,6 +69,7 @@ func (f *fakeGraphStore) SaveEdge(_ context.Context, edge *models.Edge) error {
 }
 
 func (f *fakeGraphStore) GetEdges(_ context.Context, nodeID string, edgeType string) ([]*models.Edge, error) {
+	f.getEdgesCalls++
 	if f.edgeErr != nil {
 		return nil, f.edgeErr
 	}
@@ -255,6 +263,40 @@ func TestTraverseGraphSeesEdgesAddedAfterFirstTraversal(t *testing.T) {
 // failed write leaves a previously populated cache untouched.
 func TestGraphWritesInvalidateAdjacencyCache(t *testing.T) {
 	ctx := context.Background()
+// TestAdjacencyCacheLoadSentinel verifies that the cache reports whether a
+// node has been loaded independently of whether its cached edge slice is nil,
+// so "unloaded" is distinguishable from "loaded with zero edges".
+func TestAdjacencyCacheLoadSentinel(t *testing.T) {
+	c := NewAdjacencyCache()
+
+	if _, ok := c.GetEdges("missing"); ok {
+		t.Fatal("unloaded node must not be reported as loaded")
+	}
+
+	c.SetEdges("empty", nil)
+	if edges, ok := c.GetEdges("empty"); !ok {
+		t.Fatal("node cached with nil edges must still be reported as loaded")
+	} else if edges != nil {
+		t.Fatalf("expected nil edges, got %v", edges)
+	}
+
+	c.SetEdges("populated", []*models.Edge{{ID: "e1"}})
+	if edges, ok := c.GetEdges("populated"); !ok || len(edges) != 1 {
+		t.Fatalf("expected 1 cached edge, got ok=%v edges=%v", ok, edges)
+	}
+
+	c.Invalidate()
+	if _, ok := c.GetEdges("empty"); ok {
+		t.Fatal("invalidated node must not be reported as loaded")
+	}
+}
+
+// TestTraverseGraphCachesEmptyEdgeResults reproduces the reported defect: a
+// node whose store returns a nil/empty edge slice was re-fetched on every
+// traversal because the old "edges == nil" check could not distinguish a cache
+// miss from a cached empty result. With the load sentinel, the store is hit
+// only once across repeated traversals using the same builder.
+func TestTraverseGraphCachesEmptyEdgeResults(t *testing.T) {
 	store := &fakeGraphStore{
 		nodes: map[string]*models.Node{},
 		edges: map[string][]*models.Edge{},
@@ -296,5 +338,25 @@ func TestGraphWritesInvalidateAdjacencyCache(t *testing.T) {
 	}
 	if got := builder.adjCache.GetEdges("n1"); len(got) != 2 {
 		t.Fatalf("expected failed AddNode to preserve adjacency cache, got %d edges", len(got))
+	now := time.Now()
+	store.nodes["n1"] = &models.Node{ID: "n1", Type: models.NodeTypeService, Label: "n1", CreatedAt: now}
+	// Intentionally no edges for "n1": GetEdges returns a nil slice.
+
+	builder := NewBuilder(store)
+	for i := 0; i < 2; i++ {
+		view, err := builder.TraverseGraph(context.Background(), "n1", models.TraversalOptions{MaxDepth: 1})
+		if err != nil {
+			t.Fatalf("traverse #%d: %v", i+1, err)
+		}
+		if len(view.Nodes) != 1 {
+			t.Fatalf("traverse #%d: expected 1 node, got %d", i+1, len(view.Nodes))
+		}
+		if len(view.Edges) != 0 {
+			t.Fatalf("traverse #%d: expected 0 edges, got %d", i+1, len(view.Edges))
+		}
+	}
+
+	if store.getEdgesCalls != 1 {
+		t.Fatalf("expected empty edge result to be cached after the first traversal (1 store call), got %d", store.getEdgesCalls)
 	}
 }
