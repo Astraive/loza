@@ -14,8 +14,9 @@ from __future__ import annotations
 import importlib.util
 import json
 import sys
+import urllib.error
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -206,22 +207,6 @@ def test_node_available_runs_all_e2e_steps():
         "sdk.rs.collector_e2e",
     ):
         assert by_id[step_id].status == "implemented_and_passing"
-"""Regression tests for the verification matrix flows."""
-
-from __future__ import annotations
-
-import importlib.util
-import sys
-import urllib.error
-from pathlib import Path
-from unittest.mock import MagicMock, patch
-
-MODULE_PATH = Path(__file__).resolve().parent / "verification_matrix.py"
-_spec = importlib.util.spec_from_file_location("verification_matrix", MODULE_PATH)
-vm = importlib.util.module_from_spec(_spec)
-assert _spec.loader is not None
-sys.modules["verification_matrix"] = vm
-_spec.loader.exec_module(vm)
 
 
 def _passing_result(step_id: str) -> vm.StepResult:

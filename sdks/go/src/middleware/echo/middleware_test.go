@@ -159,6 +159,9 @@ func TestMiddlewareLogsEmitFailures(t *testing.T) {
 	}
 	if logEvent.Error == nil || logEvent.Error.Message != "sink write failed" {
 		t.Fatalf("log error = %+v", logEvent.Error)
+	}
+}
+
 // TestMiddlewareRePanicWithRecoveryDisabledStillEmits verifies that a started
 // event is finished and emitted even when the panic is propagated to the caller
 // because panic recovery is disabled (MASS-0497 / issue #721).

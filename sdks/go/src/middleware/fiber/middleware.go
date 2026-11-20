@@ -66,7 +66,6 @@ func MiddlewareWithConfig(cfg Config) fiberpkg.Handler {
 		}()
 
 		err = c.Next()
-		enrichRoute(ctx, c)
 		route := ""
 		if !isUnmatchedRoute(err) {
 			if matched := c.Route(); matched != nil {

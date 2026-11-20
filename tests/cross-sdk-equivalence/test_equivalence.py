@@ -202,13 +202,13 @@ def main():
 
     # Poll until storage has the event instead of assuming a fixed delay
     print("Querying stored events...")
-    events = query_events(marker)
-    found = require_unique_event(events, marker)
-    if found is None:
-        print(f"FAIL: Expected exactly one event for marker={marker}, got {len(events)}")
     events = wait_for_event(marker)
     if not events:
         print(f"FAIL: No events found for marker={marker}")
+        sys.exit(1)
+    found = require_unique_event(events, marker)
+    if found is None:
+        print(f"FAIL: Expected exactly one event for marker={marker}, got {len(events)}")
         sys.exit(1)
 
     print("  Found matching event. Verifying canonical fields...")
@@ -249,12 +249,9 @@ def main():
     if result is None:
         record_failure("Release field emit failed (collector may not support)")
     else:
-        time.sleep(0.5)
-        events = query_events(release_marker)
+        events = wait_for_event(release_marker)
         release_found = require_unique_event(events, release_marker)
         if release_found is not None and canonical_match(release_found, release_event):
-        events = wait_for_event(release_marker)
-        if events and canonical_match(events[0], release_event):
             print("  PASS: Release event accepted and stored")
         else:
             record_failure("Release event was not found in projected storage")
@@ -306,12 +303,9 @@ def main():
     }
     result = emit_event_via_api(domain_event)
     if result:
-        time.sleep(0.5)
-        events = query_events(domain_marker)
+        events = wait_for_event(domain_marker)
         domain_found = require_unique_event(events, domain_marker)
         if domain_found is not None and canonical_match(domain_found, domain_event):
-        events = wait_for_event(domain_marker)
-        if events and canonical_match(events[0], domain_event):
             print("  PASS: Domain helper fields preserved in projected storage")
         else:
             record_failure("Domain event was not found in projected storage")
@@ -338,7 +332,8 @@ def test_no_events_failure_message_includes_marker(monkeypatch, capsys):
     module = sys.modules[__name__]
 
     # Make main() deterministic and offline: fixed marker, no network, no sleep.
-    monkeypatch.setattr(time, "time", lambda: marker_value)
+    # make_marker uses a uuid suffix, so fix it directly rather than patching time.
+    monkeypatch.setattr(module, "make_marker", lambda prefix: f"{prefix}-{marker_value}")
     monkeypatch.setattr(time, "sleep", lambda _seconds: None)
     monkeypatch.setattr(module, "check_collector_available", lambda: True)
     monkeypatch.setattr(module, "emit_event_via_api", lambda event: {"ok": True})

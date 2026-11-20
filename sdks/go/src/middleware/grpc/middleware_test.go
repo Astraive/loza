@@ -145,6 +145,8 @@ func TestRecoveredPanicIsNotLeakedToGRPCClients(t *testing.T) {
 	if !logged {
 		t.Fatal("panic value was not recorded in server-side telemetry")
 	}
+}
+
 // TestInterceptorsRePanicWithRecoveryDisabledStillEmit verifies that a started
 // event is finished and emitted even when the panic is propagated to the caller
 // because panic recovery is disabled (MASS-0497 / issue #721).

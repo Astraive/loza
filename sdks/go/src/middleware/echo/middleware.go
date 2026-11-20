@@ -70,10 +70,8 @@ func MiddlewareWithConfig(cfg Config) echopkg.MiddlewareFunc {
 			} else {
 				loza.Finish(ctx, "success", loza.Int("status_code", c.Response().Status))
 			}
-			_ = loza.Emit(ctx)
-			return nil
 			emitEvent(ctx, eventName)
-			return err
+			return nil
 		}
 	}
 }
