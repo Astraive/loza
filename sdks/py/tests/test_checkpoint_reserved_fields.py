@@ -1,6 +1,3 @@
-from __future__ import annotations
-
-from datetime import datetime, timedelta, timezone
 """
 Regression tests for reserved checkpoint fields.
 
@@ -12,6 +9,7 @@ mirroring the protection LOZA already applies to canonical event fields.
 from __future__ import annotations
 
 import json
+from datetime import datetime, timedelta, timezone
 
 import loza
 from loza.core.checkpoint import Checkpoint

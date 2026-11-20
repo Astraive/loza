@@ -29,6 +29,7 @@ func subscriptionKey(filter string) string {
 	}
 	return incidentKeyPrefix + filter
 }
+
 // dropLog samples drop warnings so a slow subscriber cannot flood the logs;
 // every drop is still counted in metrics.EventBusDroppedEvents.
 var dropLog = log.Logger.Sample(&zerolog.BasicSampler{N: 100})
@@ -73,7 +74,8 @@ func (b *EventBus) Subscribe(filter string) <-chan *models.Event {
 	return ch
 }
 
-// Unsubscribe removes a subscription and closes its channel.
+// Unsubscribe removes a subscription and closes its channel. Empty map keys
+// are removed so SubscriberCount and cleanup do not leave stale entries.
 func (b *EventBus) Unsubscribe(filter string, ch <-chan *models.Event) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -81,15 +83,13 @@ func (b *EventBus) Unsubscribe(filter string, ch <-chan *models.Event) {
 	key := subscriptionKey(filter)
 	subs := b.subscribers[key]
 	for i, sub := range subs {
-		// Compare the underlying channel
+		// Compare the underlying channel.
 		if sub == ch {
-			b.subscribers[key] = append(subs[:i], subs[i+1:]...)
 			remaining := append(subs[:i], subs[i+1:]...)
 			if len(remaining) == 0 {
-				// Drop the key so empty subscriptions are not left in the map.
-				delete(b.subscribers, filter)
+				delete(b.subscribers, key)
 			} else {
-				b.subscribers[filter] = remaining
+				b.subscribers[key] = remaining
 			}
 			close(sub)
 			break
@@ -106,34 +106,17 @@ func (b *EventBus) Publish(event *models.Event) {
 	// service name that happen to be equal can neither collide nor cause the
 	// same subscription to be delivered the event twice.
 	for _, ch := range b.subscribers[wildcardKey] {
-		deliver(ch, event)
-	// Send to wildcard subscribers
-	for _, ch := range b.subscribers[""] {
 		b.deliver(ch, event, "wildcard", "")
 	}
 
 	if event.IncidentID != "" {
 		for _, ch := range b.subscribers[incidentKeyPrefix+event.IncidentID] {
-			deliver(ch, event)
-		for _, ch := range b.subscribers[event.IncidentID] {
 			b.deliver(ch, event, "incident", event.IncidentID)
 		}
 	}
 
 	if event.Service != "" {
 		for _, ch := range b.subscribers[serviceKeyPrefix+event.Service] {
-			deliver(ch, event)
-		}
-	}
-}
-
-// deliver performs a non-blocking send, dropping the event if the
-// subscriber's buffer is full.
-func deliver(ch chan *models.Event, event *models.Event) {
-	select {
-	case ch <- event:
-	default:
-		for _, ch := range b.subscribers[event.Service] {
 			b.deliver(ch, event, "service", event.Service)
 		}
 	}

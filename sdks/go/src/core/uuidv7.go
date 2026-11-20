@@ -66,21 +66,6 @@ func (g *uuidV7Gen) NewID() string { return g.newID() }
 func (g *uuidV7Gen) newID() string {
 	g.mu.Lock()
 
-	now := g.nowMS()
-	if now == g.lastMS {
-		g.seq++
-		if g.seq > 0x0FFF {
-			// Sequence overflow: wait for next millisecond.
-			for now == g.lastMS {
-				g.mu.Unlock()
-				time.Sleep(time.Microsecond * 100)
-				g.mu.Lock()
-				now = g.nowMS()
-			}
-			// Record the new millisecond alongside the sequence reset, otherwise
-			// the next call in this millisecond takes the "new millisecond" branch
-			// and restarts the sequence, emitting a duplicate (timestamp, seq) prefix.
-			g.lastMS = now
 	now := time.Now().UnixMilli()
 	if now > g.lastMS {
 		// Wall clock advanced: begin a new millisecond.

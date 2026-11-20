@@ -13,35 +13,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestWebSocketUpgraderOriginPolicy pins the origin-allowlist behavior of the
-// upgrader returned by NewWebSocketUpgrader. A former package-level upgrader
-// duplicated this policy but ignored the configured allowlist; the handler must
-// rely on NewWebSocketUpgrader so configured non-localhost origins are honored.
-func TestWebSocketUpgraderOriginPolicy(t *testing.T) {
-	upgrader := NewWebSocketUpgrader([]string{"https://console.example.test"})
-
-	tests := []struct {
-		name       string
-		origin     string
-		wantAccept bool
-	}{
-		{name: "configured allowlist origin accepted", origin: "https://console.example.test", wantAccept: true},
-		{name: "unconfigured external origin rejected", origin: "https://evil.example.com", wantAccept: false},
-		{name: "no origin (non-browser) accepted", origin: "", wantAccept: true},
-		{name: "localhost dev origin accepted", origin: "http://localhost:3000", wantAccept: true},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			req := httptest.NewRequest(http.MethodGet, "/ws", nil)
-			if tc.origin != "" {
-				req.Header.Set("Origin", tc.origin)
-			}
-			assert.Equal(t, tc.wantAccept, upgrader.CheckOrigin(req))
-		})
-	}
-}
-
 // TestTailWebSocketHandlerOriginAllowlist verifies the handler uses the
 // allowlist-configured upgrader (the single source of truth) rather than a dead
 // upgrader with a weaker origin policy.

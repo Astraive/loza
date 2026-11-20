@@ -317,6 +317,9 @@ func TestQueryTailHistoryReportsAmbiguousTimestampColumn(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "ambiguous timestamp column") {
 		t.Fatalf("error = %q, want it to mention ambiguous timestamp column", err.Error())
+	}
+}
+
 func TestQueryTailHistorySkipsUndecryptableRows(t *testing.T) {
 	db, err := sql.Open("duckdb", filepath.Join(t.TempDir(), "tail.db"))
 	if err != nil {
@@ -386,6 +389,8 @@ func TestQueryTailHistorySkipsUndecryptableRows(t *testing.T) {
 	if len(rows) != 2 || string(rows[0]) != string(first) || string(rows[1]) != string(second) {
 		t.Fatalf("encrypted tail history = %q, want [%q %q]", rows, first, second)
 	}
+}
+
 func waitForTailSubscriberCount(t *testing.T, s *collectorState, want int) {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)

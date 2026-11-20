@@ -82,8 +82,7 @@ export class ProcessHandle {
   finish(...attrs: any[]): void {
     const now = Date.now();
     const endedMs = now - (this._event.startedAt || now);
-    const { extra, statusCode } = collectAttrs([...this._attrs, ...attrs]);
-    const { code: statusCode, extra } = extractStatusCode(attrs);
+    const { code: statusCode, extra } = extractStatusCode([...this._attrs, ...attrs]);
     const entry: ProcessEntry = {
       step: this._step,
       name: this._name,
@@ -122,8 +121,7 @@ export class TimerHandle {
 
   stop(...attrs: any[]): void {
     const durationMs = Date.now() - this._startedAt;
-    const { extra, statusCode } = collectAttrs([...this._attrs, ...attrs]);
-    const { code: statusCode, extra } = extractStatusCode(attrs);
+    const { code: statusCode, extra } = extractStatusCode([...this._attrs, ...attrs]);
     const entry: TimerEntry = {
       name: this._name,
       duration_ms: durationMs,
@@ -183,8 +181,7 @@ export class GroupHandle {
   finish(...attrs: any[]): void {
     const now = Date.now();
     const endedMs = now - (this._event.startedAt || now);
-    const { extra, statusCode } = collectAttrs([...this._attrs, ...attrs]);
-    const { code: statusCode, extra } = extractStatusCode(attrs);
+    const { code: statusCode, extra } = extractStatusCode([...this._attrs, ...attrs]);
     const entry: GroupEntry = {
       name: this._name,
       started_at_ms: this._startedAtMs,

@@ -4,8 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"io"
 	"errors"
+	"io"
 	"net"
 	"net/http"
 	"sync/atomic"
@@ -18,7 +18,7 @@ import (
 const (
 	defaultGraphQLDepthLimit = 10
 	defaultGraphQLBatchLimit = 10
-	maxGraphQLDepth = 10
+	maxGraphQLDepth          = 10
 
 	// These mirror the collector HTTP server defaults (see HTTPConfig and the
 	// default collector config) so the GraphQL endpoint is not left unbounded.
@@ -140,7 +140,6 @@ func (s *GraphQLServer) Start(ctx context.Context) error {
 		return err
 	}
 
-	handler := s.handler(schema)
 	handler := s.newHandler(schema)
 	s.server = s.newServer(handler)
 

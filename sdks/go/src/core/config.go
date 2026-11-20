@@ -611,7 +611,6 @@ func (c Config) Validate() error {
 			Problem: "basic auth username requires a password unless it is an lz_pub_ capability",
 		}
 	}
-	if c.DSNUsername != "" && strings.ContainsAny(c.DSNUsername, ":\t\r\n ") {
 	if strings.ContainsAny(c.DSNUsername, ":\t\r\n ") {
 		return &ConfigValidationError{
 			Field:   "DSNUsername",
@@ -701,7 +700,6 @@ func isLocalCollectorHost(host string) bool {
 	}
 }
 
-func validateCollectorCredentials(endpoint, username, password, apiKey string, insecure bool) error {
 func validateCollectorCredentials(endpoint, apiKey, username, password string, insecure bool) error {
 	if endpointURL, err := url.Parse(strings.TrimSpace(endpoint)); err == nil &&
 		endpointURL.User != nil {

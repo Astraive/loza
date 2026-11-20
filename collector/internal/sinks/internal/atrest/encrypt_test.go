@@ -115,6 +115,9 @@ func TestDecryptBytesWrongKeyFails(t *testing.T) {
 	}
 	if _, err := DecryptBytes([]byte(enc), "wrong-key"); err == nil {
 		t.Fatal("expected authentication failure with wrong key")
+	}
+}
+
 // sealLegacy reproduces the original (vulnerable) behaviour: AEAD.Seal with a
 // nil AAD and the legacy "enc:" prefix. It is used to build fixtures that prove
 // backward compatibility and to reproduce the context-swap defect.

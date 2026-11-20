@@ -240,6 +240,8 @@ mod tests {
         let encoded = serde_json::to_string(&sample()).expect("encode sample");
         assert_event(&encoded, "checkpoints.1.name", "second");
         assert_event(&encoded, "dotted\\.key", "literal");
+    }
+
     #[test]
     #[should_panic(expected = "capture: flush failed")]
     fn capture_surfaces_flush_failure() {

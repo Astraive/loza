@@ -298,6 +298,8 @@ func TestUpdateSignatureOccurrenceIncrementOnce(t *testing.T) {
 			}
 		})
 	}
+}
+
 // stampedeStore counts List calls concurrently and can hold the first one
 // open so a window for concurrent cache misses can be created deterministically.
 type stampedeStore struct {

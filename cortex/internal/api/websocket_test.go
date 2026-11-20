@@ -1,9 +1,9 @@
 package api
 
 import (
+	"context"
 	"errors"
 	"fmt"
-	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -24,13 +24,16 @@ type fataler interface {
 }
 
 // sendFrameOrFail writes a WebSocket frame and hard-fails the test if the write
-// fails. An oversized-frame test must never pass without its payload actually
-// reaching the server, so a write error is escalated instead of being logged
-// and ignored.
+// fails. Use it where a successful write is required for the test to be
+// meaningful; tests that deliberately provoke an early server close must
+// tolerate the interrupted write and verify the outcome from the read side.
 func sendFrameOrFail(t fataler, write func(int, []byte) error, messageType int, data []byte) {
 	t.Helper()
 	if err := write(messageType, data); err != nil {
 		t.Fatalf("write websocket frame: %v", err)
+	}
+}
+
 // readerRoleContext returns an authenticated context whose role is below writer.
 func readerRoleContext() context.Context {
 	return middleware.WithAuthResult(context.Background(), &middleware.AuthResult{
@@ -51,6 +54,9 @@ func TestExecuteWebSocketAction_IngestBatchIsNotRoleGated(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), `unknown websocket action "ingest_batch"`) {
 		t.Fatalf("expected unknown-action error, got %v", err)
+	}
+}
+
 func TestWebSocket_CheckOriginAllowlist(t *testing.T) {
 	upgrader := newCortexWSUpgrader([]string{"https://app.example.com"})
 
@@ -113,6 +119,8 @@ func TestExecuteWebSocketAction_IngestEventStillRequiresWriterRole(t *testing.T)
 	if !strings.Contains(err.Error(), "writer role required for ingest operations") {
 		t.Fatalf("expected writer-role error, got %v", err)
 	}
+}
+
 // isReadLimitCloseError reports whether err is the CloseMessageTooBig close
 // error the server sends when a frame exceeds its configured read limit.
 func isReadLimitCloseError(err error) bool {
@@ -141,32 +149,26 @@ func TestWebSocket_ReadLimitRejectsLargeFrames(t *testing.T) {
 	// Send a well-formed message exceeding the 1MB read limit (1MB + 1 byte).
 	// Keeping the JSON valid means that without the read limit the server would
 	// accept the request and reply normally, so a rejection can only come from
-	// the read limit. A failed write is a hard failure, never a silent return.
+	// the read limit. The server rejects as soon as it sees the oversized frame
+	// header: it sends a 1009 close and tears down the socket immediately, so
+	// the client may still be mid-write when the connection is reset. A write
+	// error here is expected, not a failure; the 1009 close read below is the
+	// authoritative proof that the oversized frame reached the server.
 	bigPayload := strings.Repeat("x", 1<<20+1)
-	sendFrameOrFail(t, conn.WriteMessage, websocket.TextMessage,
-		[]byte(`{"action":"healthz","event":"`+bigPayload+`"}`))
+	if err := conn.WriteMessage(websocket.TextMessage,
+		[]byte(`{"action":"healthz","event":"`+bigPayload+`"}`)); err != nil {
+		t.Logf("oversized frame write interrupted by server close: %v", err)
+	}
 
 	// Bound the read so a missing rejection fails fast instead of hanging.
 	if err := conn.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
 		t.Fatalf("set read deadline: %v", err)
-	err = conn.WriteMessage(websocket.TextMessage, []byte(`{"action":"healthz","event":`+bigPayload+`}`))
-	if err != nil {
-		// The server closes the connection as soon as it reads the oversized
-		// frame header, so the client may be mid-write when the socket is torn
-		// down. The close error read below is the authoritative signal.
-		t.Logf("write interrupted by server close: %v", err)
 	}
 
 	// The server closes the connection with 1009 (message too big) when the
-	// oversized frame exceeds its read limit.
+	// oversized frame exceeds its read limit. Require that specific close code
+	// so an unrelated error (timeout, reset, protocol error) cannot pass.
 	_, _, err = conn.ReadMessage()
-	if !websocket.IsCloseError(err, websocket.CloseMessageTooBig) {
-		t.Fatalf("expected read-limit close (%d), got: %v", websocket.CloseMessageTooBig, err)
-	if err == nil {
-		t.Fatal("expected connection to be closed due to read limit violation")
-	}
-	// Require the specific close code for an oversized message so an unrelated
-	// error (timeout, reset, protocol error) cannot pass this test.
 	if !isReadLimitCloseError(err) {
 		t.Fatalf("expected CloseMessageTooBig close error from read limit violation, got: %v", err)
 	}
@@ -208,10 +210,7 @@ func TestWebSocket_ReadLimitAllowsSmallFrames(t *testing.T) {
 	defer conn.Close()
 
 	// Send a small message — should succeed
-	err = conn.WriteMessage(websocket.TextMessage, []byte(`{"action":"healthz"}`))
-	if err != nil {
-		t.Fatalf("write small message: %v", err)
-	}
+	sendFrameOrFail(t, conn.WriteMessage, websocket.TextMessage, []byte(`{"action":"healthz"}`))
 
 	_, msg, err := conn.ReadMessage()
 	if err != nil {
@@ -232,10 +231,9 @@ func (r *recordingFataler) Fatalf(format string, args ...any) {
 	r.fatals = append(r.fatals, fmt.Sprintf(format, args...))
 }
 
-// TestSendFrameOrFail_WriteErrorIsFatal is a regression test for the vacuous
-// pass at websocket_test.go:30. A failed frame write must escalate as a hard
-// failure; with the old log-and-return behavior no failure was recorded and the
-// oversized-frame test passed without ever exercising the server's read limit.
+// TestSendFrameOrFail_WriteErrorIsFatal verifies that a failed frame write
+// escalates as a hard failure. With a log-and-return helper no failure would be
+// recorded, letting a test pass without its payload actually being sent.
 func TestSendFrameOrFail_WriteErrorIsFatal(t *testing.T) {
 	sentinel := errors.New("send buffer too small")
 

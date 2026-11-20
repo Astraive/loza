@@ -170,6 +170,8 @@ func TestHandleOTLPLogsIngestFailureDoesNotReflectInternalDetails(t *testing.T) 
 	if !strings.Contains(logs.String(), "collector_otlp_ingest_failed") {
 		t.Fatalf("expected server-side log event collector_otlp_ingest_failed, got logs: %s", logs.String())
 	}
+}
+
 // TestHandleOTLPLogsIngestMetrics verifies that OTLP ingest traffic is included
 // in the same ingest request counters as the JSON ingest handler.
 func TestHandleOTLPLogsIngestMetrics(t *testing.T) {

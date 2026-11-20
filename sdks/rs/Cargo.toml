@@ -38,5 +38,4 @@ libc = "0.2"
 default = []
 actix = ["dep:actix-web", "dep:futures-util"]
 axum = ["dep:axum", "dep:tower", "dep:hyper", "dep:tracing"]
-axum = ["dep:axum", "dep:hyper", "tower"]
 tower = ["dep:tower", "dep:http", "dep:futures-util"]

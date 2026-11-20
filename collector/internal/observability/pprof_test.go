@@ -1,10 +1,16 @@
 package observability
 
 import (
+	"bytes"
+	"log"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
+	"strings"
+	"sync"
 	"testing"
+	"time"
 )
 
 func TestLoopbackAddr(t *testing.T) {
@@ -131,16 +137,8 @@ func TestPprofMuxGuardsEveryHandler(t *testing.T) {
 	mux.ServeHTTP(w, r)
 	if w.Code != http.StatusOK {
 		t.Fatalf("loopback GET /debug/pprof/ = %d, want 200", w.Code)
-	"bytes"
-	"log"
-	"net"
-	"net/http"
-	"regexp"
-	"strings"
-	"sync"
-	"testing"
-	"time"
-)
+	}
+}
 
 type syncBuffer struct {
 	mu  sync.Mutex

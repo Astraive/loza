@@ -190,8 +190,6 @@ func New(config ConnectionConfig) (*Client, error) {
 	if config.Username != "" && config.Password == "" && !strings.HasPrefix(config.Username, "lz_pub_") {
 		return nil, newConfigError("basic username requires a password")
 	}
-	if (config.APIKey != "" || config.Username != "") && endpoint.Scheme == "http" && !isLocalhost(endpoint.Hostname()) {
-		return nil, newConfigError("authentication credentials require TLS for non-local endpoints")
 	if err := requireTLSForCredentials(endpoint, config.APIKey, config.Username); err != nil {
 		return nil, err
 	}

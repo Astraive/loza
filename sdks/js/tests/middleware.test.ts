@@ -1,6 +1,5 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { Logger } from '../src/core/logger.ts';
 import { lozaHttpMiddleware } from '../src/middleware/http.ts';
 import { lozaMiddleware } from '../src/middleware/express.ts';
 import { lozaKoaMiddleware } from '../src/middleware/koa.ts';

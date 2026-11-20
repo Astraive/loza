@@ -134,7 +134,6 @@ func ValidateEventBytesStrict(raw []byte, strict bool) error {
 		// ingest-envelope validation.
 		_, hasAPIVersion := payload["api_version"]
 		if eventsRaw, ok := payload["events"].([]any); ok && !hasAPIVersion {
-		if eventsRaw, ok := payload["events"].([]any); ok && payload["api_version"] == nil {
 			for _, item := range eventsRaw {
 				event, ok := item.(map[string]any)
 				if !ok {

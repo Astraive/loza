@@ -5,19 +5,14 @@ pub fn middleware_name() -> &'static str {
 #[cfg(feature = "axum")]
 pub mod axum_impl {
     use crate::middleware::axum::response::ResponseCapture;
-    use crate::{Logger, Params};
-    use axum::extract::{MatchedPath, Request};
     use crate::{EventContext, LozaError, Logger, Params};
-    use axum::extract::Request;
+    use axum::extract::{ConnectInfo, MatchedPath, Request};
     use axum::middleware::Next;
     use axum::response::Response;
     use std::convert::Infallible;
     use std::future::Future;
-    use std::pin::Pin;
-    use axum::extract::{ConnectInfo, Request};
-    use axum::middleware::Next;
-    use axum::response::Response;
     use std::net::SocketAddr;
+    use std::pin::Pin;
     use std::sync::Arc;
     use std::task::{Context, Poll};
     use std::time::Instant;
@@ -28,7 +23,7 @@ pub mod axum_impl {
     // helper routes through the unrelated global default logger instead.
     fn append_request_attrs(
         logger: &Logger,
-        ctx: &mut crate::EventContext,
+        ctx: &mut EventContext,
         user_agent: &str,
         remote_ip: &str,
     ) {
@@ -38,7 +33,7 @@ pub mod axum_impl {
 
     fn append_response_attrs(
         logger: &Logger,
-        ctx: &mut crate::EventContext,
+        ctx: &mut EventContext,
         status: u16,
         duration_ms: i64,
     ) {
@@ -91,6 +86,8 @@ pub mod axum_impl {
         finish_result?;
         emit_result?;
         Ok(())
+    }
+
     /// Read the peer address that axum inserts when the service is built with
     /// `into_make_service_with_connect_info::<SocketAddr>()`.
     fn remote_ip_from_request(req: &Request) -> String {
@@ -100,7 +97,6 @@ pub mod axum_impl {
             .unwrap_or_default()
     }
 
-    pub async fn loza_middleware(
     impl<S> Layer<S> for LozaLayer {
         type Service = LozaService<S>;
 
@@ -189,8 +185,7 @@ pub mod axum_impl {
 
         let res = call(req).await;
 
-        let capture = ResponseCapture::from_response(&res);
-        let status = capture.status();
+        let capture = res.as_ref().ok().map(ResponseCapture::from_response);
         let status = match &res {
             Ok(response) => response.status().as_u16(),
             Err(_) => 500,
@@ -198,13 +193,9 @@ pub mod axum_impl {
         let elapsed = started.elapsed().as_millis() as u64;
         let outcome = if status >= 500 { "error" } else { "success" };
         append_response_attrs(&logger, &mut ctx, status, elapsed as i64);
-        crate::Append(&mut ctx, crate::Int("status_code", status as i64));
-        crate::Append(&mut ctx, crate::Int("response_bytes", capture.bytes() as i64));
-        crate::Append(&mut ctx, crate::Int("duration_ms", elapsed as i64));
-        let _ = logger.finish(&mut ctx, outcome);
-        let _ = logger.emit(&ctx);
-        crate::Append(&mut ctx, crate::Int("status_code", status as i64));
-        crate::Append(&mut ctx, crate::Int("duration_ms", elapsed as i64));
+        if let Some(capture) = capture {
+            logger.append(&mut ctx, crate::Int("response_bytes", capture.bytes() as i64));
+        }
         if let Err(err) = finish_and_emit(&logger, &mut ctx, outcome) {
             tracing::warn!(error = %err, "loza-axum: failed to record http.request event");
         }
@@ -212,10 +203,29 @@ pub mod axum_impl {
         res
     }
 
+    /// A usable axum middleware function that records an `http.request` event
+    /// per request.
+    pub async fn loza_middleware(
+        logger: Arc<Logger>,
+        service_name: String,
+        req: Request,
+        next: Next,
+    ) -> Response {
+        run_with_telemetry(logger, service_name, req, |req| async move {
+            Ok::<_, Infallible>(next.run(req).await)
+        })
+        .await
+        .expect("axum's Next is infallible")
+    }
+
     #[cfg(test)]
     mod tests {
         use super::*;
         use crate::{Config, MemorySinkStore, Params, SinkConfig};
+
+        fn test_logger() -> Logger {
+            Logger::new(Config::test("axum-middleware"))
+        }
 
         #[test]
         fn enrichment_uses_configured_logger_duplicate_policy() {
@@ -259,10 +269,7 @@ pub mod axum_impl {
                 ctx.attrs.get("duration_ms").and_then(|v| v.as_i64()),
                 Some(5),
                 "duration_ms must be appended via the configured logger"
-        use crate::Config;
-
-        fn test_logger() -> Logger {
-            Logger::new(Config::test("axum-middleware"))
+            );
         }
 
         #[test]
@@ -291,35 +298,22 @@ pub mod axum_impl {
                 matches!(err, LozaError::Validation(_)),
                 "expected the emit failure to be surfaced, got {err}"
             );
-        use axum::body::Body;
-
-        fn request_with_connect_info(addr: SocketAddr) -> Request {
-            let mut req = Request::new(Body::empty());
-            req.extensions_mut().insert(ConnectInfo(addr));
-            req
         }
 
         #[test]
         fn remote_ip_is_read_from_connect_info_extension() {
+            use axum::body::Body;
             let addr: SocketAddr = "203.0.113.42:5151".parse().unwrap();
-            assert_eq!(remote_ip_from_request(&request_with_connect_info(addr)), addr.to_string());
+            let mut req = Request::new(Body::empty());
+            req.extensions_mut().insert(ConnectInfo(addr));
+            assert_eq!(remote_ip_from_request(&req), addr.to_string());
         }
 
         #[test]
         fn remote_ip_defaults_to_empty_without_connect_info() {
+            use axum::body::Body;
             let req = Request::new(Body::empty());
             assert_eq!(remote_ip_from_request(&req), "");
         }
-    pub async fn loza_middleware(
-        logger: Arc<Logger>,
-        service_name: String,
-        req: Request,
-        next: Next,
-    ) -> Response {
-        run_with_telemetry(logger, service_name, req, |req| async move {
-            Ok::<_, Infallible>(next.run(req).await)
-        })
-        .await
-        .expect("axum's Next is infallible")
     }
 }

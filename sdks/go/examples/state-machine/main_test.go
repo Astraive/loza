@@ -7,7 +7,6 @@ import (
 	"io"
 	"os"
 	"strings"
-	"context"
 	"testing"
 
 	"github.com/astraive/loza/sdks/go"
@@ -138,6 +137,10 @@ func TestDemoFunctionsSucceedOnHappyPath(t *testing.T) {
 	for name, fn := range fns {
 		if err := fn(); err != nil {
 			t.Errorf("%s: unexpected error: %v", name, err)
+		}
+	}
+}
+
 // captureStdout runs fn with os.Stdout redirected to a pipe and returns
 // everything fn wrote to stdout. loza.Dev() builds its stdout sink while fn
 // runs, so SDK output is captured along with the example's fmt output.
@@ -188,6 +191,9 @@ func TestMainDemonstratesStateObservability(t *testing.T) {
 		if !strings.Contains(output, want) {
 			t.Errorf("main() output missing %q", want)
 		}
+	}
+}
+
 // TestActiveEventWithoutStartedEvent reproduces the reported defect at
 // main.go: loza.FromContext returns (nil, false) when no event has been stored
 // in the context. The demo call sites previously discarded the boolean and

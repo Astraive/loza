@@ -103,16 +103,11 @@ func (s *collectorState) deleteBySize(ctx context.Context, db *sql.DB) error {
 		return err
 	}
 
-	if currentSize <= s.config().retentionMaxSize {
+	if currentSize.Int64 <= s.config().retentionMaxSize {
 		return nil
 	}
 
-	excessSize := currentSize - s.config().retentionMaxSize
-	if currentSize.Int64 <= s.cfg.retentionMaxSize {
-		return nil
-	}
-
-	excessSize := currentSize.Int64 - s.cfg.retentionMaxSize
+	excessSize := currentSize.Int64 - s.config().retentionMaxSize
 	query := fmt.Sprintf(`
 		DELETE FROM %s
 		WHERE event_id IN (

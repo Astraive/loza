@@ -1345,6 +1345,8 @@ func RedactPatterns(patterns ...string) Redactor { return core.RedactPatterns(pa
 
 func HashKeysWithSecret(secret []byte, keys ...string) Redactor {
 	return core.HashKeysWithSecret(secret, keys...)
+}
+
 // TryRedactPatterns is like RedactPatterns but returns an error instead of
 // warning and skipping when a pattern is invalid.
 func TryRedactPatterns(patterns ...string) (Redactor, error) {

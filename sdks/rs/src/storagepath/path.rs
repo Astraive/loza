@@ -175,11 +175,12 @@ fn create_private_dir(path: &Path) -> io::Result<()> {
 }
 
 #[cfg(test)]
-mod tests {
+mod path_tests {
     use super::*;
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static NEXT_ID: AtomicU64 = AtomicU64::new(0);
+
 
     fn unique_test_path(tag: &str) -> PathBuf {
         std::env::temp_dir().join(format!(

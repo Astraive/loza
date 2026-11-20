@@ -108,6 +108,10 @@ func (*concurrentFeedbackStore) GetSuccessRate(context.Context, string, string) 
 	return 0, nil
 }
 
+func (*concurrentFeedbackStore) GetAverageTimeToResolve(context.Context, string, string) (int64, error) {
+	return 0, nil
+}
+
 func newConcurrentLearner(signatureID string) (*Learner, *concurrentSignatureStore) {
 	sigStore := &concurrentSignatureStore{
 		fakeSignatureStoreForLearner: fakeSignatureStoreForLearner{

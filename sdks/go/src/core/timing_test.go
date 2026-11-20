@@ -374,6 +374,8 @@ func TestWithHelpers_ForwardAttrs(t *testing.T) {
 			t.Error("expected fn to run when ctx has no event")
 		}
 	})
+}
+
 // Regression tests for MASS-0424: attrs passed to StartProcess/StartTimer/
 // StartGroup used to be silently discarded. They must be captured on the
 // handle and merged with the attrs supplied at completion.
@@ -475,6 +477,9 @@ func TestTiming_WithAliasesRecordAttrs(t *testing.T) {
 	}
 	if got, ok := lookupAttrValue(ev.Timers[0].Attrs, "kind"); !ok || got != "timer" {
 		t.Errorf("WithTimer: attr missing: got %v (present=%v)", got, ok)
+	}
+}
+
 // TestEventCheckpointUsesConfiguredClock verifies that (*Event).Checkpoint
 // measures the delta from StartedAt using the logger's configured clock, the
 // same time base used to set StartedAt in buildEvent. With a frozen/mock clock

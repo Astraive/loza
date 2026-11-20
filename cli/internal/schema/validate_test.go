@@ -123,6 +123,9 @@ func TestValidateWrappedEventsWithNullAPIVersion(t *testing.T) {
 	}
 	if err := ValidateEventBytes(nullVersion); err == nil {
 		t.Fatal("ValidateEventBytes should reject an explicit null api_version instead of taking the wrapped-events shortcut")
+	}
+}
+
 // TestValidateOversizedPayloadsRejected covers the size-limit bypass where a
 // payload containing an "events" key or an embedded newline skipped the limit.
 // The global bound is now shape-independent, and per-event limits are applied

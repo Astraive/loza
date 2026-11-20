@@ -65,6 +65,12 @@ func normalizePrefix(prefix string) string {
 		if segment == "" || segment == "." || segment == ".." {
 			continue
 		}
+		// A query or fragment delimiter must never leak into an object key:
+		// drop the whole segment so a prefix cannot inject URL syntax beyond
+		// the path portion of the key.
+		if strings.ContainsAny(segment, "?#") {
+			continue
+		}
 		clean = append(clean, segment)
 	}
 	if len(clean) == 0 {

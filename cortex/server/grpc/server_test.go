@@ -67,6 +67,9 @@ func TestBuildRedactConfig_DefaultEnforceWithoutBlocklist(t *testing.T) {
 	}
 	if len(got.Allowlist) == 0 {
 		t.Fatal("Allowlist should be populated with defaults when redaction is enabled")
+	}
+}
+
 // TestRedactionConfigDoesNotNormalizeMode verifies that mode normalization lives
 // solely in config defaults/validation. Both config.Load and config.LoadDefault
 // validate the config, so by the time New sees it an enabled PIIRedaction always
@@ -88,7 +91,10 @@ func TestRedactionConfigDoesNotNormalizeMode(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			cfg := config.Default()
+			cfg, err := config.Default()
+			if err != nil {
+				t.Fatal(err)
+			}
 			cfg.PIIRedaction.Enabled = true
 			cfg.PIIRedaction.Mode = tt.mode
 			cfg.PIIRedaction.Blocklist = nil
@@ -104,7 +110,10 @@ func TestRedactionConfigDoesNotNormalizeMode(t *testing.T) {
 // TestRedactionConfigKeepsAllowlistDefault guards the adjacent, still-reachable
 // defaulting: an enabled redactor with no allowlist gets the common safe fields.
 func TestRedactionConfigKeepsAllowlistDefault(t *testing.T) {
-	cfg := config.Default()
+	cfg, err := config.Default()
+	if err != nil {
+		t.Fatal(err)
+	}
 	cfg.PIIRedaction.Enabled = true
 	cfg.PIIRedaction.Mode = "enforce"
 	cfg.PIIRedaction.Allowlist = nil

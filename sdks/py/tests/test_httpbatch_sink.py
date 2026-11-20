@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import json
 import threading
-import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 
+import loza.sinks.httpbatch.httpbatch as httpbatch_module
 from loza.core.http_client import CollectorClient
 from loza.sinks.httpbatch import HTTPBatchSink
 
@@ -78,7 +78,11 @@ def test_httpbatch_sink_negative_retries_still_sends_batch(monkeypatch: pytest.M
         attempts.append(request)
         return _FakeResponse()
 
-    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(
+        httpbatch_module,
+        "_open_with_redirect_guard",
+        lambda req, timeout, endpoint: fake_urlopen(req),
+    )
 
     sink = HTTPBatchSink("https://collector.example/events", retries=-1, enable_compression=False)
     sink.write_batch(
@@ -243,8 +247,6 @@ _VALID_EVENT = (
 
 
 def _ndjson_sink(monkeypatch: pytest.MonkeyPatch, sent: dict[str, object]) -> HTTPBatchSink:
-    import loza.sinks.httpbatch.httpbatch as httpbatch_module
-
     class _Response:
         status = 202
 
@@ -264,7 +266,11 @@ def _ndjson_sink(monkeypatch: pytest.MonkeyPatch, sent: dict[str, object]) -> HT
         sent["request"] = req
         return _Response()
 
-    monkeypatch.setattr(httpbatch_module.urllib.request, "urlopen", _capture)
+    monkeypatch.setattr(
+        httpbatch_module,
+        "_open_with_redirect_guard",
+        lambda req, timeout, endpoint: _capture(req),
+    )
     return HTTPBatchSink("http://localhost/events", ndjson=True, enable_compression=False)
 
 

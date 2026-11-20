@@ -1,15 +1,20 @@
 use super::super::clock::unix_millis;
+use std::cell::RefCell;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
-use std::sync::{Mutex, OnceLock};
+use std::sync::Arc;
 
 type IdGenerator = Box<dyn Fn() -> String + Send + Sync>;
-// Stored behind an `Arc` so the generator can be cloned out of the critical
-// section and invoked after the mutex guard has been dropped. `Box<dyn Fn>`
-// is not `Clone`, so cloning the box itself is not possible.
+// Stored behind an `Arc` so the generator can be cloned out of the slot and
+// invoked after the borrow has been released. `Box<dyn Fn>` is not `Clone`, so
+// cloning the box itself is not possible.
 type SharedIdGenerator = Arc<dyn Fn() -> String + Send + Sync>;
 
-static CUSTOM_ID_GEN: OnceLock<Mutex<Option<SharedIdGenerator>>> = OnceLock::new();
+thread_local! {
+    // The generator override is a testkit/testing hook. Keeping it per-thread
+    // prevents one test's custom (or panicking) generator from leaking into a
+    // different test that happens to run concurrently on another thread.
+    static CUSTOM_ID_GEN: RefCell<Option<SharedIdGenerator>> = RefCell::new(None);
+}
 static ID_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 /// Build a unique, prefixed identifier.
@@ -26,38 +31,10 @@ fn generate_id(prefix: &str) -> String {
     format!("{}_{}_{:x}_{:x}", prefix, unix_millis(), seq, random)
 }
 
-/// Lock the generator slot, recovering the guard if a previous holder panicked.
-///
-/// The stored value is just an `Option<Arc<dyn Fn>>` with no invariant to
-/// protect, so a poisoned guard can safely be recovered instead of letting one
-/// panic cascade into every later ID lookup.
-fn lock_generator() -> std::sync::MutexGuard<'static, Option<SharedIdGenerator>> {
-    CUSTOM_ID_GEN
-// The clock has millisecond resolution, so a bare `evt_{millis}` collides for
-// every event created within the same millisecond. Seed a process-local
-// monotonic counter with random entropy: the counter guarantees uniqueness
-// within a millisecond, while the random seed keeps IDs distinct across
-// process restarts and concurrent processes.
-static ID_SEQUENCE: OnceLock<AtomicU64> = OnceLock::new();
-
-fn id_sequence() -> &'static AtomicU64 {
-    ID_SEQUENCE.get_or_init(|| AtomicU64::new(fastrand::u64(..)))
-}
-
 pub fn new_event_id() -> String {
-    if let Some(gen) = CUSTOM_ID_GEN
-        .get_or_init(|| Mutex::new(None))
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-}
-
-pub fn new_event_id() -> String {
-    let gen = {
-        let guard = lock_generator();
-        (*guard).clone()
-    };
-    // The lock is released before the caller-provided closure runs. Invoking
-    // it under the lock deadlocked any generator that re-entered this module.
+    // Clone the generator out and release the borrow before invoking it: a
+    // reentrant generator may call `set_id_generator`/`reset_id_generator`.
+    let gen = CUSTOM_ID_GEN.with(|slot| (*slot.borrow()).clone());
     if let Some(gen) = gen {
         return gen();
     }
@@ -69,28 +46,27 @@ pub fn new_event_id() -> String {
 /// generator override.
 pub fn new_request_id() -> String {
     generate_id("req")
-    let seq = id_sequence().fetch_add(1, Ordering::Relaxed);
-    format!("evt_{:x}_{:016x}", unix_millis(), seq)
 }
 
 pub fn set_id_generator(f: IdGenerator) {
-    *lock_generator() = Some(SharedIdGenerator::from(f));
+    CUSTOM_ID_GEN.with(|slot| *slot.borrow_mut() = Some(SharedIdGenerator::from(f)));
 }
 
 pub fn reset_id_generator() {
-    *lock_generator() = None;
+    CUSTOM_ID_GEN.with(|slot| *slot.borrow_mut() = None);
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::internal::clock::{freeze_at, unfreeze};
+    use std::collections::HashSet;
     use std::panic::{catch_unwind, AssertUnwindSafe};
 
     #[test]
     fn panicking_generator_does_not_permanently_poison_id_generator() {
-        // A panicking generator is now invoked after the guard is dropped, so
-        // it no longer poisons the mutex; the recovery path is still exercised
-        // defensively by `lock_generator()` and remains covered here.
+        // A panicking generator is invoked after the slot borrow is released,
+        // so it cannot leave the slot in a poisoned/partially-mutated state.
         set_id_generator(Box::new(|| panic!("generator exploded")));
         assert!(catch_unwind(AssertUnwindSafe(new_event_id)).is_err());
 
@@ -107,13 +83,6 @@ mod tests {
         // Leave the shared generator slot clean for other tests.
         reset_id_generator();
     }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::internal::clock::{freeze_at, unfreeze};
-    use std::collections::HashSet;
 
     #[test]
     fn default_event_ids_are_unique_within_the_same_millisecond() {

@@ -427,6 +427,8 @@ describe('Sink boundaries', () => {
     } finally {
       await closeServer(server);
     }
+  });
+
   it('reports health from the sink health method instead of always healthy', async () => {
     const sinkWithHealth = (name: string, healthFn?: () => boolean | Promise<boolean>) => ({
       name: () => name,

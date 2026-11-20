@@ -10,14 +10,11 @@ import { DefaultSchema } from '../core/schema.ts';
 import type { Level } from '../core/level.ts';
 import { loadFileConfig, mergeFileConfig } from './config-file.ts';
 import { applyDSN } from './dsn-config.ts';
-import { isPublicDSNUsername, parse as parseDSN } from './dsn.ts';
-
-function isLocalhost(host: string): boolean {
-  // URL.hostname retains IPv6 brackets: new URL('http://[::1]').hostname === '[::1]'.
-  const normalized = host.replace(/^\[|\]$/g, '');
-  return normalized === 'localhost' || normalized === '127.0.0.1' || normalized === '::1';
-}
 import { isLocalhost, isPublicDSNUsername, parse as parseDSN } from './dsn.ts';
+
+function hasBasicCredentials(cfg: Pick<Config, 'apiKey' | 'username' | 'password'>): boolean {
+  return !cfg.apiKey && !!cfg.username && (!!cfg.password || isPublicDSNUsername(cfg.username));
+}
 
 /** Single URL validation gate reused by every config entry point. */
 function requireTLSForCredentials(endpoint: URL, cfg: Pick<Config, 'apiKey' | 'username'>): void {
@@ -472,9 +469,6 @@ export function WithPanicRecovery(panicRecovery: boolean): ConfigOption { return
 export function WithApiKey(apiKey: string): ConfigOption { return cfg => { cfg.apiKey = apiKey.trim(); return cfg; }; }
 export function WithRelease(release: string): ConfigOption { return cfg => withOptions(cfg, { release }); }
 export function WithNamespace(ns: string): ConfigOption { return cfg => withOptions(cfg, { namespace: ns }); }
-export function WithApiKey(apiKey: string): ConfigOption { return cfg => withOptions(cfg, { apiKey }); }
-export function WithRelease(_release: string): ConfigOption { return cfg => cfg; }
-export function WithNamespace(_ns: string): ConfigOption { return cfg => cfg; }
 export function WithOtelBridge(enabled: boolean): ConfigOption {
   return cfg => enabled ? { ...cfg, async: { ...cfg.async, enabled: true } } : cfg;
 }
@@ -483,4 +477,3 @@ export function WithTimeout(ms: number): ConfigOption { return cfg => { cfg.time
 export function WithQueueSize(size: number): ConfigOption { return cfg => { cfg.async.queueSize = size; return cfg; }; }
 export function WithLogger(logger: Logger): ConfigOption { return cfg => withOptions(cfg, { logger }); }
 export function WithOverflowPolicy(policy: OverflowPolicy): ConfigOption { return cfg => withOptions(cfg, { overflowPolicy: policy }); }
-export function WithLogger(_logger: Logger): ConfigOption { return cfg => cfg; }

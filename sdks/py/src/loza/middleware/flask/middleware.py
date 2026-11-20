@@ -118,7 +118,6 @@ class Middleware:
                         outcome = "cancelled" if aborted else ("error" if status_code >= 500 else "success")
                         Finish(
                             ctx,
-                            "error" if status_code >= 500 else "success",
                             outcome,
                             Int("status_code", status_code),
                             Int("response_bytes", response_bytes),

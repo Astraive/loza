@@ -156,6 +156,8 @@ func workerEventCount(events, workers, workerID int) int {
 		count++
 	}
 	return count
+}
+
 // formatThroughput renders the events/sec rate for the report. A non-positive
 // duration (for example a degenerate run started with -events 0) would
 // otherwise make the division yield NaN or +Inf, so it is reported as "n/a".

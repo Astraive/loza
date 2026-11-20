@@ -31,9 +31,6 @@ type IncidentContext struct {
 	SimilarIncidents []*SimilarIncident  `json:"similar_incidents"`
 	Symptoms         []Symptom           `json:"symptoms"`
 	SuggestedActions []RemediationAction `json:"suggested_actions"`
-	Confidence    float64            `json:"confidence"`
-	Explain       string             `json:"explain"`
-	ExplainReport *ExplainReport     `json:"explain_report,omitempty"`
 
 	// Partial is true when one or more enrichment subsystems (signature
 	// extraction, similarity search or remediation lookup) failed. It lets
@@ -42,9 +39,10 @@ type IncidentContext struct {
 	Partial bool `json:"partial,omitempty"`
 	// Warnings holds a human-readable diagnostic for every failed subsystem.
 	Warnings []string `json:"warnings,omitempty"`
-	Confidence       float64             `json:"confidence"`
-	Explain          string              `json:"explain"`
-	ExplainReport    *ExplainReport      `json:"explain_report,omitempty"`
+
+	Confidence    float64        `json:"confidence"`
+	Explain       string         `json:"explain"`
+	ExplainReport *ExplainReport `json:"explain_report,omitempty"`
 }
 
 type ExplainReport struct {

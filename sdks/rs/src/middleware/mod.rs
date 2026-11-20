@@ -3,7 +3,7 @@ pub mod axum;
 pub mod hyper;
 pub mod tower;
 
-pub use tower::{MiddlewareConfig, MiddlewareResult};
+pub use tower::{capture_request_with_config, MiddlewareConfig, MiddlewareResult};
 
 /// Record an HTTP response status on the event's typed `status_code` field.
 ///
@@ -75,4 +75,3 @@ mod tests {
         );
     }
 }
-pub use tower::{capture_request_with_config, MiddlewareConfig, MiddlewareResult};

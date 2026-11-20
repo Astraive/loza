@@ -22,6 +22,7 @@ import (
 	"github.com/astraive/loza/cortex/internal/config"
 	"github.com/astraive/loza/cortex/internal/storage"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
 )
 
 // tlsTestFiles writes a CA, a server certificate/key and a client
@@ -95,8 +96,14 @@ func tlsTestFiles(t *testing.T) (certFile, keyFile, caFile, clientCertFile, clie
 
 func freePort(t *testing.T) int {
 	t.Helper()
-	"google.golang.org/grpc/credentials"
-)
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := lis.Addr().(*net.TCPAddr).Port
+	lis.Close()
+	return port
+}
 
 func testCACert(t *testing.T) (*x509.Certificate, *ecdsa.PrivateKey, []byte) {
 	t.Helper()
@@ -190,9 +197,10 @@ func startTLSServer(t *testing.T, cfg config.Config, tlsCfg *tls.Config, handler
 	if err != nil {
 		t.Fatal(err)
 	}
-	port := lis.Addr().(*net.TCPAddr).Port
-	lis.Close()
-	return port
+	// The certificate chain is preloaded in tlsCfg, so ServeTLS uses it in memory.
+	go func() { _ = srv.ServeTLS(lis, "", "") }()
+	t.Cleanup(func() { _ = srv.Close() })
+	return lis.Addr().String()
 }
 
 func tlsTestCA(t *testing.T, caFile string) *x509.CertPool {
@@ -385,11 +393,7 @@ func TestStartGRPCServerUsesSharedTLSConfig(t *testing.T) {
 	unauth.Close()
 	if err == nil {
 		t.Fatal("gRPC accepted a client without a certificate despite mutual_tls")
-	go func() {
-		_ = srv.ServeTLS(lis, cfg.TLS.CertFile, cfg.TLS.KeyFile)
-	}()
-	t.Cleanup(func() { _ = srv.Close() })
-	return lis.Addr().String()
+	}
 }
 
 func httpsClient(t *testing.T, caPEM []byte, clientCert, clientKey []byte, maxVersion uint16) *http.Client {
@@ -413,7 +417,10 @@ func httpsClient(t *testing.T, caPEM []byte, clientCert, clientKey []byte, maxVe
 }
 
 func TestNewHTTPServerAttachesSharedTLSConfig(t *testing.T) {
-	cfg := config.Default()
+	cfg, err := config.Default()
+	if err != nil {
+		t.Fatalf("Default: %v", err)
+	}
 	plain := newHTTPServer(cfg, nil, nil)
 	if plain.TLSConfig != nil {
 		t.Fatal("plaintext server should not have a TLS config")
@@ -449,7 +456,11 @@ func TestHTTPSServerEnforcesMinimumVersion(t *testing.T) {
 		{name: "tls13", minVersion: "1.3"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			cfg := config.Default()
+			cfg, err := config.Default()
+			if err != nil {
+				t.Fatalf("Default: %v", err)
+			}
+			var caPEM []byte
 			cfg.TLS, caPEM = testTLSConfig(t, tc.minVersion, false)
 			tlsCfg, err := config.BuildTLSConfig(cfg.TLS)
 			if err != nil {
@@ -492,8 +503,12 @@ func TestHTTPSServerEnforcesMinimumVersion(t *testing.T) {
 }
 
 func TestHTTPSServerMutualTLS(t *testing.T) {
-	cfg := config.Default()
-	cfg.TLS, caPEM, ca, caKey := testTLSConfigWithCA(t, "1.2", true)
+	cfg, err := config.Default()
+	if err != nil {
+		t.Fatalf("Default: %v", err)
+	}
+	tlsCfgFromTest, caPEM, ca, caKey := testTLSConfigWithCA(t, "1.2", true)
+	cfg.TLS = tlsCfgFromTest
 	tlsCfg, err := config.BuildTLSConfig(cfg.TLS)
 	if err != nil {
 		t.Fatal(err)
@@ -515,7 +530,10 @@ func TestHTTPSServerMutualTLS(t *testing.T) {
 }
 
 func TestGRPCServerOptionsUseSharedTLSConfig(t *testing.T) {
-	cfg := config.Default()
+	cfg, err := config.Default()
+	if err != nil {
+		t.Fatalf("Default: %v", err)
+	}
 	if opts, err := grpcServerOptions(cfg, nil); err != nil || len(opts) != 0 {
 		t.Fatalf("disabled TLS: opts = %d, err = %v; want 0 options and no error", len(opts), err)
 	}

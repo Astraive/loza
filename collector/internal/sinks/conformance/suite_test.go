@@ -1,8 +1,14 @@
 package conformance
 
 import (
+	"context"
+	"errors"
+	"fmt"
 	"reflect"
+	"strings"
 	"testing"
+
+	collectorevent "github.com/astraive/loza/collector/internal/event"
 )
 
 // TestOptionsExposesOnlyEffectiveOptions guards against reintroducing a no-op
@@ -29,12 +35,8 @@ func TestOptionsExposesOnlyEffectiveOptions(t *testing.T) {
 		if !effective[name] {
 			t.Errorf("Options.%s does not influence Run and should be removed", name)
 		}
-	"context"
-	"strings"
-	"testing"
-
-	collectorevent "github.com/astraive/loza/collector/internal/event"
-)
+	}
+}
 
 // nameRecordingSink is a no-op sink used to observe the testing.TB handed to
 // the Factory for each conformance subtest.
@@ -87,13 +89,6 @@ func TestRunNamesSubtestsWithName(t *testing.T) {
 		})
 	}
 }
-	"context"
-	"errors"
-	"fmt"
-	"testing"
-
-	collectorevent "github.com/astraive/loza/collector/internal/event"
-)
 
 // TestReportsCancelled is the regression test for the context_cancellation
 // conformance check. The old check (`err != nil && !errors.Is(err,

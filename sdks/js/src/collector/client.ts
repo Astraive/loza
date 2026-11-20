@@ -85,6 +85,7 @@ export class CollectorClient {
     const hasCredentials = Boolean(this.apiKey) || Boolean(this.username);
     if (hasCredentials && endpoint.protocol === 'http:' && !isLoopback) {
       throw new Error('invalid CollectorClient options: credentials require HTTPS (HTTP is allowed only for localhost)');
+    }
     if (!this.apiKey && this.username &&
       endpoint.protocol === 'http:' &&
       !isLocalhost(endpoint.hostname)) {

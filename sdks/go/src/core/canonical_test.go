@@ -130,12 +130,6 @@ func TestRunEventPanicPreservesErrorIdentity(t *testing.T) {
 	cfg.Sinks = []Sink{sink}
 	cfg.PanicRecovery = true
 
-// setupRunEventLogger installs a logger with a capture sink as the default and
-// returns a cleanup that restores the previous default.
-func setupRunEventLogger(t *testing.T) {
-	t.Helper()
-	cfg := Test()
-	cfg.Sinks = []Sink{&captureSink{}}
 	l, err := New(cfg)
 	if err != nil {
 		t.Fatalf("new logger: %v", err)
@@ -192,6 +186,18 @@ func TestPanicRunErrorUnwrapNonError(t *testing.T) {
 		t.Fatalf("Unwrap of nil receiver: got=%v want=nil", got)
 	}
 }
+
+// setupRunEventLogger installs a logger with a capture sink as the default and
+// returns a cleanup that restores the previous default.
+func setupRunEventLogger(t *testing.T) {
+	t.Helper()
+	cfg := Test()
+	cfg.Sinks = []Sink{&captureSink{}}
+	l, err := New(cfg)
+	if err != nil {
+		t.Fatalf("new logger: %v", err)
+	}
+
 	prev := Default()
 	SetDefault(l)
 	t.Cleanup(func() { SetDefault(prev) })
@@ -239,4 +245,3 @@ func TestRunEventPreservesApplicationErrorWhenFinishFails(t *testing.T) {
 		t.Fatalf("expected Finish failure to be combined into the error, got %v", err)
 	}
 }
-

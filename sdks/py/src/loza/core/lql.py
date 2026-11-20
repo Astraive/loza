@@ -154,11 +154,6 @@ def query_sql(
     if api_key:
         headers["X-API-Key"] = api_key
     req = urllib.request.Request(url, data=body, headers=headers, method="POST")
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        data = json.loads(resp.read().decode("utf-8"))
-    if not isinstance(data, dict):
-        raise LQLCompilationError("lql response has an invalid result envelope")
-    return QueryResult(columns=data.get("columns", []), rows=data.get("rows", []))
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             raw = resp.read(8 * 1024 * 1024 + 1)

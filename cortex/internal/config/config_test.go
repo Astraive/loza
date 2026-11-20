@@ -301,6 +301,26 @@ func TestApplyEnvOverridesRejectsInvalidValues(t *testing.T) {
 		{name: "pii redaction enabled", key: "CORTEX_PII_REDACTION_ENABLED", val: "yep"},
 		{name: "collector source of truth", key: "CORTEX_COLLECTOR_SOURCE_OF_TRUTH", val: "maybe"},
 		{name: "collector tail enabled", key: "CORTEX_COLLECTOR_TAIL_ENABLED", val: "maybe"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv(tc.key, tc.val)
+			cfg := defaultConfig()
+			err := applyEnvOverrides(cfg)
+			if err == nil {
+				t.Fatalf("applyEnvOverrides accepted invalid %s=%q", tc.key, tc.val)
+			}
+			if !strings.Contains(err.Error(), tc.key) {
+				t.Fatalf("error %q does not identify %s", err, tc.key)
+			}
+			if !strings.Contains(err.Error(), tc.val) {
+				t.Fatalf("error %q does not include rejected value %q", err, tc.val)
+			}
+		})
+	}
+}
+
 func TestParseEnvBool(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -325,17 +345,18 @@ func TestParseEnvBool(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			t.Setenv(tc.key, tc.val)
-			cfg := defaultConfig()
-			err := applyEnvOverrides(cfg)
-			if err == nil {
-				t.Fatalf("applyEnvOverrides accepted invalid %s=%q", tc.key, tc.val)
+			got, err := parseEnvBool("CORTEX_AUTH_ENABLED", tc.value)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("parseEnvBool(%q) expected an error", tc.value)
+				}
+				return
 			}
-			if !strings.Contains(err.Error(), tc.key) {
-				t.Fatalf("error %q does not identify %s", err, tc.key)
+			if err != nil {
+				t.Fatalf("parseEnvBool(%q): %v", tc.value, err)
 			}
-			if !strings.Contains(err.Error(), tc.val) {
-				t.Fatalf("error %q does not include rejected value %q", err, tc.val)
+			if got != tc.want {
+				t.Fatalf("parseEnvBool(%q) = %v, want %v", tc.value, got, tc.want)
 			}
 		})
 	}
@@ -404,20 +425,6 @@ func TestDefaultRejectsInvalidEnvironmentOverride(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "CORTEX_COLLECTOR_MAX_RESPONSE_BYTES") {
 		t.Fatalf("Default error = %v, want invalid CORTEX_COLLECTOR_MAX_RESPONSE_BYTES error", err)
-			got, err := parseEnvBool("CORTEX_AUTH_ENABLED", tc.value)
-			if tc.wantErr {
-				if err == nil {
-					t.Fatalf("parseEnvBool(%q) expected an error", tc.value)
-				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("parseEnvBool(%q): %v", tc.value, err)
-			}
-			if got != tc.want {
-				t.Fatalf("parseEnvBool(%q) = %v, want %v", tc.value, got, tc.want)
-			}
-		})
 	}
 }
 
@@ -865,6 +872,30 @@ func TestParseAPIKeys(t *testing.T) {
 			raw:     "my-service:sk_abc123:writer,bad:key:with:colon,read-only:sk_def456:reader",
 			wantErr: true,
 		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := parseAPIKeys(tc.raw)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatal("expected an error for malformed CORTEX_API_KEYS")
+				}
+				if !strings.Contains(err.Error(), "CORTEX_API_KEYS") {
+					t.Fatalf("error should identify the malformed variable, got: %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("parseAPIKeys: %v", err)
+			}
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("parseAPIKeys = %+v, want %+v", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestValidateProductionRequiresExplicitHMACSecret(t *testing.T) {
 	base := func() Config {
 		return Config{
@@ -894,21 +925,15 @@ func TestValidateProductionRequiresExplicitHMACSecret(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := parseAPIKeys(tc.raw)
-			if tc.wantErr {
-				if err == nil {
-					t.Fatal("expected an error for malformed CORTEX_API_KEYS")
-				}
-				if !strings.Contains(err.Error(), "CORTEX_API_KEYS") {
-					t.Fatalf("error should identify the malformed variable, got: %v", err)
-				}
-				return
+			cfg := base()
+			cfg.Environment = tc.environment
+			cfg.Authentication.HMACSecret = tc.secret
+			err := cfg.Validate()
+			if tc.wantErr && err == nil {
+				t.Fatal("expected validation error for production without HMAC secret")
 			}
-			if err != nil {
-				t.Fatalf("parseAPIKeys: %v", err)
-			}
-			if !reflect.DeepEqual(got, tc.want) {
-				t.Fatalf("parseAPIKeys = %+v, want %+v", got, tc.want)
+			if !tc.wantErr && err != nil {
+				t.Fatalf("Validate: %v", err)
 			}
 		})
 	}
@@ -948,17 +973,6 @@ func TestLoadAppliesValidAPIKeysFromEnv(t *testing.T) {
 	want := []APIKey{{Name: "my-service", Key: "sk_abc123", Role: "writer"}}
 	if !reflect.DeepEqual(cfg.Authentication.APIKeys, want) {
 		t.Fatalf("API keys = %+v, want %+v", cfg.Authentication.APIKeys, want)
-			cfg := base()
-			cfg.Environment = tc.environment
-			cfg.Authentication.HMACSecret = tc.secret
-			err := cfg.Validate()
-			if tc.wantErr && err == nil {
-				t.Fatal("expected validation error for production without HMAC secret")
-			}
-			if !tc.wantErr && err != nil {
-				t.Fatalf("Validate: %v", err)
-			}
-		})
 	}
 }
 

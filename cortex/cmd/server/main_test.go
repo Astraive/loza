@@ -10,9 +10,9 @@ import (
 
 	"github.com/astraive/loza/cortex/internal/config"
 	"github.com/astraive/loza/cortex/internal/models"
+	"github.com/astraive/loza/cortex/internal/storage"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/test/bufconn"
-	"github.com/astraive/loza/cortex/internal/storage"
 )
 
 type noopBatchProcessor struct{}
@@ -158,6 +158,9 @@ func TestStartGRPCServerClosesChannelOnSetupFailure(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("startGRPCServer did not signal setup failure via channel close")
+	}
+}
+
 type syncTestEventStore struct {
 	saved [][]*models.Event
 }
@@ -274,7 +277,10 @@ func (*syncTestStorage) Remediations() storage.RemediationStore { return nil }
 func (*syncTestStorage) Feedback() storage.FeedbackStore        { return nil }
 
 func TestSyncProcessorAppliesPIIRedaction(t *testing.T) {
-	cfg := config.Default()
+	cfg, err := config.Default()
+	if err != nil {
+		t.Fatal(err)
+	}
 	cfg.PIIRedaction.Enabled = true
 	cfg.PIIRedaction.Mode = "enforce"
 

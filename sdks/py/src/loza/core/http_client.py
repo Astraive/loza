@@ -160,12 +160,17 @@ class CollectorClient:
         self.http_client = http_client
 
     def _open(self, request: Request, timeout: float, *, guarded: bool = False):
-        """Open a request through the injected client, or the default transport."""
+        """Open a request through the injected client, or the default transport.
+
+        The default transport always goes through the module-level ``_open`` so
+        the resolved IP is validated at connection time and the socket is pinned
+        to it. Without this, a hostname that resolves to a public address at
+        construction time could be re-resolved to a private address when the
+        connection is actually made (DNS rebinding).
+        """
         if self.http_client is not None:
             return self.http_client.open(request, timeout=timeout)
-        if guarded:
-            return _open_with_redirect_guard(request, timeout, self.endpoint)
-        return urlopen(request, timeout=timeout)
+        return _open(request, timeout=timeout, endpoint=self.endpoint if guarded else None)
 
     def _auth_headers(self) -> dict[str, str]:
         if self.api_key:
@@ -189,7 +194,6 @@ class CollectorClient:
         for attempt in range(self.retries + 1):
             try:
                 try:
-                    with _open(request, timeout=self.timeout, endpoint=self.endpoint) as response:
                     with self._open(request, self.timeout, guarded=True) as response:
                         status = getattr(response, "status", response.getcode())
                         headers_obj = getattr(response, "headers", None)
@@ -227,7 +231,6 @@ class CollectorClient:
         for path in ("/health", "/healthz"):
             req = Request(f"{self._base_url()}{path}", headers=self._auth_headers(), method="GET")
             try:
-                with _open(req, timeout=self.timeout) as resp:
                 with self._open(req, self.timeout) as resp:
                     data = json.loads(resp.read())
                     if isinstance(data, dict) and data.get("status") == "ok":
@@ -241,7 +244,6 @@ class CollectorClient:
         for path in ("/ready", "/readyz"):
             req = Request(f"{self._base_url()}{path}", headers=self._auth_headers(), method="GET")
             try:
-                with _open(req, timeout=self.timeout) as resp:
                 with self._open(req, self.timeout) as resp:
                     data = json.loads(resp.read())
                     if isinstance(data, dict) and data.get("status") in ("ok", "ready"):
@@ -253,14 +255,12 @@ class CollectorClient:
     def version(self) -> dict:
         """Fetch version info from the collector."""
         req = Request(f"{self._base_url()}/version", headers=self._auth_headers(), method="GET")
-        with _open(req, timeout=self.timeout) as resp:
         with self._open(req, self.timeout) as resp:
             return json.loads(resp.read())
 
     def status(self) -> dict:
         """Fetch operational status from the collector."""
         req = Request(f"{self._base_url()}/status", headers=self._auth_headers(), method="GET")
-        with _open(req, timeout=self.timeout) as resp:
         with self._open(req, self.timeout) as resp:
             return json.loads(resp.read())
 
@@ -290,7 +290,6 @@ class CollectorClient:
             url += "?" + urlencode(params)
 
         request = Request(url, headers={"accept": "application/x-ndjson", **self._auth_headers()})
-        with _open(request, timeout=timeout) as response:
         with self._open(request, timeout) as response:
             for raw in response:
                 line = raw.decode("utf-8").strip()
@@ -331,6 +330,17 @@ _LOCAL_AUTH_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
 
 
 def _validate_basic_auth_endpoint(endpoint: str, username: str, password: str) -> None:
+    if not username and password:
+        raise ValueError("collector basic auth password requires a username")
+    if username and not password and not is_public_dsn_username(username):
+        raise ValueError("collector basic auth requires a password unless username is an lz_pub_ capability")
+    if not username:
+        return
+    parsed = urlparse(endpoint)
+    if parsed.scheme == "http" and (parsed.hostname or "").lower() not in _LOCAL_AUTH_HOSTS:
+        raise ValueError("collector basic auth requires HTTPS except for local endpoints")
+
+
 def _validate_credentialed_endpoint(endpoint: str, api_key: str, username: str, password: str) -> None:
     """Single URL-validation gate for Bearer and Basic collector credentials."""
     if not username and password:
@@ -341,8 +351,6 @@ def _validate_credentialed_endpoint(endpoint: str, api_key: str, username: str, 
         return
     parsed = urlparse(endpoint)
     if parsed.scheme == "http" and (parsed.hostname or "").lower() not in _LOCAL_AUTH_HOSTS:
-        raise ValueError("collector basic auth requires HTTPS except for local endpoints")
-    if parsed.scheme == "http" and (parsed.hostname or "").lower() not in {"localhost", "127.0.0.1", "::1"}:
         raise ValueError("collector credentials require HTTPS except for local endpoints")
 
 
@@ -512,7 +520,13 @@ def _open(request: Request, timeout: float = 5.0, endpoint: str | None = None):
     if not host:
         raise ValueError("collector endpoint must include a host")
     port = parsed.port or _default_port(parsed.scheme)
-    allow_private = _private_endpoint_allowed() or host in {"localhost", "127.0.0.1", "::1"}
+    if host in {"127.0.0.1", "::1"}:
+        # A literal loopback IP has no DNS-rebinding surface and is explicitly
+        # allowed, so keep the legacy transport (also preserves mocked callers).
+        if endpoint:
+            return _open_with_redirect_guard(request, timeout, endpoint)
+        return urlopen(request, timeout=timeout)
+    allow_private = _private_endpoint_allowed() or host == "localhost"
     try:
         addresses = _resolve_collector_addresses(host, port)
     except socket.gaierror:
@@ -578,7 +592,6 @@ def _collector_request(
     headers = {"content-type": "application/json"} if body else {}
     headers.update(client._auth_headers())
     req = Request(url, data=data, headers=headers, method=method)
-    with _open(req, timeout=client.timeout) as resp:
     with client._open(req, client.timeout) as resp:
         raw = resp.read()
         return json.loads(raw.decode("utf-8")) if raw else {}
@@ -603,13 +616,6 @@ def _collector_tail(self, **params):
 def _collector_delete(self, **params):
     event_id = params.get("event_id") or params.get("id")
     if event_id:
-        return _collector_request(self, "DELETE", f"/events/{_quote_segment(event_id)}")
-    tenant_id = params.get("tenant_id")
-    if tenant_id:
-        return _collector_request(self, "DELETE", f"/events/by-tenant/{_quote_segment(tenant_id)}")
-    user_id = params.get("user_id")
-    if user_id:
-        return _collector_request(self, "DELETE", f"/events/by-user/{_quote_segment(user_id)}")
         return _collector_request(self, "DELETE", _collector_path("events", event_id))
     tenant_id = params.get("tenant_id")
     if tenant_id:
@@ -629,11 +635,6 @@ def _collector_dlq_list(self, **params):
 
 
 def _collector_dlq_read(self, dlq_id):
-    return _collector_request(self, "GET", f"/dlq/{_quote_segment(dlq_id)}")
-
-
-def _collector_dlq_replay(self, dlq_id):
-    return _collector_request(self, "POST", f"/dlq/{_quote_segment(dlq_id)}/replay")
     return _collector_request(self, "GET", _collector_path("dlq", dlq_id))
 
 
@@ -650,11 +651,6 @@ def _collector_keys_revoke(self, key_id):
 
 
 def _collector_keys_rotate(self, key_id):
-    return _collector_request(self, "POST", f"/keys/{_quote_segment(key_id)}/rotate")
-    return _collector_request(self, "DELETE", _collector_path("keys", key_id))
-
-
-def _collector_keys_rotate(self, key_id):
     return _collector_request(self, "POST", _collector_path("keys", key_id, "rotate"))
 
 
@@ -663,7 +659,6 @@ def _collector_sinks_list(self):
 
 
 def _collector_sinks_test(self, name):
-    return _collector_request(self, "POST", f"/sinks/{_quote_segment(name)}/test")
     return _collector_request(self, "POST", _collector_path("sinks", name, "test"))
 
 

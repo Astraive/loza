@@ -5,7 +5,6 @@ import (
 	"encoding/base64"
 	"errors"
 	"math/rand"
-	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,34 +13,34 @@ import (
 	"time"
 )
 
-// recordingSink is an in-memory Sink used to exercise queue backpressure
+// sizeLimitedSink is an in-memory Sink used to exercise queue backpressure
 // without any filesystem or network dependency.
-type recordingSink struct {
+type sizeLimitedSink struct {
 	mu      sync.Mutex
 	batches [][]byte
 }
 
-func (s *recordingSink) WriteEvent(ctx context.Context, data []byte, key []byte) error {
+func (s *sizeLimitedSink) WriteEvent(ctx context.Context, data []byte, key []byte) error {
 	return s.WriteBatch(ctx, [][]byte{data})
 }
 
-func (s *recordingSink) WriteBatch(ctx context.Context, events [][]byte) error {
+func (s *sizeLimitedSink) WriteBatch(ctx context.Context, events [][]byte) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.batches = append(s.batches, events...)
 	return nil
 }
 
-func (s *recordingSink) Flush(ctx context.Context) error { return nil }
+func (s *sizeLimitedSink) Flush(ctx context.Context) error { return nil }
 
-func (s *recordingSink) Close(ctx context.Context) error { return nil }
+func (s *sizeLimitedSink) Close(ctx context.Context) error { return nil }
 
 // newSizeLimitedQueue builds a queue whose only limit is a byte cap: MaxEvents
 // is left at 0 (unbounded) so the byte cap is the sole backpressure mechanism.
 // The flush loop is effectively disabled so buffered sizes stay deterministic.
-func newSizeLimitedQueue(t *testing.T, maxSizeBytes int64) (*Queue, *recordingSink) {
+func newSizeLimitedQueue(t *testing.T, maxSizeBytes int64) (*Queue, *sizeLimitedSink) {
 	t.Helper()
-	sink := &recordingSink{}
+	sink := &sizeLimitedSink{}
 	q, err := NewQueue(QueueConfig{
 		Directory:     filepath.Join(t.TempDir(), "queue"),
 		Sink:          sink,
@@ -258,6 +257,11 @@ func (s *countingSink) WriteBatch(ctx context.Context, events [][]byte) error {
 	defer s.mu.Unlock()
 	s.calls = append(s.calls, time.Now())
 	if s.fail {
+		return errors.New("sink unavailable")
+	}
+	return nil
+}
+
 type recordingSink struct {
 	mu      sync.Mutex
 	fail    bool
@@ -467,6 +471,9 @@ func TestQueueHonorsBackoffBeforeAutomaticRetry(t *testing.T) {
 	calls := sink.callTimes()
 	if gap := calls[1].Sub(calls[0]); gap < 200*time.Millisecond {
 		t.Fatalf("retry gap %v shorter than configured backoff %v", gap, backoff)
+	}
+}
+
 func (s *recordingSink) Flush(context.Context) error { return nil }
 func (s *recordingSink) Close(context.Context) error { return nil }
 
@@ -659,6 +666,9 @@ func TestCircuitBreakerHalfOpenEndToEnd(t *testing.T) {
 	waitForCircuit(t, q, false)
 	if err := q.Enqueue(context.Background(), Event{Payload: []byte("recovered")}); err != nil {
 		t.Fatalf("enqueue after recovery was rejected: %v", err)
+	}
+}
+
 type stubSink struct {
 	closeErr error
 }
@@ -668,7 +678,7 @@ func (*stubSink) WriteBatch(context.Context, [][]byte) error       { return nil 
 func (*stubSink) Flush(context.Context) error                      { return nil }
 func (s *stubSink) Close(context.Context) error                    { return s.closeErr }
 
-func newTestQueue(t *testing.T, sink Sink) *Queue {
+func newQueueWithSink(t *testing.T, sink Sink) *Queue {
 	t.Helper()
 	q, err := NewQueue(QueueConfig{Directory: t.TempDir(), Sink: sink})
 	if err != nil {
@@ -681,7 +691,7 @@ func newTestQueue(t *testing.T, sink Sink) *Queue {
 // used to panic with "close of closed channel". It also exercises the case
 // where the flush loop is parked in cond.Wait() when shutdown starts.
 func TestQueueCloseIsIdempotent(t *testing.T) {
-	q := newTestQueue(t, &stubSink{})
+	q := newQueueWithSink(t, &stubSink{})
 	for i := 0; i < 3; i++ {
 		if err := q.Enqueue(context.Background(), Event{Payload: []byte("event")}); err != nil {
 			t.Fatalf("enqueue: %v", err)
@@ -707,7 +717,7 @@ func TestQueueCloseIsIdempotent(t *testing.T) {
 // error from the single shutdown performed by sync.Once.
 func TestQueueCloseConcurrentReturnsStoredError(t *testing.T) {
 	wantErr := errors.New("sink close failed")
-	q := newTestQueue(t, &stubSink{closeErr: wantErr})
+	q := newQueueWithSink(t, &stubSink{closeErr: wantErr})
 	for i := 0; i < 3; i++ {
 		if err := q.Enqueue(context.Background(), Event{Payload: []byte("event")}); err != nil {
 			t.Fatalf("enqueue: %v", err)
@@ -740,7 +750,7 @@ func TestQueueCloseConcurrentReturnsStoredError(t *testing.T) {
 // TestQueueCloseFlushesRemainingEvents guards against regressing the final
 // flush performed during shutdown.
 func TestQueueCloseFlushesRemainingEvents(t *testing.T) {
-	q := newTestQueue(t, &stubSink{})
+	q := newQueueWithSink(t, &stubSink{})
 	const events = 3
 	for i := 0; i < events; i++ {
 		if err := q.Enqueue(context.Background(), Event{Payload: []byte("event")}); err != nil {

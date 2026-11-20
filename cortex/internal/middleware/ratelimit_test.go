@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 )
 
 func mustCIDR(t *testing.T, s string) *net.IPNet {
@@ -134,9 +135,8 @@ func TestRateLimiterMiddlewareIgnoresSpoofedXFFForPerIPLimit(t *testing.T) {
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusTooManyRequests {
 		t.Fatalf("expected rate limit rejection for shared client bucket, got %d", rec.Code)
-	"testing"
-	"time"
-)
+	}
+}
 
 func TestRateLimiterStopStopsCleanup(t *testing.T) {
 	rl := NewRateLimiter(60, 60)

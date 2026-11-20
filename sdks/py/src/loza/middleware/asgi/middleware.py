@@ -5,7 +5,6 @@ from typing import Any, Awaitable, Callable
 
 from ... import Bool, Emit, Enrich, Finish, FinishError, Int, Params, StartHTTPEvent, String
 from .response import ResponseCapture
-from ... import Emit, Enrich, Finish, FinishError, Int, Params, StartHTTPEvent, String
 
 
 class Middleware:
@@ -66,11 +65,9 @@ class Middleware:
                 String("http.remote_ip", _remote_ip(scope)),
             )
             await self.app(scope, receive, capture_send)
-            ctx.params.status_code = status_code
+            ctx.params.status_code = capture.status_code
             Finish(
                 ctx,
-                "error" if status_code >= 500 else "success",
-                Int("response_bytes", response_bytes),
                 "error" if capture.status_code >= 500 else "success",
                 Int("status_code", capture.status_code),
                 Int("response_bytes", capture.bytes),
@@ -79,13 +76,13 @@ class Middleware:
         except BaseException as exc:
             # asyncio.CancelledError (a BaseException since 3.8) must finish the
             # event with an error too, otherwise `finally` emits it incomplete.
-        except Exception as exc:
             if ctx is None:
                 # route_resolver raised before the event existed. Fall back to
                 # the raw path so the failure is still recorded and emitted.
                 ctx = self._event_context(scope, scope.get("path", ""))
-            FinishError(ctx, exc, Bool("panic", True))
-            FinishError(ctx, exc)
+                FinishError(ctx, exc, Bool("panic", True))
+            else:
+                FinishError(ctx, exc)
             raise
         finally:
             if ctx is not None:

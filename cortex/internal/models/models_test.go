@@ -75,6 +75,10 @@ func TestOutcomeCategory(t *testing.T) {
 	for _, tt := range tests {
 		if got := OutcomeCategory(tt.code); got != tt.expected {
 			t.Errorf("OutcomeCategory(%d) = %q, want %q", tt.code, got, tt.expected)
+		}
+	}
+}
+
 func TestEdgeValidateRejectsNaNWeight(t *testing.T) {
 	base := Edge{ID: "e1", FromNodeID: "n1", ToNodeID: "n2", Type: EdgeTypeDependsOn}
 

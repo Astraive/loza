@@ -27,7 +27,10 @@ func TestApplyEnvOverridesEventBusKafkaCanonicalWins(t *testing.T) {
 	t.Setenv("LOZA_KAFKA_TOPIC", "alias-topic")
 	t.Setenv("LOZA_KAFKA_GROUP", "alias-group")
 
-	fc := defaultFileConfig()
+	fc, err := defaultFileConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := applyEnvOverrides(&fc); err != nil {
 		t.Fatalf("apply overrides: %v", err)
 	}
@@ -48,7 +51,10 @@ func TestApplyEnvOverridesEventBusKafkaDeprecatedAlias(t *testing.T) {
 	t.Setenv("LOZA_KAFKA_TOPIC", "alias-topic")
 	t.Setenv("LOZA_KAFKA_GROUP", "alias-group")
 
-	fc := defaultFileConfig()
+	fc, err := defaultFileConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := applyEnvOverrides(&fc); err != nil {
 		t.Fatalf("apply overrides: %v", err)
 	}

@@ -57,7 +57,6 @@ def _stable_text(value: Any) -> str:
 
 
 def _hash(value: Any) -> str:
-    return hash_sensitive_text(_stable_text(value))
     return secure_hash(_stable_text(value))
 
 

@@ -168,6 +168,8 @@ describe('Config boundaries', () => {
     const noCredentials = defaultConfig();
     noCredentials.collectorUrl = 'http://collector.example/events';
     assert.equal(validateConfig(noCredentials), noCredentials);
+  });
+
   it('allows Basic credentials over plaintext HTTP to IPv6 localhost ([::1])', () => {
     // URL.hostname keeps IPv6 brackets, so the bare '::1' comparison missed this.
     const ipv6 = defaultConfig();

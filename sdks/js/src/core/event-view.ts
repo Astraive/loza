@@ -32,7 +32,14 @@ function freezeClone<T>(value: T, seen: WeakMap<object, any> = new WeakMap()): T
   const copy: Record<string, any> = {};
   seen.set(value as object, copy);
   for (const [key, item] of Object.entries(value as Record<string, any>)) {
-    copy[key] = freezeClone(item, seen);
+    // defineProperty keeps a caller-controlled `__proto__` key as an ordinary
+    // own property instead of invoking the inherited prototype setter.
+    Object.defineProperty(copy, key, {
+      value: freezeClone(item, seen),
+      writable: true,
+      enumerable: true,
+      configurable: true,
+    });
   }
   return Object.freeze(copy) as T;
 }

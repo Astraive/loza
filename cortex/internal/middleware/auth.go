@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"sync"
 
 	"github.com/astraive/loza/cortex/internal/config"
 )
@@ -23,6 +24,9 @@ type Auth struct {
 	hmacSecret []byte
 	initErr    error
 	once       sync.Once
+	// initCfg is a private copy of the configuration needed by the lazy init.
+	// It is cleared as soon as init runs so raw API keys are never retained.
+	initCfg *config.AuthenticationConfig
 }
 
 type hashedAPIKey struct {
@@ -31,14 +35,6 @@ type hashedAPIKey struct {
 	Role    string
 }
 
-// AutoGenerateHMACSecret derives a deterministic HMAC key from the configured API keys.
-// This ensures the same config always produces the same secret without requiring
-// an explicit HMAC_SECRET env var. Because it is derived only from the same keys it
-// protects, it adds no independent secret entropy; set HMACSecret to supply one.
-func AutoGenerateHMACSecret(keys []config.APIKey) []byte {
-	var parts []string
-	for _, k := range keys {
-		parts = append(parts, k.Key)
 // hmacSecretBytes is the size (in bytes) of a generated HMAC secret: 256 bits
 // matches the strength of the HMAC-SHA256 construction that consumes it.
 const hmacSecretBytes = 32
@@ -65,33 +61,33 @@ func NewAuth(cfg *config.AuthenticationConfig) *Auth {
 	a := &Auth{}
 	if cfg == nil {
 		return a
-	return &Auth{cfg: cfg}
+	}
+	a.enabled = cfg.Enabled
+	// Keep a private copy so the caller may scrub its own config immediately.
+	clone := *cfg
+	clone.APIKeys = append([]config.APIKey(nil), cfg.APIKeys...)
+	a.initCfg = &clone
+	return a
 }
 
 func (a *Auth) init() {
 	if a.keyCache != nil || a.initErr != nil {
 		return
 	}
-
-	a.enabled = cfg.Enabled
-	if len(cfg.APIKeys) == 0 {
-		return a
-	if a.cfg == nil || len(a.cfg.APIKeys) == 0 {
+	cfg := a.initCfg
+	// Release the raw API keys as soon as they have been consumed.
+	a.initCfg = nil
+	if cfg == nil {
 		return
 	}
 
-	// Determine HMAC secret: use explicit config or auto-generate from API keys.
-	if cfg.HMACSecret != "" {
-		a.hmacSecret = []byte(cfg.HMACSecret)
-	} else {
-		a.hmacSecret = AutoGenerateHMACSecret(cfg.APIKeys)
 	// Use the explicitly configured secret when present. Otherwise generate a
 	// cryptographically random secret with independent entropy. Never derive it
 	// from the API keys: that would let a single leaked key reconstruct the HMAC
 	// key and defeat the separation between the two authentication layers.
 	// Production deployments must configure an explicit secret (see config.Validate).
-	if a.cfg.HMACSecret != "" {
-		a.hmacSecret = []byte(a.cfg.HMACSecret)
+	if cfg.HMACSecret != "" {
+		a.hmacSecret = []byte(cfg.HMACSecret)
 	} else {
 		secret, err := generateHMACSecret()
 		if err != nil {
@@ -101,6 +97,9 @@ func (a *Auth) init() {
 		a.hmacSecret = secret
 	}
 
+	if len(cfg.APIKeys) == 0 {
+		return
+	}
 	a.keyCache = make(map[string]*hashedAPIKey, len(cfg.APIKeys))
 	for i := range cfg.APIKeys {
 		key := &cfg.APIKeys[i]
@@ -111,7 +110,6 @@ func (a *Auth) init() {
 			Role:    key.Role,
 		}
 	}
-	return a
 }
 
 func hmacSHA256(data, secret []byte) []byte {
@@ -161,7 +159,6 @@ func (a *Auth) authenticate(r *http.Request) *AuthResult {
 	apiKeyHeader := "X-API-Key"
 
 	providedKey := strings.TrimSpace(r.Header.Get(apiKeyHeader))
-	providedKey := strings.TrimSpace(r.Header.Get("X-API-Key"))
 	if providedKey == "" {
 		authHeader := strings.TrimSpace(r.Header.Get("Authorization"))
 		if strings.HasPrefix(strings.ToLower(authHeader), "bearer ") {
@@ -244,17 +241,6 @@ func (a *Auth) AuthorizeRole(result *AuthResult, requiredRole string) bool {
 		// Fail closed: an unknown role on either side denies access. The old
 		// zero-value lookup mapped unknown roles to level 0, which silently
 		// granted access whenever the required role was also unrecognized.
-		return false
-	}
-
-	requiredLevel, ok := roleHierarchy[requiredRole]
-	if !ok {
-		// An unknown or empty required role is a configuration/caller error;
-		// never treat it as level 0 and thereby authorize everyone.
-		return false
-	}
-	currentLevel, ok := roleHierarchy[result.Role]
-	if !ok || currentLevel == 0 {
 		return false
 	}
 

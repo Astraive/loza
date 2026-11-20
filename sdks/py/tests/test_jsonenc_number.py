@@ -3,7 +3,9 @@ from decimal import Decimal
 import pytest
 
 from loza.internal.jsonenc import number as internal_number
+from loza.internal.jsonenc.number import duration_ms as internal_duration_ms
 from loza.jsonenc import number as number
+from loza.jsonenc.number import duration_ms as public_duration_ms
 
 MODULES = [number, internal_number]
 
@@ -31,12 +33,6 @@ def test_safe_number_keeps_representable_finite_decimal(module):
 def test_safe_number_still_rejects_non_finite_decimal(module):
     assert module.safe_number(Decimal("NaN")) is None
     assert module.safe_number(Decimal("Infinity")) is None
-from __future__ import annotations
-
-import pytest
-
-from loza.internal.jsonenc.number import duration_ms as internal_duration_ms
-from loza.jsonenc.number import duration_ms as public_duration_ms
 
 
 @pytest.mark.parametrize("duration_ms", [internal_duration_ms, public_duration_ms])

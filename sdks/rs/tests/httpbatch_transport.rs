@@ -13,7 +13,7 @@ fn http_batch_sink_posts_gzipped_events_to_collector() {
     // LOZA_COLLECTOR_API_KEY_HEADER from the process-global environment at
     // emit time. Serialize with the key-from-environment test so its
     // transient set_var/remove_var cannot leak into this sink's request.
-    let _guard = env_lock().lock().expect("env lock");
+    let _guard = lock_env();
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind test server");
     listener
         .set_nonblocking(false)
@@ -146,12 +146,12 @@ fn env_lock_serializes_global_collector_env_access() {
     // are process-global and are read at emit time, so every HttpBatchSink
     // test must hold env_lock while it sets or observes them. This proves the
     // lock actually excludes a sibling while a transient key is present.
-    let guard = env_lock().lock().expect("env lock");
+    let guard = lock_env();
 
     let (acquired_tx, acquired_rx) = mpsc::channel();
     let (release_tx, release_rx) = mpsc::channel::<()>();
     let contender = thread::spawn(move || {
-        let _g = env_lock().lock().expect("env lock");
+        let _g = lock_env();
         acquired_tx.send(()).expect("signal lock acquired");
         release_rx.recv().expect("wait for release");
     });

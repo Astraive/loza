@@ -188,6 +188,8 @@ test('allows API-key auth over plaintext HTTP only for localhost endpoints', asy
   });
   await client.query('from events');
   assert.equal(authorization, 'Bearer secret');
+});
+
 test('rejects bearer API keys over plaintext HTTP for non-local endpoints', () => {
   const invalidConfigurations = [
     { endpoint: 'http://collector.example', collector: 'demo', apiKey: 'lz_sec_live_key' },

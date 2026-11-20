@@ -120,11 +120,6 @@ func (s *collectorState) handleKeyCreate(w http.ResponseWriter, r *http.Request)
 		writeJSON(w, http.StatusForbidden, map[string]any{"error": "collector_scope_mismatch"})
 		return
 	}
-	token8, err := randomToken(8)
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "token_generation_failed"})
-		return
-	}
 	secret, err := randomToken(24)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "token_generation_failed"})
@@ -242,12 +237,6 @@ func (s *collectorState) handleKeyRotate(w http.ResponseWriter, r *http.Request)
 	// Store the NEW key FIRST, then revoke old (order matters: never leave zero keys)
 	secretHash := auth.HashSecret(newSecret, s.serverSecret)
 	newKey := &auth.KeyRecord{
-		ID:          newKeyID,
-		KeyID:       newKeyID,
-		SecretHash:  secretHash,
-		Kind:        oldRecord.Kind,
-		Roles:       []auth.Role{auth.RoleIngestServer},
-		AllowedEnvs: []string{env},
 		ID:              newKeyID,
 		KeyID:           newKeyID,
 		SecretHash:      secretHash,

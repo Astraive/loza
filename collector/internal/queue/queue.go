@@ -81,13 +81,11 @@ type Queue struct {
 	// q.events. It is guarded by mu and kept in sync with q.events so that
 	// MaxSizeBytes backpressure can be enforced alongside MaxEvents.
 	queueBytes int64
-	mu         sync.Mutex
-	cond       *sync.Cond
-	closed     bool
-	cfg           QueueConfig
-	events        []Event
+	// oldestEventAt is the enqueue time of the oldest buffered event; it
+	// drives the partial-batch flush deadline. Guarded by mu.
 	oldestEventAt time.Time
 	mu            sync.Mutex
+	cond          *sync.Cond
 	wakeCh        chan struct{}
 	closed        bool
 
@@ -157,6 +155,7 @@ func NewQueue(cfg QueueConfig) (*Queue, error) {
 		flushDone: make(chan struct{}, 1),
 		rng:       rand.New(rand.NewSource(time.Now().UnixNano())),
 	}
+	q.cond = sync.NewCond(&q.mu)
 
 	q.wg.Add(1)
 	go q.flushLoop()
@@ -352,7 +351,8 @@ func (q *Queue) flushLoop() {
 				}
 			} else {
 				q.mu.Unlock()
-			timedFlush = true
+				timedFlush = true
+			}
 		case <-q.wakeCh:
 			// A new event arrived; recompute the deadline for the oldest one.
 		case <-timer.C:
@@ -376,6 +376,9 @@ func (q *Queue) flushLoop() {
 // channel is buffered with capacity one so notifications sent while the loop
 // is busy are coalesced rather than lost.
 func (q *Queue) notifyFlush() {
+	if q.cond != nil {
+		q.cond.Signal()
+	}
 	select {
 	case q.wakeCh <- struct{}{}:
 	default:
@@ -388,31 +391,12 @@ func (q *Queue) markClosed() {
 	q.mu.Unlock()
 }
 
+// stopTimer stops t and drains its channel if the timer already fired.
 func stopTimer(t *time.Timer) {
 	if !t.Stop() {
 		select {
 		case <-t.C:
 		default:
-			q.mu.Lock()
-			if q.hasReadyEvent() && (len(q.events) >= q.cfg.BatchSize || q.hasReadyRetry()) {
-			// Close() broadcasts the cond while holding q.mu. Recheck stopCh
-			// under that same lock so a wake-up delivered before we parked in
-			// cond.Wait() cannot be missed.
-			select {
-			case <-q.stopCh:
-				q.mu.Unlock()
-				return
-			default:
-			}
-			if len(q.events) >= q.cfg.BatchSize {
-				q.mu.Unlock()
-				if err := q.doFlush(); err != nil {
-					log.Printf("queue flush error: %v", err)
-				}
-				continue
-			}
-			q.cond.Wait()
-			q.mu.Unlock()
 		}
 	}
 }
@@ -447,10 +431,12 @@ func (q *Queue) doFlush() error {
 	for _, e := range events {
 		q.queueBytes -= int64(len(e.Payload))
 	}
-	events := make([]Event, len(q.events))
-	copy(events, q.events)
-	q.events = q.events[:0]
-	q.oldestEventAt = time.Time{}
+	if len(q.events) > 0 {
+		// Deferred events remain; restart their batch-timeout clock.
+		q.oldestEventAt = time.Now()
+	} else {
+		q.oldestEventAt = time.Time{}
+	}
 	q.mu.Unlock()
 
 	batch := make([][]byte, len(events))
@@ -527,11 +513,7 @@ func (q *Queue) doFlush() error {
 		earliest := q.earliestRetry()
 		q.mu.Unlock()
 		if !earliest.IsZero() {
-			time.AfterFunc(time.Until(earliest), func() {
-				q.mu.Lock()
-				q.cond.Signal()
-				q.mu.Unlock()
-			})
+			time.AfterFunc(time.Until(earliest), q.notifyFlush)
 		}
 		q.notifyFlush()
 	}

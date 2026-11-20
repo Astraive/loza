@@ -4,6 +4,7 @@ import hashlib
 import hmac
 import os
 import secrets
+from typing import Any
 
 # Optional per-deployment secret. When set, hashed PII stays stable across
 # restarts of a deployment (allowable correlation) while still being impossible
@@ -36,8 +37,7 @@ def hash_sensitive_value(value: object) -> str:
     return hash_sensitive_text(str(value))
 
 
-__all__ = ["hash_sensitive_text", "hash_sensitive_value"]
-from typing import Any
+__all__ = ["hash_sensitive_text", "hash_sensitive_value", "HASH_SECRET_ENV", "secure_hash"]
 
 # A secret key makes value hashes non-reversible for low-entropy inputs such as
 # emails, phone numbers and account IDs. A keyed HMAC cannot be attacked with

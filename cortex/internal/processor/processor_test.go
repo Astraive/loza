@@ -248,7 +248,7 @@ func TestNewConfiguredEventProcessorRedactsSyncBatch(t *testing.T) {
 	}
 }
 
-func TestNewConfiguredEventProcessorDisabledIsNoOp(t *testing.T) {
+func TestNewConfiguredEventProcessorDisabledFailsClosed(t *testing.T) {
 	events := &fakeEventStore{}
 	p := NewConfiguredEventProcessor(events, &fakeTopologyStoreForProcessor{}, &fakeGraphStoreForProcessor{}, config.PIIRedactionConfig{Enabled: false})
 
@@ -260,8 +260,11 @@ func TestNewConfiguredEventProcessorDisabledIsNoOp(t *testing.T) {
 	if err := p.ProcessEvent(context.Background(), event); err != nil {
 		t.Fatalf("process event: %v", err)
 	}
-	if got := events.saved[0].Raw["email"]; got != "alice@example.com" {
-		t.Fatalf("disabled redaction changed value: %v", got)
+	// Redaction has no silent pass-through: a disabled config still yields a
+	// redactor built from an empty config, which fails closed to enforce mode.
+	// Previously this path attached a no-op redactor that leaked PII.
+	if got := events.saved[0].Raw["email"]; got != "[REDACTED]" {
+		t.Fatalf("disabled redaction must fail closed and still redact: %v", got)
 	}
 }
 
@@ -483,6 +486,54 @@ func TestProcessBatchUsesCanonicalServiceForGraphNodes(t *testing.T) {
 }
 
 func TestProcessBatchLinksLocalTrace(t *testing.T) {
+	events := &fakeEventStore{}
+	topology := &fakeTopologyStoreForProcessor{}
+	graphStore := &fakeGraphStoreForProcessor{}
+	p := NewEventProcessor(events, topology, graphStore)
+
+	ts := time.Now()
+	batch := []*models.Event{
+		{
+			ID:         "evt-1",
+			Timestamp:  ts,
+			Kind:       models.EventKindLog,
+			Service:    "svc-a",
+			TraceID:    "trace-1",
+			Provenance: "jsonl",
+		},
+		{
+			ID:         "evt-2",
+			Timestamp:  ts.Add(time.Second),
+			Kind:       models.EventKindMetric,
+			Service:    "svc-a",
+			TraceID:    "trace-1",
+			Provenance: "jsonl",
+		},
+	}
+
+	if err := p.ProcessBatch(context.Background(), batch); err != nil {
+		t.Fatalf("process batch: %v", err)
+	}
+	// External trace events must be queried even when multiple batch events share
+	// the trace, so pre-existing events connected to the trace are not omitted.
+	if events.traceCalls != 1 {
+		t.Fatalf("expected one trace lookup for the shared-trace group, got %d", events.traceCalls)
+	}
+
+	foundLocalTraceEdge := false
+	for _, edge := range graphStore.edges {
+		if edge.Type == models.EdgeTypeSameTrace &&
+			((edge.FromNodeID == "evt-1" && edge.ToNodeID == "evt-2") ||
+				(edge.FromNodeID == "evt-2" && edge.ToNodeID == "evt-1")) {
+			foundLocalTraceEdge = true
+			break
+		}
+	}
+	if !foundLocalTraceEdge {
+		t.Fatalf("expected same-trace edge between local batch events, got %+v", graphStore.edges)
+	}
+}
+
 func TestProcessJSONLAcceptsLineLargerThan64KB(t *testing.T) {
 	events := &fakeEventStore{}
 	p := NewEventProcessor(events, &fakeTopologyStoreForProcessor{}, &fakeGraphStoreForProcessor{})

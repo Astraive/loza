@@ -58,28 +58,7 @@ describe('Cortex client boundaries', () => {
     assert.throws(() => validateFeedback({ incident_id: 'id' }), /outcome/);
   });
 
-  it('does not inject optional fields into caller-owned remediation objects', async () => {
-    // Direct normalization must not add omitted optional fields.
-    const direct: any = { incident_id: ' inc ', action: ' restart ' };
-    normalizeRemediation(direct);
-    assert.deepEqual(Object.keys(direct).sort(), ['action', 'incident_id']);
-    assert.equal(direct.incident_id, 'inc');
-    assert.equal(direct.action, 'restart');
-    assert.equal('remediation_id' in direct, false);
-    assert.equal('operator' in direct, false);
-    assert.equal('timestamp' in direct, false);
 
-    // recordRemediation must leave the caller's object untouched and must not
-    // send values for optional fields that were omitted.
-    const bodies: string[] = [];
-    const server = http.createServer((req, res) => {
-      let body = '';
-      req.on('data', chunk => { body += chunk.toString(); });
-      req.on('end', () => {
-        bodies.push(body);
-        res.statusCode = 200;
-        res.end('{}');
-      });
   it('does not transmit the API key to a plaintext remote host', () => {
     // Regression: an http:// URL used to send x-api-key without TLS.
     assert.throws(
@@ -112,6 +91,68 @@ describe('Cortex client boundaries', () => {
     const address = server.address();
     if (!address || typeof address === 'string') throw new Error('missing address');
     try {
+      const client = new CortexClient({ url: `http://127.0.0.1:${address.port}`, apiKey: 'secret' });
+      assert.equal(await client.health(), true);
+      assert.equal(seenKey, 'secret');
+    } finally {
+      await stopCortex(server);
+    }
+  });
+
+  it('reports validation errors for null graph elements instead of throwing TypeError', () => {
+    assert.throws(() => validateGraphView({ nodes: [null], edges: [] }), /node 0 missing 'id'/);
+    assert.throws(() => validateGraphView({ nodes: [undefined], edges: [] }), /node 0 missing 'id'/);
+    assert.throws(() => validateGraphView({ nodes: [], edges: [null] }), /edge 0 missing 'source' or 'from_node_id'/);
+    assert.throws(() => validateGraphView({ nodes: [], edges: [undefined] }), /edge 0 missing 'source' or 'from_node_id'/);
+    const graph = { nodes: [null, { id: ' node ' }] } as any;
+    assert.doesNotThrow(() => normalizeGraphView(graph));
+    assert.equal(graph.nodes[1].id, 'node');
+    assert.throws(() => validateGraphView(graph), /node 0 missing 'id'/);
+  });
+
+  it('rejects API-key auth over non-local plaintext HTTP', () => {
+    assert.throws(
+      () => new CortexClient({ url: 'http://cortex.example', apiKey: 'lz_sec_live_key' }),
+      /require HTTPS/
+    );
+    assert.throws(
+      () => new CortexClient({ url: 'loza://cortex.example' }),
+      /must use HTTP\(S\)/
+    );
+    assert.doesNotThrow(() => new CortexClient({ url: 'http://127.0.0.1:9308', apiKey: 'local-key' }));
+    assert.doesNotThrow(() => new CortexClient({ url: 'https://cortex.example', apiKey: 'lz_sec_live_key' }));
+  });
+
+  it('does not inject optional fields into caller-owned remediation objects', async () => {
+    // Direct normalization must not add omitted optional fields.
+    const direct: any = { incident_id: ' inc ', action: ' restart ' };
+    normalizeRemediation(direct);
+    assert.deepEqual(Object.keys(direct).sort(), ['action', 'incident_id']);
+    assert.equal(direct.incident_id, 'inc');
+    assert.equal(direct.action, 'restart');
+    assert.equal('remediation_id' in direct, false);
+    assert.equal('operator' in direct, false);
+    assert.equal('timestamp' in direct, false);
+
+    // recordRemediation must leave the caller's object untouched and must not
+    // send values for optional fields that were omitted.
+    const bodies: string[] = [];
+    const server = http.createServer((req, res) => {
+      let body = '';
+      req.on('data', chunk => { body += chunk.toString(); });
+      req.on('end', () => {
+        bodies.push(body);
+        res.statusCode = 200;
+        res.end('{}');
+      });
+    });
+    const gate = Promise.withResolvers<void>();
+    server.once('error', gate.reject);
+    server.listen(0, '127.0.0.1', () => gate.resolve());
+    await gate.promise;
+    const address = server.address();
+    if (!address || typeof address === 'string') throw new Error('missing address');
+    try {
       const client = new CortexClient({ url: `http://127.0.0.1:${address.port}` });
       const data: any = { incident_id: ' inc ', action: ' restart ' };
       await client.recordRemediation(data);
@@ -125,35 +166,7 @@ describe('Cortex client boundaries', () => {
       assert.equal('timestamp' in sent, false);
     } finally {
       await new Promise<void>((resolve, reject) => server.close(err => err ? reject(err) : resolve()));
-    try {
-      const address = server.address();
-      if (!address || typeof address === 'string') throw new Error('missing address');
-      const client = new CortexClient({ url: `http://127.0.0.1:${address.port}`, apiKey: 'secret' });
-      assert.equal(await client.health(), true);
-      assert.equal(seenKey, 'secret');
-    } finally {
-      await stopCortex(server);
     }
-  it('reports validation errors for null graph elements instead of throwing TypeError', () => {
-    assert.throws(() => validateGraphView({ nodes: [null], edges: [] }), /node 0 missing 'id'/);
-    assert.throws(() => validateGraphView({ nodes: [undefined], edges: [] }), /node 0 missing 'id'/);
-    assert.throws(() => validateGraphView({ nodes: [], edges: [null] }), /edge 0 missing 'source' or 'from_node_id'/);
-    assert.throws(() => validateGraphView({ nodes: [], edges: [undefined] }), /edge 0 missing 'source' or 'from_node_id'/);
-    const graph = { nodes: [null, { id: ' node ' }] };
-    assert.doesNotThrow(() => normalizeGraphView(graph));
-    assert.equal(graph.nodes[1].id, 'node');
-    assert.throws(() => validateGraphView(graph), /node 0 missing 'id'/);
-  it('rejects API-key auth over non-local plaintext HTTP', () => {
-    assert.throws(
-      () => new CortexClient({ url: 'http://cortex.example', apiKey: 'lz_sec_live_key' }),
-      /requires HTTPS/
-    );
-    assert.throws(
-      () => new CortexClient({ url: 'loza://cortex.example' }),
-      /must use HTTP\(S\)/
-    );
-    assert.doesNotThrow(() => new CortexClient({ url: 'http://127.0.0.1:9308', apiKey: 'local-key' }));
-    assert.doesNotThrow(() => new CortexClient({ url: 'https://cortex.example', apiKey: 'lz_sec_live_key' }));
   });
 
   it('calls health, readiness, ingest, graph, reconstruction, and feedback APIs', async () => {
@@ -184,6 +197,37 @@ describe('Cortex client boundaries', () => {
       res.statusCode = 500;
       res.setHeader('content-type', 'application/json');
       res.end(JSON.stringify({ error: 'bad api key' }));
+    });
+    const gate = Promise.withResolvers<void>();
+    server.once('error', gate.reject);
+    server.listen(0, '127.0.0.1', () => gate.resolve());
+    await gate.promise;
+    const address = server.address();
+    if (!address || typeof address === 'string') throw new Error('missing address');
+    const client = new CortexClient({ url: `http://127.0.0.1:${address.port}`, apiKey: 'bad' });
+    try {
+      // Every write/void caller must surface the failure instead of resolving silently.
+      await assert.rejects(client.ingestBatch([{ event: 'one' }]), (err: unknown) => {
+        assert.ok(err instanceof CortexHttpError);
+        assert.equal(err.status, 500);
+        assert.match(err.message, /cortex returned 500/);
+        assert.match(err.message, /bad api key/);
+        assert.match(err.body, /bad api key/);
+        return true;
+      });
+      await assert.rejects(client.ingestJsonl([{ event: 'one' }]), /cortex returned 500/);
+      await assert.rejects(client.recordRemediation({ incident_id: 'id', action: 'fix' }), /cortex returned 500/);
+      await assert.rejects(client.recordFeedback({ incident_id: 'id', outcome: 'resolved' }), /cortex returned 500/);
+      // Reads go through the same request path and must fail too.
+      await assert.rejects(client.reconstruct('incident'), /cortex returned 500/);
+      // Health/readiness probes still resolve to false rather than throwing.
+      assert.equal(await client.health(), false);
+      assert.equal(await client.ready(), false);
+    } finally {
+      await stopCortex(server);
+    }
+  });
+
   it('preserves multi-byte UTF-8 characters split across response chunks', async () => {
     const body = JSON.stringify({
       incident_id: 'incident 🚀 fire',
@@ -214,29 +258,8 @@ describe('Cortex client boundaries', () => {
     await gate.promise;
     const address = server.address();
     if (!address || typeof address === 'string') throw new Error('missing address');
-    const client = new CortexClient({ url: `http://127.0.0.1:${address.port}`, apiKey: 'bad' });
+    const client = new CortexClient({ url: `http://127.0.0.1:${address.port}` });
     try {
-      // Every write/void caller must surface the failure instead of resolving silently.
-      await assert.rejects(client.ingestBatch([{ event: 'one' }]), (err: unknown) => {
-        assert.ok(err instanceof CortexHttpError);
-        assert.equal(err.status, 500);
-        assert.match(err.message, /cortex returned 500/);
-        assert.match(err.message, /bad api key/);
-        assert.match(err.body, /bad api key/);
-        return true;
-      });
-      await assert.rejects(client.ingestJsonl([{ event: 'one' }]), /cortex returned 500/);
-      await assert.rejects(client.recordRemediation({ incident_id: 'id', action: 'fix' }), /cortex returned 500/);
-      await assert.rejects(client.recordFeedback({ incident_id: 'id', outcome: 'resolved' }), /cortex returned 500/);
-      // Reads go through the same request path and must fail too.
-      await assert.rejects(client.reconstruct('incident'), /cortex returned 500/);
-      // Health/readiness probes still resolve to false rather than throwing.
-      assert.equal(await client.health(), false);
-      assert.equal(await client.ready(), false);
-    try {
-      const address = server.address();
-      if (!address || typeof address === 'string') throw new Error('missing address');
-      const client = new CortexClient({ url: `http://127.0.0.1:${address.port}` });
       const result = await client.reconstruct('incident');
       assert.equal(result.incident_id, 'incident 🚀 fire');
       assert.equal((result as any).note, 'café ☕');

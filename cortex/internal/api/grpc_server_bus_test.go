@@ -6,7 +6,6 @@ import (
 
 	"github.com/astraive/loza/cortex/internal/config"
 	"github.com/astraive/loza/cortex/internal/models"
-	"github.com/astraive/loza/cortex/internal/redaction"
 	"github.com/astraive/loza/cortex/internal/storage"
 	"github.com/stretchr/testify/require"
 )
@@ -29,7 +28,7 @@ func TestNewGRPCServerAppliesConfiguredSubscriberBufferSize(t *testing.T) {
 	require.NoError(t, err)
 	defer stor.Close()
 
-	srv := NewGRPCServer(cfg, stor, redaction.Config{})
+	srv := NewGRPCServer(cfg, stor)
 
 	ch := srv.bus.Subscribe("")
 	defer srv.bus.Unsubscribe("", ch)

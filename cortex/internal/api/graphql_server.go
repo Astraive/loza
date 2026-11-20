@@ -140,6 +140,8 @@ func (s *GraphQLServer) handleGraphQL(w http.ResponseWriter, r *http.Request) {
 			s.writeError(w, http.StatusBadRequest, "query exceeds maximum complexity")
 			return
 		}
+	}
+
 	// Check query depth before executing (the WebSocket path applies the same
 	// validation inside executeQuery).
 	if err := validateGraphQLQueryDepth(req.Query); err != nil {

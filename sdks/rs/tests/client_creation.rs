@@ -29,12 +29,6 @@ fn direct_api_key_auth_rejects_remote_plaintext_http() {
     let error = client
         .ingest(&[])
         .expect_err("remote Bearer API key auth must not use plaintext HTTP");
-fn direct_api_key_rejects_remote_plaintext_http() {
-    let client = loza::core::CollectorHttpClient::new("http://collector.example.com")
-        .with_api_key("lz_sec_live_key");
-    let error = client
-        .ingest(&[])
-        .expect_err("remote API key must not use plaintext HTTP");
     assert!(
         error.contains("credentialed HTTP requires TLS"),
         "unexpected error: {error}"
@@ -70,6 +64,9 @@ fn direct_api_key_auth_allows_loopback_plaintext_http() {
         .expect("loopback Bearer auth over HTTP must stay allowed");
     assert_eq!(response.status_code, 200);
     handle.join().expect("server thread");
+}
+
+#[test]
 fn config_rejects_api_key_over_plaintext_http() {
     let remote = loza::Config::dev("catalog")
         .with_collector_endpoint("http://collector.example.com:80")

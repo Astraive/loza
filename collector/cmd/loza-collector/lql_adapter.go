@@ -353,64 +353,8 @@ func (c *lqlStdioCompiler) requestLocked(ctx context.Context, method string, par
 	if err != nil {
 		return lqlRPCResponse{}, err
 	}
-	// Capture the reader for this request so a goroutine left over from a
-	// timed-out request cannot consume replies from a restarted process.
-	stdout := c.stdout
-	if _, err := c.stdin.Write(append(line, '\n')); err != nil {
-		return lqlRPCResponse{}, err
-	}
-	type readResult struct {
-		response lqlRPCResponse
-		err      error
-	}
-	result := make(chan readResult, 1)
-	go func() {
-		var mismatchID int64
-		sawMismatch := false
-		for {
-			responseLine, readErr := stdout.ReadBytes('\n')
-			if readErr != nil {
-				// If every candidate reply was drained as a mismatch, surface
-				// the id mismatch so callers can tell a stale reply from a
-				// genuine read failure instead of only seeing the EOF/error.
-				if sawMismatch {
-					result <- readResult{err: fmt.Errorf("lql response id mismatch: got %d, want %d: %w", mismatchID, id, readErr)}
-				} else {
-					result <- readResult{err: readErr}
-				}
-				return
-			}
-			var response lqlRPCResponse
-			if err := json.Unmarshal(responseLine, &response); err != nil {
-				result <- readResult{err: err}
-				return
-			}
-			// A compiler that omits the id leaves it at zero; accept those
-			// replies for legacy compatibility. Drain stale, duplicated, or
-			// out-of-order replies instead of accepting the first line as the
-			// answer to this request. This also discards any reply left in
-			// flight across a restart, so only a reply correlated to this
-			// request (or one with no id at all) can satisfy it.
-			if response.ID != 0 && response.ID != id {
-				sawMismatch = true
-				mismatchID = response.ID
-				continue
-			}
-			result <- readResult{response: response}
-			return
-		}
-	}()
-	select {
-	case <-ctx.Done():
-		return lqlRPCResponse{}, ctx.Err()
-	case read := <-result:
-		if read.err != nil {
-			return lqlRPCResponse{}, read.err
-		}
-		return read.response, nil
-	}
-}
-
+	// Register the pending request before writing so the shared reader can
+	// deliver a fast reply without racing this registration.
 	resultCh := make(chan lqlRPCResult, 1)
 	readerDone := c.readerDone
 	c.pendingMu.Lock()
@@ -437,8 +381,4 @@ func (c *lqlStdioCompiler) requestLocked(ctx context.Context, method string, par
 	case res := <-resultCh:
 		return res.response, res.err
 	}
-}
-
-func escapeLQLString(value string) string {
-	return strings.ReplaceAll(strings.ReplaceAll(value, `\`, `\\`), `"`, `\"`)
 }

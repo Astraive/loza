@@ -3,6 +3,9 @@ package main
 import (
 	"bytes"
 	"errors"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"strings"
 	"testing"
 )
@@ -91,11 +94,8 @@ func TestRunEnvExampleSuccessPrintsValues(t *testing.T) {
 	got := out.String()
 	if !strings.Contains(got, "Service:") {
 		t.Errorf("successful example did not print configuration values:\n%s", got)
-	"go/ast"
-	"go/parser"
-	"go/token"
-	"testing"
-)
+	}
+}
 
 // TestMainShutsDownLoggerExactlyOnce guards against re-introducing a second
 // Logger.Shutdown call in the config demo. Shutdown is not idempotent: it

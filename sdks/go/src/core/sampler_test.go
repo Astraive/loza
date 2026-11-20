@@ -67,6 +67,8 @@ func TestSampleRateLimitedInitialBurst(t *testing.T) {
 	if accepted != 1 {
 		t.Fatalf("fresh limiter accepted %d events before refill, want 1", accepted)
 	}
+}
+
 func TestSampleRandomNaNRate(t *testing.T) {
 	// A NaN rate compares false against every bound, so an unguarded switch
 	// falls through to rand.Float64() < NaN (always false) and silently drops

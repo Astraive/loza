@@ -141,6 +141,8 @@ func (s *Server) Stop() {
 	if s.rateLimit != nil {
 		s.rateLimit.Stop()
 	}
+}
+
 // StartAnalyzer launches the correlation analyzer under ctx and returns a channel
 // that is closed once the analyzer has fully stopped. The caller owns ctx and must
 // cancel it to trigger graceful shutdown of the analyzer.
@@ -580,17 +582,11 @@ func (s *Server) Start(addr string) error {
 		go s.analyzer.Run(ctx)
 	}
 
-	tlsCfg, err := config.BuildTLSConfig(s.config.TLS)
-	if err != nil {
-		return err
-	}
-
 	srv := &http.Server{
 		Addr:         addr,
 		Handler:      s.Router(),
 		ReadTimeout:  30 * time.Second,
 		WriteTimeout: 30 * time.Second,
-		TLSConfig:    tlsCfg,
 	}
 
 	var tlsCfg *tls.Config
@@ -606,7 +602,8 @@ func (s *Server) Start(addr string) error {
 		// The certificate chain is preloaded into TLSConfig, so ServeTLS uses
 		// the in-memory certificates and enforces the configured TLS settings.
 		return srv.ListenAndServeTLS("", "")
-	if s.config.TLS.Enabled {
+	}
+	if s.config != nil && s.config.TLS.Enabled {
 		return srv.ListenAndServeTLS(s.config.TLS.CertFile, s.config.TLS.KeyFile)
 	}
 	return srv.ListenAndServe()

@@ -299,8 +299,8 @@ CONTRACT = {
   "fixtures": {
   "version": "v1",
   "product_version": "0.4.1",
-  "strict_schema": "../schema/event.strict.schema.json",
-  "loose_schema": "../schema/event.loose.schema.json",
+  "strict_schema": "../schemas/json/event.strict.schema.json",
+  "loose_schema": "../schemas/json/event.loose.schema.json",
   "valid": [
   "valid/http_success.json",
   "valid/http_error.json",
@@ -523,15 +523,15 @@ def validate_event_payload(payload: dict[str, Any], strict: bool) -> None:
 
 def validate_event_payload_detailed(payload: dict[str, Any], strict: bool) -> list[ValidationError]:
     errors: list[ValidationError] = []
+    encoded_size = len(json.dumps(payload, separators=(',', ':')).encode())
+    if encoded_size > MAX_EVENT_BYTES:
+        errors.append(ValidationError(field='payload', code='too_large', message=f'event exceeds max_event_size_bytes ({encoded_size} > {MAX_EVENT_BYTES})'))
     # Strict mode forbids aliases (CONTRACT alias_policy.strict_mode =
     # "reject_before_normalization"): reject `event_type` before it is
     # normalized away, matching the other SDKs' `alias_not_allowed` error.
     if strict and 'event_type' in payload:
         errors.append(ValidationError(field='event_type', code='alias_not_allowed', message='field "event_type" is not allowed in strict mode; use "event" instead'))
     normalized, _ = normalize_event_aliases(payload)
-    encoded_size = len(json.dumps(payload, separators=(',', ':')).encode())
-    if encoded_size > MAX_EVENT_BYTES:
-        errors.append(ValidationError(field='payload', code='too_large', message=f'event exceeds max_event_size_bytes ({encoded_size} > {MAX_EVENT_BYTES})'))
     if strict:
         for key in normalized:
             if key not in ALLOWED_TOP_LEVEL_FIELDS:
@@ -564,6 +564,7 @@ def _validate_event_size(payload: Any, strict: bool) -> None:
     if size > MAX_EVENT_BYTES:
         raise _event_bytes_too_large(size)
     validate_event_payload(payload, strict)
+
 def _validate_ndjson_line(line: bytes, strict: bool) -> None:
     try:
         parsed = json.loads(line)
@@ -592,13 +593,7 @@ def validate_flexible_json_bytes(raw: bytes, strict: bool) -> None:
                 continue
             if len(line) > MAX_EVENT_BYTES:
                 raise _event_bytes_too_large(len(line))
-            validate_event_payload(json.loads(line), strict)
-            if line.strip():
-                _validate_ndjson_line(line, strict)
-                stripped = line.strip()
-                if len(stripped) > MAX_EVENT_BYTES:
-                    raise ValidationErrors([ValidationError(field='payload', code='too_large', message=f'event exceeds max_event_size_bytes ({len(stripped)} > {MAX_EVENT_BYTES})')])
-                validate_event_payload(json.loads(line), strict)
+            _validate_ndjson_line(line, strict)
         return
     if isinstance(payload, dict) and 'events' in payload:
         for event in payload['events']:

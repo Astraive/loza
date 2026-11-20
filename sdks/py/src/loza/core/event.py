@@ -377,7 +377,9 @@ def _sanitize_checkpoint(
     for key in hash_keys:
         value = checkpoint.get(key)
         if value is not None:
-            checkpoint[key] = hashlib.sha256(str(value).encode("utf-8")).hexdigest()
+            # Use the same keyed pseudonym as the top-level hash path so a
+            # bare SHA-256 of sensitive checkpoint data never leaks.
+            checkpoint[key] = secure_hash(value)
     for key in sensitive_keys:
         if checkpoint.get(key) is not None:
             checkpoint[key] = "[REDACTED]"
@@ -387,7 +389,6 @@ def _hash_at_path(target: dict[str, Any], key: str) -> None:
     value = _get_path(target, key)
     if value is None:
         return
-    hashed = hash_sensitive_value(value)
     hashed = secure_hash(value)
     _set_path_direct(target, key, hashed)
 

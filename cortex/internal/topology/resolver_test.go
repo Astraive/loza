@@ -313,6 +313,9 @@ func TestRegisterAliasFailsWhenHistoryLookupFails(t *testing.T) {
 	}
 	if len(store.saved) != 0 {
 		t.Fatalf("alias must not be saved when history cannot be verified, got %d saved", len(store.saved))
+	}
+}
+
 func TestAliasIDIncludesValidTo(t *testing.T) {
 	validFrom := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	validTo1 := validFrom.Add(time.Hour)

@@ -48,21 +48,12 @@ type PipelineConfig struct {
 
 // Pipeline manages the async event emission queue.
 type Pipeline struct {
-	cfg       PipelineConfig
-	queue     chan PipelineItem
-	done      chan struct{}
-	stopOnce  sync.Once
-	workerWG  sync.WaitGroup
-	pending   atomic.Int64
-	drainMu   sync.Mutex
-	drainCond *sync.Cond
-
 	// enqueueMu is the shutdown gate. Enqueue holds a read lock for its whole
 	// check-then-reserve-then-send sequence; Shutdown takes the write lock before
 	// closing done. This guarantees that once done is closed no Enqueue is still
 	// in flight, so every accepted item is already in the queue before workers
 	// begin draining and waitForDrain observes pending == 0.
-	enqueueMu sync.RWMutex
+	enqueueMu     sync.RWMutex
 	cfg           PipelineConfig
 	queue         chan PipelineItem
 	done          chan struct{}

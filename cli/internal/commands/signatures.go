@@ -43,10 +43,11 @@ func SignaturesCommand(ctx context.Context, cfg config.Config, args []string) er
 
 	sigs, ok := dataObj["signatures"].([]any)
 	if !ok {
-	sigs, err := parseSignaturesResponse(data)
-	if err != nil {
-		fmt.Println(string(data))
-		return err
+		sigs, err = parseSignaturesResponse(data)
+		if err != nil {
+			fmt.Println(string(data))
+			return err
+		}
 	}
 
 	rows := [][]string{}

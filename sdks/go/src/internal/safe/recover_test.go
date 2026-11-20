@@ -29,6 +29,8 @@ func TestCallConvertsPanicsToErrors(t *testing.T) {
 }
 
 func TestGoRunsFunctionsAndRecoversPanics(t *testing.T) {
+}
+
 func TestCallPreservesPanicErrorIdentity(t *testing.T) {
 	sentinel := &sentinelError{msg: "sentinel panic"}
 	err := Call(func() { panic(sentinel) })

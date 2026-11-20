@@ -192,6 +192,9 @@ func TestCloseOnceReaderPropagatesFirstErrorWithoutReclosing(t *testing.T) {
 	}
 	if got := base.closeCount(); got != 1 {
 		t.Fatalf("underlying reader closed %d times, want 1", got)
+	}
+}
+
 type stubQueueReader struct {
 	calls int
 	poll  func(call int) ([]queueRecord, error)
