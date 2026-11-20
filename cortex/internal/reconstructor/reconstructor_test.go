@@ -3,8 +3,8 @@ package reconstructor
 import (
 	"context"
 	"errors"
-	"strings"
 	"math"
+	"strings"
 	"testing"
 	"time"
 
@@ -523,6 +523,9 @@ func TestReconstructAdaptiveExcludesOwnSignature(t *testing.T) {
 	}
 	if result.SimilarIncidents[0].IncidentID != "historic-1" {
 		t.Fatalf("expected historical signature as most similar, got %+v", result.SimilarIncidents[0])
+	}
+}
+
 // TestSignalScoreNumericAttributeTypes verifies that threshold-exceedance
 // scoring works for both float64 (JSON decoded) and float32 (native metric)
 // attribute values. Previously only float64 was scored, so a float32

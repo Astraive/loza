@@ -328,7 +328,3 @@ func (m *redisMessage) Nack(ctx context.Context, cause error) error {
 	}
 	return m.bus.failMessage(ctx, m.stream, m.group, m.streamID, m.env, cause)
 }
-func (m *redisMessage) Ack(ctx context.Context) error {
-	return m.client.XAck(ctx, m.stream, m.group, m.streamID).Err()
-}
-func (m *redisMessage) Nack(_ context.Context, _ error) error { return nil } // Redis Streams redeliver on no-ack

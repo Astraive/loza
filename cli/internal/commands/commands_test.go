@@ -980,16 +980,17 @@ func TestEmitWithCustomKindAndOutcome(t *testing.T) {
 
 func TestSignaturesCommandHandlesUnexpectedJSONShape(t *testing.T) {
 	tests := []struct {
-		name string
-		body string
+		name    string
+		body    string
+		wantErr string
 	}{
-		{"data_missing", `{"other":1}`},
-		{"data_null", `{"data":null}`},
-		{"data_not_object", `{"data":[]}`},
-		{"data_string", `{"data":"unexpected"}`},
-		{"null_body", `null`},
-		{"signatures_missing", `{"data":{}}`},
-		{"signatures_not_array", `{"data":{"signatures":"unexpected"}}`},
+		{"data_missing", `{"other":1}`, ""},
+		{"data_null", `{"data":null}`, ""},
+		{"data_not_object", `{"data":[]}`, ""},
+		{"data_string", `{"data":"unexpected"}`, ""},
+		{"null_body", `null`, ""},
+		{"signatures_missing", `{"data":{}}`, "signatures response: missing or invalid 'signatures' array"},
+		{"signatures_not_array", `{"data":{"signatures":"unexpected"}}`, "signatures response: missing or invalid 'signatures' array"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -1011,8 +1012,17 @@ func TestSignaturesCommandHandlesUnexpectedJSONShape(t *testing.T) {
 					return SignaturesCommand(context.Background(), cfg, nil)
 				})
 			}()
-			if err != nil {
-				t.Fatalf("signatures: %v", err)
+			if tt.wantErr == "" {
+				if err != nil {
+					t.Fatalf("signatures: %v", err)
+				}
+			} else {
+				if err == nil {
+					t.Fatalf("signatures: expected error containing %q, got nil", tt.wantErr)
+				}
+				if !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("signatures: error = %q, want containing %q", err.Error(), tt.wantErr)
+				}
 			}
 			if !strings.Contains(out, tt.body) {
 				t.Fatalf("expected raw body %q in output, got %q", tt.body, out)
@@ -1064,14 +1074,16 @@ func TestOutputIncidentContextHandlesMissingOrInvalidSuccessRate(t *testing.T) {
 				"suggested_actions": []interface{}{tt.action},
 			}
 			out, err := captureStdout(t, func() error {
-				outputIncidentContext(ctx)
-				return nil
+				return outputIncidentContext(ctx)
 			})
-			if err != nil {
-				t.Fatalf("outputIncidentContext: %v", err)
+			if err == nil {
+				t.Fatal("expected an error for a missing or invalid success_rate, got nil")
 			}
-			if !strings.Contains(out, "  - restart\n") {
-				t.Fatalf("expected action to be printed without a success rate, got %q", out)
+			if !strings.Contains(err.Error(), "missing or invalid success_rate") {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if strings.Contains(out, "  - restart") {
+				t.Fatalf("action must not be printed when success_rate is missing or invalid, got %q", out)
 			}
 		})
 	}

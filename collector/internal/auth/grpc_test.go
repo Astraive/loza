@@ -1,8 +1,11 @@
 package auth
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
 	"net"
+	"strings"
 	"testing"
 	"time"
 
@@ -114,16 +117,8 @@ func TestGRPCAuthenticatePropagatesCollectorGrants(t *testing.T) {
 	store.keys[keyID].CollectorGrants[0].Permissions[PermEventsWrite] = false
 	if !ac.AuthorizesCollector("payments", "prod", PermEventsWrite) {
 		t.Fatal("gRPC auth context must not alias the stored collector grant")
-	"bytes"
-	"context"
-	"log/slog"
-	"strings"
-	"testing"
-
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/metadata"
-	"google.golang.org/grpc/status"
-)
+	}
+}
 
 // TestGRPCAuthenticate_RejectedLocalDevKeyNotLogged verifies that rejecting a
 // local dev key does not write any of the raw credential (including the secret

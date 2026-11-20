@@ -299,8 +299,8 @@ CONTRACT = {
   "fixtures": {
   "version": "v1",
   "product_version": "0.4.1",
-  "strict_schema": "../schema/event.strict.schema.json",
-  "loose_schema": "../schema/event.loose.schema.json",
+  "strict_schema": "../schemas/json/event.strict.schema.json",
+  "loose_schema": "../schemas/json/event.loose.schema.json",
   "valid": [
   "valid/http_success.json",
   "valid/http_error.json",
@@ -523,15 +523,15 @@ def validate_event_payload(payload: dict[str, Any], strict: bool) -> None:
 
 def validate_event_payload_detailed(payload: dict[str, Any], strict: bool) -> list[ValidationError]:
     errors: list[ValidationError] = []
+    encoded_size = len(json.dumps(payload, separators=(',', ':')).encode())
+    if encoded_size > MAX_EVENT_BYTES:
+        errors.append(ValidationError(field='payload', code='too_large', message=f'event exceeds max_event_size_bytes ({encoded_size} > {MAX_EVENT_BYTES})'))
     # Strict mode forbids aliases (CONTRACT alias_policy.strict_mode =
     # "reject_before_normalization"): reject `event_type` before it is
     # normalized away, matching the other SDKs' `alias_not_allowed` error.
     if strict and 'event_type' in payload:
         errors.append(ValidationError(field='event_type', code='alias_not_allowed', message='field "event_type" is not allowed in strict mode; use "event" instead'))
     normalized, _ = normalize_event_aliases(payload)
-    encoded_size = len(json.dumps(payload, separators=(',', ':')).encode())
-    if encoded_size > MAX_EVENT_BYTES:
-        errors.append(ValidationError(field='payload', code='too_large', message=f'event exceeds max_event_size_bytes ({encoded_size} > {MAX_EVENT_BYTES})'))
     if strict:
         for key in normalized:
             if key not in ALLOWED_TOP_LEVEL_FIELDS:
@@ -556,31 +556,56 @@ def validate_event_payload_detailed(payload: dict[str, Any], strict: bool) -> li
     _opt_status_code(normalized, 'status_code', errors)
     return errors
 
+def _event_bytes_too_large(size: int) -> ValidationErrors:
+    return ValidationErrors([ValidationError(field='payload', code='too_large', message=f'payload exceeds max_event_size_bytes ({size} > {MAX_EVENT_BYTES})')])
+
+def _validate_event_size(payload: Any, strict: bool) -> None:
+    size = len(json.dumps(payload, separators=(',', ':'), ensure_ascii=False).encode('utf-8'))
+    if size > MAX_EVENT_BYTES:
+        raise _event_bytes_too_large(size)
+    validate_event_payload(payload, strict)
+
+def _validate_ndjson_line(line: bytes, strict: bool) -> None:
+    try:
+        parsed = json.loads(line)
+    except json.JSONDecodeError as exc:
+        raise ValidationErrors([ValidationError(field='payload', code='invalid_json', message=f'NDJSON line is not valid JSON: {exc}')]) from exc
+    if not isinstance(parsed, dict):
+        raise ValidationErrors([ValidationError(field='payload', code='invalid_payload', message='each NDJSON line must be a JSON object')])
+    validate_event_payload(parsed, strict)
+
 def validate_flexible_json_bytes(raw: bytes, strict: bool) -> None:
     trimmed = raw.strip()
     if not trimmed:
         raise ValidationErrors([ValidationError(field='payload', code='empty_payload', message='payload is empty')])
+    # Enforce a hard raw-byte ceiling on every payload regardless of shape. The
+    # format is determined by parsing below, never by sniffing arbitrary bytes
+    # such as b'"events"' or b'\n' (which allowed oversized single events to
+    # skip the max_event_size_bytes check entirely).
     if len(trimmed) > MAX_BATCH_BYTES:
         raise ValidationErrors([ValidationError(field='payload', code='too_large', message=f'payload exceeds max_batch_size_bytes ({len(trimmed)} > {MAX_BATCH_BYTES})')])
     try:
         payload = json.loads(trimmed)
     except json.JSONDecodeError:
         for line in trimmed.splitlines():
-            if line.strip():
-                stripped = line.strip()
-                if len(stripped) > MAX_EVENT_BYTES:
-                    raise ValidationErrors([ValidationError(field='payload', code='too_large', message=f'event exceeds max_event_size_bytes ({len(stripped)} > {MAX_EVENT_BYTES})')])
-                validate_event_payload(json.loads(line), strict)
+            line = line.strip()
+            if not line:
+                continue
+            if len(line) > MAX_EVENT_BYTES:
+                raise _event_bytes_too_large(len(line))
+            _validate_ndjson_line(line, strict)
         return
     if isinstance(payload, dict) and 'events' in payload:
         for event in payload['events']:
-            validate_event_payload(event, strict)
+            _validate_event_size(event, strict)
         return
     if isinstance(payload, list):
         for event in payload:
-            validate_event_payload(event, strict)
+            _validate_event_size(event, strict)
         return
     if isinstance(payload, dict):
+        if len(trimmed) > MAX_EVENT_BYTES:
+            raise _event_bytes_too_large(len(trimmed))
         validate_event_payload(payload, strict)
         return
     raise ValidationErrors([ValidationError(field='payload', code='invalid_payload', message='payload must be a JSON object, array, wrapper, or NDJSON')])
@@ -609,12 +634,16 @@ def _opt_enum(payload: dict[str, Any], key: str, allowed: set[str], errors: list
     if not isinstance(value, str) or not value.strip() or value.strip() not in allowed:
         errors.append(ValidationError(field=key, code='invalid_enum', message=f'field "{key}" has unsupported value "{value}"'))
 
+def _is_int(value: Any) -> bool:
+    # bool subclasses int in Python, so exclude it explicitly for integer fields.
+    return isinstance(value, int) and not isinstance(value, bool)
+
 def _opt_nonneg_int(payload: dict[str, Any], key: str, errors: list[ValidationError]) -> None:
-    if key in payload and (not isinstance(payload[key], int) or payload[key] < 0):
+    if key in payload and (not _is_int(payload[key]) or payload[key] < 0):
         errors.append(ValidationError(field=key, code='invalid_integer', message=f'field "{key}" must be a non-negative integer'))
 
 def _opt_status_code(payload: dict[str, Any], key: str, errors: list[ValidationError]) -> None:
-    if key in payload and (not isinstance(payload[key], int) or payload[key] < 100 or payload[key] > 599):
+    if key in payload and (not _is_int(payload[key]) or payload[key] < 100 or payload[key] > 599):
         errors.append(ValidationError(field=key, code='invalid_status_code', message=f'field "{key}" must be between 100 and 599'))
 
 def _req_service(payload: dict[str, Any], errors: list[ValidationError]) -> None:

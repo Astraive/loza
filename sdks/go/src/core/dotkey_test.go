@@ -1,6 +1,10 @@
 package core
 
-import "testing"
+import (
+	"errors"
+	"strings"
+	"testing"
+)
 
 // lookupDotNode walks a DotNode tree by path segments, returning nil when a
 // segment is missing.
@@ -34,11 +38,14 @@ func assertLeaf(t *testing.T, node *DotNode, kind uint8, value any) {
 func TestExpandDotKeysLeafBeforeBranch(t *testing.T) {
 	// Regression for MASS-0416: "a.b" followed by "a.b.c" used to write to a
 	// nil Children map (panic), or replaced the leaf and dropped the branch.
-	_, _, _, keys, roots := ExpandDotKeys(
+	_, _, _, keys, roots, err := ExpandDotKeys(
 		[]string{"a.b", "a.b.c"},
 		[]uint8{1, 2},
 		[]any{"v-b", "v-c"},
 	)
+	if err != nil {
+		t.Fatalf("ExpandDotKeys: %v", err)
+	}
 	if len(keys) != 1 || keys[0] != "a" {
 		t.Fatalf("keys = %v, want [a]", keys)
 	}
@@ -57,11 +64,14 @@ func TestExpandDotKeysLeafBeforeBranch(t *testing.T) {
 func TestExpandDotKeysBranchBeforeLeaf(t *testing.T) {
 	// The reverse order used to overwrite the branch node at "b", silently
 	// dropping the child "c".
-	_, _, _, keys, roots := ExpandDotKeys(
+	_, _, _, keys, roots, err := ExpandDotKeys(
 		[]string{"a.b.c", "a.b"},
 		[]uint8{2, 1},
 		[]any{"v-c", "v-b"},
 	)
+	if err != nil {
+		t.Fatalf("ExpandDotKeys: %v", err)
+	}
 	if len(keys) != 1 || keys[0] != "a" {
 		t.Fatalf("keys = %v, want [a]", keys)
 	}
@@ -75,11 +85,14 @@ func TestExpandDotKeysBranchBeforeLeaf(t *testing.T) {
 }
 
 func TestExpandDotKeysDuplicateLeafIsLastWriteWins(t *testing.T) {
-	_, _, _, keys, roots := ExpandDotKeys(
+	_, _, _, keys, roots, err := ExpandDotKeys(
 		[]string{"a.b", "a.b"},
 		[]uint8{1, 2},
 		[]any{"first", "second"},
 	)
+	if err != nil {
+		t.Fatalf("ExpandDotKeys: %v", err)
+	}
 	if len(keys) != 1 {
 		t.Fatalf("keys = %v, want [a]", keys)
 	}
@@ -87,11 +100,14 @@ func TestExpandDotKeysDuplicateLeafIsLastWriteWins(t *testing.T) {
 }
 
 func TestExpandDotKeysNonConflicting(t *testing.T) {
-	plainKeys, _, _, keys, roots := ExpandDotKeys(
+	plainKeys, _, _, keys, roots, err := ExpandDotKeys(
 		[]string{"standalone", "user.id", "user.name", "plain"},
 		[]uint8{1, 2, 3, 4},
 		[]any{"s", 42, "alice", "p"},
 	)
+	if err != nil {
+		t.Fatalf("ExpandDotKeys: %v", err)
+	}
 	if len(plainKeys) != 2 || plainKeys[0] != "standalone" || plainKeys[1] != "plain" {
 		t.Fatalf("plainKeys = %v, want [standalone plain]", plainKeys)
 	}
@@ -100,11 +116,7 @@ func TestExpandDotKeysNonConflicting(t *testing.T) {
 	}
 	assertLeaf(t, lookupDotNode(roots[0], "id"), 2, 42)
 	assertLeaf(t, lookupDotNode(roots[0], "name"), 3, "alice")
-import (
-	"errors"
-	"strings"
-	"testing"
-)
+}
 
 func TestExpandDotKeysRejectsMismatchedSliceLengths(t *testing.T) {
 	cases := []struct {

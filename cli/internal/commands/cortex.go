@@ -116,11 +116,6 @@ func RunCortexIngest(ctx context.Context, cfg config.Config, args []string) erro
 			return err
 		}
 		events = fetched
-		var err error
-		events, err = client.FetchEventsFromURL(ctx, url)
-		if err != nil {
-			return err
-		}
 	}
 
 	if len(events) == 0 {
@@ -197,8 +192,6 @@ func ndjsonSkippedWarning(path string, badLines []int) string {
 // variable so tests can shorten it without waiting for the production value.
 var fetchEventsTimeout = 30 * time.Second
 
-func fetchEventsFromURL(ctx context.Context, url string) ([]map[string]interface{}, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 // normalizeFetchURL validates an arbitrary --url value before it is used as a
 // fetch target. It rejects malformed URLs and non-HTTP schemes and returns the
 // canonical form produced by net/url, so special characters are encoded rather
@@ -221,13 +214,8 @@ func normalizeFetchURL(rawURL string) (string, error) {
 	return parsed.String(), nil
 }
 
-func fetchEventsFromURL(rawURL string) []map[string]interface{} {
-	target, err := normalizeFetchURL(rawURL)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "%v\n", err)
-		return nil
-	}
-	resp, err := http.Get(target)
+func fetchEventsFromURL(ctx context.Context, url string) ([]map[string]interface{}, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, fmt.Errorf("build events request for %s: %w", url, err)
 	}
@@ -326,11 +314,6 @@ func outputIncidentContext(ctx map[string]interface{}) error {
 		fmt.Println("\nSuggested Actions:")
 		for _, a := range actions {
 			if action, ok := a.(map[string]interface{}); ok {
-				if rate, ok := action["success_rate"].(float64); ok {
-					fmt.Printf("  - %s (success rate: %.1f%%)\n", action["action"], rate*100)
-				} else {
-					fmt.Printf("  - %s\n", action["action"])
-				}
 				rate, ok := action["success_rate"].(float64)
 				if !ok {
 					return fmt.Errorf("suggested action %v: missing or invalid success_rate", action["action"])
@@ -510,11 +493,6 @@ func RunCortexGraph(ctx context.Context, cfg config.Config, args []string) error
 	edges, ok := graph["edges"].([]interface{})
 	if !ok {
 		return fmt.Errorf("decode graph: missing or invalid 'edges' field (expected an array)")
-		return fmt.Errorf("graph response: missing or invalid 'nodes' array")
-	}
-	edges, ok := graph["edges"].([]interface{})
-	if !ok {
-		return fmt.Errorf("graph response: missing or invalid 'edges' array")
 	}
 
 	fmt.Printf("Graph: %d nodes, %d edges\n", len(nodes), len(edges))

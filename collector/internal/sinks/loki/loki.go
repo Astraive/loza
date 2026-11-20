@@ -49,9 +49,6 @@ type sink struct {
 	closeOnce sync.Once
 	closeErr  error
 	wg        sync.WaitGroup
-	// inflight tracks pushes whose batches have already been handed out of
-	// s.batch by appendEntry. Close waits on it so every in-flight push has
-	// settled (and any failed push has been restored) before the final flush.
 
 	// inflight tracks WriteEvent calls that have pulled a batch off s.batch
 	// and are about to push it. Close waits on inflight before its final
@@ -144,8 +141,6 @@ func (s *sink) WriteEvent(ctx context.Context, encoded []byte, ev *collectoreven
 	if len(batch) == 0 {
 		return nil
 	}
-	// appendEntry registered this batch as in-flight under s.mu. Balance it
-	// once the push (and any restore) has completed.
 	// appendEntry registered this push while holding s.mu, after confirming
 	// the sink was not closed. Pair that registration here so Close can wait
 	// for the push (and any restore) to finish before its final Flush.
@@ -190,16 +185,10 @@ func (s *sink) Close(ctx context.Context) error {
 		// complete set of entries that still need delivery.
 		s.wg.Wait()
 		s.inflight.Wait()
-		closeErr = s.finalFlush(ctx)
-		// A WriteEvent that passed appendEntry's closed check may still be
-		// pushing its batch. Wait for it (including a failed push's restore)
-		// so the final Flush below actually drains those entries.
-		s.inflight.Wait()
-		closeErr = s.Flush(ctx)
 		// Store the flush result on the sink so it is published to every
 		// Close caller. sync.Once.Do guarantees all callers return only after
 		// the winning call finishes, so this write is visible to all of them.
-		s.closeErr = s.Flush(ctx)
+		s.closeErr = s.finalFlush(ctx)
 	})
 	return s.closeErr
 }
@@ -269,9 +258,6 @@ func (s *sink) appendEntry(entry lokiEntry) ([]lokiEntry, error) {
 	batch := make([]lokiEntry, len(s.batch))
 	copy(batch, s.batch)
 	s.batch = s.batch[:0]
-	// Register while still holding s.mu so Close cannot begin Wait between
-	// the batch leaving s.batch and the push being registered.
-	s.inflight.Add(1)
 	return batch, nil
 }
 

@@ -35,6 +35,34 @@ func TestFromRawMapPreservesFractionalSecondsFromNumericTimestamp(t *testing.T) 
 			timestamp: -1.5,
 			wantSec:   -2,
 			wantNsec:  500000000,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			event, err := FromRawMap(map[string]any{
+				"id":        "evt-1",
+				"service":   "test-service",
+				"kind":      "collector_event",
+				"timestamp": tt.timestamp,
+			}, "jsonl")
+			if err != nil {
+				t.Fatalf("FromRawMap() unexpected error: %v", err)
+			}
+
+			want := time.Unix(tt.wantSec, int64(tt.wantNsec)).UTC()
+			if !event.Timestamp.Equal(want) {
+				t.Errorf("Timestamp = %s (nsec=%d), want %s (nsec=%d)",
+					event.Timestamp.Format(time.RFC3339Nano), event.Timestamp.Nanosecond(),
+					want.Format(time.RFC3339Nano), want.Nanosecond())
+			}
+			if got := event.Timestamp.Nanosecond(); got != tt.wantNsec {
+				t.Errorf("Nanosecond() = %d, want %d", got, tt.wantNsec)
+			}
+		})
+	}
+}
+
 // TestTimestampLayouts verifies that FromRawMap still parses every timestamp
 // layout it is meant to support after removing the redundant RFC3339 branches.
 // RFC3339Nano alone covers both RFC3339 and its nanosecond variant; the bare
@@ -65,7 +93,26 @@ func TestTimestampLayouts(t *testing.T) {
 			timestamp: "2024-01-02T03:04:05",
 			want:      time.Date(2024, 1, 2, 3, 4, 5, 0, time.UTC),
 		},
-import "testing"
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			raw := map[string]any{
+				"id":        "evt-1",
+				"service":   "svc-a",
+				"kind":      "log",
+				"timestamp": tt.timestamp,
+			}
+			event, err := FromRawMap(raw, "loza")
+			if err != nil {
+				t.Fatalf("FromRawMap() unexpected error: %v", err)
+			}
+			if !event.Timestamp.Equal(tt.want) {
+				t.Errorf("Timestamp = %v, want %v", event.Timestamp, tt.want)
+			}
+		})
+	}
+}
 
 func TestFromRawMapHTTPStatusCode(t *testing.T) {
 	tests := []struct {
@@ -87,24 +134,25 @@ func TestFromRawMapHTTPStatusCode(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			event, err := FromRawMap(map[string]any{
+			raw := map[string]any{
 				"id":        "evt-1",
-				"service":   "test-service",
-				"kind":      "collector_event",
-				"timestamp": tt.timestamp,
-			}, "jsonl")
-			if err != nil {
-				t.Fatalf("FromRawMap() unexpected error: %v", err)
+				"timestamp": "2024-01-02T03:04:05Z",
+				"kind":      "http",
+				"service":   "checkout",
+				"http": map[string]any{
+					"status_code": tt.value,
+				},
 			}
 
-			want := time.Unix(tt.wantSec, int64(tt.wantNsec)).UTC()
-			if !event.Timestamp.Equal(want) {
-				t.Errorf("Timestamp = %s (nsec=%d), want %s (nsec=%d)",
-					event.Timestamp.Format(time.RFC3339Nano), event.Timestamp.Nanosecond(),
-					want.Format(time.RFC3339Nano), want.Nanosecond())
+			event, err := FromRawMap(raw, "collector")
+			if err != nil {
+				t.Fatalf("FromRawMap() error = %v", err)
 			}
-			if got := event.Timestamp.Nanosecond(); got != tt.wantNsec {
-				t.Errorf("Nanosecond() = %d, want %d", got, tt.wantNsec)
+			if event.HTTP == nil {
+				t.Fatal("FromRawMap() returned event with nil HTTP context")
+			}
+			if got := event.HTTP.StatusCode; got != tt.want {
+				t.Errorf("HTTP.StatusCode = %d, want %d", got, tt.want)
 			}
 		})
 	}
@@ -264,20 +312,6 @@ func TestFromRawMapPlainNumericLifecycleStrings(t *testing.T) {
 	tm := event.Timers[0]
 	if tm.DurationMs != 750 || tm.StatusCode != 203 {
 		t.Errorf("timer = %+v, want duration=750 status=203", tm)
-			raw := map[string]any{
-				"id":        "evt-1",
-				"service":   "svc-a",
-				"kind":      "log",
-				"timestamp": tt.timestamp,
-			}
-			event, err := FromRawMap(raw, "loza")
-			if err != nil {
-				t.Fatalf("FromRawMap() unexpected error: %v", err)
-			}
-			if !event.Timestamp.Equal(tt.want) {
-				t.Errorf("Timestamp = %v, want %v", event.Timestamp, tt.want)
-			}
-		})
 	}
 }
 
@@ -294,27 +328,7 @@ func TestTimestampUnsupportedLayoutRejected(t *testing.T) {
 		t.Fatal("FromRawMap() expected an error for an unparseable timestamp, got nil")
 	}
 }
-			raw := map[string]any{
-				"id":        "evt-1",
-				"timestamp": "2024-01-02T03:04:05Z",
-				"kind":      "http",
-				"service":   "checkout",
-				"http": map[string]any{
-					"status_code": tt.value,
-				},
-			}
 
-			event, err := FromRawMap(raw, "collector")
-			if err != nil {
-				t.Fatalf("FromRawMap() error = %v", err)
-			}
-			if event.HTTP == nil {
-				t.Fatal("FromRawMap() returned event with nil HTTP context")
-			}
-			if got := event.HTTP.StatusCode; got != tt.want {
-				t.Errorf("HTTP.StatusCode = %d, want %d", got, tt.want)
-			}
-		})
 func validRawMap() map[string]any {
 	return map[string]any{
 		"id":         "evt-1",

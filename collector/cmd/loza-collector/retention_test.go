@@ -5,9 +5,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"context"
-	"database/sql"
+	"strings"
 	"testing"
 
 	_ "github.com/marcboeker/go-duckdb"
@@ -27,6 +26,10 @@ func openRetentionTestDB(t *testing.T, schema, seed string) *sql.DB {
 	}
 	if _, err := db.Exec(seed); err != nil {
 		t.Fatalf("seed retention test table: %v", err)
+	}
+	return db
+}
+
 func newRetentionTestDB(t *testing.T) *sql.DB {
 	t.Helper()
 	db, err := sql.Open("duckdb", ":memory:")
@@ -145,6 +148,9 @@ func TestHandleRetentionApplyReportsDeleteFailure(t *testing.T) {
 	errText, _ := body["error"].(string)
 	if !strings.Contains(errText, "delete events by age") {
 		t.Errorf("response error = %q, want propagated age delete error", errText)
+	}
+}
+
 // TestDeleteBySizeEmptyTable reproduces the empty-table case: SUM over an
 // empty table returns NULL, which must not be reported as a scan error.
 func TestDeleteBySizeEmptyTable(t *testing.T) {

@@ -43,16 +43,11 @@ def _sorted_keys(value: Any) -> Any:
 
 
 def encode(value: Any, pretty: bool = False) -> str:
-    return json.dumps(
-        value,
-        indent=2 if pretty else None,
-        separators=None if pretty else (",", ":"),
-        sort_keys=True,
-        allow_nan=False,
     # Keys are sorted explicitly above; json.dumps' own sort_keys compares raw
     # keys and raises on dicts mixing, for example, str and int keys.
     return json.dumps(
         _sorted_keys(value),
         indent=2 if pretty else None,
         separators=None if pretty else (",", ":"),
+        allow_nan=False,
     )

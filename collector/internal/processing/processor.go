@@ -151,7 +151,6 @@ type Processor struct {
 	rng            *rand.Rand
 	dlqFile        appendWriter
 	rngMu          sync.Mutex
-	dlqFile        *os.File
 	dlqMu          sync.Mutex
 	quarantineFile appendWriter
 	quarantineMu   sync.Mutex

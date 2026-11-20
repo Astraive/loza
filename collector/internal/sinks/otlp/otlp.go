@@ -200,11 +200,6 @@ func New(ctx context.Context, cfg Config) (collectorevent.Sink, error) {
 	}
 
 	res, err := newResource(ctx, resolved)
-	res, err := newResourceFn(ctx,
-		resource.WithAttributes(mapToAttributes(resolved.ResourceAttributes)...),
-		resource.WithAttributes(semconv.ServiceName(resolved.Logger)),
-		resource.WithTelemetrySDK(),
-	)
 	if err != nil {
 		// The exporter owns a gRPC connection/background goroutines. If the
 		// resource could not be created, shut it down so a failed New call does
@@ -239,7 +234,7 @@ func New(ctx context.Context, cfg Config) (collectorevent.Sink, error) {
 // supplying a reserved key (for example "service.name" or "telemetry.sdk.name")
 // would have it silently overwritten by a later detector.
 func newResource(ctx context.Context, resolved resolvedConfig) (*resource.Resource, error) {
-	return resource.New(ctx,
+	return newResourceFn(ctx,
 		resource.WithTelemetrySDK(),
 		resource.WithAttributes(semconv.ServiceName(resolved.Logger)),
 		resource.WithAttributes(mapToAttributes(resolved.ResourceAttributes)...),

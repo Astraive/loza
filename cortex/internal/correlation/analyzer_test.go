@@ -207,6 +207,9 @@ func TestAnalyzeFallsBackToDefaultLimitsForNonPositiveConfig(t *testing.T) {
 	}
 	if len(store.limits) != 1 || store.limits[0] != defaultListPageSize {
 		t.Fatalf("expected fallback page size %d, got limits %v", defaultListPageSize, store.limits)
+	}
+}
+
 // emptyEventStore overrides only List; the analyzer analysis path needs no
 // other event-store methods.
 type emptyEventStore struct {

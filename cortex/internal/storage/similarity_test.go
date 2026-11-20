@@ -37,12 +37,6 @@ func TestComputeSimilarityUsesNormalizedCosine(t *testing.T) {
 // symptom similarity is the only contributor, scaled by its 0.3 weight) to guard
 // against that logic being dropped or corrupted when the dead code is removed.
 func TestComputeSimilaritySymptomUnionIntersection(t *testing.T) {
-// TestComputeSimilaritySymptomOverlap guards the symptom-set similarity
-// computation where a redundant `bSymptoms[k] = true` loop used to sit. With
-// shape and feature vectors left empty, the overall score reduces to
-// 0.3 * Jaccard(aSymptoms, bSymptoms), so any change to how the symptom maps,
-// union, or intersection are built is caught here.
-func TestComputeSimilaritySymptomOverlap(t *testing.T) {
 	tests := []struct {
 		name      string
 		aSymptoms []models.SymptomType
@@ -72,6 +66,40 @@ func TestComputeSimilaritySymptomOverlap(t *testing.T) {
 			aSymptoms: []models.SymptomType{models.SymptomTypeTimeout, models.SymptomTypeTimeout, models.SymptomTypeErrorRate},
 			bSymptoms: []models.SymptomType{models.SymptomTypeTimeout, models.SymptomTypeLatencySpike},
 			want:      0.3 * (1.0 / 3.0),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			a := &models.IncidentSignature{Symptoms: tt.aSymptoms}
+			b := &models.IncidentSignature{Symptoms: tt.bSymptoms}
+
+			gotPostgres := computeSimilarityPostgres(a, b)
+			if math.Abs(gotPostgres-tt.want) > 1e-9 {
+				t.Errorf("computeSimilarityPostgres() = %v, want %v", gotPostgres, tt.want)
+			}
+
+			gotDuckDB := computeSimilarity(a, b)
+			if math.Abs(gotDuckDB-tt.want) > 1e-9 {
+				t.Errorf("computeSimilarity() = %v, want %v", gotDuckDB, tt.want)
+			}
+		})
+	}
+}
+
+// TestComputeSimilaritySymptomOverlap guards the symptom-set similarity
+// computation where a redundant `bSymptoms[k] = true` loop used to sit. With
+// shape and feature vectors left empty, the overall score reduces to
+// 0.3 * Jaccard(aSymptoms, bSymptoms), so any change to how the symptom maps,
+// union, or intersection are built is caught here.
+func TestComputeSimilaritySymptomOverlap(t *testing.T) {
+	tests := []struct {
+		name      string
+		aSymptoms []models.SymptomType
+		bSymptoms []models.SymptomType
+		want      float64
+	}{
+		{
 			name:      "identical symptom sets",
 			aSymptoms: []models.SymptomType{models.SymptomTypeTimeout, models.SymptomTypeLatencySpike},
 			bSymptoms: []models.SymptomType{models.SymptomTypeTimeout, models.SymptomTypeLatencySpike},
@@ -108,14 +136,6 @@ func TestComputeSimilaritySymptomOverlap(t *testing.T) {
 			a := &models.IncidentSignature{Symptoms: tt.aSymptoms}
 			b := &models.IncidentSignature{Symptoms: tt.bSymptoms}
 
-			gotPostgres := computeSimilarityPostgres(a, b)
-			if math.Abs(gotPostgres-tt.want) > 1e-9 {
-				t.Errorf("computeSimilarityPostgres() = %v, want %v", gotPostgres, tt.want)
-			}
-
-			gotDuckDB := computeSimilarity(a, b)
-			if math.Abs(gotDuckDB-tt.want) > 1e-9 {
-				t.Errorf("computeSimilarity() = %v, want %v", gotDuckDB, tt.want)
 			for name, got := range map[string]float64{
 				"duckdb":   computeSimilarity(a, b),
 				"postgres": computeSimilarityPostgres(a, b),

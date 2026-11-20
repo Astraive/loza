@@ -25,7 +25,9 @@ def _validate_flexible_json_bytes_unavailable(raw: bytes, strict: bool) -> None:
         "install loza-spec to enable flexible JSON byte validation."
     )
 
-# Try importing from loza-spec (primary path - when installed as dependency)
+# Only a genuinely missing dependency may trigger fallback. Any other
+# import-time failure (NameError, bad constant, validation error, ...) must
+# propagate instead of silently running against a stale contract.
 try:
     from loza_contract import (
         LOZA_SPEC_VERSION,
@@ -53,18 +55,21 @@ try:
         ValidationErrors,
     )
 except ImportError:
-    # Only a genuinely missing/incomplete dependency may trigger fallback. Any other
-    # import-time failure (NameError, bad constant, validation error, ...) must
-    # propagate instead of silently running against a stale contract.
     logger.warning(
         "Could not import the authoritative loza contract; falling back to the "
         "monorepo/backup contract, which may omit spec/security fixes.",
         exc_info=True,
     )
-    # Fallback: try importing from sibling loza-spec directory (for development/monorepo)
-    try:
-        spec_dir = Path(__file__).parent.parent.parent.parent.parent.parent / "spec" / "generated" / "python"
-        if spec_dir.exists():
+    # Fallback: import from a sibling loza-spec checkout (development/monorepo).
+    # The temporary sys.path entry keeps the normal import machinery (including
+    # meta path hooks) in play, but is always restored so this development copy
+    # cannot shadow other installed modules for the rest of the process.
+    spec_dir = Path(__file__).parent.parent.parent.parent.parent.parent / "spec" / "generated" / "python"
+    contract_path = spec_dir / "loza_contract.py"
+    loaded_from_monorepo = False
+    if contract_path.exists():
+        original_path = list(sys.path)
+        try:
             sys.path.insert(0, str(spec_dir))
             from loza_contract import (
                 LOZA_SPEC_VERSION,
@@ -91,66 +96,28 @@ except ImportError:
                 ValidationError,
                 ValidationErrors,
             )
-        else:
-            raise ImportError(f"loza-spec not found at {spec_dir}")
-    except ImportError as e:
-        logger.warning(
-            "Could not import the loza contract from the monorepo path; falling "
-            "back to the backup contract, which may omit spec/security fixes.",
-            exc_info=True,
-        )
-except Exception:
-    # Fallback: load the contract from a sibling loza-spec checkout in the
-    # monorepo (development only). Load it directly from its file path instead
-    # of inserting the directory into sys.path: mutating the process-wide
-    # module search path on import lets this development copy shadow other
-    # installed modules and makes behavior depend on import order.
-    try:
-        spec_dir = Path(__file__).parent.parent.parent.parent.parent.parent / "spec" / "generated" / "python"
-        contract_path = spec_dir / "loza_contract.py"
-        if not contract_path.exists():
-            raise ImportError(f"loza-spec not found at {contract_path}")
-        loader = importlib.machinery.SourceFileLoader("loza_contract_from_spec", str(contract_path))
-        spec = importlib.util.spec_from_loader(loader.name, loader)
-        if spec is None:
-            raise ImportError(f"Cannot load contract module from {contract_path}")
-        contract = importlib.util.module_from_spec(spec)
-        sys.modules[loader.name] = contract
-        loader.exec_module(contract)
+            loaded_from_monorepo = True
+        except ImportError:
+            logger.warning(
+                "Could not import the loza contract from the monorepo path; falling "
+                "back to the backup contract, which may omit spec/security fixes.",
+                exc_info=True,
+            )
+        finally:
+            sys.path[:] = original_path
 
-        LOZA_SPEC_VERSION = contract.LOZA_SPEC_VERSION
-        LOZA_INGEST_API_VERSION = contract.LOZA_INGEST_API_VERSION
-        LOZA_EVENT_VERSION = contract.LOZA_EVENT_VERSION
-        MAX_EVENT_BYTES = contract.MAX_EVENT_BYTES
-        ALLOWED_TOP_LEVEL_FIELDS = contract.ALLOWED_TOP_LEVEL_FIELDS
-        CANONICAL_FIELDS = contract.CANONICAL_FIELDS
-        ALLOWED_KINDS = contract.ALLOWED_KINDS
-        ALLOWED_LEVELS = contract.ALLOWED_LEVELS
-        ALLOWED_OUTCOMES = contract.ALLOWED_OUTCOMES
-        ALLOWED_PARTIAL_REASONS = contract.ALLOWED_PARTIAL_REASONS
-        ALLOWED_EVENT_STATES = contract.ALLOWED_EVENT_STATES
-        CollectorAck = contract.CollectorAck
-        CollectorError = contract.CollectorError
-        CollectorResponse = contract.CollectorResponse
-        parse_collector_response = contract.parse_collector_response
-        looks_like_loza_event = contract.looks_like_loza_event
-        normalize_event_aliases = contract.normalize_event_aliases
-        build_ingest_envelope = contract.build_ingest_envelope
-        validate_event_payload = contract.validate_event_payload
-        validate_event_payload_detailed = contract.validate_event_payload_detailed
-        validate_flexible_json_bytes = contract.validate_flexible_json_bytes
-        ValidationError = contract.ValidationError
-        ValidationErrors = contract.ValidationErrors
-    except Exception as e:
+    if not loaded_from_monorepo:
+        # Last resort: load the bundled backup contract directly from its file
+        # path. Never leave a development directory on sys.path.
         backup_path = Path(__file__).with_name("spec_contract.py.bak")
         if not backup_path.exists():
             raise ImportError(
                 "Cannot import loza contract. Install loza-spec as a dependency or ensure it's available at spec/generated/python/"
-            ) from e
+            )
         loader = importlib.machinery.SourceFileLoader("loza_generated_spec_contract_backup", str(backup_path))
         spec = importlib.util.spec_from_loader(loader.name, loader)
         if spec is None:
-            raise ImportError(f"Cannot load fallback contract module from {backup_path}") from e
+            raise ImportError(f"Cannot load fallback contract module from {backup_path}")
         backup = importlib.util.module_from_spec(spec)
         sys.modules[loader.name] = backup
         loader.exec_module(backup)

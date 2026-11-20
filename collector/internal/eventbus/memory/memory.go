@@ -91,9 +91,6 @@ func (m *Message) decision() (nacked bool, nackErr error) {
 	return m.nacked, m.nackErr
 }
 
-func (m *Message) Ack(_ context.Context) error           { return nil }
-func (m *Message) Nack(_ context.Context, _ error) error { return nil }
-
 // New creates a new memory bus.
 func New(_ context.Context, cfg eventbus.Config) (eventbus.Bus, error) {
 	return &Bus{
@@ -275,7 +272,7 @@ func (b *Bus) appendToDLQ(env eventbus.Envelope, reason error) {
 	if env.Headers == nil {
 		env.Headers = make(map[string]string)
 	}
-	env.Headers["dlq_reason"] = reason.Error()
+	env.Headers["dlq_reason"] = eventbus.DLQReasonString(reason)
 	b.dlqMu.Lock()
 	b.dlq = append(b.dlq, env)
 	b.dlqMu.Unlock()
@@ -308,16 +305,9 @@ func (b *Bus) Health(_ context.Context) eventbus.Health {
 // PublishDLQ sends an envelope to the in-process DLQ.
 func (b *Bus) PublishDLQ(_ context.Context, original eventbus.Envelope, reason error) error {
 	// Clone before recording so dlq_reason is never written into the caller's
-	// shared Headers map (MASS-0178).
+	// shared Headers map (MASS-0178). appendToDLQ writes the reason onto the
+	// clone, keeping the caller's map untouched.
 	b.appendToDLQ(cloneEnvelope(original), reason)
-	b.dlqMu.Lock()
-	defer b.dlqMu.Unlock()
-	original.Attempts++
-	if original.Headers == nil {
-		original.Headers = make(map[string]string)
-	}
-	original.Headers["dlq_reason"] = eventbus.DLQReasonString(reason)
-	b.dlq = append(b.dlq, original)
 	return nil
 }
 

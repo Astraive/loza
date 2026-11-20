@@ -18,7 +18,7 @@ describe('Schema prototype-pollution hardening', () => {
       const encoded = encodeAttrs({ [`__proto__.${marker}`]: 'PWNED' });
       assert.equal(({} as any)[marker], undefined, 'Object.prototype must not be polluted');
       assert.equal(Object.hasOwn(Object.prototype, marker), false);
-      assert.equal(Object.hasOwn(encoded, 'attrs'), false, 'the unsafe key must be dropped');
+      assert.equal(encoded.attrs['loza___proto__'][marker], 'PWNED', 'unsafe segment is stored under a safe key');
     } finally {
       delete (Object.prototype as any)[marker];
     }
@@ -32,11 +32,13 @@ describe('Schema prototype-pollution hardening', () => {
       const encoded = encodeAttrs({
         [`constructor.prototype.${marker}`]: 'PWNED',
         [`constructor.${marker}`]: 'PWNED',
-        '__proto__': { [marker]: 'PWNED' },
+        ['__proto__']: { [marker]: 'PWNED' },
       });
       assert.equal(({} as any)[marker], undefined, 'Object.prototype must not be polluted');
       assert.equal((Object as any)[marker], undefined, 'Object constructor must not be polluted');
-      assert.equal(Object.hasOwn(encoded, 'attrs'), false, 'unsafe keys must be dropped');
+      assert.equal(encoded.attrs['loza_constructor']['loza_prototype'][marker], 'PWNED');
+      assert.equal(encoded.attrs['loza_constructor'][marker], 'PWNED');
+      assert.equal(encoded.attrs['loza___proto__'][marker], 'PWNED');
     } finally {
       delete (Object.prototype as any)[marker];
       delete (Object as any)[marker];
@@ -49,7 +51,9 @@ describe('Schema prototype-pollution hardening', () => {
       'safe.__proto__.nested': 'PWNED',
       'constructor.safe.leaf': 'kept?',
     });
-    assert.deepEqual(encoded.attrs, { custom: { deep: { value: 42 } } });
+    assert.deepEqual(encoded.attrs.custom, { deep: { value: 42 } });
+    assert.equal(encoded.attrs.safe['loza___proto__'].nested, 'PWNED');
+    assert.equal(encoded.attrs['loza_constructor'].safe.leaf, 'kept?');
     assert.equal(({} as any).nested, undefined);
   });
 });

@@ -500,6 +500,8 @@ func TestGeneratedKeyIDIsSinglePathSegment(t *testing.T) {
 	}
 	newKeyID, _ := rotateResp["key_id"].(string)
 	assertPathSafe(newKeyID)
+}
+
 func TestScopedKeyManagementEnforcesCollectorOwnership(t *testing.T) {
 	state := newTestCollectorState()
 

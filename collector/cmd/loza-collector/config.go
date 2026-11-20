@@ -1173,6 +1173,7 @@ func validateFileConfig(fc fileConfig) error {
 	// rejected with an error instead of terminating the process later.
 	if _, err := parseTrustedCIDRs(fc.Identity.TrustedProxies); err != nil {
 		return err
+	}
 	if identityMode == "jwt" {
 		if strings.TrimSpace(fc.Auth.JWT.Issuer) == "" {
 			return errors.New("auth.jwt.issuer must not be empty when identity.mode is jwt")
@@ -2041,7 +2042,6 @@ func parseConfigBool(raw string) (bool, error) {
 const redactedSecret = "[REDACTED]"
 
 func marshalPrintableConfig(fc fileConfig) ([]byte, error) {
-	redacted := redactConfigForPrint(fc)
 	// Printable() applies an allowlist: only reviewed, non-secret fields keep
 	// their value; every other field becomes collectorconfig.RedactedMarker.
 	redacted := fc.Printable()

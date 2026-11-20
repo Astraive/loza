@@ -39,7 +39,7 @@ from .pipeline import EnqueueOutcome, MemoryOfflineBuffer, Pipeline
 from .redactor import default_redactor
 from .schema import DefaultSchema, EventView
 from ..sinks.httpbatch import HTTPBatchSink
-from ..generated.spec_contract import validate_event_payload
+from ..generated.spec_contract import ValidationErrors, validate_event_payload
 
 
 # Ambient "current event" shared across all Logger instances. A ContextVar keeps the
@@ -64,6 +64,8 @@ class Logger:
             self._config.redactor = default_redactor()
         if self._config.schema is None:
             self._config.schema = DefaultSchema()
+        if self._config.duplicate_policy is None:
+            self._config.duplicate_policy = CanonicalWins
         if self._config.async_config.enabled and self._config.sinks:
             self._pipeline = Pipeline(
                 self._config.sinks,
@@ -122,6 +124,8 @@ class Logger:
             self._config.redactor = default_redactor()
         if self._config.schema is None:
             self._config.schema = DefaultSchema()
+        if self._config.duplicate_policy is None:
+            self._config.duplicate_policy = CanonicalWins
         if self._config.async_config.enabled and self._config.sinks:
             self._pipeline = Pipeline(
                 self._config.sinks,
@@ -643,6 +647,14 @@ class Logger:
         payload = ctx.to_dict()
         try:
             validate_event_payload(payload, strict=True)
+        except ValidationErrors as exc:
+            # Size limits are enforced by the SDK itself in _emit_inner (which
+            # can drop an oversized event and record the rejection reason). A
+            # strict-schema "too_large" error must not bypass that path by
+            # turning a droppable event into a validation exception.
+            errors = [error for error in exc.errors if getattr(error, "code", None) != "too_large"]
+            if errors:
+                raise EventValidationError(str(exc)) from exc
         except ValueError as exc:
             raise EventValidationError(str(exc)) from exc
 
@@ -786,22 +798,8 @@ class Logger:
         return ctx.attrs, key
 
     def _sanitize_event(self, ctx: EventContext) -> EventContext:
-        """Create a sanitized copy: drop, hash, and redact sensitive attrs."""
-        if not ctx._drop_keys and not ctx._hash_keys and not ctx._sensitive_keys:
-            return ctx
-        safe = copy.deepcopy(ctx)
-        for key in ctx._drop_keys:
-            bucket, local = self._resolve_bucket(safe, key)
-            self._delete_path(bucket, local)
-        for key in ctx._hash_keys:
-            bucket, local = self._resolve_bucket(safe, key)
-            self._hash_at_path(bucket, local)
-        for key in ctx._sensitive_keys:
-            bucket, local = self._resolve_bucket(safe, key)
-            self._redact_at_path(bucket, local)
-        for checkpoint in safe.checkpoints:
-            self._sanitize_checkpoint(checkpoint, ctx._drop_keys, ctx._hash_keys, ctx._sensitive_keys)
-        return safe
+        """Create a sanitized copy by delegating to the standalone sanitize_event."""
+        return sanitize_event(ctx)
 
     @staticmethod
     def _sanitize_checkpoint(
@@ -826,7 +824,6 @@ class Logger:
         value = Logger._get_path(target, key)
         if value is None:
             return
-        hashed = hash_sensitive_value(value)
         hashed = secure_hash(value)
         Logger._set_path_direct(target, key, hashed)
 
@@ -834,8 +831,6 @@ class Logger:
     def _redact_at_path(target: dict[str, Any], key: str) -> None:
         if Logger._get_path(target, key) is not None:
             Logger._set_path_direct(target, key, "[REDACTED]")
-        """Create a sanitized copy by delegating to the standalone sanitize_event."""
-        return sanitize_event(ctx)
 
     @staticmethod
     def _get_path(target: dict[str, Any], key: str) -> Any:
@@ -848,6 +843,21 @@ class Logger:
                 return None
             current = current[part]
         return current
+
+    @staticmethod
+    def _set_path_direct(target: dict[str, Any], key: str, value: Any) -> None:
+        if "." not in key:
+            target[key] = value
+            return
+        parts = key.split(".")
+        current = target
+        for part in parts[:-1]:
+            child = current.get(part)
+            if not isinstance(child, dict):
+                child = {}
+                current[part] = child
+            current = child
+        current[parts[-1]] = value
 
     @staticmethod
     def _set_path(target: dict[str, Any], key: str, value: Any, policy: str = LastWins) -> None:

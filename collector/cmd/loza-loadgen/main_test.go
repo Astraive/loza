@@ -4,11 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 // TestWorkerEventCount verifies that the requested event count is distributed
@@ -27,25 +30,6 @@ func TestWorkerEventCount(t *testing.T) {
 		{"one event", 1, 4, []int{1, 0, 0, 0}},
 		{"single worker", 10, 1, []int{10}},
 		{"zero events", 0, 4, []int{0, 0, 0, 0}},
-	"math"
-	"strconv"
-	"testing"
-	"time"
-)
-
-func TestFormatThroughput(t *testing.T) {
-	tests := []struct {
-		name     string
-		accepted int64
-		duration time.Duration
-		want     string
-	}{
-		{name: "normal run", accepted: 200, duration: 4 * time.Second, want: "50.00"},
-		{name: "fractional duration", accepted: 100, duration: 2500 * time.Millisecond, want: "40.00"},
-		{name: "zero events over positive duration", accepted: 0, duration: time.Second, want: "0.00"},
-		{name: "zero duration with accepted events", accepted: 10, duration: 0, want: "n/a"},
-		{name: "zero duration with zero events", accepted: 0, duration: 0, want: "n/a"},
-		{name: "negative duration", accepted: 10, duration: -time.Second, want: "n/a"},
 	}
 
 	for _, tt := range tests {
@@ -64,6 +48,38 @@ func TestFormatThroughput(t *testing.T) {
 			for w := range got {
 				if got[w] != tt.want[w] {
 					t.Errorf("worker %d count = %d, want %d (counts: %v)", w, got[w], tt.want[w], got)
+				}
+			}
+		})
+	}
+}
+
+func TestFormatThroughput(t *testing.T) {
+	tests := []struct {
+		name     string
+		accepted int64
+		duration time.Duration
+		want     string
+	}{
+		{name: "normal run", accepted: 200, duration: 4 * time.Second, want: "50.00"},
+		{name: "fractional duration", accepted: 100, duration: 2500 * time.Millisecond, want: "40.00"},
+		{name: "zero events over positive duration", accepted: 0, duration: time.Second, want: "0.00"},
+		{name: "zero duration with accepted events", accepted: 10, duration: 0, want: "n/a"},
+		{name: "zero duration with zero events", accepted: 0, duration: 0, want: "n/a"},
+		{name: "negative duration", accepted: 10, duration: -time.Second, want: "n/a"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := formatThroughput(tt.accepted, tt.duration)
+			if got != tt.want {
+				t.Fatalf("formatThroughput(%d, %v) = %q, want %q", tt.accepted, tt.duration, got, tt.want)
+			}
+
+			// The report must never surface a non-finite value (NaN/+Inf).
+			if f, err := strconv.ParseFloat(got, 64); err == nil {
+				if math.IsNaN(f) || math.IsInf(f, 0) {
+					t.Fatalf("formatThroughput(%d, %v) produced non-finite value %q", tt.accepted, tt.duration, got)
 				}
 			}
 		})
@@ -256,19 +272,5 @@ func TestParseErrorMentionsBadValue(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "events") {
 		t.Fatalf("error %q does not identify the offending flag", err)
-	}
-}
-			got := formatThroughput(tt.accepted, tt.duration)
-			if got != tt.want {
-				t.Fatalf("formatThroughput(%d, %v) = %q, want %q", tt.accepted, tt.duration, got, tt.want)
-			}
-
-			// The report must never surface a non-finite value (NaN/+Inf).
-			if f, err := strconv.ParseFloat(got, 64); err == nil {
-				if math.IsNaN(f) || math.IsInf(f, 0) {
-					t.Fatalf("formatThroughput(%d, %v) produced non-finite value %q", tt.accepted, tt.duration, got)
-				}
-			}
-		})
 	}
 }

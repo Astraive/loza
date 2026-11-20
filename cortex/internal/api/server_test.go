@@ -732,6 +732,9 @@ func TestHandleSimilarIncidentsWithoutSignatureReturnsEmpty(t *testing.T) {
 	}
 	if calls := server.match.(*similarIncidentMatcher).callCount; calls != 0 {
 		t.Fatalf("FindSimilar called %d times, want 0", calls)
+	}
+}
+
 func readinessCorrelationState(t *testing.T, srv *Server) string {
 	t.Helper()
 	rec := httptest.NewRecorder()
@@ -753,7 +756,10 @@ func TestReadyzReportsAnalyzerNotConfigured(t *testing.T) {
 }
 
 func TestStartAnalyzerRunsWithManagedContextAndReportsState(t *testing.T) {
-	cfg := config.Default()
+	cfg, err := config.Default()
+	if err != nil {
+		t.Fatal(err)
+	}
 	cfg.Storage.DuckDB.Path = filepath.Join(t.TempDir(), "cortex.duckdb")
 	cfg.Correlation.Enabled = true
 	cfg.Correlation.AnalysisInterval = time.Minute
@@ -793,7 +799,10 @@ func TestStartAnalyzerRunsWithManagedContextAndReportsState(t *testing.T) {
 }
 
 func TestStartAnalyzerDisabledReturnsClosedDone(t *testing.T) {
-	cfg := config.Default()
+	cfg, err := config.Default()
+	if err != nil {
+		t.Fatal(err)
+	}
 	cfg.Storage.DuckDB.Path = filepath.Join(t.TempDir(), "cortex.duckdb")
 	cfg.Correlation.Enabled = false
 	stor, err := storage.NewStorage(cfg)

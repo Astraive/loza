@@ -340,6 +340,8 @@ func watchSignals(ctx context.Context, cancel context.CancelFunc, signals ...os.
 		close(done)
 		<-exitedCh
 	}, exitedCh
+}
+
 // sleepWithContext waits for d or until ctx is done. It is a variable so tests
 // can replace it with a deterministic implementation.
 var sleepWithContext = sleepWithContextReal

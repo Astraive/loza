@@ -31,7 +31,10 @@ func TestValidateIncidentContextConfidence(t *testing.T) {
 			err := ValidateIncidentContext(ctx)
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("ValidateIncidentContext() error = %v, wantErr %v (confidence %v)", err, tt.wantErr, tt.confidence)
-import "testing"
+			}
+		})
+	}
+}
 
 func TestValidateGraphViewNodeIDValue(t *testing.T) {
 	tests := []struct {

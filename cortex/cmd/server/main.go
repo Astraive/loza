@@ -2,8 +2,8 @@ package main
 
 import (
 	"context"
-	"errors"
 	"crypto/tls"
+	"errors"
 	"flag"
 	"fmt"
 	"net"
@@ -84,13 +84,14 @@ func main() {
 	defer stopSignals()
 
 	syncProcessor := newSyncProcessor(cfg, stor)
+
 	// Single server construction path: build the Cortex server once, start its
 	// correlation analyzer under the managed process context, and reuse its
 	// router for the HTTP server below.
 	cortexSrv := httpserver.New(cfg, stor)
+	defer cortexSrv.Stop()
 	analyzerDone := cortexSrv.StartAnalyzer(processCtx)
 
-	syncProcessor := processor.NewEventProcessor(stor.Events(), stor.Topology(), stor.Graph())
 	syncDone := startCollectorSync(processCtx, cfg.Collector, syncProcessor)
 	if cfg.Collector.SourceOfTruth && cfg.Collector.Mode == "pull" {
 		log.Info().
@@ -102,31 +103,10 @@ func main() {
 	var grpcReady <-chan *grpc.Server
 	if cfg.GRPC.Enabled {
 		grpcReady = startGRPCServer(cfg, stor)
-	// Build the TLS config once so an invalid configuration fails startup
-	// before any listener is opened, and so HTTP and gRPC share the same
-	// MinVersion / mTLS posture.
-	tlsCfg, err := config.BuildTLSConfig(cfg.TLS)
-	if err != nil {
-		log.Fatal().Err(err).Msg("Invalid TLS configuration")
-	}
-
-	if cfg.GRPC.Enabled {
-		go startGRPCServer(cfg, stor, tlsCfg)
 	}
 
 	log.Info().Str("addr", httpAddr(cfg)).Msg("Starting HTTP server")
-
-	cortexServer := httpserver.New(cfg, stor)
-	defer cortexServer.Stop()
-
-	httpSrv := &http.Server{
-		Addr:         addr,
-		Handler:      cortexServer.Router(),
-		Handler:      cortexSrv.Router(),
-		ReadTimeout:  cfg.Server.ReadTimeout,
-		WriteTimeout: cfg.Server.WriteTimeout,
-		TLSConfig:    tlsCfg,
-	}
+	httpSrv := newHTTPServer(cfg, tlsCfg, cortexSrv.Router())
 
 	listenErr := make(chan error, 1)
 	go runHTTPServer(httpSrv, listenErr)
@@ -140,36 +120,6 @@ func main() {
 		stopSignals()
 	case <-processCtx.Done():
 		log.Info().Msg("Shutting down server...")
-	httpSrv := newHTTPServer(cfg, tlsCfg, httpserver.Handler(cfg, stor))
-
-	go func() {
-		var err error
-		if cfg.TLS.Enabled {
-			err = httpSrv.ListenAndServeTLS(cfg.TLS.CertFile, cfg.TLS.KeyFile)
-		} else {
-			err = httpSrv.ListenAndServe()
-		}
-		if err != nil && err != http.ErrServerClosed {
-			log.Fatal().Err(err).Msg("Server failed")
-		}
-	}()
-
-	<-processCtx.Done()
-	log.Info().Msg("Shutting down server...")
-
-	if grpcServer != nil {
-		stopped := make(chan struct{})
-		go func() {
-			grpcServer.GracefulStop()
-			close(stopped)
-		}()
-		select {
-		case <-stopped:
-			log.Info().Msg("gRPC server stopped")
-		case <-time.After(10 * time.Second):
-			log.Warn().Msg("gRPC graceful stop timed out, forcing")
-			grpcServer.Stop()
-		}
 	}
 
 	shutdownGRPCServer(grpcReady)
@@ -204,6 +154,8 @@ func runHTTPServer(httpSrv *http.Server, errCh chan<- error) {
 	if err != nil && !errors.Is(err, http.ErrServerClosed) {
 		errCh <- err
 	}
+}
+
 // newSyncProcessor builds the EventProcessor used by the collector source-of-truth
 // sync. It routes through the shared factory so PII redaction is applied on the
 // sync ingestion path just like HTTP, gRPC and GraphQL.
@@ -224,29 +176,6 @@ func startCollectorSync(ctx context.Context, cfg config.CollectorConfig, proc co
 	return done
 }
 
-// startGRPCServer starts the gRPC server in a goroutine and returns a channel
-// that hands the constructed *grpc.Server back to the caller. The channel is
-// closed without a value if setup fails (e.g. TLS or listener setup errors), so
-// a caller waiting for shutdown never blocks on a server that will not arrive.
-func startGRPCServer(cfg *config.Config, stor storage.Storage) <-chan *grpc.Server {
-	ready := make(chan *grpc.Server, 1)
-	go func() {
-		defer close(ready)
-
-		grpcAddr := fmt.Sprintf("%s:%d", cfg.GRPC.Host, cfg.GRPC.Port)
-		log.Info().Str("addr", grpcAddr).Msg("Starting gRPC server")
-
-		var opts []grpc.ServerOption
-		grpcTLSCfg, err := config.BuildTLSConfig(cfg.TLS)
-		if err != nil {
-			log.Error().Err(err).Msg("Invalid TLS configuration for gRPC")
-			return
-		}
-		if grpcTLSCfg != nil {
-			// credentials.NewTLS uses the same TLS config as the HTTP listener,
-			// so min_version and mutual TLS are enforced on gRPC too.
-			opts = append(opts, grpc.Creds(credentials.NewTLS(grpcTLSCfg)))
-		}
 // httpAddr returns the configured HTTP listen address.
 func httpAddr(cfg *config.Config) string {
 	return fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)
@@ -286,15 +215,26 @@ func grpcServerOptions(cfg *config.Config, tlsCfg *tls.Config) ([]grpc.ServerOpt
 	return []grpc.ServerOption{grpc.Creds(credentials.NewTLS(tlsCfg.Clone()))}, nil
 }
 
-func startGRPCServer(cfg *config.Config, stor storage.Storage, tlsCfg *tls.Config) {
-	grpcAddr := fmt.Sprintf("%s:%d", cfg.GRPC.Host, cfg.GRPC.Port)
-	log.Info().Str("addr", grpcAddr).Msg("Starting gRPC server")
+// startGRPCServer starts the gRPC server in a goroutine and returns a channel
+// that hands the constructed *grpc.Server back to the caller. The channel is
+// closed without a value if setup fails (e.g. TLS or listener setup errors), so
+// a caller waiting for shutdown never blocks on a server that will not arrive.
+func startGRPCServer(cfg *config.Config, stor storage.Storage) <-chan *grpc.Server {
+	ready := make(chan *grpc.Server, 1)
+	go func() {
+		defer close(ready)
 
-	opts, err := grpcServerOptions(cfg, tlsCfg)
-	if err != nil {
-		log.Error().Err(err).Msg("Invalid TLS configuration for gRPC")
-		return
-	}
+		grpcAddr := fmt.Sprintf("%s:%d", cfg.GRPC.Host, cfg.GRPC.Port)
+		log.Info().Str("addr", grpcAddr).Msg("Starting gRPC server")
+
+		opts, err := grpcServerOptions(cfg, nil)
+		if err != nil {
+			log.Error().Err(err).Msg("Invalid TLS configuration for gRPC")
+			return
+		}
+		// Enforce the same auth, role and rate-limit policy as the HTTP API on
+		// every gRPC RPC, including streams.
+		opts = append(opts, grpcserver.ServerOptions(cfg)...)
 
 		listener, err := net.Listen("tcp", grpcAddr)
 		if err != nil {
@@ -323,13 +263,6 @@ func startGRPCServer(cfg *config.Config, stor storage.Storage, tlsCfg *tls.Confi
 // A nil channel means gRPC is disabled and is a no-op.
 func shutdownGRPCServer(ready <-chan *grpc.Server) {
 	if ready == nil {
-	// Enforce the same auth, role and rate-limit policy as the HTTP API on
-	// every gRPC RPC, including streams.
-	opts = append(opts, grpcserver.ServerOptions(cfg)...)
-
-	listener, err := net.Listen("tcp", grpcAddr)
-	if err != nil {
-		log.Error().Err(err).Msg("Failed to create listener")
 		return
 	}
 

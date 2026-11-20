@@ -5,14 +5,10 @@ import os
 import time
 from collections import deque
 from dataclasses import dataclass, field
-from pathlib import Path
-from queue import Empty, Full, Queue
-from threading import Event, Lock, RLock, Thread
-from typing import Callable, Iterable, Protocol
 from enum import Enum
 from pathlib import Path
 from queue import Empty, Full, Queue
-from threading import Event, Lock, Thread
+from threading import Event, Lock, RLock, Thread
 from typing import Any, Callable, Iterable, Protocol
 
 from ..version import SDK_VERSION
@@ -76,10 +72,6 @@ class DeliveryStats:
         with self._lock:
             self.batches += 1
 
-    def snapshot(self) -> dict[str, int | str]:
-        """Return a consistent view taken while no mutation is in progress."""
-    _lock: Any = field(default_factory=Lock, init=False, repr=False, compare=False)
-
     def increase(self, name: str, amount: int = 1) -> None:
         """Atomically add to a counter. All counter writes go through this lock."""
         with self._lock:
@@ -90,6 +82,7 @@ class DeliveryStats:
             self.last_error = message
 
     def snapshot(self) -> dict[str, int | str]:
+        """Return a consistent view taken while no mutation is in progress."""
         with self._lock:
             return {
                 "enqueued": self.enqueued,
@@ -289,14 +282,6 @@ class Pipeline:
         """
         try:
             self.queue.put_nowait(encoded)
-            self.stats.record_enqueued()
-            if self._metrics is not None:
-                self._metrics.set_buffer_size(self.queue.qsize())
-            return True
-        except Full:
-            self.stats.record_dropped()
-            if self._metrics is not None:
-                self._metrics.on_event_dropped("queue_full")
         except Full:
             if self.offline_buffer is not None:
                 self.offline_buffer.append(encoded)
@@ -405,7 +390,6 @@ class Pipeline:
         if no_sinks:
             errors.append(RuntimeError("no sinks configured"))
         if errors:
-            self.stats.record_failed(len(encoded_events), "; ".join(str(error) for error in errors))
             self.stats.increase("failed", len(encoded_events))
             self.stats.set_last_error("; ".join(str(error) for error in errors))
             if self._metrics is not None:
@@ -417,8 +401,6 @@ class Pipeline:
                 for error in errors:
                     self.error_handler(error)
         else:
-            self.stats.record_emitted(len(encoded_events))
-        self.stats.record_batch()
             self.stats.increase("emitted", len(encoded_events))
         self.stats.increase("batches")
         return not errors
@@ -436,7 +418,6 @@ class Pipeline:
                 return None
             except Exception as exc:
                 last_error = exc
-                self.stats.record_retried(int(attempt < self.retry_policy.max_attempts))
                 self.stats.increase("retried", int(attempt < self.retry_policy.max_attempts))
                 if self._metrics is not None:
                     self._metrics.on_retry(attempt)

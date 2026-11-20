@@ -1,4 +1,4 @@
-use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
+use std::sync::{Mutex, MutexGuard, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 static FROZEN_TIME_MS: OnceLock<Mutex<Option<u128>>> = OnceLock::new();
@@ -29,11 +29,6 @@ fn millis_since_epoch(now: SystemTime) -> u128 {
     now.duration_since(UNIX_EPOCH)
         .map(|elapsed| elapsed.as_millis())
         .unwrap_or_else(|error| error.duration().as_millis())
-    drop(guard);
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis()
 }
 
 pub fn freeze_at(ms: u128) {
@@ -47,6 +42,8 @@ pub fn unfreeze() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
+    use std::time::Duration;
 
     #[test]
     fn lock_or_recover_recovers_from_poisoned_mutex() {
@@ -80,12 +77,6 @@ mod tests {
         // disabling the process-wide clock used by ID/filename generation.
         assert!(unix_millis() > 0);
     }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::time::Duration;
 
     #[test]
     fn post_epoch_millis_are_the_epoch_offset() {

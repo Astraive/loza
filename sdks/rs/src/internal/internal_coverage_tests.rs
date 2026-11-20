@@ -107,18 +107,20 @@ mod tests {
     fn reentrant_id_generator_does_not_deadlock() {
         let _id_gen_guard = ID_GEN_TEST_LOCK.lock().unwrap();
 
-        core::uuidv7::set_id_generator(Box::new(|| {
-            // These re-acquire the same mutex `new_event_id` used to hold
-            // while calling this closure. With the lock held, either call
-            // deadlocked; with the fix they return normally.
-            core::uuidv7::reset_id_generator();
-            core::uuidv7::set_id_generator(Box::new(|| "inner".to_string()));
-            "outer".to_string()
-        }));
-
         let (tx, rx) = std::sync::mpsc::channel();
         let handle = thread::spawn(move || {
-            tx.send(core::uuidv7::new_event_id()).unwrap();
+            // The generator override is thread-local, so install it on the
+            // same thread that calls `new_event_id`. The reentrant calls below
+            // used to re-acquire the mutex `new_event_id` held while invoking
+            // this closure (deadlocking); they must now return normally.
+            core::uuidv7::set_id_generator(Box::new(|| {
+                core::uuidv7::reset_id_generator();
+                core::uuidv7::set_id_generator(Box::new(|| "inner".to_string()));
+                "outer".to_string()
+            }));
+            let id = core::uuidv7::new_event_id();
+            core::uuidv7::reset_id_generator();
+            tx.send(id).unwrap();
         });
 
         let id = rx
@@ -128,6 +130,9 @@ mod tests {
         assert_eq!(id, "outer");
 
         core::uuidv7::reset_id_generator();
+    }
+
+    #[test]
     fn camel_key_capitalizes_non_ascii_segment_starts() {
         // Regression: non-ASCII segment starts must be capitalized with the
         // Unicode-aware char::to_uppercase(), not to_ascii_uppercase().

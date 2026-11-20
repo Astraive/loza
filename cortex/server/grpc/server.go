@@ -10,14 +10,20 @@ import (
 )
 
 func New(cfg *config.Config, stor storage.Storage) *api.GRPCServer {
-	return api.NewGRPCServer(cfg, stor, buildRedactConfig(cfg))
+	// Redaction is derived from cfg.PIIRedaction inside NewGRPCServer so every
+	// ingestion path shares the same configured redactor.
+	return api.NewGRPCServer(cfg, stor)
 }
 
 // buildRedactConfig resolves the effective redaction settings from config.
 // When redaction is enabled and no mode is explicitly configured, enforcement
 // is the safe default regardless of whether a blocklist is present.
 func buildRedactConfig(cfg *config.Config) redaction.Config {
-	return api.NewGRPCServer(cfg, stor, redactionConfig(cfg))
+	redactCfg := redactionConfig(cfg)
+	if cfg.PIIRedaction.Enabled && redactCfg.Mode == "" {
+		redactCfg.Mode = redaction.ModeEnforce
+	}
+	return redactCfg
 }
 
 func redactionConfig(cfg *config.Config) redaction.Config {
@@ -26,15 +32,11 @@ func redactionConfig(cfg *config.Config) redaction.Config {
 		Blocklist: cfg.PIIRedaction.Blocklist,
 		Allowlist: cfg.PIIRedaction.Allowlist,
 	}
-	if cfg.PIIRedaction.Enabled && redactCfg.Mode == "" {
-		redactCfg.Mode = redaction.ModeEnforce
-	}
 	if len(redactCfg.Allowlist) == 0 && cfg.PIIRedaction.Enabled {
 		// Default allowlist for common non-sensitive event fields
 		redactCfg.Allowlist = []string{"service", "level", "timestamp", "id", "event_id", "trace_id", "span_id", "incident_id", "environment", "release", "version", "schema_version", "event_version"}
 	}
 	return redactCfg
-	return api.NewGRPCServer(cfg, stor)
 }
 
 // ServerOptions returns the gRPC server options that install the shared auth,

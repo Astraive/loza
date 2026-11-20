@@ -93,6 +93,7 @@ func (s *SinkAdapter) WriteEvent(ctx context.Context, encoded []byte, ev *collec
 		if !ev.Timestamp.IsZero() {
 			env.Timestamp = ev.Timestamp
 		}
+	}
 	// Populate the envelope's tenant metadata so downstream bus adapters can
 	// route by tenant (e.g. Kafka partition keys, per-tenant DLQs).
 	if tenantID, ok := processing.ExtractTenantID(encoded); ok {

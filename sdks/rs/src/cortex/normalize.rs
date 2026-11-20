@@ -69,8 +69,10 @@ fn normalize_timestamp(ts: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::normalize_graph_nodes;
+    use super::normalize_incident_context;
     use super::normalize_timestamp;
     use crate::cortex::schema::{IncidentContext, Remediation, RemediationFeedback};
+    use crate::cortex::validate::validate_incident_context;
     use serde_json::{json, Value};
     use time::format_description::well_known::Rfc3339;
 
@@ -157,13 +159,6 @@ mod tests {
         assert_eq!(nodes[0]["id"], json!(42));
         assert_eq!(nodes[1], json!({"name": "no-id"}));
     }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::cortex::validate::validate_incident_context;
-    use serde_json::json;
 
     fn ctx_with_confidence(confidence: f64) -> IncidentContext {
         IncidentContext {

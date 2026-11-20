@@ -31,26 +31,13 @@ type cacheEntry struct {
 type MemoryKeyCache struct {
 	entries         map[string]*cacheEntry
 	lru             *list.List
-	mu              sync.Mutex
+	mu              sync.RWMutex
 	defaultTTL      time.Duration
 	negativeTTL     time.Duration
 	cleanupInterval time.Duration
 	maxEntries      int
 	stopCleanup     chan struct{}
-	cleanupWG       sync.WaitGroup
-	entries          map[string]*cacheEntry
-	mu               sync.RWMutex
-	defaultTTL       time.Duration
-	negativeTTL      time.Duration
-	cleanupInterval  time.Duration
-	stopCleanup      chan struct{}
-	closeOnce        sync.Once
-	cleanupWG        sync.WaitGroup
-	mu              sync.RWMutex
-	defaultTTL      time.Duration
-	negativeTTL     time.Duration
-	cleanupInterval time.Duration
-	stopCleanup     chan struct{}
+	closeOnce       sync.Once
 	cleanupWG       sync.WaitGroup
 }
 

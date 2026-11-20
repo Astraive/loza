@@ -252,11 +252,6 @@ impl ContextCarrier {
         {
             return None;
         }
-        // W3C Trace Context reserves version `ff` and forbids all-zero
-        // trace-id / span-id values; such headers are spec-invalid.
-        if version.eq_ignore_ascii_case("ff")
-            || trace_id.bytes().all(|byte| byte == b'0')
-            || span_id.bytes().all(|byte| byte == b'0')
         // W3C Trace Context: `ff` is a reserved/invalid version, and the
         // all-zero trace-id and span-id are explicitly invalid.
         if version.eq_ignore_ascii_case("ff")
@@ -1146,6 +1141,8 @@ mod tests {
             .with_span_id(SPAN_ID);
         let expected = format!("00-{}-{}-01", TRACE_ID, SPAN_ID);
         assert_eq!(carrier.traceparent().as_deref(), Some(expected.as_str()));
+    }
+
     #[test]
     fn context_carrier_rejects_spec_invalid_traceparent() {
         // W3C Trace Context: reserved version `ff` and all-zero IDs are invalid.

@@ -65,14 +65,7 @@ def _load_version() -> str:
         if path.is_file():
             try:
                 text = path.read_text(encoding="utf-8")
-                for line in text.splitlines():
-                    stripped = line.strip()
-                    if stripped.startswith("version:"):
-                        value = stripped.split(":", 1)[1].strip().strip("\"'")
-                        if value:
-                            return value
             except (OSError, UnicodeDecodeError):
-            except OSError:
                 continue
             version = _version_from_text(text)
             if version is not None:

@@ -353,6 +353,9 @@ func TestLQLRequestLockedRejectsMismatchedReply(t *testing.T) {
 	response, err := compiler.requestLocked(ctx, "compile", map[string]any{})
 	if err == nil {
 		t.Fatalf("expected mismatched-id reply to be rejected, got response %+v", response)
+	}
+}
+
 const lqlMockServerEnv = "LOZA_LQL_MOCK_STDIO"
 
 // init turns the test binary into a minimal LQL stdio subprocess when it is

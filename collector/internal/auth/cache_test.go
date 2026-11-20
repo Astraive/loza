@@ -245,6 +245,8 @@ func TestMemoryKeyCache_NonPositiveTTLsAreClamped(t *testing.T) {
 			}
 		})
 	}
+}
+
 func TestMemoryKeyCache_CloseIdempotent(t *testing.T) {
 	cache := NewMemoryKeyCache(10*time.Second, 5*time.Second)
 

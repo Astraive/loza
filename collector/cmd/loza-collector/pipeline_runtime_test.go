@@ -81,8 +81,7 @@ func TestAcquireIngestCapacityConcurrentEvents(t *testing.T) {
 	cfg.maxInflightEvents = 1
 	cfg.maxQueueBytes = 0
 	assertExclusiveIngestCapacity(t, cfg)
-	"testing"
-)
+}
 
 // limitStateWithoutMemoryLimiter returns a collectorState whose limits.* values
 // are configured but whose component registry deliberately omits the

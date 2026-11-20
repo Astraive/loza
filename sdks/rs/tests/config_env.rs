@@ -182,6 +182,8 @@ fn https_and_explicit_local_insecure_credentialed_sinks_are_allowed() {
         local.validate().is_ok(),
         "explicit insecure local sinks should remain usable"
     );
+}
+
 /// Restores an environment variable to its prior value when dropped.
 struct EnvRestore {
     key: &'static str,

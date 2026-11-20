@@ -37,8 +37,12 @@ def _collector_reachable(url: str = COLLECTOR_URL, timeout: float = 2.0) -> bool
 
 
 _COLLECTOR_SKIP = pytest.mark.skipif(
-    not _collector_reachable(),
-    reason=f"loza-collector not running at {COLLECTOR_URL}",
+    not _collector_reachable() or not (INGEST_API_KEY and ADMIN_API_KEY),
+    reason=(
+        f"loza-collector not running at {COLLECTOR_URL}"
+        if not _collector_reachable()
+        else "collector API keys not configured"
+    ),
 )
 
 EVENT_COUNT = 3

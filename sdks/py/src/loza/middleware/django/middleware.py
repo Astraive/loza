@@ -58,7 +58,6 @@ class LozaMiddleware:
             route = _route_from_match(request)
             if route:
                 ctx.params.route = route
-            Emit(ctx)
             try:
                 Emit(ctx)
             except Exception as exc:

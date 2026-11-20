@@ -104,6 +104,7 @@ func DecryptBytesWithContext(data []byte, key, context string) ([]byte, error) {
 		if strings.TrimSpace(key) != "" {
 			return nil, ErrMissingPrefix
 		}
+	}
 	legacy := false
 	var body string
 	switch {

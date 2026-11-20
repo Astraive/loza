@@ -57,7 +57,6 @@ class SecurityLimiter:
 
 
 def hash_value(value: Any) -> str:
-    return hash_sensitive_value(value)
     return secure_hash(value)
 
 

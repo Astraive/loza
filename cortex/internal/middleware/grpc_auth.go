@@ -56,7 +56,7 @@ func requiredGRPCRole(fullMethod string) string {
 func (i *GRPCAuthInterceptor) authorize(ctx context.Context, fullMethod string) (context.Context, error) {
 	// Authentication is only bypassed when it is explicitly disabled. When it
 	// is enabled, missing or invalid credentials are denied by default.
-	if i.auth != nil && i.auth.cfg != nil && i.auth.cfg.Enabled {
+	if i.auth != nil && i.auth.enabled {
 		result := i.auth.AuthenticateToken(grpcCredential(ctx))
 		if !result.Authorized {
 			return ctx, status.Error(codes.Unauthenticated, "unauthorized")

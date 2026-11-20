@@ -2,6 +2,7 @@ package version
 
 import (
 	"os"
+	"strings"
 	"sync"
 
 	"gopkg.in/yaml.v3"
@@ -42,16 +43,6 @@ func versionFromFiles(paths []string) string {
 		}
 		if v := versionFromYAML(data); v != "" {
 			return v
-		for _, line := range strings.Split(string(data), "\n") {
-			trimmed := strings.TrimSpace(line)
-			if strings.HasPrefix(trimmed, "version:") {
-				value := strings.TrimSpace(strings.TrimPrefix(trimmed, "version:"))
-				value = stripInlineComment(value)
-				value = strings.Trim(value, "\"'")
-				if isValidVersion(value) {
-					return value
-				}
-			}
 		}
 	}
 	return fallbackVersion
@@ -59,6 +50,8 @@ func versionFromFiles(paths []string) string {
 
 // versionFromYAML parses data as YAML and returns only the top-level "version"
 // field. Unmarshalling into a struct ensures nested "version" keys are ignored.
+// The parsed value is still normalized and validated so inline comment
+// remnants or otherwise invalid tokens cannot leak into the reported version.
 func versionFromYAML(data []byte) string {
 	var doc struct {
 		Version string `yaml:"version"`
@@ -66,7 +59,14 @@ func versionFromYAML(data []byte) string {
 	if err := yaml.Unmarshal(data, &doc); err != nil {
 		return ""
 	}
-	return doc.Version
+	value := stripInlineComment(doc.Version)
+	value = strings.Trim(value, "\"'")
+	if !isValidVersion(value) {
+		return ""
+	}
+	return value
+}
+
 // stripInlineComment removes a YAML inline comment from value. In YAML a '#'
 // starts a comment only when it is at the start of a scalar or is preceded by
 // whitespace; a '#' inside a quoted scalar is part of the value.

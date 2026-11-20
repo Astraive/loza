@@ -51,10 +51,6 @@ export interface Feedback {
   notes?: string;
 }
 
-function isLocalhost(host: string): boolean {
-  return host === 'localhost' || host === '127.0.0.1' || host === '::1';
-}
-
 // --- Normalization ---
 
 function normalizeTimestamp(ts: string): string {
@@ -171,8 +167,8 @@ export class CortexClient {
       throw new Error('cortex: credentials must not be embedded in the URL');
     }
     const apiKey = opts.apiKey || '';
-    if (apiKey && endpoint.protocol === 'http:' && !isLocalhost(endpoint.hostname)) {
-      throw new Error('cortex: API key authentication requires HTTPS for non-local hosts');
+    if (apiKey && endpoint.protocol === 'http:' && !isLoopbackHost(endpoint.hostname)) {
+      throw new Error('invalid CortexClient options: API keys require HTTPS (HTTP is allowed only for localhost)');
     }
     this.url = endpoint.toString().replace(/\/$/, '');
     this.apiKey = apiKey;
@@ -309,12 +305,12 @@ export class CortexClient {
         });
         res.on('end', () => {
           const statusCode = res.statusCode || 0;
+          const body = Buffer.concat(chunks).toString('utf8');
           if (statusCode >= 300) {
-            reject(new CortexHttpError(statusCode, data));
+            reject(new CortexHttpError(statusCode, body));
             return;
           }
-          resolve({ statusCode, body: data });
-          resolve({ statusCode: res.statusCode || 0, body: Buffer.concat(chunks).toString('utf8') });
+          resolve({ statusCode, body });
         });
       });
 

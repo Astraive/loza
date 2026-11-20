@@ -1,13 +1,14 @@
 from __future__ import annotations
 
-import hashlib
 import json
 
 import loza
 from loza.core import event as event_module
+from loza.core.hashing import secure_hash
 
 HASH_RAW = "HASH_RAW"
-EXPECTED_HASH = hashlib.sha256(HASH_RAW.encode("utf-8")).hexdigest()
+# Sensitive values (including checkpoints) use a keyed HMAC, never a bare SHA-256.
+EXPECTED_HASH = secure_hash(HASH_RAW)
 
 
 def _checkpoint_attrs(immediate: bool) -> tuple[list[dict], loza.EventContext]:

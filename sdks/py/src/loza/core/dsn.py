@@ -14,6 +14,7 @@ capabilities use an explicitly empty password (`lz_pub_...:`).
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 from urllib.parse import parse_qs, quote, unquote_to_bytes, urlparse
 

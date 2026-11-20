@@ -6,6 +6,9 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestParseEventsEmptyEnvelopeYieldsZeroEvents(t *testing.T) {
@@ -81,11 +84,7 @@ func TestParseEventsNormalPayloadDoesNotReturnSentinel(t *testing.T) {
 	if errors.Is(err, ErrPayloadTooLarge) {
 		t.Fatal("unexpected ErrPayloadTooLarge for a small payload")
 	}
-	"testing"
-
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
-)
+}
 
 // errReader emits data once, then fails with err on the next Read.
 type errReader struct {

@@ -193,16 +193,6 @@ class Config:
             raise ValueError("strict mode requires service")
 
 
-def load_layered_config() -> Config:
-    raw: dict[str, Any] = {}
-    defaults_path = _find_defaults_path()
-    raw = _merge_dicts(raw, _parse_simple_yaml(defaults_path.read_text(encoding="utf-8")))
-    user_path = _find_user_config_path()
-    if user_path is not None and user_path.exists():
-        raw = _merge_dicts(raw, _parse_simple_yaml(user_path.read_text(encoding="utf-8")))
-    return _resolve_unset(_config_from_mapping(raw))
-
-
 def _resolve_unset(cfg: Config) -> Config:
     """Replace any still-unset sentinels with their concrete default values."""
     if cfg.strict is _UNSET_FALSE:
@@ -216,8 +206,6 @@ def _resolve_unset(cfg: Config) -> Config:
     return cfg
 
 
-def new_client(code_config: Config):  # -> Logger
-    """Create a Logger with 4-layer config precedence: defaults -> file -> env -> code."""
 def _build_validated_config(code_config: Config) -> Config:
     """Run the full 4-layer precedence pipeline and return a validated Config."""
     # Step 1: Start with hardcoded defaults

@@ -4,12 +4,10 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
-	"strings"
-	"sync"
-	"testing"
 
 	"cloud.google.com/go/storage"
 )
@@ -101,6 +99,8 @@ func TestCloseFlushesBufferedDataOnce(t *testing.T) {
 	if attempts.Load() != 1 {
 		t.Fatalf("upload attempts after drained Close = %d, want 1", attempts.Load())
 	}
+}
+
 // newFailingFlushSink builds a sink whose final flush fails deterministically
 // without any network access: the GCS writer validates the object name
 // client-side and rejects the invalid UTF-8 key before issuing a request.

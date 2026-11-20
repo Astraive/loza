@@ -254,10 +254,8 @@ export class HTTPBatchSink implements Sink {
     }
     if ((this.apiKey || this.username) &&
       endpoint.protocol === 'http:' &&
-      !['localhost', '127.0.0.1', '::1'].includes(endpoint.hostname)) {
-      throw new Error('invalid HTTP sink options: credentials require HTTPS (HTTP is allowed only for localhost)');
       !isLocalhost(endpoint.hostname)) {
-      throw new Error('invalid HTTP sink options: Basic credentials require HTTPS (HTTP is allowed only for localhost)');
+      throw new Error('invalid HTTP sink options: credentials require HTTPS (HTTP is allowed only for localhost)');
     }
     this.authHeader = opts.authHeader || 'Authorization';
     this.sdkName = opts.sdkName || 'loza-js';

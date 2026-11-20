@@ -1,17 +1,15 @@
 package core
 
 import (
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"math"
 	"math/big"
 	"os"
 	"path/filepath"
-	"strconv"
-	"go/ast"
-	"go/parser"
-	"go/token"
-	"os"
-	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"time"

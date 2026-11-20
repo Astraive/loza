@@ -8,8 +8,8 @@ use loza::{
 /// The error is deliberately kept in the `Result` so that a failed event emit
 /// is surfaced to the caller instead of being replaced with an empty string.
 fn encoded_from(
-    result: Result<MiddlewareResult, serde_json::Error>,
-) -> Result<String, serde_json::Error> {
+    result: Result<MiddlewareResult, loza::LozaError>,
+) -> Result<String, loza::LozaError> {
     result.map(|result| result.encoded)
 }
 

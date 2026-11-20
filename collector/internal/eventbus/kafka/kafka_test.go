@@ -4,8 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"sync"
 	"reflect"
+	"sync"
 	"testing"
 	"time"
 	"unsafe"
@@ -22,8 +22,6 @@ func (e errTypeA) Error() string { return e.msg }
 type errTypeB struct{ msg string }
 
 func (e errTypeB) Error() string { return e.msg }
-	"github.com/twmb/franz-go/pkg/kgo"
-)
 
 // clientRetryConfig creates a franz-go client from opts and reads back the
 // effective record/request retry limits from its internal config. franz-go

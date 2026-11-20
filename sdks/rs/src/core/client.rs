@@ -800,15 +800,6 @@ fn validate_credentialed_endpoint(endpoint: &str, insecure: bool) -> Result<(), 
     Err("credentialed HTTP requires TLS (set insecure explicitly for local development)".into())
 }
 
-fn validate_basic_auth_username(username: &str) -> Result<(), String> {
-    if username.is_empty() || username.contains(':') || username.chars().any(char::is_whitespace) {
-        return Err(
-            "basic auth username must be non-empty and contain no ':' or whitespace".into(),
-        );
-    }
-    Ok(())
-}
-
 pub fn extract_http_headers(
     headers: &BTreeMap<String, String>,
 ) -> (Option<String>, Option<String>, Option<String>) {

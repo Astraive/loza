@@ -154,7 +154,10 @@ func (*redactionTestStorage) Remediations() storage.RemediationStore { return ni
 func (*redactionTestStorage) Feedback() storage.FeedbackStore        { return nil }
 
 func redactionTestConfig() *config.Config {
-	cfg := config.Default()
+	cfg, err := config.Default()
+	if err != nil {
+		panic(err)
+	}
 	cfg.PIIRedaction.Enabled = true
 	cfg.PIIRedaction.Mode = "enforce"
 	return cfg

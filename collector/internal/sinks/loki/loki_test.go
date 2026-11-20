@@ -134,7 +134,6 @@ func TestFlushRestoreOnFailure(t *testing.T) {
 // flush them again. The fix reports the drop explicitly and keeps the sink
 // free of unflushable entries.
 func TestCloseFinalFlushFailureDropsExplicitly(t *testing.T) {
-func TestCloseReturnsFlushErrorToAllCallers(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusBadGateway)
 		_, _ = w.Write([]byte("upstream down"))
@@ -146,23 +145,6 @@ func TestCloseReturnsFlushErrorToAllCallers(t *testing.T) {
 		BatchSize:     10,
 		FlushInterval: time.Hour,
 		Client:        srv.Client(),
-func TestPeriodicFlushErrorIsSurfaced(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusServiceUnavailable)
-		_, _ = w.Write([]byte("loki unavailable"))
-	}))
-	defer srv.Close()
-
-	errCh := make(chan error, 8)
-	rawSink, err := New(Config{
-		URL:           srv.URL,
-		BatchSize:     10,
-		FlushInterval: 10 * time.Millisecond,
-		Timeout:       200 * time.Millisecond,
-		Client:        srv.Client(),
-		OnFlushError: func(err error) {
-			errCh <- err
-		},
 	})
 	if err != nil {
 		t.Fatalf("new sink: %v", err)
@@ -189,6 +171,61 @@ func TestPeriodicFlushErrorIsSurfaced(t *testing.T) {
 	}
 }
 
+func TestPeriodicFlushErrorIsSurfaced(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = w.Write([]byte("loki unavailable"))
+	}))
+	defer srv.Close()
+
+	errCh := make(chan error, 8)
+	rawSink, err := New(Config{
+		URL:           srv.URL,
+		BatchSize:     10,
+		FlushInterval: 10 * time.Millisecond,
+		Timeout:       200 * time.Millisecond,
+		Client:        srv.Client(),
+		OnFlushError: func(err error) {
+			errCh <- err
+		},
+	})
+	if err != nil {
+		t.Fatalf("new sink: %v", err)
+	}
+	s := rawSink.(*sink)
+
+	defer func() { _ = s.Close(context.Background()) }()
+
+	if err := s.WriteEvent(context.Background(), []byte(`{"event":"periodic"}`), nil); err != nil {
+		t.Fatalf("write event: %v", err)
+	}
+
+	select {
+	case got := <-errCh:
+		if got == nil {
+			t.Fatalf("expected a non-nil flush error")
+		}
+		if !strings.Contains(got.Error(), "push batch failed") {
+			t.Fatalf("unexpected flush error: %v", got)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatalf("periodic flush error was not surfaced through OnFlushError")
+	}
+
+	// Stop the background loop before inspecting the batch so the assertion
+	// does not race with a concurrent flush. Close's final flush is expected
+	// to fail here because the test server never accepts a push; a failed
+	// final flush explicitly drops the unflushable entries rather than
+	// stranding them in a sink that can no longer flush.
+	_ = s.Close(context.Background())
+	s.mu.Lock()
+	retained := len(s.batch)
+	s.mu.Unlock()
+	if retained != 0 {
+		t.Fatalf("expected the failed final flush to drop all entries, got %d entries", retained)
+	}
+}
+
 // TestCloseWaitsForInflightPush verifies that Close waits for a push already
 // in flight before performing the final flush, so a failed in-flight push has
 // been restored and its entries are picked up by the final flush.
@@ -211,6 +248,54 @@ func TestCloseWaitsForInflightPush(t *testing.T) {
 		BatchSize:     1,
 		FlushInterval: time.Hour,
 		Client:        srv.Client(),
+	})
+	if err != nil {
+		t.Fatalf("new sink: %v", err)
+	}
+	s := rawSink.(*sink)
+
+	writeCtx, cancelWrite := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancelWrite()
+	writeDone := make(chan error, 1)
+	go func() {
+		writeDone <- s.WriteEvent(writeCtx, []byte(`{"event":"inflight"}`), nil)
+	}()
+
+	select {
+	case <-pushStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("push did not start")
+	}
+
+	closeDone := make(chan error, 1)
+	go func() { closeDone <- s.Close(context.Background()) }()
+
+	select {
+	case err := <-closeDone:
+		t.Fatalf("Close returned before the in-flight push completed: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	close(releasePush)
+
+	select {
+	case err := <-writeDone:
+		if err != nil {
+			t.Fatalf("write event: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("write did not complete")
+	}
+	select {
+	case err := <-closeDone:
+		if err != nil {
+			t.Fatalf("close: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("close did not complete")
+	}
+}
+
 // closeInflightTransport blocks the first push (the in-flight WriteEvent)
 // until released, fails the first three pushes (WriteEvent's three attempts)
 // and makes later pushes succeed. It records whether the entry was ever
@@ -277,72 +362,6 @@ func TestCloseWaitsForInflightWriteEvent(t *testing.T) {
 	}
 	s := rawSink.(*sink)
 
-	writeCtx, cancelWrite := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancelWrite()
-	writeDone := make(chan error, 1)
-	go func() {
-		writeDone <- s.WriteEvent(writeCtx, []byte(`{"event":"inflight"}`), nil)
-	}()
-
-	select {
-	case <-pushStarted:
-	case <-time.After(2 * time.Second):
-		t.Fatal("push did not start")
-	}
-
-	closeDone := make(chan error, 1)
-	go func() { closeDone <- s.Close(context.Background()) }()
-
-	select {
-	case err := <-closeDone:
-		t.Fatalf("Close returned before the in-flight push completed: %v", err)
-	case <-time.After(100 * time.Millisecond):
-	}
-
-	close(releasePush)
-
-	select {
-	case err := <-writeDone:
-		if err != nil {
-			t.Fatalf("write event: %v", err)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("write did not complete")
-	}
-	select {
-	case err := <-closeDone:
-		if err != nil {
-			t.Fatalf("close: %v", err)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("close did not complete")
-	defer func() { _ = s.Close(context.Background()) }()
-
-	if err := s.WriteEvent(context.Background(), []byte(`{"event":"periodic"}`), nil); err != nil {
-		t.Fatalf("write event: %v", err)
-	}
-
-	select {
-	case got := <-errCh:
-		if got == nil {
-			t.Fatalf("expected a non-nil flush error")
-		}
-		if !strings.Contains(got.Error(), "push batch failed") {
-			t.Fatalf("unexpected flush error: %v", got)
-		}
-	case <-time.After(3 * time.Second):
-		t.Fatalf("periodic flush error was not surfaced through OnFlushError")
-	}
-
-	// Stop the background loop before inspecting the retained batch so the
-	// assertion does not race with a concurrent flush. Close is expected to
-	// fail here because the test server never accepts a push.
-	_ = s.Close(context.Background())
-	s.mu.Lock()
-	retained := len(s.batch)
-	s.mu.Unlock()
-	if retained != 1 {
-		t.Fatalf("expected the failed batch to be retained in memory, got %d entries", retained)
 	writeErr := make(chan error, 1)
 	go func() {
 		writeErr <- s.WriteEvent(context.Background(), []byte(line), nil)
@@ -394,6 +413,27 @@ func TestCloseWaitsForInflightWriteEvent(t *testing.T) {
 	defer tr.mu.Unlock()
 	if !tr.okWithEntry {
 		t.Fatalf("restored batch was never pushed by Close's final Flush (calls=%d)", tr.calls)
+	}
+}
+
+func TestCloseReturnsFlushErrorToAllCallers(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+		_, _ = w.Write([]byte("upstream down"))
+	}))
+	defer srv.Close()
+
+	rawSink, err := New(Config{
+		URL:           srv.URL,
+		BatchSize:     10,
+		FlushInterval: time.Hour,
+		Client:        srv.Client(),
+	})
+	if err != nil {
+		t.Fatalf("new sink: %v", err)
+	}
+	s := rawSink.(*sink)
+
 	// Leave a batch pending so the flush performed by Close fails upstream.
 	if err := s.WriteEvent(context.Background(), []byte(`{"event":"close.flush"}`), nil); err != nil {
 		t.Fatalf("write event: %v", err)

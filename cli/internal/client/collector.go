@@ -8,7 +8,6 @@ import (
 	"io"
 	"math"
 	"net/http"
-	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -316,7 +315,6 @@ func FetchDLQ(baseURL string) ([]byte, error) {
 }
 
 func FetchDLQItem(baseURL, id string) ([]byte, error) {
-	return getJSON(baseURL, "/dlq/"+url.PathEscape(id))
 	return getJSON(buildURL(baseURL, []string{"dlq", id}, nil))
 }
 
@@ -325,7 +323,6 @@ func ReplayDLQ(ctx context.Context, baseURL string) ([]byte, error) {
 }
 
 func ReplayDLQItem(ctx context.Context, baseURL, id string) ([]byte, error) {
-	return postJSON(ctx, baseURL, "/dlq/"+url.PathEscape(id)+"/replay", nil)
 	return postJSON(ctx, buildURL(baseURL, []string{"dlq", id, "replay"}, nil), nil)
 }
 
@@ -362,15 +359,6 @@ func AuditPII(ctx context.Context, baseURL string, payload []byte) ([]byte, erro
 }
 
 func DeleteEventsByTenant(ctx context.Context, baseURL, tenantID, reason string) ([]byte, error) {
-	return deleteJSON(ctx, baseURL, "/events/by-tenant/"+url.PathEscape(tenantID), reason)
-}
-
-func DeleteEventsByUser(ctx context.Context, baseURL, userID, reason string) ([]byte, error) {
-	return deleteJSON(ctx, baseURL, "/events/by-user/"+url.PathEscape(userID), reason)
-}
-
-func DeleteEventByID(ctx context.Context, baseURL, eventID, reason string) ([]byte, error) {
-	return deleteJSON(ctx, baseURL, "/events/"+url.PathEscape(eventID), reason)
 	return deleteJSON(ctx, buildURL(baseURL, []string{"events", "by-tenant", tenantID}, nil), reason)
 }
 
@@ -387,15 +375,6 @@ func FetchSinks(baseURL string) ([]byte, error) {
 }
 
 func FetchSinkHealth(baseURL, name string) ([]byte, error) {
-	return getJSON(baseURL, "/sinks/"+url.PathEscape(name))
-}
-
-func TestSink(ctx context.Context, baseURL, name string) ([]byte, error) {
-	return postJSON(ctx, baseURL, "/sinks/"+url.PathEscape(name)+"/test", nil)
-}
-
-func DeleteDLQItem(ctx context.Context, baseURL, id string) ([]byte, error) {
-	return deleteJSON(ctx, baseURL, "/dlq/"+url.PathEscape(id), "")
 	return getJSON(buildURL(baseURL, []string{"sinks", name}, nil))
 }
 
@@ -420,11 +399,6 @@ func FetchQuarantine(baseURL string) ([]byte, error) {
 }
 
 func ReplayQuarantineItem(ctx context.Context, baseURL, id string) ([]byte, error) {
-	return postJSON(ctx, baseURL, "/quarantine/"+url.PathEscape(id)+"/replay", nil)
-}
-
-func DeleteQuarantineItem(ctx context.Context, baseURL, id string) ([]byte, error) {
-	return deleteJSON(ctx, baseURL, "/quarantine/"+url.PathEscape(id), "")
 	return postJSON(ctx, buildURL(baseURL, []string{"quarantine", id, "replay"}, nil), nil)
 }
 
@@ -437,23 +411,6 @@ func CreateAPIKey(ctx context.Context, baseURL string, payload []byte) ([]byte, 
 }
 
 func RevokeAPIKey(ctx context.Context, baseURL, id string) ([]byte, error) {
-	return postJSON(ctx, baseURL, "/keys/"+url.PathEscape(id)+"/revoke", nil)
-}
-
-func RotateAPIKey(ctx context.Context, baseURL, id string) ([]byte, error) {
-	return postJSON(ctx, baseURL, "/keys/"+url.PathEscape(id)+"/rotate", nil)
-}
-
-func WatchStream(ctx context.Context, baseURL string, filters map[string]string) (io.ReadCloser, error) {
-	base := strings.TrimRight(baseURL, "/") + "/tail"
-	if len(filters) > 0 {
-		values := make(url.Values, len(filters))
-		for k, v := range filters {
-			values.Set(k, v)
-		}
-		base += "?" + values.Encode()
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base, nil)
 	return postJSON(ctx, buildURL(baseURL, []string{"keys", id, "revoke"}, nil), nil)
 }
 
@@ -526,7 +483,6 @@ func sleepContext(ctx context.Context, d time.Duration) error {
 	}
 }
 
-func getJSON(baseURL, path string) ([]byte, error) {
 func getJSON(rawURL string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), defaultTimeout)
 	defer cancel()
@@ -743,16 +699,6 @@ func parseRetryAfter(value string) time.Duration {
 func applyAPIKeyAuth(req *http.Request) error {
 	if req == nil || req.URL == nil {
 		return nil
-func applyAPIKeyAuth(req *http.Request) {
-	if req == nil || req.URL == nil {
-		return
-	}
-	// Never attach credentials to a host that was not explicitly configured.
-	// This prevents a malicious --url/--collector-url (or config file) from
-	// exfiltrating LOZA_API_KEY to an attacker-controlled endpoint.
-	origin, ok := normalizeOrigin(req.URL.String())
-	if !ok || !isAllowedOrigin(origin) {
-		return
 	}
 	apiKey := getConfiguredAPIKey(req.URL.Host)
 	if apiKey == "" {
@@ -760,6 +706,13 @@ func applyAPIKeyAuth(req *http.Request) {
 	}
 	if req.URL.Scheme == "http" && !isLoopbackCLIHost(req.URL.Hostname()) {
 		return fmt.Errorf("refusing to send API key over plaintext HTTP to non-local host %q", req.URL.Hostname())
+	}
+	// Never attach credentials to a host that was not explicitly configured.
+	// This prevents a malicious --url/--collector-url (or config file) from
+	// exfiltrating LOZA_API_KEY to an attacker-controlled endpoint.
+	origin, ok := normalizeOrigin(req.URL.String())
+	if !ok || !isAllowedOrigin(origin) {
+		return nil
 	}
 	// Use Authorization: Bearer format (matches collector auth middleware)
 	req.Header.Set("Authorization", "Bearer "+apiKey)

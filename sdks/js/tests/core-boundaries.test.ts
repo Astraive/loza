@@ -47,6 +47,14 @@ describe('Core boundaries', () => {
 
   it('returns default context values when run with an undefined event', () => {
     runWithEvent(undefined as never, () => {
+      assert.equal(getEvent(), undefined);
+      assert.equal(hasEvent(), false);
+      assert.equal(eventId(), '');
+      assert.equal(requestIdFromContext(), '');
+      assert.equal(traceIdFromContext(), '');
+    });
+  });
+
   it('has no event in context by default', () => {
     withoutEvent(() => {
       assert.equal(getEvent(), undefined);

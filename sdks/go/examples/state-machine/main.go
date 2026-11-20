@@ -35,6 +35,8 @@ func runExample(name string, fn func() error) {
 		fmt.Printf("   Error: %v\n", err)
 	}
 	fmt.Println()
+}
+
 // activeEvent returns the canonical event stored in ctx. It never reports ok
 // with a nil event, so callers only dereference the result when ok is true.
 // This guards the missing-event case (for example, a context that never went
@@ -86,11 +88,10 @@ func happyPath() error {
 // happyPathWithContext contains the lifecycle logic so tests can supply a
 // context (for example, one holding a closed event) and observe propagation.
 func happyPathWithContext(ctx context.Context) error {
-	ev, _ := loza.FromContext(ctx)
 	ev, ok := activeEvent(ctx)
 	if !ok {
 		fmt.Println("no active event in context; skipping demo")
-		return
+		return nil
 	}
 	fmt.Printf("1. Initial state: %s\n", ev.State())
 
@@ -136,7 +137,7 @@ func errorHandling() error {
 	ev, ok := activeEvent(ctx)
 	if !ok {
 		fmt.Println("no active event in context; skipping demo")
-		return
+		return nil
 	}
 	fmt.Printf("1. Initial state: %s\n", ev.State())
 
@@ -174,7 +175,7 @@ func invalidTransitions() error {
 	ev, ok := activeEvent(ctx)
 	if !ok {
 		fmt.Println("no active event in context; skipping demo")
-		return
+		return nil
 	}
 
 	// Complete the lifecycle
@@ -233,7 +234,7 @@ func arrayOperations() error {
 	ev, ok := activeEvent(ctx)
 	if !ok {
 		fmt.Println("no active event in context; skipping demo")
-		return
+		return nil
 	}
 	fmt.Printf("Initial state: %s\n", ev.State())
 
@@ -293,7 +294,7 @@ func demonstrateStateObservability() error {
 	ev, ok := activeEvent(ctx)
 	if !ok {
 		fmt.Println("no active event in context; skipping demo")
-		return
+		return nil
 	}
 
 	states := []string{}

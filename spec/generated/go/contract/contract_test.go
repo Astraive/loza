@@ -25,6 +25,26 @@ func ndjson(lines ...[]byte) []byte {
 	return bytes.Join(lines, []byte("\n"))
 }
 
+// assertTooLargeError asserts that an oversized event is rejected by the
+// shape-independent per-event byte limit (the MASS-0837 security fix), rather
+// than being silently skipped or accepted.
+func assertTooLargeError(t *testing.T, err error) {
+	t.Helper()
+	if err == nil {
+		t.Fatal("expected oversized NDJSON record to be rejected by the per-event size limit")
+	}
+	verrs, ok := err.(ValidationErrors)
+	if !ok {
+		t.Fatalf("expected ValidationErrors, got %T: %v", err, err)
+	}
+	for _, ve := range verrs {
+		if ve.Code == "too_large" {
+			return
+		}
+	}
+	t.Fatalf("expected too_large validation error, got %+v", verrs)
+}
+
 func TestValidateFlexibleJSONBytesOversizedLine(t *testing.T) {
 	large := oversizedEventLine("evt-large", 100*1024)
 	if len(large) <= 64*1024 {
@@ -32,9 +52,9 @@ func TestValidateFlexibleJSONBytesOversizedLine(t *testing.T) {
 	}
 
 	payload := ndjson([]byte(validSmallEvent), large)
-	if err := ValidateFlexibleJSONBytes(payload, false); err != nil {
-		t.Fatalf("expected oversized valid NDJSON record to validate, got %v", err)
-	}
+	// Oversized events must be rejected even when otherwise valid; the raw
+	// byte size limit is enforced independently of the payload shape.
+	assertTooLargeError(t, ValidateFlexibleJSONBytes(payload, false))
 }
 
 func TestValidateFlexibleJSONBytesOversizedInvalidLine(t *testing.T) {
@@ -45,20 +65,10 @@ func TestValidateFlexibleJSONBytesOversizedInvalidLine(t *testing.T) {
 	}
 
 	payload := ndjson([]byte(validSmallEvent), invalid)
-	err := ValidateFlexibleJSONBytes(payload, false)
-	if err == nil {
-		t.Fatal("expected invalid oversized NDJSON record to be rejected, not silently skipped")
-	}
-	verrs, ok := err.(ValidationErrors)
-	if !ok {
-		t.Fatalf("expected ValidationErrors, got %T: %v", err, err)
-	}
-	for _, ve := range verrs {
-		if ve.Code == "missing_event_id" {
-			return
-		}
-	}
-	t.Fatalf("expected missing_event_id validation error, got %+v", verrs)
+	// The per-event size check runs before field-level validation, so an
+	// oversized line is rejected as too_large regardless of the fact that it
+	// is also missing event_id.
+	assertTooLargeError(t, ValidateFlexibleJSONBytes(payload, false))
 }
 
 func TestValidateFlexibleJSONBytesOversizedMalformedLine(t *testing.T) {

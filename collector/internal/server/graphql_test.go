@@ -134,6 +134,8 @@ func TestGraphQLConfiguredBatchLimit(t *testing.T) {
 	require.Equal(t, http.StatusOK, rec.Code)
 	var single map[string]json.RawMessage
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &single))
+}
+
 func TestGraphQLServerHTTPServerTimeouts(t *testing.T) {
 	srv := NewGraphQLServer(GraphQLConfig{Enabled: true, Port: ":9310"}, &mockState{})
 

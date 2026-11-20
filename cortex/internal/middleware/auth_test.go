@@ -148,34 +148,34 @@ func TestRequireRole(t *testing.T) {
 }
 
 func TestRequireRoleRejectsUnknownRequiredRole(t *testing.T) {
-func TestAuthorizeRoleFailsClosedOnUnknownRoles(t *testing.T) {
 	auth := NewAuth(&config.AuthenticationConfig{Enabled: true})
 
+	// Required roles are validated at construction time: an unknown or empty
+	// required role now panics so a misconfiguration cannot degrade into an
+	// authorization bypass at request time. Denying per-request (HTTP 403) is
+	// no longer enough because the same bad configuration could be reused.
+	for _, role := range []string{"", "administrator", "writer "} {
+		t.Run("invalid required role panics", func(t *testing.T) {
+			defer func() {
+				if recover() == nil {
+					t.Fatalf("RequireRole(%q) did not panic for an invalid required role", role)
+				}
+			}()
+			auth.RequireRole(role)
+		})
+	}
+
+	// Valid required roles are still enforced at request time and fail closed
+	// when the caller's role is missing or unknown.
 	tests := []struct {
 		name         string
 		requiredRole string
 		currentRole  string
 		want         int
 	}{
-		{name: "empty required role denied", requiredRole: "", currentRole: "admin", want: http.StatusForbidden},
-		{name: "misspelled required role denied", requiredRole: "administrator", currentRole: "admin", want: http.StatusForbidden},
-		{name: "misspelled lowercase required role denied", requiredRole: "writer ", currentRole: "admin", want: http.StatusForbidden},
 		{name: "valid admin required role allowed", requiredRole: "admin", currentRole: "admin", want: http.StatusOK},
 		{name: "empty current role denied", requiredRole: "reader", currentRole: "", want: http.StatusForbidden},
 		{name: "unknown current role denied", requiredRole: "reader", currentRole: "superuser", want: http.StatusForbidden},
-		callerRole   string
-		want         bool
-	}{
-		{name: "admin satisfies admin", requiredRole: "admin", callerRole: "admin", want: true},
-		{name: "admin satisfies writer", requiredRole: "writer", callerRole: "admin", want: true},
-		{name: "writer does not satisfy admin", requiredRole: "admin", callerRole: "writer", want: false},
-		{name: "reader does not satisfy writer", requiredRole: "writer", callerRole: "reader", want: false},
-		// Unknown role on either side must deny.
-		{name: "unknown required role", requiredRole: "admni", callerRole: "admin", want: false},
-		{name: "unknown caller role", requiredRole: "admin", callerRole: "hacker", want: false},
-		{name: "both roles unknown", requiredRole: "admni", callerRole: "hacker", want: false},
-		{name: "empty required role", requiredRole: "", callerRole: "admin", want: false},
-		{name: "empty caller role", requiredRole: "admin", callerRole: "", want: false},
 	}
 
 	for _, tc := range tests {
@@ -195,6 +195,41 @@ func TestAuthorizeRoleFailsClosedOnUnknownRoles(t *testing.T) {
 				t.Fatalf("status = %d, want %d", rec.Code, tc.want)
 			}
 		})
+	}
+}
+
+func TestAuthorizeRoleFailsClosedOnUnknownRoles(t *testing.T) {
+	auth := NewAuth(&config.AuthenticationConfig{Enabled: true})
+
+	tests := []struct {
+		name         string
+		requiredRole string
+		callerRole   string
+		want         bool
+	}{
+		{name: "admin satisfies admin", requiredRole: "admin", callerRole: "admin", want: true},
+		{name: "admin satisfies writer", requiredRole: "writer", callerRole: "admin", want: true},
+		{name: "writer does not satisfy admin", requiredRole: "admin", callerRole: "writer", want: false},
+		{name: "reader does not satisfy writer", requiredRole: "writer", callerRole: "reader", want: false},
+		// Unknown role on either side must deny.
+		{name: "unknown required role", requiredRole: "admni", callerRole: "admin", want: false},
+		{name: "unknown caller role", requiredRole: "admin", callerRole: "hacker", want: false},
+		{name: "both roles unknown", requiredRole: "admni", callerRole: "hacker", want: false},
+		{name: "empty required role", requiredRole: "", callerRole: "admin", want: false},
+		{name: "empty caller role", requiredRole: "admin", callerRole: "", want: false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			r := httptest.NewRequest(http.MethodGet, "/", nil)
+			r = r.WithContext(WithAuthResult(r.Context(), &AuthResult{Authorized: true, Role: tc.callerRole}))
+			if got := auth.authorizeRole(r, tc.requiredRole); got != tc.want {
+				t.Fatalf("authorizeRole(required=%q, caller=%q) = %v, want %v", tc.requiredRole, tc.callerRole, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestGenerateHMACSecretHasIndependentEntropy(t *testing.T) {
 	first, err := GenerateHMACSecret()
 	if err != nil {
@@ -286,14 +321,6 @@ func TestAuthSecretGenerationFailureFailsClosed(t *testing.T) {
 
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want %d (fail closed)", rec.Code, http.StatusUnauthorized)
-	}
-}
-			r := httptest.NewRequest(http.MethodGet, "/", nil)
-			r = r.WithContext(WithAuthResult(r.Context(), &AuthResult{Authorized: true, Role: tc.callerRole}))
-			if got := auth.authorizeRole(r, tc.requiredRole); got != tc.want {
-				t.Fatalf("authorizeRole(required=%q, caller=%q) = %v, want %v", tc.requiredRole, tc.callerRole, got, tc.want)
-			}
-		})
 	}
 }
 

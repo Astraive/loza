@@ -640,6 +640,10 @@ func TestEventBuffer_ConcurrentAddDoesNotDropPendingBatch(t *testing.T) {
 			if seen[id] != 1 {
 				t.Fatalf("event %s flushed %d times, want exactly 1", id, seen[id])
 			}
+		}
+	}
+}
+
 // TestEventBuffer_CloseReturnsFlushErrorToAllCallers verifies that an error
 // returned by the close-time Flush is reported to every Close caller, not just
 // the first one that runs the sync.Once body.

@@ -201,8 +201,10 @@ func TestAllowEvents_LimitChangeTakesEffect(t *testing.T) {
 	rl := NewKeyRateLimiter()
 	defer rl.Close()
 
-	// Drain the bucket at the high limit (epm=600 -> burst=61).
-	for i := 0; i < 200; i++ {
+	// Drain the bucket at the high limit. The event bucket is sized to the full
+	// epm (600), not epm/10+1, so it takes 600 one-event reservations to empty;
+	// drain well past that to be robust against refill.
+	for i := 0; i < 1000; i++ {
 		if !rl.AllowEvents("rotating-key", 600, 1) {
 			break
 		}
@@ -242,6 +244,8 @@ func TestLimitChange_RebuildsWithConfiguredRate(t *testing.T) {
 	if got := rl.eventLimiters["rate-key"].Limit(); got != wantEvt {
 		t.Fatalf("event limiter rate = %v, want %v after epm change", got, wantEvt)
 	}
+}
+
 // TestKeyRateLimiterClose_StopsBackgroundCleanup is a regression test for the
 // leaked cleanup goroutine/ticker: NewKeyRateLimiter starts a cleanupLoop that
 // runs a 10-minute ticker until Close is called. Close must signal the loop to

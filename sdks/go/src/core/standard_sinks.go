@@ -340,10 +340,9 @@ func CollectorSink(cfg CollectorSinkConfig) (Sink, error) {
 	}
 	if err := validateCollectorCredentials(
 		cfg.Endpoint,
-		"",
+		bearerCredential(cfg.Headers),
 		cfg.BasicUsername,
 		cfg.BasicPassword,
-		bearerCredential(cfg.Headers),
 		cfg.Insecure,
 	); err != nil {
 		return nil, err
@@ -580,7 +579,6 @@ type HTTPBatchSinkConfig struct {
 	// behavior in addition to the timeout/connection settings on Client.
 	Transport *HTTPTransport
 	OnError   func(error)
-	OnError       func(error)
 	// OnDrop is notified once for every event discarded by the overflow policy.
 	OnDrop func(reason string)
 }
@@ -602,10 +600,9 @@ func HTTPBatchSink(cfg HTTPBatchSinkConfig) (Sink, error) {
 	}
 	if err := validateCollectorCredentials(
 		cfg.Endpoint,
-		"",
+		bearerCredential(cfg.Headers),
 		cfg.BasicUsername,
 		cfg.BasicPassword,
-		bearerCredential(cfg.Headers),
 		cfg.Insecure,
 	); err != nil {
 		return nil, err

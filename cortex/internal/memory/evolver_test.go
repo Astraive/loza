@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"math"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -405,11 +406,8 @@ func TestEvolveMergesBehavioralMatch(t *testing.T) {
 	}
 	if len(store.saved) != 1 {
 		t.Fatalf("expected exactly one Save call, got %d", len(store.saved))
-	"reflect"
-	"testing"
-
-	"github.com/astraive/loza/cortex/internal/models"
-)
+	}
+}
 
 // TestMergeSignaturesRemediationDoesNotAlias verifies that the merged
 // signature owns its remediation slice. The previous implementation assigned

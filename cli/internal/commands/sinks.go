@@ -27,9 +27,6 @@ func validateSinkName(name string) error {
 
 func SinksCommand(ctx context.Context, cfg config.Config, args []string) error {
 	sub := "list"
-	if len(args) > 0 && len(args[0]) > 0 && args[0][0] != '-' {
-		sub = args[0]
-		args = args[1:]
 	if len(args) > 0 {
 		candidate := strings.TrimSpace(args[0])
 		if candidate != "" && !strings.HasPrefix(candidate, "-") {

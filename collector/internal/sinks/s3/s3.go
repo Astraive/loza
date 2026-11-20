@@ -55,7 +55,6 @@ type sink struct {
 	// inflight tracks every putObject that may restore records to the buffer.
 	// Close waits for it so restored records are included in the final flush.
 	inflight    sync.WaitGroup
-	closeErr    error
 	flushCtx    context.Context
 	cancelFlush context.CancelFunc
 }
@@ -160,9 +159,10 @@ func (s *sink) Close(ctx context.Context) error {
 		// flush loop has stopped. Wait for all of them before the final flush
 		// so restored records are uploaded (or surface as a Close error).
 		s.inflight.Wait()
+		// finalFlush is the one and only final drain. Running flushBatch
+		// afterwards would find the restored payload (when finalFlush fails),
+		// see s.closed, and overwrite the real error with "s3: sink closed".
 		s.closeErr = s.finalFlush(ctx)
-		s.wg.Wait()
-		s.closeErr = s.flushBatch(ctx)
 	})
 	return s.closeErr
 }

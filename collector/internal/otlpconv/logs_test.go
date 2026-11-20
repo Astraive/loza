@@ -214,6 +214,8 @@ func intAttr(v int64) *commonv1.AnyValue {
 
 func doubleAttr(v float64) *commonv1.AnyValue {
 	return &commonv1.AnyValue{Value: &commonv1.AnyValue_DoubleValue{DoubleValue: v}}
+}
+
 func TestOutcomeFromAttrsFallsThroughOnUnrecognizedValue(t *testing.T) {
 	tests := []struct {
 		name  string

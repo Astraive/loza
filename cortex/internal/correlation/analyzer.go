@@ -21,6 +21,8 @@ const (
 	// run when the configured maximum is not positive. It is deliberately well
 	// above the old hard-coded 10,000 single-page cap.
 	defaultMaxEvents = 100000
+)
+
 // State describes the lifecycle state of the correlation analyzer.
 type State string
 
@@ -159,19 +161,6 @@ func (a *Analyzer) analyze(ctx context.Context) error {
 		return fmt.Errorf("list events for correlation analysis: %w", err)
 	}
 
-	// Both synthesis passes consume the same event slice but operate on
-	// different lookback windows. Filter with the larger of the two so that
-	// deploy-to-anomaly pairs inside DeploymentAdjacencyWindow are not
-	// discarded by the shorter co-occurrence window before they are examined.
-	lookback := max(a.cfg.CoOccurrenceWindow*2, a.cfg.DeploymentAdjacencyWindow)
-	cutoff := time.Now().Add(-lookback)
-	var recent []*models.Event
-	for _, e := range events {
-		if e.Timestamp.After(cutoff) {
-			recent = append(recent, e)
-		}
-		return err
-	}
 	if len(recent) == 0 {
 		return nil
 	}
@@ -196,7 +185,12 @@ func (a *Analyzer) listRecentEvents(ctx context.Context) ([]*models.Event, error
 		maxEvents = defaultMaxEvents
 	}
 
-	cutoff := time.Now().Add(-a.cfg.CoOccurrenceWindow * 2)
+	// Both synthesis passes consume the same event slice but operate on
+	// different lookback windows. Filter with the larger of the two so that
+	// deploy-to-anomaly pairs inside DeploymentAdjacencyWindow are not
+	// discarded by the shorter co-occurrence window before they are examined.
+	lookback := max(a.cfg.CoOccurrenceWindow*2, a.cfg.DeploymentAdjacencyWindow)
+	cutoff := time.Now().Add(-lookback)
 	var recent []*models.Event
 	for offset := 0; offset < maxEvents; {
 		limit := pageSize

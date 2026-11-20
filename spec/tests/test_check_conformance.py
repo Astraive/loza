@@ -34,6 +34,11 @@ class TestDeclaredEventSchemas(unittest.TestCase):
 
             for src in (SPEC_ROOT / "schema").glob("*.json"):
                 shutil.copy2(src, schema_dir / src.name)
+            # main() also validates the published schema mirror paths.
+            mirror_dir = spec_root / "schemas" / "json"
+            mirror_dir.mkdir(parents=True)
+            for src in (SPEC_ROOT / "schemas" / "json").glob("*.json"):
+                shutil.copy2(src, mirror_dir / src.name)
 
             declared_strict = schema_dir / "manifest-declared.strict.json"
             declared_loose = schema_dir / "manifest-declared.loose.json"

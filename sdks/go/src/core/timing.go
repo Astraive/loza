@@ -221,8 +221,6 @@ func Step(ctx context.Context, name string, fn func() error) error {
 // step is the shared implementation of Step and WithProcess. attrs are recorded
 // on the emitted process on both the success and error paths.
 func step(ctx context.Context, name string, fn func() error, attrs []Attr) error {
-// Any attrs are captured on the step when it starts.
-func Step(ctx context.Context, name string, fn func() error, attrs ...Attr) error {
 	ev := loadEvent(ctx)
 	if ev == nil {
 		return fn()
@@ -247,8 +245,6 @@ func Phase(ctx context.Context, name string, fn func() error) error {
 
 // phase is the shared implementation of Phase and WithGroup.
 func phase(ctx context.Context, name string, fn func() error, attrs []Attr) error {
-// Any attrs are captured on the phase when it starts.
-func Phase(ctx context.Context, name string, fn func() error, attrs ...Attr) error {
 	ev := loadEvent(ctx)
 	if ev == nil {
 		return fn()
@@ -273,8 +269,6 @@ func Span(ctx context.Context, name string, fn func() error) error {
 
 // span is the shared implementation of Span and WithTimer.
 func span(ctx context.Context, name string, fn func() error, attrs []Attr) error {
-// Any attrs are captured on the timer when it starts.
-func Span(ctx context.Context, name string, fn func() error, attrs ...Attr) error {
 	ev := loadEvent(ctx)
 	if ev == nil {
 		return fn()
@@ -296,19 +290,16 @@ func Span(ctx context.Context, name string, fn func() error, attrs ...Attr) erro
 // WithProcess is like Step but also records attrs on the emitted process.
 func WithProcess(ctx context.Context, name string, fn func() error, attrs ...Attr) error {
 	return step(ctx, name, fn, attrs)
-	return Step(ctx, name, fn, attrs...)
 }
 
 // WithGroup is like Phase but also records attrs on the emitted group.
 func WithGroup(ctx context.Context, name string, fn func() error, attrs ...Attr) error {
 	return phase(ctx, name, fn, attrs)
-	return Phase(ctx, name, fn, attrs...)
 }
 
 // WithTimer is like Span but also records attrs on the emitted timer.
 func WithTimer(ctx context.Context, name string, fn func() error, attrs ...Attr) error {
 	return span(ctx, name, fn, attrs)
-	return Span(ctx, name, fn, attrs...)
 }
 
 // mergeHandleAttrs combines attributes captured at Start* time with those

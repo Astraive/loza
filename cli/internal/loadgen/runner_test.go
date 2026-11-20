@@ -244,11 +244,8 @@ func TestRunBatchesEventsWithPositiveBatchSize(t *testing.T) {
 	defer mu.Unlock()
 	if requests != 2 {
 		t.Fatalf("expected 2 batched requests, got %d", requests)
-	"net/http"
-	"net/http/httptest"
-	"strings"
-	"testing"
-)
+	}
+}
 
 // TestRunnerConfigValidateRejectsInvalidNumbers covers the divide-by-zero at
 // runner.go:32 (Workers == 0) and other numeric inputs that would panic or

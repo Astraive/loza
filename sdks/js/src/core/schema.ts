@@ -9,30 +9,6 @@ export interface Schema {
 
 export type SchemaFunc = (view: EventView) => Record<string, any>;
 
-/**
- * Key segments that can escape a plain object through its prototype chain.
- * Rejecting them anywhere in a path prevents writes to Object.prototype and
- * writes through an object's inherited `__proto__` setter.
- */
-const UNSAFE_KEY_SEGMENTS = new Set(['__proto__', 'constructor', 'prototype']);
-
-/** Set a value in a nested object using dot-separated key path. */
-function setNestedValue(obj: Record<string, any>, key: string, value: any): void {
-  const parts = key.split('.');
-  // Attr keys are untrusted: never traverse into or write a prototype-related segment.
-  if (parts.some(part => UNSAFE_KEY_SEGMENTS.has(part))) return;
-
-  let current = obj;
-  for (let i = 0; i < parts.length - 1; i++) {
-    const part = parts[i];
-    // Own-property check (not `in`) keeps inherited keys out of traversal;
-    // the denylist above blocks the only object-valued inherited key, `__proto__`.
-    if (!Object.hasOwn(current, part) || typeof current[part] !== 'object' || current[part] === null) {
-      current[part] = {};
-    }
-    current = current[part];
-  }
-  current[parts[parts.length - 1]] = value;
 /** Set a value in a nested object using dot-separated key path (prototype-pollution safe). */
 function setNestedValue(obj: Record<string, any>, key: string, value: any): void {
   setSafePath(obj, key, value);

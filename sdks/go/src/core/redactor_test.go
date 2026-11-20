@@ -286,6 +286,9 @@ func TestHashKeysWithEmptySecretUsesEphemeralKey(t *testing.T) {
 	want, _ := HashKeys("user.id").Redact("user.id", plaintext)
 	if got != want {
 		t.Fatalf("empty secret digest = %q, want ephemeral digest %q", got, want)
+	}
+}
+
 func TestRedactPatternsSkipsInvalidPatternWithoutPanic(t *testing.T) {
 	attrs := []Attr{
 		String("secret_token", "value"),

@@ -502,6 +502,26 @@ func TestHTTPBatchSink_OnErrorReceivesCollectorResponseFailure(t *testing.T) {
 			default:
 			}
 		},
+	})
+	if err != nil {
+		t.Fatalf("HTTPBatchSink() error = %v", err)
+	}
+	defer sink.Close(context.Background())
+
+	if err := sink.WriteEvent(context.Background(), []byte(`{"event":"test"}`), nil); err != nil {
+		t.Fatalf("WriteEvent() error = %v", err)
+	}
+
+	select {
+	case got := <-errCh:
+		if !strings.Contains(got.Error(), "schema validation failed") {
+			t.Fatalf("OnError error = %q, want containing %q", got.Error(), "schema validation failed")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("OnError was not called for the rejected batch")
+	}
+}
+
 type contextCaptureRoundTripper struct {
 	requestContexts chan context.Context
 }
@@ -524,18 +544,6 @@ func TestHTTPBatchSink_WriteEventPropagatesContextCancellation(t *testing.T) {
 		t.Fatalf("HTTPBatchSink() error = %v", err)
 	}
 	defer sink.Close(context.Background())
-
-	if err := sink.WriteEvent(context.Background(), []byte(`{"event":"test"}`), nil); err != nil {
-		t.Fatalf("WriteEvent() error = %v", err)
-	}
-
-	select {
-	case got := <-errCh:
-		if !strings.Contains(got.Error(), "schema validation failed") {
-			t.Fatalf("OnError error = %q, want containing %q", got.Error(), "schema validation failed")
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("OnError was not called for the rejected batch")
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer sink.Close(ctx) // canceled by the time it runs, so cleanup cannot re-send

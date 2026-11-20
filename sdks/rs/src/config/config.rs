@@ -560,9 +560,12 @@ impl Config {
         // loza:// DSN with tls=false resolves to an http endpoint and is
         // rejected here whenever credentials are present.
         let has_credentials = self.basic_username.is_some() || !self.api_key.is_empty();
+        // Loopback traffic never leaves the host, so plaintext HTTP is safe
+        // there without requiring an explicit `insecure` opt-in. Only reject
+        // credentialed plaintext HTTP when the collector is not loopback.
         if has_credentials
             && self.collector_endpoint.starts_with("http://")
-            && (!self.insecure || !is_local_endpoint(&self.collector_endpoint))
+            && !is_local_endpoint(&self.collector_endpoint)
         {
             return Err(crate::errors::LozaError::Validation(
                 crate::errors::ValidationError::new(

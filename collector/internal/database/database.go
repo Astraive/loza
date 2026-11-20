@@ -4,12 +4,13 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
 	"reflect"
 	"strings"
 	"time"
+
+	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // Metadata is safe to expose through the Collector API.
@@ -54,7 +55,6 @@ func normalizeResultValue(value any) any {
 	return value
 }
 
-func collectRows(columns []string, next func() bool, scan func(...any) error, rowErr func() error, close func(), limit int) (Result, error) {
 // rowScanner allocates scan destinations for one row, scans into them, and
 // returns the backend-neutral values. Each backend decides how its
 // destinations are typed; collectRows owns iteration, normalization, limits

@@ -204,7 +204,7 @@ func TestReconstructReturnsGraphBuildError(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	srv := NewGRPCServer(cfg, stor, redaction.Config{})
+	srv := NewGRPCServer(cfg, stor)
 
 	resp, err := srv.Reconstruct(context.Background(), &lozav1.ReconstructRequest{IncidentId: incidentID})
 

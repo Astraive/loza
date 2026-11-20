@@ -3,7 +3,10 @@ package eventbus
 import (
 	"testing"
 
+	"github.com/astraive/loza/cortex/internal/metrics"
 	"github.com/astraive/loza/cortex/internal/models"
+	"github.com/prometheus/client_golang/prometheus/testutil"
+	"github.com/stretchr/testify/require"
 )
 
 // bufferedEvents drains a subscription channel without blocking. Publish
@@ -141,11 +144,7 @@ func TestUnsubscribeRemovesOnlyMatchingSubscription(t *testing.T) {
 		t.Fatalf("remaining subscriber received %d event(s); want 1", got)
 	}
 	bus.Unsubscribe("incident-A", chB)
-	"github.com/astraive/loza/cortex/internal/metrics"
-	"github.com/astraive/loza/cortex/internal/models"
-	"github.com/prometheus/client_golang/prometheus/testutil"
-	"github.com/stretchr/testify/require"
-)
+}
 
 func droppedCount(subscription string) float64 {
 	return testutil.ToFloat64(metrics.EventBusDroppedEvents.WithLabelValues(subscription))
@@ -161,7 +160,16 @@ func TestPublishFullSubscriberBuffersAreCounted(t *testing.T) {
 	bus := New().WithBufferSize(1)
 	wildcard := bus.Subscribe("")
 	incident := bus.Subscribe("incident-1")
-	service := bus.Subscribe("svc-1")
+
+	// Subscribe only creates wildcard and incident subscriptions; the public
+	// API maps a non-empty filter into the incident namespace. Publish still
+	// has a distinct service namespace, so register a channel there directly
+	// to exercise the service drop path with namespaced keys.
+	service := make(chan *models.Event, 1)
+	serviceKey := serviceKeyPrefix + "svc-1"
+	bus.mu.Lock()
+	bus.subscribers[serviceKey] = append(bus.subscribers[serviceKey], service)
+	bus.mu.Unlock()
 
 	event := &models.Event{
 		ID:         "event-1",
@@ -182,6 +190,8 @@ func TestPublishFullSubscriberBuffersAreCounted(t *testing.T) {
 	// drop paths rather than disappearing without a trace.
 	bus.Publish(event)
 	require.Len(t, wildcard, 1, "no event may be appended to a full buffer")
+	require.Len(t, incident, 1, "no event may be appended to a full buffer")
+	require.Len(t, service, 1, "no event may be appended to a full buffer")
 	require.Equal(t, baselineWildcard+1, droppedCount("wildcard"))
 	require.Equal(t, baselineIncident+1, droppedCount("incident"))
 	require.Equal(t, baselineService+1, droppedCount("service"))
@@ -198,22 +208,27 @@ func TestPublishWithBufferCapacityDoesNotCountDrops(t *testing.T) {
 
 	require.Len(t, ch, 1)
 	require.Equal(t, baseline, droppedCount("wildcard"))
-import "testing"
+}
 
 // TestUnsubscribeRemovesEmptyFilterKey verifies that removing the last channel
 // for a filter deletes the map key instead of leaving an empty slice behind.
 func TestUnsubscribeRemovesEmptyFilterKey(t *testing.T) {
 	bus := New()
 
+	// Subscriptions live under namespaced keys, never under the raw filter.
+	key := incidentKeyPrefix + "incident-1"
 	ch := bus.Subscribe("incident-1")
-	if _, ok := bus.subscribers["incident-1"]; !ok {
-		t.Fatal("expected filter key to exist after Subscribe")
+	if _, ok := bus.subscribers[key]; !ok {
+		t.Fatal("expected namespaced filter key to exist after Subscribe")
+	}
+	if _, ok := bus.subscribers["incident-1"]; ok {
+		t.Fatal("did not expect an un-namespaced filter key")
 	}
 
 	bus.Unsubscribe("incident-1", ch)
 
-	if _, ok := bus.subscribers["incident-1"]; ok {
-		t.Fatal("expected filter key to be removed after last Unsubscribe")
+	if _, ok := bus.subscribers[key]; ok {
+		t.Fatal("expected namespaced filter key to be removed after last Unsubscribe")
 	}
 	if got := bus.SubscriberCount(); got != 0 {
 		t.Fatalf("SubscriberCount() = %d, want 0", got)
@@ -225,17 +240,18 @@ func TestUnsubscribeRemovesEmptyFilterKey(t *testing.T) {
 func TestUnsubscribeKeepsFilterKeyWithRemainingSubscribers(t *testing.T) {
 	bus := New()
 
+	key := incidentKeyPrefix + "incident-1"
 	first := bus.Subscribe("incident-1")
 	second := bus.Subscribe("incident-1")
 
 	bus.Unsubscribe("incident-1", first)
 
-	subs, ok := bus.subscribers["incident-1"]
+	subs, ok := bus.subscribers[key]
 	if !ok {
-		t.Fatal("expected filter key to remain while subscribers exist")
+		t.Fatal("expected namespaced filter key to remain while subscribers exist")
 	}
 	if len(subs) != 1 {
-		t.Fatalf("len(subscribers[incident-1]) = %d, want 1", len(subs))
+		t.Fatalf("len(subscribers[%s]) = %d, want 1", key, len(subs))
 	}
 	if subs[0] != second {
 		t.Fatal("expected remaining subscriber to be the second channel")
@@ -245,8 +261,8 @@ func TestUnsubscribeKeepsFilterKeyWithRemainingSubscribers(t *testing.T) {
 	}
 
 	bus.Unsubscribe("incident-1", second)
-	if _, ok := bus.subscribers["incident-1"]; ok {
-		t.Fatal("expected filter key to be removed after last Unsubscribe")
+	if _, ok := bus.subscribers[key]; ok {
+		t.Fatal("expected namespaced filter key to be removed after last Unsubscribe")
 	}
 }
 
@@ -255,15 +271,17 @@ func TestUnsubscribeKeepsFilterKeyWithRemainingSubscribers(t *testing.T) {
 func TestUnsubscribeOnlyRemovesEmptiedFilterKey(t *testing.T) {
 	bus := New()
 
+	incidentKey := incidentKeyPrefix + "incident-1"
+	wildcardSubKey := wildcardKey
 	incidentCh := bus.Subscribe("incident-1")
 	wildcardCh := bus.Subscribe("")
 
 	bus.Unsubscribe("incident-1", incidentCh)
 
-	if _, ok := bus.subscribers["incident-1"]; ok {
-		t.Fatal("expected emptied filter key to be removed")
+	if _, ok := bus.subscribers[incidentKey]; ok {
+		t.Fatal("expected emptied namespaced filter key to be removed")
 	}
-	if _, ok := bus.subscribers[""]; !ok {
+	if _, ok := bus.subscribers[wildcardSubKey]; !ok {
 		t.Fatal("expected wildcard filter key to remain")
 	}
 	if got := bus.SubscriberCount(); got != 1 {

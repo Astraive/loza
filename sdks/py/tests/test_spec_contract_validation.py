@@ -41,6 +41,8 @@ def test_missing_event_id_reports_single_alias_agnostic_error():
 def test_event_id_snake_case_alias_satisfies_requirement():
     valid, errors = validate_event_map(
         {
+            "schema_version": "v1",
+            "event_version": "v1",
             "event_id": "evt_1",
             "timestamp": "2026-01-01T00:00:00Z",
             "service": "checkout",
@@ -58,7 +60,12 @@ def test_each_required_field_is_enforced(missing: str) -> None:
     del event[missing]
     valid, errors = validate_event_map(event)
     assert valid is False
-    assert f"missing required field: {missing}" in errors
+    expected = (
+        "missing required field: event_id (or eventId)"
+        if missing == "event_id"
+        else f"missing required field: {missing}"
+    )
+    assert expected in errors
 
 
 @pytest.mark.parametrize("missing", ["schema_version", "event_version"])
@@ -84,6 +91,8 @@ def test_canonical_camel_case_aliases_satisfy_required_fields() -> None:
 def test_event_id_camel_case_alias_satisfies_requirement():
     valid, errors = validate_event_map(
         {
+            "schemaVersion": "v1",
+            "eventVersion": "v1",
             "eventId": "evt_1",
             "timestamp": "2026-01-01T00:00:00Z",
             "service": "checkout",

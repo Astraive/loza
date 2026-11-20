@@ -2,6 +2,7 @@ package s3
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -232,14 +233,8 @@ func TestCloseReturnsWhenPeriodicFlushStalls(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("Close hung while a periodic flush was stalled")
-	"errors"
-	"net/http"
-	"testing"
-
-	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/credentials"
-	"github.com/aws/aws-sdk-go-v2/service/s3"
-)
+	}
+}
 
 var errSimulatedPut = errors.New("simulated s3 put failure")
 
@@ -252,7 +247,7 @@ func (failingHTTPClient) Do(*http.Request) (*http.Response, error) {
 // TestCloseReturnsFlushErrorOnEveryCall reproduces the case where the final
 // flush fails: the error must be reported to the first and every later caller.
 func TestCloseReturnsFlushErrorOnEveryCall(t *testing.T) {
-	client := s3.NewFromConfig(aws.Config{
+	client := awss3.NewFromConfig(aws.Config{
 		Region:      "us-east-1",
 		Credentials: credentials.NewStaticCredentialsProvider("id", "secret", ""),
 		HTTPClient:  failingHTTPClient{},

@@ -121,7 +121,6 @@ func (s *sink) notifyDropped(dropped int) {
 	}
 }
 
-func (s *sink) WriteEvent(_ context.Context, encoded []byte, _ *loza.Event) error {
 // enforceBufferLimitLocked drops the oldest buffered events until the buffer
 // fits MaxBufferSize. The caller must hold s.mu. It returns the number dropped.
 func (s *sink) enforceBufferLimitLocked() int {
@@ -149,11 +148,6 @@ func (s *sink) WriteEvent(ctx context.Context, encoded []byte, _ *loza.Event) er
 	cp := make([]byte, len(encoded))
 	copy(cp, encoded)
 	s.buf = append(s.buf, cp)
-	dropped := s.trimBuf()
-	flush := len(s.buf) >= s.cfg.BatchSize
-	s.mu.Unlock()
-	s.notifyDropped(dropped)
-	if flush {
 	dropped := s.enforceBufferLimitLocked()
 	flush := len(s.buf) >= s.cfg.BatchSize
 	s.mu.Unlock()
@@ -215,13 +209,8 @@ func (s *sink) Flush(ctx context.Context) error {
 		s.mu.Lock()
 		dropped = s.retainFailed(batch)
 		s.mu.Unlock()
-		// Requeue the failed batch ahead of newer events, but keep the total
-		// bounded so repeated collector failures cannot grow the buffer forever.
-		batch = append(batch, s.buf...)
-		s.buf = batch
-		dropped := s.enforceBufferLimitLocked()
-		s.mu.Unlock()
-		s.notifyDrops("buffer_overflow_drop_oldest", dropped)
+		s.flushMu.Unlock()
+		s.notifyDropped(dropped)
 		return err
 	}
 	s.flushMu.Unlock()

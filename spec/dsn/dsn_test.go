@@ -505,6 +505,11 @@ func TestParseAcceptsValidCollectorSlugs(t *testing.T) {
 			want := "https://host:443/collectors/" + slug + "/events"
 			if dsn.EventsURL != want {
 				t.Fatalf("EventsURL = %q, want %q", dsn.EventsURL, want)
+			}
+		})
+	}
+}
+
 // DNS hostnames are case-insensitive, so mixed/uppercase spellings of
 // localhost must take the same TLS/port defaults as lowercase "localhost".
 func TestParseLocalhostHostnameCaseInsensitive(t *testing.T) {

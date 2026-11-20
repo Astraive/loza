@@ -23,9 +23,9 @@ func TestGetReturnsZeroedBuffer(t *testing.T) {
 	// Use a controlled pool whose New always yields a dirty buffer, so Get must
 	// zero the storage itself regardless of whether sync.Pool hands back a
 	// recycled buffer or a freshly allocated one.
-	orig := BytePool
-	defer func() { BytePool = orig }()
-	BytePool = &sync.Pool{
+	orig := bytePool
+	defer func() { bytePool = orig }()
+	bytePool = &sync.Pool{
 		New: func() any {
 			b := make([]byte, 0, 16)
 			b = append(b, "SENTINEL"...)

@@ -40,11 +40,6 @@ export function lozaMiddleware(opts: ExpressMiddlewareOptions = {}) {
         loza.emit(ctx).catch(() => {});
       }
     };
-    // Scope downstream request handling to this event with run(). The context
-    // is restored when next() and its async children complete, so it cannot
-    // bleed into unrelated work or a later request.
-    runWithEvent(ctx, () => next());
-
     // Install the response hooks before invoking downstream code. A handler
     // that calls res.end() synchronously inside next() must be intercepted.
     const originalEnd = res.end;

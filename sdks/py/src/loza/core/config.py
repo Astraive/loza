@@ -296,13 +296,12 @@ class Config:
 
             host = (urlparse(self.collector_endpoint).hostname or "").lower()
             if host not in {"localhost", "127.0.0.1", "::1"}:
-                raise ValueError("collector basic auth requires HTTPS except for local endpoints")
+                raise ValueError("collector credentials require HTTPS except for local endpoints")
         from .http_client import _validate_auth_requires_https
 
         _validate_auth_requires_https(
             self.collector_endpoint.strip(), api_key=self.api_key, username=self.username, password=self.password
         )
-                raise ValueError("collector credentials require HTTPS except for local endpoints")
 
 
 def load_layered_config() -> Config:

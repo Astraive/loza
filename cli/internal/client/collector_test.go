@@ -352,10 +352,22 @@ func TestDLQItemHelpersEscapeIDInPath(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
 func TestAPIKeyAuthRequiresTLSForNonLocalHosts(t *testing.T) {
 	t.Setenv("LOZA_API_KEY", "lz_sec_live_key")
 	t.Setenv("LOZA_COLLECTOR_API_KEY", "")
 	t.Setenv("LOZA_CORTEX_API_KEY", "")
+	// Credentials are only attached to explicitly configured origins. Register
+	// the endpoints we expect to receive the key so this test exercises the
+	// TLS gate rather than the origin allowlist.
+	resetAllowedOrigins(t)
+	SetAllowedOrigins(
+		"https://collector.example/status",
+		"http://127.0.0.1:9308/status",
+		"http://localhost:9308/status",
+	)
 
 	for _, endpoint := range []string{"http://collector.example/status", "http://cortex.example/healthz"} {
 		req, err := http.NewRequest(http.MethodGet, endpoint, nil)
@@ -381,6 +393,9 @@ func TestAPIKeyAuthRequiresTLSForNonLocalHosts(t *testing.T) {
 		if got := req.Header.Get("Authorization"); got != "Bearer lz_sec_live_key" {
 			t.Fatalf("Authorization = %q for %s", got, endpoint)
 		}
+	}
+}
+
 type capturedRequest struct {
 	method      string
 	escapedPath string

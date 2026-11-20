@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	chdriver "github.com/ClickHouse/clickhouse-go/v2/lib/driver"
+	"github.com/stretchr/testify/require"
 )
 
 // countRows is a minimal database/sql driver that serves count rows with no
@@ -102,10 +103,10 @@ func TestCollectRowsHonorsLimitWithoutError(t *testing.T) {
 	result, err := collectRows(
 		columns,
 		func() bool { return index < len(values) },
-		func(dest ...any) error {
-			*(dest[0].(*any)) = values[index]
+		func() ([]any, error) {
+			value := values[index]
 			index++
-			return nil
+			return []any{value}, nil
 		},
 		func() error { return nil },
 		func() { closed = true },
@@ -204,13 +205,10 @@ func (r *stubClickHouseRows) Scan(dest ...any) error {
 			*d = b
 		default:
 			return fmt.Errorf("Scan column %d: unexpected destination %T", i, dest[i])
-	"errors"
-	"reflect"
-	"testing"
-
-	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
-	"github.com/stretchr/testify/require"
-)
+		}
+	}
+	return nil
+}
 
 // fakeColumnType is a minimal driver.ColumnType for exercising the
 // reflection-based ClickHouse scan path.
@@ -226,7 +224,7 @@ func (f fakeColumnType) DatabaseTypeName() string { return "String" }
 
 type fakeClickHouseRows struct {
 	columns []string
-	types   []driver.ColumnType
+	types   []chdriver.ColumnType
 	data    [][]any
 	pos     int
 	rowErr  error
@@ -234,8 +232,8 @@ type fakeClickHouseRows struct {
 	closed  bool
 }
 
-func (f *fakeClickHouseRows) Columns() []string                { return f.columns }
-func (f *fakeClickHouseRows) ColumnTypes() []driver.ColumnType { return f.types }
+func (f *fakeClickHouseRows) Columns() []string                  { return f.columns }
+func (f *fakeClickHouseRows) ColumnTypes() []chdriver.ColumnType { return f.types }
 
 func (f *fakeClickHouseRows) Next() bool {
 	if f.pos < len(f.data) {
@@ -322,18 +320,26 @@ func TestCollectRowsNormalizesValues(t *testing.T) {
 	result, err := collectRows(
 		[]string{"raw", "text"},
 		func() bool { pos++; return pos < len(data) },
-		func(dest ...any) error {
-			*(dest[0].(*any)) = data[pos][0]
-			*(dest[1].(*any)) = data[pos][1]
-			return nil
+		func() ([]any, error) {
+			return []any{data[pos][0], data[pos][1]}, nil
 		},
+		func() error { return nil },
+		func() {},
+		0,
+	)
+	if err != nil {
+		t.Fatalf("collectRows: %v", err)
+	}
+	assertResultRows(t, result.Rows, [][]any{{"bytes-value", "text-value"}})
+}
+
 func (f *fakeClickHouseRows) Err() error   { return f.rowErr }
 func (f *fakeClickHouseRows) Close() error { f.closed = true; return nil }
 
 func clickHouseFixture(rowErr error) *fakeClickHouseRows {
 	return &fakeClickHouseRows{
 		columns: []string{"id", "payload"},
-		types: []driver.ColumnType{
+		types: []chdriver.ColumnType{
 			fakeColumnType{name: "id", scanType: reflect.TypeOf(int64(0))},
 			fakeColumnType{name: "payload", scanType: reflect.TypeOf([]byte(nil))},
 		},
@@ -411,11 +417,10 @@ func TestCollectRowsNormalizesBytes(t *testing.T) {
 		func() {},
 		0,
 	)
-	if err != nil {
-		t.Fatalf("collectRows: %v", err)
-	}
-	assertResultRows(t, result.Rows, [][]any{{"bytes-value", "text-value"}})
-import "testing"
+	require.NoError(t, err)
+	require.Equal(t, "value", got.Rows[0][0])
+	require.IsType(t, "", got.Rows[0][0])
+}
 
 func TestValidateQuery(t *testing.T) {
 	t.Parallel()
@@ -450,7 +455,4 @@ func TestValidateQuery(t *testing.T) {
 			}
 		})
 	}
-	require.NoError(t, err)
-	require.Equal(t, "value", got.Rows[0][0])
-	require.IsType(t, "", got.Rows[0][0])
 }

@@ -33,7 +33,8 @@ type kafkaBus struct {
 
 // producerOpts builds the producer options used by New. Keeping the option
 // construction separate lets config validation be exercised without a broker.
-func producerOpts(kc eventbus.KafkaConfig) []kgo.Opt {
+func producerOpts(kc eventbus.KafkaConfig) []kgo.Opt { return clientOpts(kc) }
+
 // clientOpts builds the franz-go client options from the event bus Kafka config.
 func clientOpts(kc eventbus.KafkaConfig) []kgo.Opt {
 	opts := []kgo.Opt{
@@ -97,7 +98,6 @@ func New(_ context.Context, cfg eventbus.Config) (eventbus.Bus, error) {
 		kc.ConsumerGroup = "loza-worker"
 	}
 
-	client, err := kgo.NewClient(producerOpts(kc)...)
 	client, err := kgo.NewClient(clientOpts(kc)...)
 	if err != nil {
 		return nil, fmt.Errorf("eventbus/kafka: client: %w", err)

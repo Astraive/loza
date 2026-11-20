@@ -5,8 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
-	"net"
 	"math/rand"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -284,6 +284,9 @@ func TestProcessorRedisDedupeUsesCallerDeadline(t *testing.T) {
 	}
 	if elapsed > 2*time.Second {
 		t.Fatalf("Process blocked for %v despite a 200ms caller deadline", elapsed)
+	}
+}
+
 // alwaysFailSink returns an error on every write so that all retry attempts
 // (and therefore retry jitter) are exercised on every Process call.
 type alwaysFailSink struct {

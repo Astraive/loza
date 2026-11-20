@@ -82,14 +82,6 @@ def test_asgi_middleware_emits_error_event_when_route_resolver_raises() -> None:
         sink = loza.MemorySink()
         loza.Configure(loza.Test("checkout").with_sink(sink))
         middleware = Middleware(app, service="checkout", route_resolver=broken_resolver)
-def test_asgi_middleware_records_ordinary_exception_without_panic_flag() -> None:
-    async def run() -> None:
-        async def app(scope, receive, send):
-            await send({"type": "http.response.start", "status": "not-an-int", "headers": []})
-
-        sink = loza.MemorySink()
-        loza.Configure(loza.Test("checkout").with_sink(sink))
-        middleware = Middleware(app, service="checkout")
 
         async def send(message: dict) -> None:
             return None
@@ -101,8 +93,6 @@ def test_asgi_middleware_records_ordinary_exception_without_panic_flag() -> None
                     "method": "GET",
                     "path": "/boom",
                     "headers": [(b"user-agent", b"pytest")],
-                    "path": "/health",
-                    "headers": [],
                     "client": ("127.0.0.1", 1234),
                 },
                 _receive,
@@ -123,6 +113,34 @@ def test_asgi_middleware_records_ordinary_exception_without_panic_flag() -> None
         assert payload["attrs"]["panic"] is True
         assert payload["http"]["path"] == "/boom"
         assert payload["http"]["route"] == "/boom"
+
+    asyncio.run(run())
+
+
+def test_asgi_middleware_records_ordinary_exception_without_panic_flag() -> None:
+    async def run() -> None:
+        async def app(scope, receive, send):
+            await send({"type": "http.response.start", "status": "not-an-int", "headers": []})
+
+        sink = loza.MemorySink()
+        loza.Configure(loza.Test("checkout").with_sink(sink))
+        middleware = Middleware(app, service="checkout")
+
+        async def send(message: dict) -> None:
+            return None
+
+        try:
+            await middleware(
+                {
+                    "type": "http",
+                    "method": "GET",
+                    "path": "/boom",
+                    "headers": [],
+                    "client": ("127.0.0.1", 1234),
+                },
+                _receive,
+                send,
+            )
         except ValueError as exc:
             assert "invalid literal for int()" in str(exc)
         else:  # pragma: no cover

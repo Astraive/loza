@@ -1,8 +1,11 @@
 package core
 
 import (
+	"encoding/hex"
 	"strconv"
+	"strings"
 	"testing"
+	"time"
 )
 
 // uuidV7Prefix extracts the (unix_ts_ms, sequence) pair that determines ID
@@ -61,11 +64,8 @@ func TestUUIDv7SequenceOverflowContinuesInNewMillisecond(t *testing.T) {
 	}
 	if first >= second {
 		t.Fatalf("IDs not monotonically increasing after overflow: %q >= %q", first, second)
-	"encoding/hex"
-	"strings"
-	"testing"
-	"time"
-)
+	}
+}
 
 // decodeUUIDv7 returns the 48-bit timestamp and 12-bit sequence encoded in a
 // UUIDv7 string produced by formatUUID.

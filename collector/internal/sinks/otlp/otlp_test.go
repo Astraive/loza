@@ -117,6 +117,9 @@ func assertResourceAttribute(t *testing.T, attrs map[string]string, key, want st
 	t.Helper()
 	if got := attrs[key]; got != want {
 		t.Fatalf("resource attribute %q: got %q, want %q", key, got, want)
+	}
+}
+
 type shutdownSpyExporter struct {
 	shutdownCalled bool
 	shutdownCtx    context.Context
@@ -160,6 +163,9 @@ func TestNewShutsDownExporterWhenResourceCreationFails(t *testing.T) {
 	}
 	if spy.shutdownCtx != ctx {
 		t.Fatalf("expected Shutdown to receive the provided context")
+	}
+}
+
 func TestResolveConfigIgnoresGRPCReconnectionPeriodForHTTP(t *testing.T) {
 	// GRPCReconnectionPeriod is only consumed by the gRPC exporter. An HTTP-only
 	// configuration must not be rejected for it, and the value must not leak

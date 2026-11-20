@@ -33,12 +33,6 @@ func (e *rejectionError) Error() string {
 	return fmt.Sprintf("loadgen post rejected with %d", e.statusCode)
 }
 
-func Run(ctx context.Context, cfg RunnerConfig) (Report, error) {
-	if cfg.Workers <= 0 {
-		return Report{}, fmt.Errorf("loadgen: workers must be greater than zero, got %d", cfg.Workers)
-	}
-	if cfg.BatchSize <= 0 {
-		return Report{}, fmt.Errorf("loadgen: batch size must be positive, got %d", cfg.BatchSize)
 // Validate checks numeric inputs before a run is started. Running with these
 // values would otherwise cause panics (for example dividing by zero workers)
 // or nonsensical results.

@@ -19,16 +19,14 @@ type Logger struct {
 func New(level, format string) *Logger {
 	// Resolve the level but keep it instance-scoped: calling New must not
 	// silently change the verbosity of every other zerolog logger in the
-	// process, which contradicts the per-instance Logger abstraction.
-	logLevel := parseLevel(level)
-	// Set log level. An unknown level is reported before falling back to the
-	// default so that a typo in configuration is never silently downgraded.
+	// process, which contradicts the per-instance Logger abstraction. An
+	// unknown level is reported before falling back to the default so that a
+	// typo in configuration is never silently downgraded.
 	logLevel, err := parseLevel(level)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "warning: %v; falling back to info level\n", err)
 		logLevel = zerolog.InfoLevel
 	}
-	zerolog.SetGlobalLevel(logLevel)
 
 	// Configure output format
 	var output io.Writer = os.Stdout

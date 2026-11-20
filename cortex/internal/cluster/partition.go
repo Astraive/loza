@@ -49,7 +49,6 @@ func NewPartitioner(nodeCount, nodeID int) *Partitioner {
 	if nodeID >= nodeCount {
 		nodeID = nodeCount - 1
 	}
-	return &Partitioner{
 	p := &Partitioner{
 		nodeCount: nodeCount,
 		nodeID:    nodeID,

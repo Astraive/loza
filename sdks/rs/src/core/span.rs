@@ -88,11 +88,6 @@ impl SpanContext {
         {
             return None;
         }
-        // W3C Trace Context reserves version `ff` and forbids all-zero
-        // trace-id / span-id values; such headers are spec-invalid.
-        if version.eq_ignore_ascii_case("ff")
-            || trace_id.bytes().all(|byte| byte == b'0')
-            || span_id.bytes().all(|byte| byte == b'0')
         // W3C Trace Context: `ff` is a reserved/invalid version, and the
         // all-zero trace-id and span-id are explicitly invalid.
         if version.eq_ignore_ascii_case("ff")
@@ -190,6 +185,9 @@ mod tests {
         assert_eq!(parts[1], TRACE_ID);
         assert_ne!(parts[2], SPAN_ID);
         assert_eq!(parts[3], "00");
+    }
+
+    #[test]
     fn accepts_valid_traceparent() {
         let ctx = SpanContext::from_traceparent(&format!("00-{TRACE_ID}-{SPAN_ID}-01"))
             .expect("valid traceparent should parse");
