@@ -122,7 +122,6 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 mod tests {
     use super::*;
     use signature::{Signature, SymptomClass};
-    use signature::Signature;
     use std::cmp::Ordering;
 
     #[test]

@@ -69,6 +69,7 @@ func (*inflatedReaderFrom) ReadFrom(r io.Reader) (int64, error) {
 // writes fewer bytes to the response (e.g. a compressing writer). The bytes
 // read from the source (cr.n) therefore exceed the bytes actually written (n).
 type shrinkingReaderFrom struct{ *baseTestWriter }
+
 func (*shrinkingReaderFrom) ReadFrom(r io.Reader) (int64, error) {
 	_, _ = io.Copy(io.Discard, r)
 	return 3, nil
@@ -77,6 +78,7 @@ func (*shrinkingReaderFrom) ReadFrom(r io.Reader) (int64, error) {
 // zeroReportingReaderFrom models a ReaderFrom implementation that consumes the
 // source but does not report a byte count, exercising the fallback to cr.n.
 type zeroReportingReaderFrom struct{ *baseTestWriter }
+
 func (*zeroReportingReaderFrom) ReadFrom(r io.Reader) (int64, error) {
 	_, _ = io.Copy(io.Discard, r)
 	return 0, nil
@@ -173,6 +175,9 @@ func TestResponseWriterReadFromFallsBackToSourceCountWhenWriterReportsZero(t *te
 	}
 	if base.bytes != 10 {
 		t.Fatalf("response bytes = %d, want 10 (fallback to source count)", base.bytes)
+	}
+}
+
 // TestReadFromFallbackReachability pins down the contract documented on
 // responseWriter.readFrom: the io.Copy fallback is unreachable in production
 // because newResponseWriter only exposes ReadFrom for underlying writers that
@@ -198,7 +203,7 @@ func TestReadFromFallbackReachability(t *testing.T) {
 	if n != int64(len(payload)) {
 		t.Fatalf("fallback readFrom n = %d, want %d", n, len(payload))
 	}
-	if direct.bytes != len(payload) {
+	if direct.bytes != int64(len(payload)) {
 		t.Fatalf("fallback readFrom bytes = %d, want %d", direct.bytes, len(payload))
 	}
 	if !direct.wroteHeader {

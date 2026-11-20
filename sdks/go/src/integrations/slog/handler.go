@@ -85,19 +85,13 @@ func (h *SlogHandler) Handle(ctx context.Context, rec slog.Record) error {
 	for _, seg := range h.segments {
 		node := root.nodeAt(seg.groups)
 		for _, a := range seg.attrs {
-			node.attrs = append(node.attrs, h.toAttr(a))
+			node.attrs = append(node.attrs, h.toAttr(a)...)
 		}
-	attrs := make([]loza.Attr, 0, rec.NumAttrs()+len(h.attrs))
-	for _, a := range h.attrs {
-		attrs = append(attrs, h.toAttr(a)...)
-		attrs = h.appendAttr(attrs, a)
 	}
 
 	var recordAttrs []slog.Attr
 	rec.Attrs(func(a slog.Attr) bool {
 		recordAttrs = append(recordAttrs, a)
-		attrs = append(attrs, h.toAttr(a)...)
-		attrs = h.appendAttr(attrs, a)
 		return true
 	})
 	if len(recordAttrs) > 0 {
@@ -105,7 +99,7 @@ func (h *SlogHandler) Handle(ctx context.Context, rec slog.Record) error {
 		// chain of WithGroup calls, i.e. the handler's current stack.
 		node := root.nodeAt(h.groups)
 		for _, a := range recordAttrs {
-			node.attrs = append(node.attrs, h.toAttr(a))
+			node.attrs = append(node.attrs, h.toAttr(a)...)
 		}
 	}
 	attrs := root.flatten()
@@ -159,20 +153,6 @@ func (h *SlogHandler) WithGroup(name string) slog.Handler {
 // because slog semantics require a group with an empty key to be inlined into
 // the enclosing attr list rather than wrapped in a nameless group.
 func (h *SlogHandler) toAttr(a slog.Attr) []loza.Attr {
-// appendAttr converts a slog.Attr and appends it to dst. Following slog
-// semantics, groups with an empty key are inlined: their children are appended
-// directly to dst instead of being wrapped in a loza group with an empty key.
-func (h *SlogHandler) appendAttr(dst []loza.Attr, a slog.Attr) []loza.Attr {
-	if a.Key == "" && a.Value.Kind() == slog.KindGroup {
-		for _, child := range a.Value.Group() {
-			dst = h.appendAttr(dst, child)
-		}
-		return dst
-	}
-	return append(dst, h.toAttr(a))
-}
-
-func (h *SlogHandler) toAttr(a slog.Attr) loza.Attr {
 	key := a.Key
 	v := a.Value
 	switch v.Kind() {
@@ -181,7 +161,6 @@ func (h *SlogHandler) toAttr(a slog.Attr) loza.Attr {
 		nested := make([]loza.Attr, 0, len(children))
 		for _, child := range children {
 			nested = append(nested, h.toAttr(child)...)
-			nested = h.appendAttr(nested, child)
 		}
 		if key == "" {
 			return nested

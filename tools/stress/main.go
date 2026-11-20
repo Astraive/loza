@@ -147,13 +147,7 @@ func runLoadTest(name string, concurrency int, duration time.Duration, reqFunc f
 					return
 				default:
 					r := reqFunc()
-					atomic.AddInt64(&totalReqs, 1)
 					submitResult(results, r)
-					select {
-					case results <- r:
-					default:
-						// Drop if channel full
-					}
 				}
 			}
 		}()
@@ -181,9 +175,6 @@ func runLoadTest(name string, concurrency int, duration time.Duration, reqFunc f
 		Name:        name,
 		Concurrency: concurrency,
 		Duration:    duration,
-		// Every generated request must be collected; any gap is an explicit,
-		// reported drop rather than a silent one.
-		DroppedReqs: atomic.LoadInt64(&totalReqs) - int64(len(collected)),
 		StatusCodes: make(map[int]int64),
 	}
 
@@ -277,12 +268,11 @@ func writeAndReportJSONResults(out io.Writer, path string, results map[string]an
 
 func main() {
 	outputPath := flag.String("output", defaultOutputPath, "path to write the JSON results (relative to the current directory)")
+	jsonOutputPath := flag.String("json-output", defaultJSONOutputPath, "path to write the JSON stress test results")
 	flag.Parse()
 
 	// Limit OS threads on Windows to avoid thread exhaustion
 	runtime.GOMAXPROCS(32)
-	jsonOutputPath := flag.String("json-output", defaultJSONOutputPath, "path to write the JSON stress test results")
-	flag.Parse()
 	collectorURL := "http://127.0.0.1:9308"
 	cortexURL := "http://127.0.0.1:9312"
 	// Use connection pooling to avoid Windows thread exhaustion
@@ -843,30 +833,28 @@ func main() {
 
 	// Write JSON results to the configured path, reporting failures honestly.
 	results := map[string]any{
-	fmt.Printf("Error Rate:     %.4f%%\n", float64(totalErrors)/float64(totalReqs)*100)
-
-	// Write JSON results
-	jsonData, _ := json.MarshalIndent(map[string]any{
 		"date":         time.Now().Format(time.RFC3339),
 		"target":       "localhost",
 		"collector":    collectorURL,
 		"cortex":       cortexURL,
 		"total_reqs":   totalReqs,
 		"total_errors": totalErrors,
-		"error_rate":   float64(totalErrors) / float64(totalReqs) * 100,
+		"error_rate":   errorRate(totalErrors, totalReqs) * 100,
 		"tests":        jsonResults,
 	}
+	jsonData, err := json.MarshalIndent(results, "", "  ")
+	if err != nil {
+		fmt.Printf("\nFailed to encode JSON results: %v\n", err)
+		os.Exit(1)
+	}
+	if err := writeResultsJSON(*outputPath, jsonData); err != nil {
+		fmt.Printf("\nFailed to write JSON results to %s: %v\n", *outputPath, err)
+		os.Exit(1)
+	}
+	fmt.Printf("\nJSON results written to %s\n", *outputPath)
 	if !writeAndReportJSONResults(os.Stdout, *jsonOutputPath, results) {
 		os.Exit(1)
 	}
-		"error_rate":  errorRate(totalErrors, totalReqs) * 100,
-		"tests":       jsonResults,
-	}, "", "  ")
-	if err := writeResultsJSON(*outputPath, jsonData); err != nil {
-		fmt.Printf("\nFailed to write JSON results to %s: %v\n", *outputPath, err)
-		return
-	}
-	fmt.Printf("\nJSON results written to %s\n", *outputPath)
 }
 
 // writeResultsJSON writes stress-test results to path, creating parent

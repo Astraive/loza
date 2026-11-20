@@ -3,14 +3,15 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"math"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
-	"net/http"
-	"go/ast"
-	"go/parser"
-	"go/token"
 	"testing"
 	"time"
 )
@@ -161,6 +162,9 @@ func TestRunLoadTestNoDroppedResults(t *testing.T) {
 	}
 	if tr.SuccessReqs != got {
 		t.Fatalf("SuccessReqs = %d, want %d", tr.SuccessReqs, got)
+	}
+}
+
 // When every measured duration is at or above the old one-hour sentinel, the
 // reported minimum must be the real minimum, never the sentinel itself.
 func TestMinLatencyNotReportedAsSentinel(t *testing.T) {
@@ -204,6 +208,9 @@ func TestMinLatencyTracksSmallestPositiveDuration(t *testing.T) {
 	})
 	if tr.MinLatency != small {
 		t.Fatalf("MinLatency = %v, want %v", tr.MinLatency, small)
+	}
+}
+
 // TestNoDeadAtomicRequestCounter guards against reintroducing the write-only
 // atomic request counter that was removed from runLoadTest. On the buggy source
 // this test fails because main.go imports sync/atomic and calls atomic.AddInt64;
@@ -257,9 +264,8 @@ func TestRunLoadTestTotalsFromCollectedResults(t *testing.T) {
 	}
 	if byStatus != tr.TotalReqs {
 		t.Errorf("sum(StatusCodes)=%d, want TotalReqs=%d", byStatus, tr.TotalReqs)
-	"math"
-	"testing"
-)
+	}
+}
 
 func TestErrorRate(t *testing.T) {
 	tests := []struct {
@@ -283,11 +289,8 @@ func TestErrorRate(t *testing.T) {
 				t.Errorf("errorRate(%d, %d) = %v, want %v", tt.errors, tt.total, got, tt.want)
 			}
 		})
-	"os"
-	"path/filepath"
-	"strings"
-	"testing"
-)
+	}
+}
 
 func TestFallbackVersionMatchesCurrentRelease(t *testing.T) {
 	if fallbackVersion != "0.4.1" {

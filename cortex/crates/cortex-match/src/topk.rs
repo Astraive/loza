@@ -1,4 +1,4 @@
-use std::cmp::{Ordering, Reverse};
+use std::cmp::Ordering;
 use std::collections::BinaryHeap;
 
 use crate::signature::Signature;
@@ -39,9 +39,12 @@ impl Ord for PQItem {
 
 /// Retain the `k` highest `(score, signature_id)` pairs using a min-heap.
 ///
-/// `BinaryHeap` is a max-heap, so items are wrapped in [`Reverse`] to make
-/// `peek()` return the *smallest* stored score. A new candidate evicts that
-/// smallest element only when it scores higher, leaving the k highest scores.
+/// [`PQItem`]'s reversed [`Ord`] implementation makes `BinaryHeap` behave as a
+/// min-heap, so `peek()` returns the *smallest* stored score. A new candidate
+/// evicts that smallest element only when it scores higher, leaving the k
+/// highest scores. (Do not wrap items in `Reverse` here: that would invert the
+/// comparison a second time and turn this back into a max-heap that keeps the
+/// lowest scores.)
 fn retain_top_k<I>(scored: I, k: usize, threshold: f64) -> Vec<ScoredMatch>
 where
     I: IntoIterator<Item = (f64, String)>,
@@ -50,21 +53,21 @@ where
         return Vec::new();
     }
 
-    let mut heap: BinaryHeap<Reverse<PQItem>> = BinaryHeap::with_capacity(k);
+    let mut heap: BinaryHeap<PQItem> = BinaryHeap::with_capacity(k);
 
     for (score, signature_id) in scored {
         if score < threshold {
             continue;
         }
 
-        let item = Reverse(PQItem {
+        let item = PQItem {
             score,
             signature_id,
-        });
+        };
 
         if heap.len() < k {
             heap.push(item);
-        } else if score > heap.peek().map(|p| p.0.score).unwrap_or(f64::NEG_INFINITY) {
+        } else if score > heap.peek().map(|p| p.score).unwrap_or(f64::NEG_INFINITY) {
             heap.pop();
             heap.push(item);
         }
@@ -72,7 +75,7 @@ where
 
     let mut results: Vec<ScoredMatch> = heap
         .into_iter()
-        .map(|item| ScoredMatch::new(item.0.signature_id, item.0.score))
+        .map(|item| ScoredMatch::new(item.signature_id, item.score))
         .collect();
 
     results.sort_by(|a, b| {

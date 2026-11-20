@@ -61,6 +61,9 @@ func TestRunAuditExampleLogsWhenAliasSucceeds(t *testing.T) {
 	got := strings.Join(sink.events, "")
 	if !strings.Contains(got, "audit trail started") {
 		t.Errorf("audit trail was not logged; got:\n%s", got)
+	}
+}
+
 // TestInvalidConfigYieldsNilLogger documents the trigger for MASS-0372:
 // a config validation failure makes loza.New return a nil logger alongside
 // the error, so any subsequent method call on it would dereference nil.

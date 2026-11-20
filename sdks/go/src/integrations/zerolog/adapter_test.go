@@ -114,6 +114,9 @@ func TestHookRunForwardsEventContext(t *testing.T) {
 	}
 	if sink.values[0] != want {
 		t.Fatalf("expected sink to receive event context value %q, got %#v", want, sink.values[0])
+	}
+}
+
 // TestHookRunMapsLevelsToSeverity verifies that each zerolog level is routed to
 // the correct loza severity. In particular, NoLevel (from logger.Log()/Send())
 // and unknown/custom numeric levels are level-agnostic and must not be
@@ -152,6 +155,8 @@ func TestHookRunMapsLevelsToSeverity(t *testing.T) {
 			}
 		})
 	}
+}
+
 func TestHookRunMapsLevels(t *testing.T) {
 	assertHookMapsLevels(t)
 }

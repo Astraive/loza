@@ -27,6 +27,8 @@ var collectorRequestTimeout = 10 * time.Second
 // probes. Go's default client has a zero timeout, which can hang the suite.
 func collectorHTTPClient() *http.Client {
 	return &http.Client{Timeout: collectorRequestTimeout}
+}
+
 // fataler is the subset of testing.TB used by readResponseBody. Keeping it as
 // an interface lets the read-error handling be unit tested without a live
 // collector.
@@ -146,7 +148,7 @@ func TestE2E_HTTPBatchSink_AsyncBatch(t *testing.T) {
 func TestE2E_HTTPBatchSink_VersionCheck(t *testing.T) {
 	_ = newTestClient(t)
 
-	version, err := fetchCollectorVersion(collectorHTTPClient(), collectorURL())
+	version, err := fetchCollectorVersion(t, collectorHTTPClient(), collectorURL())
 	if err != nil {
 		t.Fatalf("version: %v", err)
 	}
@@ -159,7 +161,7 @@ func TestE2E_HTTPBatchSink_VersionCheck(t *testing.T) {
 
 // fetchCollectorVersion performs the /version probe with the supplied client
 // so the request's timeout behavior can be exercised in isolation.
-func fetchCollectorVersion(client *http.Client, baseURL string) (map[string]any, error) {
+func fetchCollectorVersion(t fataler, client *http.Client, baseURL string) (map[string]any, error) {
 	resp, err := client.Get(baseURL + "/version")
 	if err != nil {
 		return nil, err
@@ -200,7 +202,7 @@ func TestE2E_HTTPBatchSink_MultipleFlushes(t *testing.T) {
 
 func getCollectorStatus(t *testing.T) []byte {
 	t.Helper()
-	body, err := fetchCollectorStatus(collectorHTTPClient(), collectorURL(), adminAPIKey())
+	body, err := fetchCollectorStatus(t, collectorHTTPClient(), collectorURL(), adminAPIKey())
 	if err != nil {
 		t.Fatalf("status: %v", err)
 	}
@@ -209,7 +211,7 @@ func getCollectorStatus(t *testing.T) []byte {
 
 // fetchCollectorStatus performs the /status probe with the supplied client so
 // the request's timeout behavior can be exercised in isolation.
-func fetchCollectorStatus(client *http.Client, baseURL, token string) ([]byte, error) {
+func fetchCollectorStatus(t fataler, client *http.Client, baseURL, token string) ([]byte, error) {
 	req, err := http.NewRequest(http.MethodGet, baseURL+"/status", nil)
 	if err != nil {
 		return nil, err
@@ -248,10 +250,10 @@ func TestCollectorHTTPRequestsAreBounded(t *testing.T) {
 	}
 
 	start := time.Now()
-	if _, err := fetchCollectorVersion(client, stalled.URL); err == nil {
+	if _, err := fetchCollectorVersion(t, client, stalled.URL); err == nil {
 		t.Fatal("expected /version request against a stalled collector to fail")
 	}
-	if _, err := fetchCollectorStatus(client, stalled.URL, ""); err == nil {
+	if _, err := fetchCollectorStatus(t, client, stalled.URL, ""); err == nil {
 		t.Fatal("expected /status request against a stalled collector to fail")
 	}
 	if elapsed := time.Since(start); elapsed > 2*time.Second {

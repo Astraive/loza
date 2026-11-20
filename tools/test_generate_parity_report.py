@@ -1,14 +1,3 @@
-"""Regression tests for tools/generate-parity-report.py status handling.
-
-These tests load the standalone script by path (it is not an importable
-package) and exercise the status-to-cell/count mapping used by the generated
-report.  They reproduce MASS-0866 / issue #956: equivalent truthy spellings
-of a status were printed verbatim but silently excluded from the Coverage
-column because the membership check was case- and whitespace-sensitive.
-"""
-"""Regression tests for tools/generate-parity-report.py."""
-
-from __future__ import annotations
 #!/usr/bin/env python3
 """Regression tests for tools/generate-parity-report.py."""
 
@@ -24,6 +13,7 @@ _spec.loader.exec_module(gpr)
 
 def _manifests_with_status(status: object) -> dict[str, dict | None]:
     """Build manifests where Go has one feature with ``status`` and others are N/A."""
+
     manifests: dict[str, dict | None] = {sdk: None for sdk in gpr.SDKS}
     manifests["go"] = {"features": [{"name": "feature_a", "status": status}]}
     return manifests

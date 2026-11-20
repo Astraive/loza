@@ -55,50 +55,19 @@ func UnaryInterceptorWithConfig(cfg Config) grpc.UnaryServerInterceptor {
 				loza.FinishError(evCtx, fmt.Errorf("panic recovered: %v", rec), loza.Int("status_code", int(codes.Internal)))
 				_ = loza.Emit(evCtx)
 				err = status.Error(codes.Internal, "internal server error")
+				resp = nil
 				return
 			}
-		if !loza.PanicRecoveryEnabled() {
-			defer func() {
-				if rec := recover(); rec != nil {
-					// The panic is intentionally propagated to the caller, but the
-					// event started above must still be finished and emitted so it
-					// is not orphaned when recovery is disabled.
-					loza.FinishError(evCtx, fmt.Errorf("panic: %v", rec), loza.Int("status_code", int(codes.Unknown)))
-					_ = loza.Emit(evCtx)
-					panic(rec)
-				}
-			}()
-			resp, err := handler(evCtx, req)
 			if err != nil {
 				st, _ := status.FromError(err)
 				reportTelemetryError(evCtx, "finish_error", loza.FinishError(evCtx, err, loza.Int("status_code", int(st.Code()))))
 			} else {
 				reportTelemetryError(evCtx, "finish", loza.Finish(evCtx, "success", loza.Int("status_code", int(codes.OK))))
 			}
-			_ = loza.Emit(evCtx)
-		}()
-
-		resp, err = handler(evCtx, req)
 			reportTelemetryError(evCtx, "emit", loza.Emit(evCtx))
-			return resp, err
-		}
-
-		defer func() {
-			if rec := recover(); rec != nil {
-				err = status.Error(codes.Internal, fmt.Sprintf("panic recovered: %v", rec))
-				reportTelemetryError(evCtx, "finish_error", loza.FinishError(evCtx, err, loza.Int("status_code", int(codes.Internal))))
-				reportTelemetryError(evCtx, "emit", loza.Emit(evCtx))
-			}
 		}()
 
 		resp, err = handler(evCtx, req)
-		if err != nil {
-			st, _ := status.FromError(err)
-			reportTelemetryError(evCtx, "finish_error", loza.FinishError(evCtx, err, loza.Int("status_code", int(st.Code()))))
-		} else {
-			reportTelemetryError(evCtx, "finish", loza.Finish(evCtx, "success", loza.Int("status_code", int(codes.OK))))
-		}
-		reportTelemetryError(evCtx, "emit", loza.Emit(evCtx))
 		return resp, err
 	}
 }

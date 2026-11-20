@@ -3,6 +3,9 @@ package main
 import (
 	"context"
 	"errors"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"strings"
 	"testing"
 )
@@ -69,11 +72,8 @@ func TestDeliverAndShutdownNoErrors(t *testing.T) {
 	}
 	if !called {
 		t.Error("emit was not called")
-	"go/ast"
-	"go/parser"
-	"go/token"
-	"testing"
-)
+	}
+}
 
 // TestMainEmitsBeforeSleep guards against re-introducing the deferred Emit in
 // this example. The httpbatch sink only receives an event when Emit runs, and
