@@ -257,14 +257,14 @@ func ValidateCollectorResponseMap(payload map[string]any) error {
 	errs := ValidationErrors{}
 	requireString(payload, "request_id", "missing_request_id", &errs)
 	requireString(payload, "status", "missing_status", &errs)
-	
+
 	// Validate status is one of the allowed values
 	if status, ok := payload["status"].(string); ok {
 		if _, exists := AllowedCollectorStatuses[strings.TrimSpace(status)]; !exists {
 			errs = append(errs, ValidationError{Field: "status", Code: "invalid_status", Message: fmt.Sprintf("field \"status\" must be one of: accepted, partial, rejected, invalid, quarantined; got %q", status)})
 		}
 	}
-	
+
 	optionalInteger(payload, "accepted", &errs)
 	optionalInteger(payload, "rejected", &errs)
 	optionalInteger(payload, "invalid", &errs)
@@ -285,7 +285,7 @@ func ValidateEventMap(payload map[string]any, strict bool) error {
 
 func ValidateEventMapDetailed(payload map[string]any, strict bool) ValidationErrors {
 	errs := ValidationErrors{}
-	
+
 	// Enforce the per-event byte limit after parsing, independent of payload shape.
 	encoded, marshalErr := json.Marshal(payload)
 	if marshalErr == nil && len(encoded) > MaxEventBytes {
@@ -298,9 +298,9 @@ func ValidateEventMapDetailed(payload map[string]any, strict bool) ValidationErr
 			errs = append(errs, ValidationError{Field: "event_type", Code: "alias_not_allowed", Message: "field \"event_type\" is not allowed in strict mode; use \"event\" instead"})
 		}
 	}
-	
+
 	normalized, _ := NormalizeEventAliasesCopyMap(payload)
-	
+
 	if strict {
 		for key := range normalized {
 			if _, ok := AllowedTopLevelFields[key]; !ok {
@@ -421,7 +421,7 @@ func requireService(payload map[string]any, errs *ValidationErrors) {
 
 func ValidateIngestEnvelopeMap(payload map[string]any, strict bool) error {
 	errs := ValidationErrors{}
-	
+
 	// Validate required envelope fields
 	requireString(payload, "api_version", "missing_api_version", &errs)
 	if source, ok := payload["source"].(map[string]any); ok {
@@ -430,7 +430,7 @@ func ValidateIngestEnvelopeMap(payload map[string]any, strict bool) error {
 	} else {
 		errs = append(errs, ValidationError{Field: "source", Code: "missing_source", Message: "field \"source\" must be an object with sdk and service"})
 	}
-	
+
 	// Validate events array
 	if events, ok := payload["events"].([]any); ok {
 		for i, item := range events {
@@ -453,7 +453,7 @@ func ValidateIngestEnvelopeMap(payload map[string]any, strict bool) error {
 	} else {
 		errs = append(errs, ValidationError{Field: "events", Code: "missing_events", Message: "field \"events\" must be an array"})
 	}
-	
+
 	if len(errs) == 0 {
 		return nil
 	}
