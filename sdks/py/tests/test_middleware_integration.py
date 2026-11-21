@@ -8,7 +8,6 @@ from types import SimpleNamespace
 import pytest
 
 import loza
-import pytest
 from loza.middleware.asgi import Middleware
 
 

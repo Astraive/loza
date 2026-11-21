@@ -21,9 +21,6 @@ def _snake_case_event() -> dict[str, object]:
 
 def test_all_required_fields_present_is_valid() -> None:
     valid, errors = validate_event_map(_snake_case_event())
-"""Regression tests for required-field validation in the spec contract."""
-
-from loza.core.spec_contract import validate_event_map
 
 
 def test_missing_event_id_reports_single_alias_agnostic_error():

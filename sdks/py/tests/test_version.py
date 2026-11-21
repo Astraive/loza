@@ -1,9 +1,12 @@
-from __future__ import annotations
 """Regression tests for cwd-independent SDK version loading."""
+
+from __future__ import annotations
 
 from pathlib import Path
 
 import loza.version as version
+
+from loza.version import SDK_VERSION, _version_from_text
 
 
 def _point_candidates_at(tmp_path: Path, monkeypatch) -> Path:
@@ -32,6 +35,8 @@ def test_load_version_falls_back_when_metadata_missing(tmp_path, monkeypatch) ->
     _point_candidates_at(tmp_path, monkeypatch)
 
     assert version._load_version() == version._FALLBACK_VERSION
+
+
 def test_version_is_independent_of_cwd(tmp_path, monkeypatch):
     """A stray loza-py.yaml in the launch directory must not change VERSION."""
     # Simulate an install where the packaged metadata file is absent from the
@@ -82,7 +87,6 @@ def test_sdk_version_matches_bundled_metadata():
             break
     assert expected is not None
     assert version.SDK_VERSION == expected
-from loza.version import SDK_VERSION, _version_from_text
 
 
 def test_inline_comment_is_not_part_of_version():
