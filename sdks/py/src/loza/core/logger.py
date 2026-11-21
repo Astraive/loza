@@ -567,7 +567,6 @@ class Logger:
         ctx.mark_partial(reason)
 
     def clone_event(self, ctx: EventContext) -> EventContext:
-        import copy
 
         return copy.deepcopy(ctx)
 
