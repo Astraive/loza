@@ -61,7 +61,7 @@ jobs:
       # --- Tests ---
 
       - name: Unit tests
-        run: pytest --ignore=tests/test_e2e_live.py -v
+        run: python -m pytest --ignore=tests/test_e2e_live.py -v
 
       - name: Coverage
         run: python run_coverage.py
