@@ -240,7 +240,7 @@ def masked(key: str, value: str, prefix: int = 2, suffix: int = 2) -> Attr:
     if len(text) <= prefix + suffix:
         return String(key, "*" * max(4, len(text)))
     head = text[:prefix] if prefix else ""
-    tail = text[len(text) - suffix:] if suffix else ""
+    tail = text[len(text) - suffix :] if suffix else ""
     return String(key, head + "*" * (len(text) - prefix - suffix) + tail)
 
 

@@ -55,6 +55,8 @@ def test_checkpoint_to_dict_reserved_fields_cannot_be_overridden_by_attrs() -> N
     assert result["name"] == "validated"
     assert result["at_ms"] == 7
     assert result["stage"] == "one"
+
+
 def test_to_dict_reserved_fields_win_over_user_attrs() -> None:
     """User attrs named like reserved fields cannot overwrite name/at_ms."""
     checkpoint = Checkpoint(

@@ -421,13 +421,7 @@ def _is_non_public_address(raw: str) -> bool:
         addr = ip_address(raw)
     except ValueError:
         return False
-    return (
-        addr.is_private
-        or addr.is_loopback
-        or addr.is_link_local
-        or addr.is_multicast
-        or addr.is_reserved
-    )
+    return addr.is_private or addr.is_loopback or addr.is_link_local or addr.is_multicast or addr.is_reserved
 
 
 def _resolve_collector_addresses(host: str, port: int) -> list[str]:
@@ -559,6 +553,8 @@ def _quote_segment(value: Any) -> str:
     ``safe`` set neutralizes ``/``, ``?`` and ``#`` (and other reserved bytes).
     """
     return quote(str(value), safe="")
+
+
 def _collector_path(*segments: Any) -> str:
     """Build a collector control-plane path from literal and ID segments.
 

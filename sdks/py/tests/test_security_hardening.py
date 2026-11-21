@@ -145,6 +145,8 @@ def test_drop_oversized_events_true_drops_events_over_any_limit(config_kwargs, p
     decision = SecurityLimiter(loza.SecurityConfig(**config_kwargs)).check_payload(payload)
     assert decision.allowed is False
     assert decision.reason == reason
+
+
 def test_collector_client_rejects_dns_rebinding_at_connection_time(monkeypatch):
     """A host that validates as public must not connect to a later private answer."""
     answers = iter([_addrinfo("93.184.216.34"), _addrinfo("127.0.0.1")])

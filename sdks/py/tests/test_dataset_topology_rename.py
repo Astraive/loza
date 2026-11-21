@@ -20,9 +20,7 @@ def test_rename_mutations_are_never_noops_seed_7() -> None:
     mutations = dataset["topology_mutations"]
 
     assert mutations
-    assert all(m["from"] != m["to"] for m in mutations), (
-        "found a rename mutation with identical 'from' and 'to'"
-    )
+    assert all(m["from"] != m["to"] for m in mutations), "found a rename mutation with identical 'from' and 'to'"
 
 
 def test_all_rename_mutations_are_real_renames_across_seeds() -> None:

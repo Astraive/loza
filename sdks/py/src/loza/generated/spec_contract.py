@@ -25,6 +25,7 @@ def _validate_flexible_json_bytes_unavailable(raw: bytes, strict: bool) -> None:
         "install loza-spec to enable flexible JSON byte validation."
     )
 
+
 # Only a genuinely missing dependency may trigger fallback. Any other
 # import-time failure (NameError, bad constant, validation error, ...) must
 # propagate instead of silently running against a stale contract.
@@ -96,6 +97,7 @@ except ImportError:
                 ValidationError,
                 ValidationErrors,
             )
+
             loaded_from_monorepo = True
         except ImportError:
             logger.warning(

@@ -159,11 +159,7 @@ def test_none_config_overrides_resolve_to_safe_defaults() -> None:
     resolved and that the full start/finish/emit pipeline still works.
     """
     logger = loza.New(
-        loza.Test("test")
-        .with_duplicate_policy(None)
-        .with_sampler(None)
-        .with_schema(None)
-        .with_redactor(None)
+        loza.Test("test").with_duplicate_policy(None).with_sampler(None).with_schema(None).with_redactor(None)
     )
 
     assert logger._config.sampler is not None

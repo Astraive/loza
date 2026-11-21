@@ -206,18 +206,11 @@ def test_overflow_with_buffer_reports_buffered_not_dropped_or_emitted() -> None:
 
 
 @pytest.mark.parametrize("logger_cls", [ClientLogger, EventLogger])
-def test_emit_does_not_mark_buffered_overflow_event_as_emitted(
-    logger_cls, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_emit_does_not_mark_buffered_overflow_event_as_emitted(logger_cls, monkeypatch: pytest.MonkeyPatch) -> None:
     # Keep workers out of the way so the queue fills deterministically.
     monkeypatch.setattr(pipeline_module.Pipeline, "start", lambda self, workers=1: None)
     metrics = MetricsCollector()
-    config = (
-        loza.Config.test("overflow")
-        .with_sink(loza.MemorySink())
-        .with_async(True)
-        .with_metrics(metrics)
-    )
+    config = loza.Config.test("overflow").with_sink(loza.MemorySink()).with_async(True).with_metrics(metrics)
     config = replace(config, async_config=replace(config.async_config, queue_size=1))
     logger = logger_cls(config)
     assert logger._pipeline is not None

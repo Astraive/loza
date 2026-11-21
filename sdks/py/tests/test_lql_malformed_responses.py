@@ -39,9 +39,7 @@ class _Response:
         b'{"columns": [], "rows": {}}',  # wrong-type rows
     ],
 )
-def test_query_lql_malformed_response_raises_structured_error(
-    monkeypatch: pytest.MonkeyPatch, payload: bytes
-) -> None:
+def test_query_lql_malformed_response_raises_structured_error(monkeypatch: pytest.MonkeyPatch, payload: bytes) -> None:
     monkeypatch.setattr(lql.urllib.request, "urlopen", lambda *_args, **_kwargs: _Response(payload))
     with pytest.raises(lql.LQLCompilationError, match="invalid result envelope"):
         lql.query_lql("https://collector", "select")
@@ -54,9 +52,7 @@ def test_query_lql_malformed_response_raises_structured_error(
         b'{"columns": [], "rows": [], "row_count": "abc"}',  # non-int row count
     ],
 )
-def test_query_lql_invalid_metadata_uses_safe_fallback(
-    monkeypatch: pytest.MonkeyPatch, payload: bytes
-) -> None:
+def test_query_lql_invalid_metadata_uses_safe_fallback(monkeypatch: pytest.MonkeyPatch, payload: bytes) -> None:
     """Non-numeric metadata is tolerated: main's _coerce_int safe fallback applies."""
     monkeypatch.setattr(lql.urllib.request, "urlopen", lambda *_args, **_kwargs: _Response(payload))
     result = lql.query_lql("https://collector", "select")
