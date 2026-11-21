@@ -5,7 +5,7 @@ pub fn middleware_name() -> &'static str {
 #[cfg(feature = "axum")]
 pub mod axum_impl {
     use crate::middleware::axum::response::ResponseCapture;
-    use crate::{EventContext, LozaError, Logger, Params};
+    use crate::{EventContext, Logger, LozaError, Params};
     use axum::extract::{ConnectInfo, MatchedPath, Request};
     use axum::middleware::Next;
     use axum::response::Response;
@@ -194,7 +194,10 @@ pub mod axum_impl {
         let outcome = if status >= 500 { "error" } else { "success" };
         append_response_attrs(&logger, &mut ctx, status, elapsed as i64);
         if let Some(capture) = capture {
-            logger.append(&mut ctx, crate::Int("response_bytes", capture.bytes() as i64));
+            logger.append(
+                &mut ctx,
+                crate::Int("response_bytes", capture.bytes() as i64),
+            );
         }
         if let Err(err) = finish_and_emit(&logger, &mut ctx, outcome) {
             tracing::warn!(error = %err, "loza-axum: failed to record http.request event");

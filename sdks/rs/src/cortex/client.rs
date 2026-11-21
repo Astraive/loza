@@ -251,8 +251,7 @@ mod tests {
 
     #[test]
     fn encoded_path_prevents_fragment_and_ampersand_injection() {
-        let path =
-            CortexClient::encoded_path(&["incidents", "inc#frag&x=y", "reconstruct"], &[]);
+        let path = CortexClient::encoded_path(&["incidents", "inc#frag&x=y", "reconstruct"], &[]);
         assert!(!path.contains('#'), "fragment must not be raw: {path}");
         assert!(path.contains("%23"), "expected '#' to be encoded: {path}");
         assert!(!path.contains('?'), "no query expected: {path}");

@@ -96,7 +96,14 @@ mod tests {
 
     #[test]
     fn traversal_names_are_neutralized() {
-        for name in ["../../etc/passwd", "..", "../x", "a/../b", "a\\..\\b", "C:\\windows\\x"] {
+        for name in [
+            "../../etc/passwd",
+            "..",
+            "../x",
+            "a/../b",
+            "a\\..\\b",
+            "C:\\windows\\x",
+        ] {
             let path = spool_path(name);
             assert_contained(&path);
         }
@@ -107,7 +114,11 @@ mod tests {
         for name in ["", ".", "..", "   "] {
             let path = spool_path(name);
             assert_contained(&path);
-            assert!(path.file_name().unwrap().to_string_lossy().ends_with(".spool"));
+            assert!(path
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .ends_with(".spool"));
         }
     }
 }
@@ -180,7 +191,6 @@ mod path_tests {
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static NEXT_ID: AtomicU64 = AtomicU64::new(0);
-
 
     fn unique_test_path(tag: &str) -> PathBuf {
         std::env::temp_dir().join(format!(

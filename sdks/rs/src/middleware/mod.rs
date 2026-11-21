@@ -65,7 +65,10 @@ mod tests {
         let _ = logger.finish(&mut ctx, "error");
         let encoded = logger.emit(&ctx).expect("emit event");
         let payload: serde_json::Value = serde_json::from_str(&encoded).expect("decode payload");
-        assert_eq!(payload.get("status_code").and_then(|v| v.as_u64()), Some(503));
+        assert_eq!(
+            payload.get("status_code").and_then(|v| v.as_u64()),
+            Some(503)
+        );
         assert!(
             payload
                 .get("attrs")

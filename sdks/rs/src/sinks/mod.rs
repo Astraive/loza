@@ -64,6 +64,21 @@ fn drain_with(
     flush(sink_cfg)
 }
 
+pub fn pause(sink_cfg: &SinkConfig) {
+    sink::pause_sink(sink_cfg);
+}
+
+pub fn resume(sink_cfg: &SinkConfig) {
+    sink::resume_sink(sink_cfg);
+}
+
+pub fn queue_size(sink_cfg: &SinkConfig) -> usize {
+    sink::sink_queue_size(sink_cfg)
+}
+
+pub fn health(sink_cfg: &SinkConfig) -> bool {
+    sink::sink_health(sink_cfg)
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -80,20 +95,4 @@ mod tests {
         assert!(drain(&memory()).is_ok());
         assert!(drain(&noop()).is_ok());
     }
-}
-
-pub fn pause(sink_cfg: &SinkConfig) {
-    sink::pause_sink(sink_cfg);
-}
-
-pub fn resume(sink_cfg: &SinkConfig) {
-    sink::resume_sink(sink_cfg);
-}
-
-pub fn queue_size(sink_cfg: &SinkConfig) -> usize {
-    sink::sink_queue_size(sink_cfg)
-}
-
-pub fn health(sink_cfg: &SinkConfig) -> bool {
-    sink::sink_health(sink_cfg)
 }

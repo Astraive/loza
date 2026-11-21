@@ -225,12 +225,14 @@ where
                         emit_http_event(
                             &logger,
                             &config,
-                            &method,
-                            &path,
-                            &user_agent,
-                            500,
-                            started.elapsed().as_millis() as u64,
-                            "error",
+                            HttpEventData {
+                                method: &method,
+                                path: &path,
+                                user_agent: &user_agent,
+                                status_code: 500,
+                                duration_ms: started.elapsed().as_millis() as u64,
+                                outcome: "error",
+                            },
                         );
                         return Ok(Response::builder()
                             .status(StatusCode::INTERNAL_SERVER_ERROR)
@@ -248,12 +250,14 @@ where
                     emit_http_event(
                         &logger,
                         &config,
-                        &method,
-                        &path,
-                        &user_agent,
-                        status,
-                        started.elapsed().as_millis() as u64,
-                        if status >= 500 { "error" } else { "success" },
+                        HttpEventData {
+                            method: &method,
+                            path: &path,
+                            user_agent: &user_agent,
+                            status_code: status,
+                            duration_ms: started.elapsed().as_millis() as u64,
+                            outcome: if status >= 500 { "error" } else { "success" },
+                        },
                     );
                     Ok(res)
                 }
@@ -261,12 +265,14 @@ where
                     emit_http_event(
                         &logger,
                         &config,
-                        &method,
-                        &path,
-                        &user_agent,
-                        500,
-                        started.elapsed().as_millis() as u64,
-                        "error",
+                        HttpEventData {
+                            method: &method,
+                            path: &path,
+                            user_agent: &user_agent,
+                            status_code: 500,
+                            duration_ms: started.elapsed().as_millis() as u64,
+                            outcome: "error",
+                        },
                     );
                     Err(err)
                 }
@@ -276,16 +282,25 @@ where
 }
 
 #[cfg(feature = "tower")]
-fn emit_http_event(
-    logger: &Logger,
-    config: &MiddlewareConfig,
-    method: &str,
-    path: &str,
-    user_agent: &str,
+struct HttpEventData<'a> {
+    method: &'a str,
+    path: &'a str,
+    user_agent: &'a str,
     status_code: u16,
     duration_ms: u64,
-    outcome: &str,
-) {
+    outcome: &'a str,
+}
+
+#[cfg(feature = "tower")]
+fn emit_http_event(logger: &Logger, config: &MiddlewareConfig, event: HttpEventData<'_>) {
+    let HttpEventData {
+        method,
+        path,
+        user_agent,
+        status_code,
+        duration_ms,
+        outcome,
+    } = event;
     let mut params = Params::new("http.request").with_kind("http");
     params.method = Some(method.to_string());
     params.path = Some(path.to_string());

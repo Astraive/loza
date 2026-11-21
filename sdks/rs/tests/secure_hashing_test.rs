@@ -23,7 +23,7 @@ fn hmac_sha256_hex(key: &str, value: &str) -> String {
 
     let mut outer_hasher = Sha256::new();
     outer_hasher.update(&outer);
-    outer_hasher.update(&inner_digest);
+    outer_hasher.update(inner_digest);
     format!("{:x}", outer_hasher.finalize())
 }
 

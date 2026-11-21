@@ -32,10 +32,7 @@ fn process_key() -> &'static [u8] {
             // ring's SystemRandom draws from the OS CSPRNG and never fails on
             // the platforms the SDK supports; fall back to a fixed, clearly
             // non-secret value only if the OS entropy source is unavailable.
-            if ring::rand::SystemRandom::new()
-                .fill(&mut key)
-                .is_err()
-            {
+            if ring::rand::SystemRandom::new().fill(&mut key).is_err() {
                 // This keeps hashing non-empty and deterministic within the
                 // process, but cannot protect against offline attacks. It is a
                 // last-resort path for platforms without a secure RNG.
@@ -104,7 +101,7 @@ mod tests {
 
         let mut outer_hasher = Sha256::new();
         outer_hasher.update(&outer);
-        outer_hasher.update(&inner_digest);
+        outer_hasher.update(inner_digest);
         format!("{:x}", outer_hasher.finalize())
     }
 
@@ -117,11 +114,7 @@ mod tests {
 
         let key = hmac::Key::new(hmac::HMAC_SHA256, secret.as_bytes());
         let tag = hmac::sign(&key, value.as_bytes());
-        let expected: String = tag
-            .as_ref()
-            .iter()
-            .map(|b| format!("{b:02x}"))
-            .collect();
+        let expected: String = tag.as_ref().iter().map(|b| format!("{b:02x}")).collect();
 
         // Cross-check ring's HMAC against the independent construction.
         assert_eq!(expected, hmac_sha256(secret, value));

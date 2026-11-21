@@ -48,11 +48,7 @@ fn read_request(stream: &mut TcpStream) -> Vec<u8> {
     let mut raw = Vec::new();
     let mut chunk = [0u8; 4096];
     let mut content_length = 0usize;
-    loop {
-        let n = match stream.read(&mut chunk) {
-            Ok(n) => n,
-            Err(_) => break,
-        };
+    while let Ok(n) = stream.read(&mut chunk) {
         if n == 0 {
             break;
         }

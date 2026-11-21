@@ -8,25 +8,16 @@ use loza::testkit::testkit;
 use loza::{Config, New};
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::Arc;
-use std::task::{Context, Poll, Wake, Waker};
+use std::task::{Context, Poll, Waker};
 use tower::{Layer, Service};
 
 /// Minimal executor: every future exercised here becomes ready on first poll.
-struct NoopWaker;
-impl Wake for NoopWaker {
-    fn wake(self: Arc<Self>) {}
-}
-
 fn block_on<F: Future>(future: F) -> F::Output {
-    let waker = Waker::from(Arc::new(NoopWaker));
-    let mut cx = Context::from_waker(&waker);
+    let mut cx = Context::from_waker(Waker::noop());
     let mut future = Box::pin(future);
-    loop {
-        match future.as_mut().poll(&mut cx) {
-            Poll::Ready(value) => return value,
-            Poll::Pending => panic!("test future unexpectedly pending"),
-        }
+    match future.as_mut().poll(&mut cx) {
+        Poll::Ready(value) => value,
+        Poll::Pending => panic!("test future unexpectedly pending"),
     }
 }
 
