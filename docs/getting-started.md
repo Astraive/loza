@@ -48,8 +48,13 @@ sequenceDiagram
 
 ### Build from Source
 
-The collector imports generated protobuf Go code that is not committed. From a
-fresh clone, run the one-command bootstrap from the repository root first:
+Generated protobuf Go code under `gen/go/loza/core/` is committed, so a fresh
+checkout can build the collector without running bootstrap first.
+
+#### Regenerate after changing protobuf definitions
+
+After changing a `.proto` file under `proto/loza/core/`, run `make bootstrap`
+from the repository root. It installs the pinned tools and regenerates the code:
 
 ```bash
 make bootstrap

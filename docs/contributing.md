@@ -2,54 +2,28 @@
 
 ## Development Setup
 
-### First-time bootstrap (required)
-
-The generated Go protobuf code under `gen/go/loza/core/` is not committed. After
-cloning, run one command from the repository root to install the pinned protobuf
-tools (`protoc`, `protoc-gen-go`, `protoc-gen-go-grpc`) and generate the code:
 ### Generated protobuf code (Go)
 
-The generated Go protobuf files under `gen/go/loza/core/` are committed. A fresh
-clone can therefore build `collector` and `cortex` immediately, with no code
-generation step:
-
-```bash
-git clone https://github.com/Astraive/loza.git
-cd loza
-(cd collector && go build ./...)
-(cd cortex && go build ./...)
-```
-
-When you change a `*.proto` file under `proto/loza/core/`, regenerate and commit
-the updated files. Install `protoc` (for example `apt install protobuf-compiler`
-on Debian/Ubuntu or `brew install protobuf` on macOS), then run the one-command
-bootstrap, which installs the pinned Go plugins and regenerates the code:
+The generated Go protobuf files under `gen/go/loza/core/` are committed, so a
+fresh checkout can build `collector` and `cortex` without a generation step.
+The `make bootstrap` target installs or replaces the pinned `protoc` and Go
+plugins, regenerates the files, and builds the generated Go module:
 
 ```bash
 make bootstrap
 ```
 
-`make proto` performs the same generation and now installs missing tools itself,
-so it also works from a fresh clone. Run `make bootstrap` again whenever the
-`.proto` files under `proto/loza/core/` change. Verify generated code is in sync
-with `make check-proto` (or `bash scripts/check-proto-sync.sh`); both work whether
-or not generated files are already present.
-
-Without this step, `go build ./...` in `collector` or `cortex` fails because
-`github.com/astraive/loza/gen/go/loza/core` does not exist yet.
-`make bootstrap` installs `protoc-gen-go@v1.36.11` and
-`protoc-gen-go-grpc@v1.6.2` into your Go bin directory and runs `make proto`.
-Buf users can generate the same output with `cd proto && buf generate` (see
-`proto/buf.gen.yaml`). Verify that committed code is in sync with:
+When you change a `*.proto` file under `proto/loza/core/`, run the bootstrap
+command and commit the updated generated files. To verify all seven committed
+outputs match the sources, run:
 
 ```bash
 make check-proto
-# or
-bash scripts/check-proto-sync.sh
 ```
 
-Both checks ignore the `protoc` version comment, so they work with any protoc
-release and even if the generated files are temporarily absent.
+The sync check fails if any generated file is missing or out of date. It restores
+the committed files after regeneration, so it does not leave generated changes
+in your working tree.
 
 ### Collector (Go)
 
