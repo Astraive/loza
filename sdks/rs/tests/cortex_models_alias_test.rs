@@ -39,10 +39,12 @@ fn legacy_models_path_is_a_single_canonical_definition() {
 /// canonical schema path, proving no field-level drift between the two.
 #[test]
 fn legacy_models_path_round_trips_with_canonical_schema() {
-    let mut context: cortex::models::IncidentContext = Default::default();
-    context.incident_id = "inc-0787".to_string();
-    context.confidence = 0.75;
-    context.related_services = vec!["api".to_string(), "worker".to_string()];
+    let context: cortex::models::IncidentContext = cortex::models::IncidentContext {
+        incident_id: "inc-0787".to_string(),
+        confidence: 0.75,
+        related_services: vec!["api".to_string(), "worker".to_string()],
+        ..Default::default()
+    };
 
     let json = serde_json::to_value(&context).expect("serialize legacy model");
 

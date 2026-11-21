@@ -77,7 +77,11 @@ fn link_event_stores_linked_id_in_links() {
     // The adjacent Logger::link_event implementation must behave identically.
     let logger = loza::test("link-svc");
     logger.link_event(&mut ctx, "evt_second");
-    assert_eq!(ctx.links.len(), 2, "Logger::link_event must append the link");
+    assert_eq!(
+        ctx.links.len(),
+        2,
+        "Logger::link_event must append the link"
+    );
     assert_eq!(
         ctx.links[1].get("target").and_then(|v| v.as_str()),
         Some("evt_second")

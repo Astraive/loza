@@ -134,7 +134,10 @@ fn remote_plaintext_basic_auth_sink_is_rejected_even_when_insecure() {
 
 #[test]
 fn credentialed_scheme_less_sink_is_rejected() {
-    for endpoint in ["//collector.example.com/events", "collector.example.com:80/events"] {
+    for endpoint in [
+        "//collector.example.com/events",
+        "collector.example.com:80/events",
+    ] {
         let cfg = Config::test("checkout").with_sink(http_batch_sink(
             endpoint,
             None,
