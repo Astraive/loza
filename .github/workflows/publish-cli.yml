@@ -217,7 +217,7 @@ jobs:
         env:
           RELEASE_VERSION: ${{ inputs.version }}
         run: python scripts/release/validate-inputs.py
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           pattern: loza-*
           merge-multiple: true
