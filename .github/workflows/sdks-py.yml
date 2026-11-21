@@ -39,7 +39,7 @@ jobs:
       - name: Install package and dev dependencies
         run: |
           pip install -e .
-          pip install pytest ruff build coverage
+          pip install pytest ruff==0.17.6 build coverage
 
       # --- Lint ---
 
