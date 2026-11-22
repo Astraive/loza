@@ -413,9 +413,9 @@ export interface Params {
 // --- Event ---
 
 /**
- * Recursively clone plain objects and arrays so a clone never shares mutable
- * state with the original. Non-plain values (Date, Map, functions, class
- * instances, ...) are returned as-is.
+ * Recursively clone arrays and plain objects so a clone never shares those
+ * mutable values with the original. Non-plain values (Date, Map, functions,
+ * class instances, ...) are retained by reference.
  */
 function deepCloneValue<T>(value: T): T {
   if (Array.isArray(value)) {
@@ -734,7 +734,7 @@ export class Event {
     const descriptors = Object.getOwnPropertyDescriptors(this);
     Object.defineProperties(ev, descriptors);
     // Deep-clone mutable collections so the clone is independent
-    ev.attrs = { ...this.attrs };
+    ev.attrs = deepCloneValue(this.attrs);
     ev.checkpoints = deepCloneValue(this.checkpoints);
     ev.processes = deepCloneValue(this.processes);
     ev.groups = deepCloneValue(this.groups);
