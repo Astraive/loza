@@ -39,6 +39,14 @@ _TRANSIENT_KAFKA_ERROR_NAMES = (
     "_WAIT_MSG",
 )
 
+class _KafkaDeliveryError(RuntimeError):
+    """Delivery callback failure retaining its Kafka error for retry policy."""
+
+    def __init__(self, error: Any) -> None:
+        self.error = error
+        super().__init__(f"Kafka delivery error: {error}")
+
+
 
 @dataclass(frozen=True)
 class RetryPolicy:
@@ -315,4 +323,4 @@ class KafkaAdapter:
         if pending:
             raise RuntimeError(f"Kafka flush timed out with {pending} pending messages")
         if delivery_error["value"] is not None:
-            raise RuntimeError(f"Kafka delivery error: {delivery_error['value']}")
+            raise _KafkaDeliveryError(delivery_error["value"])

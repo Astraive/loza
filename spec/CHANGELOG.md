@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- `spec/services/kafka_adapter.py`: delivery callback errors retain their Kafka error code
+  for retry classification, so permanent delivery failures are not retried.
 
 - `spec/services/dedupe_store.py`: a configured but unreachable Redis backend no longer
   silently downgrades to per-process local dedupe. `build_store()` now fails closed with
