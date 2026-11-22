@@ -149,8 +149,7 @@ export {
   queueSize as sinkQueueSize,
   health as sinkHealth,
 } from './sinks/standard-sinks.ts';
-export type { StatsHandler, DeliveryFailureHandler, HTTPBatchSinkOptions, KafkaSinkOptions } from './sinks/standard-sinks.ts';
-export type { StatsHandler, DeliveryFailureHandler, HTTPBatchSinkOptions, OverflowPolicy, SinkMetrics } from './sinks/standard-sinks.ts';
+export type { StatsHandler, DeliveryFailureHandler, HTTPBatchSinkOptions, KafkaSinkOptions, OverflowPolicy, SinkMetrics } from './sinks/standard-sinks.ts';
 
 // --- Redactor ---
 export {
