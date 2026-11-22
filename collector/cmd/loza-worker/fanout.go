@@ -164,6 +164,12 @@ func validateFanoutRoles(outputs []workerFanoutOutput) error {
 }
 
 func createFanoutSinks(cfg workerConfig) ([]processing.NamedSink, *processing.NamedSink, []*sql.DB, error) {
+	return createFanoutSinksWith(cfg, newFanoutSink)
+}
+
+type fanoutSinkFactory func(workerConfig, workerFanoutOutput) (collectorevent.Sink, *sql.DB, error)
+
+func createFanoutSinksWith(cfg workerConfig, makeSink fanoutSinkFactory) ([]processing.NamedSink, *processing.NamedSink, []*sql.DB, error) {
 	if err := validateFanoutRoles(cfg.fanoutOutputs); err != nil {
 		return nil, nil, nil, err
 	}
@@ -171,53 +177,34 @@ func createFanoutSinks(cfg workerConfig) ([]processing.NamedSink, *processing.Na
 	secondary := make([]processing.NamedSink, 0, len(cfg.fanoutOutputs))
 	var fallback *processing.NamedSink
 	dbs := make([]*sql.DB, 0, len(cfg.fanoutOutputs))
+	sinks := make([]collectorevent.Sink, 0, len(cfg.fanoutOutputs))
+	succeeded := false
+	defer func() {
+		if succeeded {
+			return
+		}
+		for _, sink := range sinks {
+			_ = sink.Close(context.Background())
+		}
+		for _, db := range dbs {
+			_ = db.Close()
+		}
+	}()
 
 	for _, output := range cfg.fanoutOutputs {
 		if !output.enabled {
 			continue
 		}
 
-		var (
-			sink collectorevent.Sink
-			db   *sql.DB
-			err  error
-		)
-
-		sinkType := output.sinkType
-		if sinkType == "" {
-			sinkType = fanoutSinkDuckDB
-		}
-
-		switch sinkType {
-		case fanoutSinkDuckDB:
-			sink, db, err = newDuckDBFanoutSink(cfg, output)
-		case fanoutSinkLoki:
-			sink, err = newLokiFanoutSink(output)
-		case fanoutSinkOTLP:
-			sink, err = newOTLPFanoutSink(output)
-		case fanoutSinkClickHouse:
-			sink, err = newClickHouseFanoutSink(cfg, output)
-		case fanoutSinkPostgres:
-			sink, err = newPostgresFanoutSink(cfg, output)
-		case fanoutSinkS3:
-			sink, err = newS3FanoutSink(cfg, output)
-		case fanoutSinkGCS:
-			sink, err = newGCSFanoutSink(cfg, output)
-		default:
-			for _, fanoutDB := range dbs {
-				_ = fanoutDB.Close()
-			}
-			return nil, nil, nil, fmt.Errorf("fanout output %q: unsupported type %q", output.name, sinkType)
-		}
-
-		if err != nil {
-			for _, fanoutDB := range dbs {
-				_ = fanoutDB.Close()
-			}
-			return nil, nil, nil, err
+		sink, db, err := makeSink(cfg, output)
+		if sink != nil {
+			sinks = append(sinks, sink)
 		}
 		if db != nil {
 			dbs = append(dbs, db)
+		}
+		if err != nil {
+			return nil, nil, nil, err
 		}
 
 		named := processing.NamedSink{Name: output.name, Sink: sink}
@@ -228,7 +215,41 @@ func createFanoutSinks(cfg workerConfig) ([]processing.NamedSink, *processing.Na
 		secondary = append(secondary, named)
 	}
 
+	succeeded = true
 	return secondary, fallback, dbs, nil
+}
+
+func newFanoutSink(cfg workerConfig, output workerFanoutOutput) (collectorevent.Sink, *sql.DB, error) {
+	var (
+		sink collectorevent.Sink
+		db   *sql.DB
+		err  error
+	)
+
+	sinkType := output.sinkType
+	if sinkType == "" {
+		sinkType = fanoutSinkDuckDB
+	}
+
+	switch sinkType {
+	case fanoutSinkDuckDB:
+		sink, db, err = newDuckDBFanoutSink(cfg, output)
+	case fanoutSinkLoki:
+		sink, err = newLokiFanoutSink(output)
+	case fanoutSinkOTLP:
+		sink, err = newOTLPFanoutSink(output)
+	case fanoutSinkClickHouse:
+		sink, err = newClickHouseFanoutSink(cfg, output)
+	case fanoutSinkPostgres:
+		sink, err = newPostgresFanoutSink(cfg, output)
+	case fanoutSinkS3:
+		sink, err = newS3FanoutSink(cfg, output)
+	case fanoutSinkGCS:
+		sink, err = newGCSFanoutSink(cfg, output)
+	default:
+		return nil, nil, fmt.Errorf("fanout output %q: unsupported type %q", output.name, sinkType)
+	}
+	return sink, db, err
 }
 
 func ensureSchema(db *sql.DB, cfg workerConfig) error {

@@ -8,6 +8,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/0.2.0/).
 
 ### Fixed
 
+- Worker startup now closes previously constructed fanout sinks when a later
+  output fails to initialize.
+
 - Go SDK: `FinishGroupError` now records the supplied error status code on the
   group, so failed `Phase` calls emit a non-zero `status_code` like failed
   `Step` calls instead of `0`.

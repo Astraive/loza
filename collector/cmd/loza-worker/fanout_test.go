@@ -8,6 +8,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	collectorevent "github.com/astraive/loza/collector/internal/event"
 )
 
 func TestValidateFanoutRolesRejectsMultipleEnabledFallbacks(t *testing.T) {
@@ -54,6 +56,89 @@ func TestCreateFanoutSinksRejectsMultipleFallbacks(t *testing.T) {
 	}
 	if secondary != nil || fallback != nil || dbs != nil {
 		t.Fatalf("expected no sinks on validation failure, got secondary=%v fallback=%v dbs=%v", secondary, fallback, dbs)
+	}
+}
+
+type countedFanoutSink struct {
+	closes int
+}
+
+func (*countedFanoutSink) Name() string { return "counted" }
+func (*countedFanoutSink) WriteEvent(context.Context, []byte, *collectorevent.Event) error {
+	return nil
+}
+func (*countedFanoutSink) Flush(context.Context) error { return nil }
+func (s *countedFanoutSink) Close(context.Context) error {
+	s.closes++
+	return nil
+}
+
+func TestCreateFanoutSinksClosesConstructedSinksOnFailure(t *testing.T) {
+	tests := []struct {
+		name      string
+		failure   error
+		wantError string
+	}{
+		{
+			name:      "unsupported later output",
+			failure:   errors.New(`fanout output "later": unsupported type "unknown"`),
+			wantError: "unsupported type",
+		},
+		{
+			name:      "constructor error",
+			failure:   errors.New("later output failed"),
+			wantError: "later output failed",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			first := &countedFanoutSink{}
+			cfg := workerConfig{fanoutOutputs: []workerFanoutOutput{
+				{name: "earlier", enabled: true, sinkType: "fake"},
+				{name: "later", enabled: true, sinkType: "fail"},
+			}}
+			_, _, _, err := createFanoutSinksWith(cfg, func(cfg workerConfig, output workerFanoutOutput) (collectorevent.Sink, *sql.DB, error) {
+				if output.name == "earlier" {
+					return first, nil, nil
+				}
+				if tt.name == "unsupported later output" {
+					return newFanoutSink(cfg, output)
+				}
+				return nil, nil, tt.failure
+			})
+			if err == nil || !strings.Contains(err.Error(), tt.wantError) {
+				t.Fatalf("error = %v, want containing %q", err, tt.wantError)
+			}
+			if first.closes != 1 {
+				t.Fatalf("earlier sink close calls = %d, want 1", first.closes)
+			}
+		})
+	}
+}
+
+func TestCreateFanoutSinksTransfersSinkOwnershipOnSuccess(t *testing.T) {
+	sink := &countedFanoutSink{}
+	cfg := workerConfig{fanoutOutputs: []workerFanoutOutput{
+		{name: "output", enabled: true, sinkType: "fake"},
+	}}
+	secondary, _, _, err := createFanoutSinksWith(cfg, func(_ workerConfig, _ workerFanoutOutput) (collectorevent.Sink, *sql.DB, error) {
+		return sink, nil, nil
+	})
+	if err != nil {
+		t.Fatalf("create fanout sinks: %v", err)
+	}
+	if sink.closes != 0 {
+		t.Fatalf("sink closed during successful construction: %d", sink.closes)
+	}
+	if len(secondary) != 1 || secondary[0].Sink != sink {
+		t.Fatalf("successful sink ownership was not returned: %#v", secondary)
+	}
+	if err := secondary[0].Sink.Close(context.Background()); err != nil {
+		t.Fatalf("caller close: %v", err)
+	}
+	if sink.closes != 1 {
+		t.Fatalf("caller close calls = %d, want 1", sink.closes)
 	}
 }
 
