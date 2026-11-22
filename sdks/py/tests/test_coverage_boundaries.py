@@ -617,19 +617,26 @@ def test_root_facade_and_lifecycle_surface() -> None:
     parent = loza.start_event(loza.Params(event="parent"))
     child = loza.start_event_from(parent, loza.Params(event="child"))
     assert child.service == parent.service
-    for starter, event_name in (
-        (loza.start_http_event, "http.request"),
-        (loza.start_job_event, "job.run"),
-        (loza.start_queue_event, "queue.process"),
-        (loza.start_cli_event, "cli.run"),
-        (loza.start_cron_event, "cron.tick"),
+    for starter, event_name, kind in (
+        (loza.start_http_event, "http.request", "http"),
+        (loza.start_job_event, "job.run", "job"),
+        (loza.start_queue_event, "queue.process", "queue"),
+        (loza.start_cli_event, "cli.run", "cli"),
+        (loza.start_cron_event, "cron.tick", "cron"),
     ):
-        ctx = starter(loza.Params())
+        ctx = starter(loza.Params(event="custom.event"))
         loza.enrich(ctx, loza.String("field", "value"))
         loza.finish(ctx, "success")
         encoded = loza.emit(ctx)
         assert encoded
-        assert json.loads(encoded)["event"] == event_name
+        event = json.loads(encoded)
+        assert event["event"] == "custom.event"
+        assert event["kind"] == kind
+        override = starter(loza.Params(event="override.event", kind="custom"))
+        assert override.params.kind == "custom"
+        default_ctx = starter(loza.Params())
+        loza.finish(default_ctx, "success")
+        assert json.loads(loza.emit(default_ctx))["kind"] == kind
     loza.enrich(parent, loza.String("a", 1))
     loza.append(parent, b=2)
     loza.set(parent, c=3)
