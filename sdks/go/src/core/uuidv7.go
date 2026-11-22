@@ -66,7 +66,7 @@ func (g *uuidV7Gen) NewID() string { return g.newID() }
 func (g *uuidV7Gen) newID() string {
 	g.mu.Lock()
 
-	now := time.Now().UnixMilli()
+	now := g.nowMS()
 	if now > g.lastMS {
 		// Wall clock advanced: begin a new millisecond.
 		g.lastMS = now
