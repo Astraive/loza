@@ -12,15 +12,15 @@ if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
     sys.stderr.reconfigure(encoding="utf-8")  # type: ignore[union-attr]
 
 
-# Each pair is (canonical, mirror): `schema/` is the canonical source
-# (see check_conformance._SCHEMA_DIR) and `schemas/json/` is the compatibility
-# mirror. Keep this order so diagnostics and update_mirrors.py agree on roles.
+# Each pair is (canonical, mirror): `schemas/json/` is the canonical source
+# and `schema/` is the compatibility mirror. Keep this order so diagnostics
+# and update_mirrors.py agree on roles.
 MIRROR_PAIRS: tuple[tuple[str, str], ...] = (
-    ("schema/event.schema.json", "schemas/json/event.schema.json"),
-    ("schema/event.strict.schema.json", "schemas/json/event.strict.schema.json"),
-    ("schema/event.loose.schema.json", "schemas/json/event.loose.schema.json"),
-    ("schema/ingest.schema.json", "schemas/json/ingest.schema.json"),
-    ("schema/collector-response.schema.json", "schemas/json/collector-response.schema.json"),
+    ("schemas/json/event.schema.json", "schema/event.schema.json"),
+    ("schemas/json/event.strict.schema.json", "schema/event.strict.schema.json"),
+    ("schemas/json/event.loose.schema.json", "schema/event.loose.schema.json"),
+    ("schemas/json/ingest.schema.json", "schema/ingest.schema.json"),
+    ("schemas/json/collector-response.schema.json", "schema/collector-response.schema.json"),
     # releases/v1/schemas/ are frozen snapshots, not mirrors.
 )
 

@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- `spec/scripts/update_mirrors.py`: canonical JSON schemas under `spec/schemas/json`
+  are now copied into the compatibility directory `spec/schema`.
 
 - `spec/services/dedupe_store.py`: a configured but unreachable Redis backend no longer
   silently downgrades to per-process local dedupe. `build_store()` now fails closed with

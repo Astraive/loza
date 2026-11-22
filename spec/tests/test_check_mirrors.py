@@ -1,32 +1,34 @@
 import io
+import json
 import sys
 import tempfile
 import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
+from unittest.mock import patch
 
 spec_dir = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(spec_dir / "scripts"))
 
 from check_mirrors import MIRROR_PAIRS, check_mirrors
+import update_mirrors
 
 
 class TestMirrorPairOrientation(unittest.TestCase):
     def test_each_pair_lists_canonical_source_first(self):
-        # schema/ is the canonical source (check_conformance._SCHEMA_DIR);
-        # schemas/json/ is only the compatibility mirror. Both check_mirrors
-        # and update_mirrors.py unpack pairs as (canonical, mirror), so the
-        # canonical path must come first.
+        # schemas/json/ is canonical and schema/ is only the compatibility
+        # mirror. Both check_mirrors and update_mirrors unpack pairs as
+        # (canonical, mirror), so the canonical path must come first.
         self.assertTrue(MIRROR_PAIRS)
         for canonical_rel, mirror_rel in MIRROR_PAIRS:
             with self.subTest(pair=(canonical_rel, mirror_rel)):
                 self.assertTrue(
-                    canonical_rel.startswith("schema/"),
-                    f"expected canonical path under schema/, got {canonical_rel!r}",
+                    canonical_rel.startswith("schemas/json/"),
+                    f"expected canonical path under schemas/json/, got {canonical_rel!r}",
                 )
                 self.assertTrue(
-                    mirror_rel.startswith("schemas/json/"),
-                    f"expected mirror path under schemas/json/, got {mirror_rel!r}",
+                    mirror_rel.startswith("schema/"),
+                    f"expected mirror path under schema/, got {mirror_rel!r}",
                 )
 
     def test_missing_mirror_is_reported_as_mirror_not_canonical(self):
@@ -70,6 +72,28 @@ class TestMirrorPairOrientation(unittest.TestCase):
             message = output.getvalue()
         self.assertFalse(ok)
         self.assertIn(f"drift detected: {mirror_rel} != {canonical_rel}", message)
+
+    def test_updater_copies_canonical_contents_to_compatibility_mirrors(self):
+        with tempfile.TemporaryDirectory() as td:
+            spec_root = Path(td) / "spec"
+            for index, (canonical_rel, mirror_rel) in enumerate(MIRROR_PAIRS):
+                canonical = spec_root / canonical_rel
+                mirror = spec_root / mirror_rel
+                canonical.parent.mkdir(parents=True, exist_ok=True)
+                mirror.parent.mkdir(parents=True, exist_ok=True)
+                canonical.write_text(json.dumps({"marker": f"canonical-{index}"}), encoding="utf-8")
+                mirror.write_text(json.dumps({"marker": f"legacy-{index}"}), encoding="utf-8")
+
+            output = io.StringIO()
+            with patch.object(update_mirrors, "__file__", str(spec_root / "scripts/update_mirrors.py")):
+                with redirect_stdout(output):
+                    self.assertEqual(update_mirrors.main(), 0)
+
+            for index, (canonical_rel, mirror_rel) in enumerate(MIRROR_PAIRS):
+                with self.subTest(pair=(canonical_rel, mirror_rel)):
+                    expected = {"marker": f"canonical-{index}"}
+                    self.assertEqual(json.loads((spec_root / canonical_rel).read_text(encoding="utf-8")), expected)
+                    self.assertEqual(json.loads((spec_root / mirror_rel).read_text(encoding="utf-8")), expected)
 
 
 if __name__ == "__main__":
