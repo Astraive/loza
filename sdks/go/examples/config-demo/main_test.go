@@ -92,8 +92,72 @@ func TestRunEnvExampleSuccessPrintsValues(t *testing.T) {
 		t.Fatalf("runEnvExample returned unexpected error: %v", err)
 	}
 	got := out.String()
+	if count := strings.Count(got, "2. Configuration via environment variables:"); count != 1 {
+		t.Errorf("environment example heading appeared %d times, want 1", count)
+	}
+	if len(s.calls) != len(envVars) {
+		t.Errorf("environment example set %d variables, want one pass of %d", len(s.calls), len(envVars))
+	}
 	if !strings.Contains(got, "Service:") {
 		t.Errorf("successful example did not print configuration values:\n%s", got)
+	}
+}
+
+// TestMainRunsEnvironmentExampleOnce guards the caller from repeating the
+// environment example after the checked helper returns successfully.
+func TestMainRunsEnvironmentExampleOnce(t *testing.T) {
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "main.go", nil, 0)
+	if err != nil {
+		t.Fatalf("parse main.go: %v", err)
+	}
+
+	main := (*ast.FuncDecl)(nil)
+	for _, decl := range file.Decls {
+		if fn, ok := decl.(*ast.FuncDecl); ok && fn.Name.Name == "main" {
+			main = fn
+			break
+		}
+	}
+	if main == nil {
+		t.Fatal("main function not found")
+	}
+
+	helperCalls, inlineHeadings, inlineSetters := 0, 0, 0
+	ast.Inspect(main.Body, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		switch fun := call.Fun.(type) {
+		case *ast.Ident:
+			if fun.Name == "runEnvExample" {
+				helperCalls++
+			}
+		case *ast.SelectorExpr:
+			if ident, ok := fun.X.(*ast.Ident); ok {
+				switch {
+				case ident.Name == "fmt" && fun.Sel.Name == "Println" &&
+					len(call.Args) == 1:
+					if heading, ok := call.Args[0].(*ast.BasicLit); ok &&
+						heading.Value == `"2. Configuration via environment variables:"` {
+						inlineHeadings++
+					}
+				case ident.Name == "os" && fun.Sel.Name == "Setenv":
+					inlineSetters++
+				}
+			}
+		}
+		return true
+	})
+	if helperCalls != 1 {
+		t.Errorf("main calls runEnvExample %d times, want 1", helperCalls)
+	}
+	if inlineHeadings != 0 {
+		t.Errorf("main contains %d inline Example 2 headings after the helper", inlineHeadings)
+	}
+	if inlineSetters != 0 {
+		t.Errorf("main contains %d inline environment setters after the helper", inlineSetters)
 	}
 }
 

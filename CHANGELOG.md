@@ -7,6 +7,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/0.2.0/).
 ## [Unreleased]
 
 ### Fixed
+- Go configuration demo: remove the duplicate inline environment example after
+  its checked helper call.
 
 - Go SDK: `FinishGroupError` now records the supplied error status code on the
   group, so failed `Phase` calls emit a non-zero `status_code` like failed
