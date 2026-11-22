@@ -26,6 +26,7 @@ async function startCortex(): Promise<{ server: http.Server; url: string }> {
 async function stopCortex(server: http.Server): Promise<void> {
   const gate = Promise.withResolvers<void>();
   server.close(error => error ? gate.reject(error) : gate.resolve());
+  server.closeAllConnections();
   await gate.promise;
 }
 
