@@ -36,6 +36,26 @@ class TestRunCheckTimeout(unittest.TestCase):
         self.assertIn("timed out", result.stderr)
         self.assertLessEqual(result.duration_s, 5.0)
 
+    def test_timeout_preserves_partial_output_from_each_stream(self):
+        cases = (
+            ("stdout", "import sys,time; print('partial stdout', flush=True); time.sleep(30)"),
+            ("stderr", "import sys,time; print('partial stderr', file=sys.stderr, flush=True); time.sleep(30)"),
+            ("both", "import sys,time; print('partial stdout', flush=True); print('partial stderr', file=sys.stderr, flush=True); time.sleep(30)"),
+        )
+        for stream_case, child in cases:
+            with self.subTest(stream_case=stream_case):
+                result = runner._run_check(
+                    _check(sys.executable, "-c", child),
+                    verbose=False,
+                    timeout=0.25,
+                )
+                self.assertFalse(result.passed)
+                self.assertEqual(result.returncode, runner.TIMEOUT_RETURN_CODE)
+                if stream_case in ("stdout", "both"):
+                    self.assertIn("partial stdout", result.stdout)
+                if stream_case in ("stderr", "both"):
+                    self.assertIn("partial stderr", result.stderr)
+
     def test_fast_command_still_passes(self):
         result = runner._run_check(
             _check(sys.executable, "-c", "print('ok')"),

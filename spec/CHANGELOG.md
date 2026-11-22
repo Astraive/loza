@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- `spec/conformance/runner.py`: timeout failures retain partial stdout and stderr when
+  subprocess output is captured as bytes.
 
 - `spec/services/dedupe_store.py`: a configured but unreachable Redis backend no longer
   silently downgrades to per-process local dedupe. `build_store()` now fails closed with

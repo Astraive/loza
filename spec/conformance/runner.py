@@ -11,6 +11,13 @@ import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 
+def _timeout_output_text(output: str | bytes | None) -> str:
+    """Normalize partial subprocess output captured while timing out."""
+    if isinstance(output, bytes):
+        return output.decode("utf-8", errors="replace")
+    return output or ""
+
+
 LOZA_SPEC_ROOT = Path(__file__).resolve().parents[1]
 WORKSPACE_ROOT = LOZA_SPEC_ROOT.parent
 
@@ -151,8 +158,8 @@ def _run_check(check: Check, verbose: bool, timeout: float | None = None) -> Che
     except subprocess.TimeoutExpired as exc:
         duration_s = time.perf_counter() - started
         reason = f"timed out after {timeout:g}s"
-        stdout = exc.stdout or ""
-        stderr = exc.stderr or ""
+        stdout = _timeout_output_text(exc.stdout)
+        stderr = _timeout_output_text(exc.stderr)
         print(f"  FAIL ({reason})")
         if not verbose:
             partial_output = stdout + stderr
