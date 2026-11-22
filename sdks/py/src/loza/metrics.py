@@ -25,8 +25,13 @@ DEFAULT_HISTOGRAM_BUCKETS: tuple[float, ...] = (
 
 
 def _escape_label_value(value: Any) -> str:
+    """Escape Prometheus text label characters; preserve CR as a literal byte.
+
+    The exposition grammar has no ``\\r`` escape, and the Prometheus text
+    parser accepts a literal carriage return inside a quoted label value.
+    """
     text = str(value)
-    return text.replace("\\", "\\\\").replace("\n", "\\n").replace("\r", "\\r").replace('"', '\\"')
+    return text.replace("\\", "\\\\").replace("\n", "\\n").replace('"', '\\"')
 
 
 def _format_labels(labels: dict[str, Any]) -> str:
