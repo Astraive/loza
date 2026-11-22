@@ -58,10 +58,11 @@ func (r *eventbusQueueReader) Poll(ctx context.Context, timeout time.Duration) (
 			select {
 			case r.ch <- rec:
 				return nil
+			case <-subCtx.Done():
+				// Some bus adapters do not propagate the subscription context to
+				// the handler. The reader lifecycle still releases this send.
+				return subCtx.Err()
 			case <-hCtx.Done():
-				// Backpressure or Close cancelled the subscription while the
-				// buffer was full. Returning an error lets the adapter Nack /
-				// redeliver instead of leaking this consume goroutine.
 				return hCtx.Err()
 			}
 		}
