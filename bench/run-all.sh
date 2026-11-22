@@ -124,20 +124,11 @@ fi
 # ============================================================
 # 6. Rust SDK Benchmarks
 # ============================================================
-if command -v cargo &>/dev/null; then
-    echo "--- Rust SDK Benchmarks ---"
-    cd "$REPO_ROOT/sdks/rs"
-    RS_OUT="$RESULTS_DIR/sdk-rs-${TIMESTAMP}.json"
-    python3 -c "
-import json
-results = [{'name': 'RustBenchModule', 'iterations': 0, 'ns_per_op': 0, 'pass': True, 'note': 'requires cargo bench harness'}]
-json.dump({'suite': 'sdk-rs', 'component': 'sdks/rs/bench', 'timestamp': '$TIMESTAMP', 'results': results, 'summary': {'total': 1, 'passed': 1, 'failed': 0}}, open('$RS_OUT', 'w'), indent=2)
-" 2>/dev/null && echo "  PASS: sdk-rs" && PASSED=$((PASSED+1)) || { echo "  SKIP: sdk-rs"; SKIPPED=$((SKIPPED+1)); }
-    cd "$REPO_ROOT"
-else
-    echo "  SKIP: sdk-rs (cargo not found)"
-    SKIPPED=$((SKIPPED+1))
-fi
+# The Rust benchmark harness is not implemented yet. Do not report a pass or
+# write a result until an actual Cargo benchmark has been executed and parsed.
+echo "--- Rust SDK Benchmarks ---"
+echo "  SKIP: sdk-rs (benchmark harness not available)"
+SKIPPED=$((SKIPPED+1))
 
 # ============================================================
 # 7. JavaScript SDK Benchmarks (with auth)
