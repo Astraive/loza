@@ -42,7 +42,7 @@ class Middleware:
             Bool("panic", True),
             Int("status_code", 500),
         )
-        Emit(ctx)
+        _emit_best_effort(ctx)
         return [b"Internal Server Error"]
 
     def __call__(self, environ: dict, start_response: Callable) -> Iterable[bytes]:
@@ -71,7 +71,7 @@ class Middleware:
             ctx.params.status_code = status_code
         except Exception as exc:
             FinishError(ctx, exc, Bool("panic", True))
-            Emit(ctx)
+            _emit_best_effort(ctx)
             raise
 
         def stream_response() -> Iterable[bytes]:
@@ -127,10 +127,18 @@ class Middleware:
                     if callable(close):
                         close()
                 finally:
-                    Emit(ctx)
+                    _emit_best_effort(ctx)
 
         return stream_response()
 
 
+
+
+def _emit_best_effort(ctx: object) -> None:
+    try:
+        Emit(ctx)
+    except BaseException:
+        # Telemetry failures must not alter request or stream outcomes.
+        pass
 def middleware(app=None, **config):
     return Middleware(app, **config)

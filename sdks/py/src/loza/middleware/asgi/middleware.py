@@ -86,7 +86,11 @@ class Middleware:
             raise
         finally:
             if ctx is not None:
-                Emit(ctx)
+                try:
+                    Emit(ctx)
+                except BaseException:
+                    # Telemetry failure must not replace an in-flight request error.
+                    pass
 
 
 def _header(scope: dict[str, Any], wanted: bytes) -> str:
