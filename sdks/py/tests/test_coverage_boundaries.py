@@ -617,6 +617,9 @@ def test_root_facade_and_lifecycle_surface() -> None:
     parent = loza.start_event(loza.Params(event="parent"))
     child = loza.start_event_from(parent, loza.Params(event="child"))
     assert child.service == parent.service
+    generic = loza.start_event(loza.Params(event="generic.event"))
+    loza.finish(generic, "success")
+    assert json.loads(loza.emit(generic))["kind"] == "event"
     for starter, event_name, kind in (
         (loza.start_http_event, "http.request", "http"),
         (loza.start_job_event, "job.run", "job"),
