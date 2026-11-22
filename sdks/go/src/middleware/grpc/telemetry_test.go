@@ -8,7 +8,9 @@ import (
 	"testing"
 
 	loza "github.com/astraive/loza/sdks/go"
+	"google.golang.org/grpc/codes"
 	grpcpkg "google.golang.org/grpc"
+	"google.golang.org/grpc/status"
 )
 
 // selectiveSink fails writes for failEvent and captures every other event. It
@@ -147,5 +149,73 @@ func TestStreamInterceptorLogsEmitFailure(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("stream emit failure not surfaced as a telemetry log; logs=%+v", telemetryLogs(sink))
+	}
+}
+
+func TestInterceptorsReportPanicEmitFailures(t *testing.T) {
+	for _, streamMode := range []bool{false, true} {
+		for _, recoverPanics := range []bool{false, true} {
+			name := "unary"
+			event := "grpc.request"
+			if streamMode {
+				name = "stream"
+				event = "grpc.stream"
+			}
+			if recoverPanics {
+				name += "/recovered"
+			} else {
+				name += "/propagated"
+			}
+			t.Run(name, func(t *testing.T) {
+				sinkErr := errors.New("canonical event write failed")
+				sink := &selectiveSink{failEvent: event, failErr: sinkErr}
+				cfg := loza.Test().WithSink(sink).WithPanicRecovery(recoverPanics)
+				if err := loza.Configure(cfg); err != nil {
+					t.Fatalf("configure: %v", err)
+				}
+				t.Cleanup(func() { _ = loza.Shutdown(context.Background()) })
+
+				if streamMode {
+					info := &grpcpkg.StreamServerInfo{FullMethod: "/demo.Service/Stream"}
+					stream := fakeStream{ctx: context.Background()}
+					invoke := func() {
+						err := StreamInterceptor()(nil, stream, info, func(any, grpcpkg.ServerStream) error {
+							panic("fixture panic")
+						})
+						if recoverPanics && status.Code(err) != codes.Internal {
+							t.Fatalf("recovered stream status = %v, want Internal", err)
+						}
+					}
+					if recoverPanics {
+						invoke()
+					} else {
+						assertPanic(t, "fixture panic", invoke)
+					}
+				} else {
+					info := &grpcpkg.UnaryServerInfo{FullMethod: "/demo.Service/Call"}
+					invoke := func() {
+						_, err := UnaryInterceptor()(context.Background(), nil, info, func(context.Context, any) (any, error) {
+							panic("fixture panic")
+						})
+						if recoverPanics && status.Code(err) != codes.Internal {
+							t.Fatalf("recovered unary status = %v, want Internal", err)
+						}
+					}
+					if recoverPanics {
+						invoke()
+					} else {
+						assertPanic(t, "fixture panic", invoke)
+					}
+				}
+
+				if err := loza.Flush(context.Background()); err != nil {
+					t.Fatalf("Flush: %v", err)
+				}
+				logs := telemetryLogs(sink)
+				if len(logs) != 1 || stageAttr(logs[0]) != "emit" || logs[0].Error == nil || !strings.Contains(logs[0].Error.Message, sinkErr.Error()) {
+					t.Fatalf("panic emit diagnostics = %+v, want one emit diagnostic for %q", logs, sinkErr)
+				}
+			})
+		}
 	}
 }

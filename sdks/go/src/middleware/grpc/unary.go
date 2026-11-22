@@ -45,15 +45,15 @@ func UnaryInterceptorWithConfig(cfg Config) grpc.UnaryServerInterceptor {
 		defer func() {
 			if rec := recover(); rec != nil {
 				if !recoverPanics {
-					loza.FinishError(evCtx, status.Error(codes.Internal, fmt.Sprintf("panic: %v", rec)), loza.Int("status_code", int(codes.Internal)))
-					_ = loza.Emit(evCtx)
+					reportTelemetryError(evCtx, "finish_error", loza.FinishError(evCtx, status.Error(codes.Internal, fmt.Sprintf("panic: %v", rec)), loza.Int("status_code", int(codes.Internal))))
+					reportTelemetryError(evCtx, "emit", loza.Emit(evCtx))
 					panic(rec)
 				}
 				// Record the panic value in server-side telemetry only. gRPC
 				// transmits the status message to the caller, so clients must
 				// receive a fixed, non-sensitive message instead.
-				loza.FinishError(evCtx, fmt.Errorf("panic recovered: %v", rec), loza.Int("status_code", int(codes.Internal)))
-				_ = loza.Emit(evCtx)
+				reportTelemetryError(evCtx, "finish_error", loza.FinishError(evCtx, fmt.Errorf("panic recovered: %v", rec), loza.Int("status_code", int(codes.Internal))))
+				reportTelemetryError(evCtx, "emit", loza.Emit(evCtx))
 				err = status.Error(codes.Internal, "internal server error")
 				resp = nil
 				return
