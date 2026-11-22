@@ -63,6 +63,60 @@ func TestParseNDJSONEventsBodyLimit(t *testing.T) {
 	}
 }
 
+type chunkReader struct {
+	chunks [][]byte
+}
+
+func (r *chunkReader) Read(p []byte) (int, error) {
+	if len(r.chunks) == 0 {
+		return 0, io.EOF
+	}
+	n := copy(p, r.chunks[0])
+	r.chunks = r.chunks[1:]
+	return n, nil
+}
+
+func TestParseNDJSONEventsOwnsScannedTokens(t *testing.T) {
+	tests := []struct {
+		name   string
+		chunks [][]byte
+		want   [][]byte
+	}{
+		{
+			name:   "one small record",
+			chunks: [][]byte{[]byte(`{"v":1}` + "\n")},
+			want:   [][]byte{[]byte(`{"v":1}`)},
+		},
+		{
+			name: "two small records in separate reads",
+			chunks: [][]byte{
+				[]byte(`{"v":1}` + "\n"),
+				[]byte(`{"v":2}` + "\n"),
+			},
+			want: [][]byte{[]byte(`{"v":1}`), []byte(`{"v":2}`)},
+		},
+		{
+			name: "two large records in separate reads",
+			chunks: [][]byte{
+				[]byte(`{"v":"` + strings.Repeat("a", 2988) + `"}` + "\n"),
+				[]byte(`{"v":"` + strings.Repeat("b", 2988) + `"}` + "\n"),
+			},
+			want: [][]byte{
+				[]byte(`{"v":"` + strings.Repeat("a", 2988) + `"}`),
+				[]byte(`{"v":"` + strings.Repeat("b", 2988) + `"}`),
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			events, err := parseNDJSONEvents(&chunkReader{chunks: tt.chunks}, 0)
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, events)
+		})
+	}
+}
+
 // truncatingReader returns some body bytes and then a short-body error, as a
 // real net/http request body does when Content-Length exceeds the bytes sent.
 type truncatingReader struct {

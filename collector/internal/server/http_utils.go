@@ -59,7 +59,7 @@ func parseNDJSONEvents(body io.Reader, maxBytes int64) ([][]byte, error) {
 		if len(line) == 0 {
 			continue
 		}
-		events = append(events, line)
+		events = append(events, bytes.Clone(line))
 	}
 	if err := scanner.Err(); err != nil {
 		if errors.Is(err, errPayloadTooLarge) {
