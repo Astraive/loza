@@ -59,6 +59,7 @@ class Middleware:
                 status_code = int(status.split()[0]) if status else 500
             except (IndexError, ValueError):
                 status_code = 500
+            ctx.params.status_code = status_code
             return start_response(status, response_headers, exc_info)
 
         try:

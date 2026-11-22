@@ -89,3 +89,24 @@ def test_completed_stream_is_still_reported_as_success() -> None:
     assert len(sink.events) == 1
     payload = json.loads(sink.events[0])
     assert payload["outcome"] == "success", payload
+
+
+def test_lazy_application_records_status_from_start_response_during_iteration() -> None:
+    """A generator WSGI app may start its response only when first iterated."""
+
+    def app(_environ, start_response):
+        def body():
+            start_response("201 Created", [])
+            yield b"created"
+
+        return body()
+
+    middleware, sink = _middleware(app)
+
+    assert list(middleware(_environ(), lambda *_args: None)) == [b"created"]
+
+    assert len(sink.events) == 1
+    payload = json.loads(sink.events[0])
+    assert payload["outcome"] == "success"
+    assert payload["status_code"] == 201
+    assert payload["http"]["status_code"] == 201
