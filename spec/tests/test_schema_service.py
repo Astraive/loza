@@ -1,4 +1,5 @@
 import http.client
+import os
 import sys
 import tempfile
 import threading
@@ -105,6 +106,28 @@ class TestSchemaServiceSchemas(unittest.TestCase):
         status, _ = self._get("/schemas/../loza-spec.yaml")
         self.assertEqual(status, 403)
 
+
+
+class TestSchemaServiceDockerHealthcheck(unittest.TestCase):
+    def test_image_port_and_default_healthcheck_match_service(self):
+        dockerfile = (spec_dir / "docker" / "schema-service" / "Dockerfile").read_text()
+        self.assertIn("EXPOSE 8080", dockerfile)
+        self.assertIn('"--port", "8080"', dockerfile)
+
+        healthcheck_dir = spec_dir / "docker" / "schema-service"
+        sys.path.insert(0, str(healthcheck_dir))
+        try:
+            import healthcheck
+
+            with patch.dict(os.environ, {}, clear=True):
+                with patch("healthcheck.urllib.request.urlopen") as urlopen:
+                    urlopen.return_value.__enter__.return_value.status = 200
+                    self.assertEqual(healthcheck.main(), 0)
+                    urlopen.assert_called_once_with(
+                        "http://127.0.0.1:8080/health", timeout=2
+                    )
+        finally:
+            sys.path.remove(str(healthcheck_dir))
 
 if __name__ == "__main__":
     unittest.main()
