@@ -122,6 +122,7 @@ class ProcessHandle:
         self._started_at_ms = _now_ms(event.started_at)
 
     def finish(self, **attrs: object) -> None:
+        self._event._ensure_mutable()
         now = datetime.now(timezone.utc)
         ended_ms = int((now - self._event.started_at).total_seconds() * 1000)
         status_code, clean_attrs = _extract_status_code(attrs)
@@ -155,6 +156,7 @@ class TimerHandle:
         self._started_at = started_at
 
     def stop(self, **attrs: object) -> None:
+        self._event._ensure_mutable()
         duration_ms = int((datetime.now(timezone.utc) - self._started_at).total_seconds() * 1000)
         status_code, clean_attrs = _extract_status_code(attrs)
         entry = EventTimer(
@@ -181,6 +183,7 @@ class GroupHandle:
         self._started_at_ms = _now_ms(event.started_at)
 
     def finish(self, **attrs: object) -> None:
+        self._event._ensure_mutable()
         now = datetime.now(timezone.utc)
         ended_ms = int((now - self._event.started_at).total_seconds() * 1000)
         status_code, clean_attrs = _extract_status_code(attrs)
