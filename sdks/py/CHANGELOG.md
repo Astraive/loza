@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Cortex health and readiness probes now return `False` for valid non-object
+  JSON response bodies.
+
 ### Security
 
 - `email_hash` and `ip_hash` now pseudonymize with keyed HMAC-SHA256 instead of

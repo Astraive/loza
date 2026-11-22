@@ -79,7 +79,7 @@ class CortexClient:
         """Check if cortex is healthy."""
         try:
             resp = self._get("/healthz")
-            return resp.get("status") == "ok"
+            return isinstance(resp, dict) and resp.get("status") == "ok"
         except (URLError, HTTPError, OSError, ValueError):
             return False
 
@@ -87,7 +87,7 @@ class CortexClient:
         """Check if cortex is ready to accept requests."""
         try:
             resp = self._get("/readyz")
-            return resp.get("status") == "ok" or resp.get("ready") is True
+            return isinstance(resp, dict) and (resp.get("status") == "ok" or resp.get("ready") is True)
         except (URLError, HTTPError, OSError, ValueError):
             return False
 

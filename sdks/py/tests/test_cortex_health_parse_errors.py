@@ -37,6 +37,17 @@ def test_health_and_ready_accept_valid_json(monkeypatch: pytest.MonkeyPatch) -> 
     assert client.ready() is True
 
 
+
+@pytest.mark.parametrize("payload", [b"[]", b"null", b"42", b'"ok"'])
+def test_health_and_ready_return_false_for_non_object_json(
+    monkeypatch: pytest.MonkeyPatch,
+    payload: bytes,
+) -> None:
+    _stub_urlopen(monkeypatch, payload)
+    client = CortexClient("https://cortex")
+    assert client.health() is False
+    assert client.ready() is False
+
 def test_health_returns_false_on_non_json_body(monkeypatch: pytest.MonkeyPatch) -> None:
     _stub_urlopen(monkeypatch, b"not json")
     assert CortexClient("https://cortex").health() is False
