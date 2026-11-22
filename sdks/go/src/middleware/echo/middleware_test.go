@@ -193,3 +193,41 @@ func TestMiddlewareRePanicWithRecoveryDisabledStillEmits(t *testing.T) {
 		t.Fatalf("panic event = %+v", ev)
 	}
 }
+
+func TestMiddlewareReportsEmitFailureWhenPanicPropagates(t *testing.T) {
+	failing := &failingSink{failEvent: "http.request"}
+	recorder, store := loza.MemorySink()
+	cfg := loza.Test().WithSink(failing).WithSink(recorder).WithPanicRecovery(false)
+	if err := loza.Configure(cfg); err != nil {
+		t.Fatalf("configure: %v", err)
+	}
+	t.Cleanup(func() { _ = loza.Shutdown(context.Background()) })
+
+	e := echopkg.New()
+	e.Use(Middleware())
+	e.GET("/panic", func(echopkg.Context) error { panic("boom") })
+	func() {
+		defer func() {
+			if rec := recover(); rec != "boom" {
+				t.Fatalf("propagated panic = %v, want boom", rec)
+			}
+		}()
+		e.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/panic", nil))
+	}()
+
+	if err := loza.Flush(context.Background()); err != nil {
+		t.Fatalf("Flush: %v", err)
+	}
+	var diagnostics int
+	for _, ev := range store.Events() {
+		if ev.Event == "http.request.emit" {
+			diagnostics++
+			if ev.Error == nil || ev.Error.Message != "sink write failed" {
+				t.Fatalf("diagnostic error = %+v", ev.Error)
+			}
+		}
+	}
+	if diagnostics != 1 {
+		t.Fatalf("emit failure diagnostics = %d, want 1; events = %+v", diagnostics, store.Events())
+	}
+}
