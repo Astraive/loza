@@ -6,7 +6,7 @@ import {
 import type { Attr, Params } from './event.ts';
 import { collectorRouteURL, defaultConfig, withOptions, dev, production, test, validateConfig } from '../config/config.ts';
 import type { Config, ConfigOptions } from '../config/config.ts';
-import type { Sink } from '../sinks/sink.ts';
+import type { StatsHandler } from '../sinks/standard-sinks.ts';
 import { HTTPBatchSink } from '../sinks/standard-sinks.ts';
 import { encodeJSON } from '../jsonenc/encoder.ts';
 import { getEvent, runWithEvent } from './context.ts';
@@ -35,6 +35,7 @@ function resolveSink(cfg: Config): Sink | null {
       maxDelay: cfg.maxBackoffMs,
       timeout: cfg.timeoutMs,
       enableCompression: cfg.enableCompression,
+      statsHandler: cfg.statsHandler as StatsHandler | undefined,
     });
   }
   return null;
