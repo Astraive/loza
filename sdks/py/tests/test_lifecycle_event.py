@@ -193,6 +193,40 @@ def test_partial_event_rejects_further_mutation():
     assert ctx.attrs == {}
 
 
+def test_timing_handles_cannot_mutate_event_after_emission():
+    logger, _ = loza.TestLogger()
+    ctx = logger.start_event(loza.Params(event="timing.closed"))
+    handles = (
+        (ctx.start_process("process"), "finish", ctx.processes),
+        (ctx.start_timer("timer"), "stop", ctx.timers),
+        (ctx.start_group("group"), "finish", ctx.groups),
+    )
+    logger.finish(ctx, "success")
+    logger.emit(ctx)
+    before = ctx.to_dict()
+
+    for handle, complete, entries in handles:
+        with pytest.raises(loza.EventClosedError):
+            getattr(handle, complete)()
+        assert entries == []
+
+    assert ctx.to_dict() == before
+
+
+def test_timing_handles_record_before_event_finishes():
+    logger, _ = loza.TestLogger()
+    ctx = logger.start_event(loza.Params(event="timing.active"))
+    process = ctx.start_process("process")
+    timer = ctx.start_timer("timer")
+    group = ctx.start_group("group")
+
+    process.finish()
+    timer.stop()
+    group.finish()
+
+    assert len(ctx.processes) == len(ctx.timers) == len(ctx.groups) == 1
+
+
 def test_double_finish_keeps_dedicated_error():
     """Closing finished events must not lose the double-finish error type."""
     logger, _ = loza.TestLogger()
