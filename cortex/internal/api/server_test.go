@@ -451,7 +451,7 @@ func TestGraphQLRejectsReaderIngestMutations(t *testing.T) {
 	})
 	result := testGraphQLServer(t).executeQuery(
 		ctx,
-		`mutation { ingestEvent(event: {id: "evt", service: "api", kind: "log"}) { status } }`,
+		`mutation { ingestEvent(event: {id: "evt", timestamp: "2026-01-01T12:00:00Z", service: "api", kind: "log"}) { status } }`,
 		nil,
 		"",
 	)
