@@ -36,14 +36,12 @@ func BenchCommand(ctx context.Context, cfg config.Config, args []string) error {
 		return fmt.Errorf("--batch-size must be positive, got %d", *batchSize)
 	}
 
-	// Reject rate/duration combinations whose event count overflows the
-	// platform's int range instead of silently using a wrapped-around count.
-	if _, err := computeTotalEvents(*rate, *duration); err != nil {
+	// The runner count and its overflow check must use the same rounded,
+	// duration-precise calculation.
+	totalEvents, err := computeTotalEvents(*rate, *duration)
+	if err != nil {
 		return err
 	}
-	// Compute the count with rounding so fractional and sub-second durations
-	// yield the accurate total (e.g. 100 events/sec over 500ms is 50, not 0).
-	totalEvents := benchTotalEvents(*rate, *duration)
 
 	workers := 4
 	if *rate < workers {
@@ -76,24 +74,9 @@ func BenchCommand(ctx context.Context, cfg config.Config, args []string) error {
 	return nil
 }
 
-// benchTotalEvents returns the number of events to send for a benchmark at the
-// given rate and duration. It computes with floating-point math and rounding so
-// fractional and sub-second durations yield the correct count (for example,
-// 100 events/sec for 500ms is 50 events, not 0). A non-positive result falls
-// back to the rate, preserving the previous behavior for a zero duration.
-func benchTotalEvents(rate int, duration time.Duration) int {
-	total := int(math.Round(float64(rate) * duration.Seconds()))
-	if total <= 0 {
-		return rate
-	}
-	return total
-}
-
-// computeTotalEvents returns the number of events a benchmark run should send.
-// The multiplication is carried out in int64 with an explicit check against
-// the platform's int limit so that large rate/duration combinations are
-// rejected instead of wrapping around to a wrong (possibly small positive)
-// event count.
+// computeTotalEvents returns the rounded number of events a benchmark run
+// should send. It keeps duration precision while checking the result against
+// the platform's int range.
 func computeTotalEvents(rate int, duration time.Duration) (int, error) {
 	if rate <= 0 {
 		return 0, fmt.Errorf("rate must be greater than zero")
@@ -102,17 +85,35 @@ func computeTotalEvents(rate int, duration time.Duration) (int, error) {
 		return 0, fmt.Errorf("duration must be greater than zero")
 	}
 
+	const nanosPerSecond = int64(time.Second)
+	rate64 := int64(rate)
 	seconds := int64(duration / time.Second)
-	if seconds == 0 {
-		// Sub-second durations produce no whole-seconds worth of events;
-		// keep the historical behavior of sending a single second of events.
-		return rate, nil
-	}
-
+	nanos := int64(duration % time.Second)
 	maxInt := int64(math.MaxInt)
-	if int64(rate) > maxInt/seconds {
+	if seconds > 0 && rate64 > maxInt/seconds {
 		return 0, fmt.Errorf("rate %d over duration %s produces too many events (exceeds int range)", rate, duration)
 	}
+	total := rate64 * seconds
 
-	return int(int64(rate) * seconds), nil
+	// Divide rate*nanos without overflowing int64: the low product is below
+	// 1e18 because both factors are less than 1e9.
+	remainderRate := rate64 % nanosPerSecond
+	fraction := (rate64/nanosPerSecond)*nanos + (remainderRate*nanos)/nanosPerSecond
+	if total > maxInt-fraction {
+		return 0, fmt.Errorf("rate %d over duration %s produces too many events (exceeds int range)", rate, duration)
+	}
+	total += fraction
+	if (remainderRate*nanos)%nanosPerSecond >= nanosPerSecond/2 {
+		if total == maxInt {
+			return 0, fmt.Errorf("rate %d over duration %s produces too many events (exceeds int range)", rate, duration)
+		}
+		total++
+	}
+
+	// Preserve the previous benchmark behavior for positive durations whose
+	// rounded event count is zero.
+	if total <= 0 {
+		return rate, nil
+	}
+	return int(total), nil
 }

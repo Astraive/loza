@@ -14,7 +14,7 @@ import (
 	"github.com/astraive/loza/cli/internal/config"
 )
 
-func TestBenchTotalEvents(t *testing.T) {
+func TestComputeTotalEventsPreservesFractionalDuration(t *testing.T) {
 	tests := []struct {
 		name     string
 		rate     int
@@ -25,12 +25,16 @@ func TestBenchTotalEvents(t *testing.T) {
 		{"fractional seconds", 100, 10500 * time.Millisecond, 1050},
 		{"whole seconds", 100, 10 * time.Second, 1000},
 		{"rounds half away from zero", 3, 1500 * time.Millisecond, 5},
-		{"zero duration falls back to rate", 100, 0, 100},
+		{"rounds tiny positive count to zero fallback", 1, time.Nanosecond, 1},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := benchTotalEvents(tt.rate, tt.duration); got != tt.want {
-				t.Fatalf("benchTotalEvents(%d, %v) = %d, want %d", tt.rate, tt.duration, got, tt.want)
+			got, err := computeTotalEvents(tt.rate, tt.duration)
+			if err != nil {
+				t.Fatalf("computeTotalEvents(%d, %v): %v", tt.rate, tt.duration, err)
+			}
+			if got != tt.want {
+				t.Fatalf("computeTotalEvents(%d, %v) = %d, want %d", tt.rate, tt.duration, got, tt.want)
 			}
 		})
 	}
@@ -51,10 +55,10 @@ func TestComputeTotalEvents(t *testing.T) {
 			want:     1000,
 		},
 		{
-			name:     "sub-second duration falls back to one second",
+			name:     "sub-second duration preserves its fraction",
 			rate:     100,
 			duration: 500 * time.Millisecond,
-			want:     100,
+			want:     50,
 		},
 		{
 			name:     "largest valid count",
@@ -98,8 +102,13 @@ func TestComputeTotalEvents(t *testing.T) {
 			duration: -time.Second,
 			wantErr:  true,
 		},
+		{
+			name:     "fractional duration overflow is rejected",
+			rate:     math.MaxInt / 2,
+			duration: 2500 * time.Millisecond,
+			wantErr:  true,
+		},
 	}
-
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got, err := computeTotalEvents(tt.rate, tt.duration)

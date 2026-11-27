@@ -7,6 +7,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/0.2.0/).
 ## [Unreleased]
 
 ### Fixed
+- CLI: benchmark overflow validation now uses the same rounded, fractional-
+  duration event count that the runner sends.
 
 - Go SDK: `FinishGroupError` now records the supplied error status code on the
   group, so failed `Phase` calls emit a non-zero `status_code` like failed
