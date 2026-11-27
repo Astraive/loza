@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
 """Regression tests for go test -json benchmark parsing."""
 import json
+import os
 import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
+
+BENCH_DIR = Path(__file__).resolve().parents[1]
 
 PARSER = Path(__file__).with_name("parse-go-json.py")
 
@@ -58,6 +62,61 @@ class ParseGoJsonTests(unittest.TestCase):
         self.assertNotEqual(proc.returncode, 0)
         self.assertIn("no benchmark result rows", proc.stderr)
 
+
+    def test_collector_load_without_matching_benchmark_is_skipped(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            bench_dir = root / "bench"
+            lib_dir = bench_dir / "lib"
+            lib_dir.mkdir(parents=True)
+            (root / "collector").mkdir()
+            (bench_dir / "run-collector.sh").write_text(
+                (BENCH_DIR / "run-collector.sh").read_text(encoding="utf-8"),
+                encoding="utf-8",
+            )
+            (lib_dir / "parse-go-json.py").write_text(
+                (BENCH_DIR / "lib" / "parse-go-json.py").read_text(encoding="utf-8"),
+                encoding="utf-8",
+            )
+            (lib_dir / "json-reporter.sh").write_text(
+                (BENCH_DIR / "lib" / "json-reporter.sh").read_text(encoding="utf-8"),
+                encoding="utf-8",
+            )
+            bin_dir = root / "bin"
+            bin_dir.mkdir()
+            fake_go = bin_dir / "go"
+            fake_go.write_text(
+                r"""#!/usr/bin/env bash
+case "$*" in
+    *-bench=BenchmarkLoad*)
+        printf '%s\n' '{"Action":"pass"}'
+        ;;
+    *)
+        printf '%s\n' '{"Action":"output","Output":"BenchmarkFake-1 1 42 ns/op 8 B/op 1 allocs/op\n"}' '{"Action":"pass"}'
+        ;;
+esac
+""",
+                encoding="utf-8",
+            )
+            fake_go.chmod(0o755)
+            env = os.environ.copy()
+            env["PATH"] = f"{bin_dir}{os.pathsep}{env['PATH']}"
+            proc = subprocess.run(
+                ["bash", str(bench_dir / "run-collector.sh")],
+                capture_output=True,
+                check=False,
+                env=env,
+                text=True,
+                timeout=10,
+            )
+
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            self.assertIn("PASS: collector-duckdb", proc.stdout)
+            self.assertIn("PASS: collector-projection", proc.stdout)
+            self.assertIn("SKIP: collector-load (no load benchmark found)", proc.stdout)
+            load_reports = list((bench_dir / "results").glob("collector-load-*.json"))
+            self.assertEqual(len(load_reports), 1)
+            self.assertEqual(json.loads(load_reports[0].read_text())["results"], [])
 
 if __name__ == "__main__":
     unittest.main()

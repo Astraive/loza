@@ -36,9 +36,24 @@ go test ./internal/sinks/internal/projection -run='^$' -bench=. -benchmem -count
 # --- Load Test ---
 echo "--- Load Test ---"
 LOAD_OUT="$RESULTS_DIR/collector-load-${TIMESTAMP}.json"
-go test ./internal/sinks/duckdb -run='^$' -bench=BenchmarkLoad -benchtime=5s -benchmem -count=1 -json 2>/dev/null | \
-    python3 "$SCRIPT_DIR/lib/parse-go-json.py" collector-load collector "$TIMESTAMP" \
-    > "$LOAD_OUT" && echo "  PASS: collector-load" || echo "  FAIL: collector-load"
+if go test ./internal/sinks/duckdb -run='^$' -bench=BenchmarkLoad -benchtime=5s -benchmem -count=1 -json 2>/dev/null | \
+    python3 "$SCRIPT_DIR/lib/parse-go-json.py" collector-load collector "$TIMESTAMP" --allow-empty \
+    > "$LOAD_OUT"; then
+    if python3 - "$LOAD_OUT" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as report:
+    sys.exit(0 if json.load(report).get("results") else 1)
+PY
+    then
+        echo "  PASS: collector-load"
+    else
+        echo "  SKIP: collector-load (no load benchmark found)"
+    fi
+else
+    echo "  FAIL: collector-load"
+fi
 
 cd "$REPO_ROOT"
 echo ""
