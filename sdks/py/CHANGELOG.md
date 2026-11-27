@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Flask middleware now captures the WSGI status when a lazy response calls
+  `start_response` during iteration.
+
 ### Security
 
 - `email_hash` and `ip_hash` now pseudonymize with keyed HMAC-SHA256 instead of
