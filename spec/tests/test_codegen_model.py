@@ -68,5 +68,23 @@ class TestLoadProductVersion(unittest.TestCase):
         self.assertEqual(model._FALLBACK_PRODUCT_VERSION, declared)
 
 
+class TestCortexContractSchemas(unittest.TestCase):
+    def test_generated_contract_references_existing_schema_files(self):
+        contract = model.build_cortex_contract(repo_root / "spec")
+        for name, relative_path in contract["schemas"].items():
+            with self.subTest(schema=name):
+                self.assertTrue((repo_root / relative_path).is_file(), relative_path)
+
+    def test_generation_fails_for_missing_schema_file(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            spec_root = Path(temporary_directory) / "spec"
+            spec_root.mkdir()
+
+            with self.assertRaisesRegex(
+                FileNotFoundError, "cortex-event.schema.json"
+            ):
+                model.build_cortex_contract(spec_root)
+
+
 if __name__ == "__main__":
     unittest.main()

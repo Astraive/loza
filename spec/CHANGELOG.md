@@ -14,6 +14,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `RedisUnavailableError` and logs the underlying error. **Migration:** deployments that
   intentionally relied on the silent fallback must set `DEDUPE_ALLOW_LOCAL_FALLBACK=1` to
   opt back in; the downgrade is then logged as a warning.
+- Restored the five canonical Cortex schemas referenced by the generated contract and
+  make generation fail if any advertised schema file is missing.
 
 ## [0.3.4] - 2026-08-26
 

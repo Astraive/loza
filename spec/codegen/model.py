@@ -269,16 +269,27 @@ def build_contract(spec_root: Path) -> dict[str, Any]:
 
 def build_cortex_contract(spec_root: Path) -> dict[str, Any]:
     """Build Cortex-specific contract from schemas and definitions."""
+    schemas = {
+        "event": "spec/cortex/schemas/json/cortex-event.schema.json",
+        "graph_node": "spec/cortex/schemas/json/cortex-graph-node.schema.json",
+        "graph_edge": "spec/cortex/schemas/json/cortex-graph-edge.schema.json",
+        "reconstruct_response": "spec/cortex/schemas/json/cortex-reconstruct-response.schema.json",
+        "feedback": "spec/cortex/schemas/json/cortex-feedback.schema.json",
+    }
+    missing = [
+        f"{name}={path}"
+        for name, path in schemas.items()
+        if not (spec_root.parent / path).is_file()
+    ]
+    if missing:
+        raise FileNotFoundError(
+            "Cortex contract references missing schema file(s): "
+            + ", ".join(missing)
+        )
     return {
         "spec_version": "v1",
         "api_version": "v1",
-        "schemas": {
-            "event": "spec/cortex/schemas/json/cortex-event.schema.json",
-            "graph_node": "spec/cortex/schemas/json/cortex-graph-node.schema.json",
-            "graph_edge": "spec/cortex/schemas/json/cortex-graph-edge.schema.json",
-            "reconstruct_response": "spec/cortex/schemas/json/cortex-reconstruct-response.schema.json",
-            "feedback": "spec/cortex/schemas/json/cortex-feedback.schema.json",
-        },
+        "schemas": schemas,
         "event_kinds": [
             "event", "http", "job", "queue", "cli", "cron", "log",
             "checkpoint", "deploy", "metric", "trace", "topology",
