@@ -12,6 +12,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/0.2.0/).
   group, so failed `Phase` calls emit a non-zero `status_code` like failed
   `Step` calls instead of `0`.
 
+- Cross-SDK equivalence checks now verify stored release, attrs, notice level,
+  and agent/ai kind fields instead of treating successful submission as proof
+  that the fields were preserved.
+
 ### Changed
 
 - Go SDK migration note (breaking): `core.FinishGroupError`,

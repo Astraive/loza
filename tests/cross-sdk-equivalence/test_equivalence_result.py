@@ -27,10 +27,11 @@ def _matches(marker, prefixes):
 class FakeCollector:
     """In-memory stand-in for the collector endpoints used by main()."""
 
-    def __init__(self, fail_emit_prefixes=(), drop_query_prefixes=()):
+    def __init__(self, fail_emit_prefixes=(), drop_query_prefixes=(), corrupt_fields=()):
         self.store = {}
         self.fail_emit_prefixes = tuple(fail_emit_prefixes)
         self.drop_query_prefixes = tuple(drop_query_prefixes)
+        self.corrupt_fields = tuple(corrupt_fields)
 
     def available(self):
         return True
@@ -39,7 +40,11 @@ class FakeCollector:
         marker = event.get("event_id")
         if _matches(marker, self.fail_emit_prefixes):
             return None
-        self.store[marker] = self._project(event)
+        projected = self._project(event)
+        for prefix, field in self.corrupt_fields:
+            if marker.startswith(prefix):
+                projected[field] = None
+        self.store[marker] = projected
         return {"ok": True}
 
     def query(self, marker):
@@ -49,7 +54,7 @@ class FakeCollector:
 
     @staticmethod
     def _project(event):
-        """Build the projected row shape that canonical_match() expects."""
+        """Build the projected row shape used by the equivalence assertions."""
         return {
             "event_id": event.get("event_id"),
             "event_name": event.get("event"),
@@ -58,6 +63,10 @@ class FakeCollector:
             "http_method": event.get("method"),
             "http_path": event.get("path"),
             "status_code": event.get("status_code"),
+            "release": event.get("release"),
+            "attrs": event.get("attrs"),
+            "level": event.get("level"),
+            "kind": event.get("kind"),
         }
 
 
@@ -96,7 +105,7 @@ class EquivalenceResultTests(unittest.TestCase):
 
     def test_release_projection_failure_fails_test(self):
         output = self.assert_failed(FakeCollector(drop_query_prefixes=("equiv-release-",)))
-        self.assertIn("Release event was not found in projected storage", output)
+        self.assertIn("Release or attrs did not match in projected storage", output)
 
     def test_notice_emit_failure_fails_test(self):
         output = self.assert_failed(FakeCollector(fail_emit_prefixes=("equiv-notice-",)))
@@ -107,14 +116,27 @@ class EquivalenceResultTests(unittest.TestCase):
         self.assertIn("kind=agent emit failed", output)
         self.assertIn("kind=ai emit failed", output)
 
+    def test_corrupted_extended_fields_fail_equivalence(self):
+        corruptions = (
+            (("equiv-release-", "release"), "Release or attrs"),
+            (("equiv-release-", "attrs"), "Release or attrs"),
+            (("equiv-domain-", "attrs"), "Domain helper attrs"),
+            (("equiv-notice-", "level"), "Notice level did not match"),
+            (("equiv-kind-agent-", "kind"), "kind=agent did not match"),
+            (("equiv-kind-ai-", "kind"), "kind=ai did not match"),
+        )
+        for corruption, failure in corruptions:
+            with self.subTest(field=corruption[1], marker=corruption[0]):
+                output = self.assert_failed(FakeCollector(corrupt_fields=(corruption,)))
+                self.assertIn(failure, output)
+
     def test_domain_emit_failure_fails_test(self):
         output = self.assert_failed(FakeCollector(fail_emit_prefixes=("equiv-domain-",)))
         self.assertIn("Domain event emit failed", output)
 
     def test_domain_projection_failure_fails_test(self):
         output = self.assert_failed(FakeCollector(drop_query_prefixes=("equiv-domain-",)))
-        self.assertIn("Domain event was not found in projected storage", output)
-
+        self.assertIn("Domain helper attrs did not match in projected storage", output)
     def test_collector_unavailable_still_skips(self):
         with mock.patch.object(equiv, "check_collector_available", lambda: False), \
                 contextlib.redirect_stdout(io.StringIO()) as output:

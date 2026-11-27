@@ -54,7 +54,8 @@ def build_events_query(marker: str) -> str:
     """Build the events lookup SQL for a validated marker."""
     validate_marker(marker)
     return (
-        "SELECT event_id, event_name, service, outcome, http_method, http_path, status_code "
+        "SELECT event_id, event_name, service, outcome, http_method, http_path, status_code, "
+        "release, attrs, level, kind "
         f"FROM events WHERE event_id = '{marker}' ORDER BY event_id DESC"
     )
 
@@ -172,6 +173,11 @@ def canonical_match(projected: dict, expected: dict) -> bool:
     )
 
 
+def extended_match(projected: dict, expected: dict, fields: tuple[str, ...]) -> bool:
+    """Check that extended fields survived projection into stored rows."""
+    return all(projected.get(field) == expected.get(field) for field in fields)
+
+
 def main():
     print("=== Cross-SDK Equivalence Test ===")
     print(f"Collector: {COLLECTOR_URL}")
@@ -236,8 +242,8 @@ def main():
     print("=== v0.2.0 Extended Equivalence Checks ===")
     print()
 
-    # 1. Release field equivalence
-    print("1. Release field equivalence...")
+    # 1. Release field and attrs equivalence
+    print("1. Release field and attrs equivalence...")
     release_event = dict(CANONICAL_EVENT)
     release_event["attrs"] = dict(CANONICAL_EVENT["attrs"])
     release_marker = make_marker("equiv-release")
@@ -251,10 +257,11 @@ def main():
     else:
         events = wait_for_event(release_marker)
         release_found = require_unique_event(events, release_marker)
-        if release_found is not None and canonical_match(release_found, release_event):
-            print("  PASS: Release event accepted and stored")
+        if release_found is not None and canonical_match(release_found, release_event) \
+                and extended_match(release_found, release_event, ("release", "attrs")):
+            print("  PASS: Release and attrs preserved in projected storage")
         else:
-            record_failure("Release event was not found in projected storage")
+            record_failure("Release or attrs did not match in projected storage")
 
     # 2. Notice level equivalence
     print("2. Notice level equivalence...")
@@ -268,7 +275,12 @@ def main():
     )
     result = emit_event_via_api(notice_event)
     if result:
-        print("  PASS: Notice-level event submitted")
+        notice_events = wait_for_event(notice_marker)
+        notice_found = require_unique_event(notice_events, notice_marker)
+        if notice_found is not None and extended_match(notice_found, notice_event, ("level",)):
+            print("  PASS: Notice level preserved in projected storage")
+        else:
+            record_failure("Notice level did not match in projected storage")
     else:
         record_failure("Notice level emit failed")
 
@@ -276,17 +288,21 @@ def main():
     print("3. Agent/ai kind equivalence...")
     for kind in ("agent", "ai"):
         kind_marker = make_marker(f"equiv-kind-{kind}")
-        result = emit_event_via_api(
-            dict(
-                CANONICAL_EVENT,
-                event=f"test.{kind}.{kind_marker}",
-                event_id=kind_marker,
-                kind=kind,
-                attrs=dict(CANONICAL_EVENT["attrs"], **{"test.marker": kind_marker}),
-            )
+        kind_event = dict(
+            CANONICAL_EVENT,
+            event=f"test.{kind}.{kind_marker}",
+            event_id=kind_marker,
+            kind=kind,
+            attrs=dict(CANONICAL_EVENT["attrs"], **{"test.marker": kind_marker}),
         )
+        result = emit_event_via_api(kind_event)
         if result:
-            print(f"  PASS: kind={kind} submitted")
+            kind_events = wait_for_event(kind_marker)
+            kind_found = require_unique_event(kind_events, kind_marker)
+            if kind_found is not None and extended_match(kind_found, kind_event, ("kind",)):
+                print(f"  PASS: kind={kind} preserved in projected storage")
+            else:
+                record_failure(f"kind={kind} did not match in projected storage")
         else:
             record_failure(f"kind={kind} emit failed")
 
@@ -303,12 +319,13 @@ def main():
     }
     result = emit_event_via_api(domain_event)
     if result:
-        events = wait_for_event(domain_marker)
-        domain_found = require_unique_event(events, domain_marker)
-        if domain_found is not None and canonical_match(domain_found, domain_event):
+        domain_events = wait_for_event(domain_marker)
+        domain_found = require_unique_event(domain_events, domain_marker)
+        if domain_found is not None and canonical_match(domain_found, domain_event) \
+                and extended_match(domain_found, domain_event, ("attrs",)):
             print("  PASS: Domain helper fields preserved in projected storage")
         else:
-            record_failure("Domain event was not found in projected storage")
+            record_failure("Domain helper attrs did not match in projected storage")
     else:
         record_failure("Domain event emit failed")
 
