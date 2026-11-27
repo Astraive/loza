@@ -163,7 +163,31 @@ func validateFanoutRoles(outputs []workerFanoutOutput) error {
 	return nil
 }
 
+// workerFanoutSinkFactories keeps backend construction injectable so startup
+// cleanup can be tested without creating real external sinks.
+type workerFanoutSinkFactories struct {
+	duckDB     func(workerConfig, workerFanoutOutput) (collectorevent.Sink, *sql.DB, error)
+	loki       func(workerFanoutOutput) (collectorevent.Sink, error)
+	otlp       func(workerFanoutOutput) (collectorevent.Sink, error)
+	clickHouse func(workerConfig, workerFanoutOutput) (collectorevent.Sink, error)
+	postgres   func(workerConfig, workerFanoutOutput) (collectorevent.Sink, error)
+	s3         func(workerConfig, workerFanoutOutput) (collectorevent.Sink, error)
+	gcs        func(workerConfig, workerFanoutOutput) (collectorevent.Sink, error)
+}
+
 func createFanoutSinks(cfg workerConfig) ([]processing.NamedSink, *processing.NamedSink, []*sql.DB, error) {
+	return createFanoutSinksWithFactories(cfg, workerFanoutSinkFactories{
+		duckDB:     newDuckDBFanoutSink,
+		loki:       newLokiFanoutSink,
+		otlp:       newOTLPFanoutSink,
+		clickHouse: newClickHouseFanoutSink,
+		postgres:   newPostgresFanoutSink,
+		s3:         newS3FanoutSink,
+		gcs:        newGCSFanoutSink,
+	})
+}
+
+func createFanoutSinksWithFactories(cfg workerConfig, factories workerFanoutSinkFactories) ([]processing.NamedSink, *processing.NamedSink, []*sql.DB, error) {
 	if err := validateFanoutRoles(cfg.fanoutOutputs); err != nil {
 		return nil, nil, nil, err
 	}
@@ -171,6 +195,17 @@ func createFanoutSinks(cfg workerConfig) ([]processing.NamedSink, *processing.Na
 	secondary := make([]processing.NamedSink, 0, len(cfg.fanoutOutputs))
 	var fallback *processing.NamedSink
 	dbs := make([]*sql.DB, 0, len(cfg.fanoutOutputs))
+	closeCreated := func() {
+		for _, named := range secondary {
+			_ = named.Sink.Close(context.Background())
+		}
+		if fallback != nil {
+			_ = fallback.Sink.Close(context.Background())
+		}
+		for _, fanoutDB := range dbs {
+			_ = fanoutDB.Close()
+		}
+	}
 
 	for _, output := range cfg.fanoutOutputs {
 		if !output.enabled {
@@ -190,34 +225,33 @@ func createFanoutSinks(cfg workerConfig) ([]processing.NamedSink, *processing.Na
 
 		switch sinkType {
 		case fanoutSinkDuckDB:
-			sink, db, err = newDuckDBFanoutSink(cfg, output)
+			sink, db, err = factories.duckDB(cfg, output)
 		case fanoutSinkLoki:
-			sink, err = newLokiFanoutSink(output)
+			sink, err = factories.loki(output)
 		case fanoutSinkOTLP:
-			sink, err = newOTLPFanoutSink(output)
+			sink, err = factories.otlp(output)
 		case fanoutSinkClickHouse:
-			sink, err = newClickHouseFanoutSink(cfg, output)
+			sink, err = factories.clickHouse(cfg, output)
 		case fanoutSinkPostgres:
-			sink, err = newPostgresFanoutSink(cfg, output)
+			sink, err = factories.postgres(cfg, output)
 		case fanoutSinkS3:
-			sink, err = newS3FanoutSink(cfg, output)
+			sink, err = factories.s3(cfg, output)
 		case fanoutSinkGCS:
-			sink, err = newGCSFanoutSink(cfg, output)
+			sink, err = factories.gcs(cfg, output)
 		default:
-			for _, fanoutDB := range dbs {
-				_ = fanoutDB.Close()
-			}
+			closeCreated()
 			return nil, nil, nil, fmt.Errorf("fanout output %q: unsupported type %q", output.name, sinkType)
 		}
 
-		if err != nil {
-			for _, fanoutDB := range dbs {
-				_ = fanoutDB.Close()
-			}
-			return nil, nil, nil, err
-		}
 		if db != nil {
 			dbs = append(dbs, db)
+		}
+		if err != nil {
+			if sink != nil {
+				_ = sink.Close(context.Background())
+			}
+			closeCreated()
+			return nil, nil, nil, err
 		}
 
 		named := processing.NamedSink{Name: output.name, Sink: sink}
