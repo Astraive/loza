@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented in this file.
 
+## [Unreleased]
+
+### Fixed
+
+- `Event.clone()` now recursively copies nested plain-object and array
+  attributes; non-plain values remain shared by reference.
+
 ## [0.3.4] - 2026-08-26
 
 ### Changed

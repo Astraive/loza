@@ -83,6 +83,10 @@ const config = production('my-service')
 
 `userId`, `tenantId`, `workspaceId`, `organizationId`, `sessionId`, `requestId`, `traceId`, `spanId`, `featureFlag`, `featureFlagBool`, `experiment`, `orderId`, `cartId`, `productId`, `customerId`, `plan`, `currency`, `amount`, `country`, `device`, `platform`, `appVersion`, `errorType`, `errorCode`, `errorMessage`, `errorStack`, `retryable`
 
+## Event Cloning
+
+`Event.clone()` recursively copies arrays and plain-object attribute values, so nested objects and arrays can be mutated independently on either event. Other non-plain values (such as `Date`, `Map`, or class instances) are retained by reference and are not independently mutable through the clone.
+
 ## Sinks
 
 | Sink | Description |

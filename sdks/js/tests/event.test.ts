@@ -314,4 +314,23 @@ describe('Event.clone deep copy', () => {
     clone.groups[0].attrs!.g = 777;
     assert.equal(ev.groups[0].attrs!.g, 99);
   });
+  it('deep-clones nested attrs in both mutation directions', () => {
+    const event = new Event({ event: 'clone.attrs', service: 'svc' }, 'svc', 'test');
+    event.attrs = { profile: { name: 'before', preferences: ['a'] } };
+
+    const clone = event.clone();
+    assert.notEqual(clone.attrs, event.attrs);
+    assert.notEqual(clone.attrs.profile, event.attrs.profile);
+    assert.notEqual(clone.attrs.profile.preferences, event.attrs.profile.preferences);
+
+    clone.attrs.profile.name = 'clone changed';
+    clone.attrs.profile.preferences.push('b');
+    assert.equal(event.attrs.profile.name, 'before');
+    assert.deepEqual(event.attrs.profile.preferences, ['a']);
+
+    event.attrs.profile.name = 'original changed';
+    event.attrs.profile.preferences.push('c');
+    assert.equal(clone.attrs.profile.name, 'clone changed');
+    assert.deepEqual(clone.attrs.profile.preferences, ['a', 'b']);
+  });
 });
