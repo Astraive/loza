@@ -21,15 +21,16 @@ EXPECTED_GEN=(
 )
 
 BACKUP_DIR="$(mktemp -d)"
-declare -A GENERATED_EXISTED=()
-declare -A BACKUP_SUCCEEDED=()
+GENERATED_EXISTED=()
+BACKUP_SUCCEEDED=()
 
 restore_generated() {
-    local gen status=0
-    for gen in "${EXPECTED_GEN[@]}"; do
-        if [ "${BACKUP_SUCCEEDED[$gen]-}" = yes ]; then
+    local i gen status=0
+    for i in "${!EXPECTED_GEN[@]}"; do
+        gen="${EXPECTED_GEN[$i]}"
+        if [ "${BACKUP_SUCCEEDED[$i]-}" = yes ]; then
             cp -p "$BACKUP_DIR/$gen" "$GEN_DIR/$gen" || status=1
-        elif [ "${GENERATED_EXISTED[$gen]-}" = no ]; then
+        elif [ "${GENERATED_EXISTED[$i]-}" = no ]; then
             rm -f "$GEN_DIR/$gen" || status=1
         fi
     done
@@ -38,16 +39,17 @@ restore_generated() {
 }
 trap restore_generated EXIT
 
-for gen in "${EXPECTED_GEN[@]}"; do
+for i in "${!EXPECTED_GEN[@]}"; do
+    gen="${EXPECTED_GEN[$i]}"
     if [ -e "$GEN_DIR/$gen" ]; then
-        GENERATED_EXISTED["$gen"]=yes
+        GENERATED_EXISTED[$i]=yes
         if cp -p "$GEN_DIR/$gen" "$BACKUP_DIR/$gen"; then
-            BACKUP_SUCCEEDED["$gen"]=yes
+            BACKUP_SUCCEEDED[$i]=yes
         else
             fail "failed to back up generated file: $gen"
         fi
     else
-        GENERATED_EXISTED["$gen"]=no
+        GENERATED_EXISTED[$i]=no
     fi
 done
 
