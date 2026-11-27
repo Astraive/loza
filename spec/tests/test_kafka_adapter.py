@@ -42,11 +42,15 @@ class FakeKafkaError:
     _TRANSPORT = -195
     _INVALID_ARG = -186
 
-    def __init__(self, code):
+    def __init__(self, code, retriable=None):
         self._code = code
+        self._retriable = retriable
 
     def code(self):
         return self._code
+
+    def retriable(self):
+        return self._retriable
 
 
 class FakeKafkaException(Exception):
@@ -220,6 +224,8 @@ class TestKafkaAdapter(unittest.TestCase):
             ("transient", FakeKafkaError(FakeKafkaError._TRANSPORT), 2, False),
             ("permanent", FakeKafkaError(99), 1, True),
             ("unknown", RuntimeError("unknown callback error"), 1, True),
+            ("retriable-unknown-code", FakeKafkaError(777, retriable=True), 2, False),
+            ("permanent-unknown-code", FakeKafkaError(777, retriable=False), 1, True),
         )
         for label, callback_error, attempts, should_fail in cases:
             with self.subTest(error=label):

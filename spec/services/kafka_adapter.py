@@ -263,6 +263,17 @@ class KafkaAdapter:
         if isinstance(exc, _NON_RETRYABLE_EXCEPTIONS):
             return False
 
+        if isinstance(exc, _KafkaDeliveryError):
+            retriable_fn = getattr(exc.error, "retriable", None)
+            if callable(retriable_fn):
+                try:
+                    retriable = retriable_fn()
+                except Exception:
+                    pass
+                else:
+                    if isinstance(retriable, bool):
+                        return retriable
+
         code = self._kafka_error_code(exc)
         if code is not None:
             transient_codes = set()
