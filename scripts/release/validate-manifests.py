@@ -66,10 +66,13 @@ def validate_native_metadata(component: str, manifest: dict[str, Any], manifest_
             except (ValueError, json.JSONDecodeError, tomllib.TOMLDecodeError) as exc:
                 errors.append(f"{component}: failed to parse sdks/js/package.json: {exc}")
             else:
-                if package_data.get("name") != NPM_PACKAGE:
-                    errors.append(f"{component}: sdks/js/package.json name must be {NPM_PACKAGE!r}, not {package_data.get('name')!r}")
-                if package_data.get("version") != version:
-                    errors.append(f"{component}: sdks/js/package.json version must match manifest version {version}")
+                if not isinstance(package_data, dict):
+                    errors.append(f"{component}: sdks/js/package.json must contain a JSON object")
+                else:
+                    if package_data.get("name") != NPM_PACKAGE:
+                        errors.append(f"{component}: sdks/js/package.json name must be {NPM_PACKAGE!r}, not {package_data.get('name')!r}")
+                    if package_data.get("version") != version:
+                        errors.append(f"{component}: sdks/js/package.json version must match manifest version {version}")
 
     if component == "sdk-py":
         pyproject = root / "pyproject.toml"
@@ -79,10 +82,13 @@ def validate_native_metadata(component: str, manifest: dict[str, Any], manifest_
             except (ValueError, json.JSONDecodeError, tomllib.TOMLDecodeError) as exc:
                 errors.append(f"{component}: failed to parse sdks/py/pyproject.toml: {exc}")
             else:
-                if project.get("name") != "loza":
-                    errors.append(f"{component}: sdks/py/pyproject.toml project.name must be 'loza'")
-                if project.get("version") != version:
-                    errors.append(f"{component}: sdks/py/pyproject.toml version must match manifest version {version}")
+                if not isinstance(project, dict):
+                    errors.append(f"{component}: sdks/py/pyproject.toml project must be a mapping")
+                else:
+                    if project.get("name") != "loza":
+                        errors.append(f"{component}: sdks/py/pyproject.toml project.name must be 'loza'")
+                    if project.get("version") != version:
+                        errors.append(f"{component}: sdks/py/pyproject.toml version must match manifest version {version}")
 
     if component == "sdk-rs":
         cargo_toml = root / "Cargo.toml"
@@ -92,10 +98,13 @@ def validate_native_metadata(component: str, manifest: dict[str, Any], manifest_
             except (ValueError, json.JSONDecodeError, tomllib.TOMLDecodeError) as exc:
                 errors.append(f"{component}: failed to parse sdks/rs/Cargo.toml: {exc}")
             else:
-                if package.get("name") != "loza":
-                    errors.append(f"{component}: sdks/rs/Cargo.toml package.name must be 'loza'")
-                if package.get("version") != version:
-                    errors.append(f"{component}: sdks/rs/Cargo.toml version must match manifest version {version}")
+                if not isinstance(package, dict):
+                    errors.append(f"{component}: sdks/rs/Cargo.toml package must be a mapping")
+                else:
+                    if package.get("name") != "loza":
+                        errors.append(f"{component}: sdks/rs/Cargo.toml package.name must be 'loza'")
+                    if package.get("version") != version:
+                        errors.append(f"{component}: sdks/rs/Cargo.toml version must match manifest version {version}")
 
     return errors
 
