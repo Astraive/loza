@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/0.2.0/).
 
 ### Fixed
 
+- Conformance runner decodes partial subprocess output after timeouts, preserving
+  stdout/stderr and returning a failure result instead of crashing.
 - Go SDK: `FinishGroupError` now records the supplied error status code on the
   group, so failed `Phase` calls emit a non-zero `status_code` like failed
   `Step` calls instead of `0`.

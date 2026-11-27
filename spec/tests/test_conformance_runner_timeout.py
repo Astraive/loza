@@ -36,6 +36,58 @@ class TestRunCheckTimeout(unittest.TestCase):
         self.assertIn("timed out", result.stderr)
         self.assertLessEqual(result.duration_s, 5.0)
 
+    def test_timeout_preserves_output_from_each_stream(self):
+        cases = (
+            (
+                "stdout",
+                "import time; print('partial stdout', flush=True); time.sleep(30)",
+                "partial stdout\n",
+                None,
+            ),
+            (
+                "stderr",
+                "import sys, time; "
+                "print('partial stderr', file=sys.stderr, flush=True); "
+                "time.sleep(30)",
+                "",
+                "partial stderr\n",
+            ),
+            (
+                "both",
+                "import sys, time; "
+                "print('partial stdout', flush=True); "
+                "print('partial stderr', file=sys.stderr, flush=True); "
+                "time.sleep(30)",
+                "partial stdout\n",
+                "partial stderr\n",
+            ),
+            (
+                "crlf",
+                "import sys, time; "
+                "sys.stdout.buffer.write(b'partial stdout' + bytes((13, 10))); "
+                "sys.stdout.flush(); "
+                "sys.stderr.buffer.write(b'partial stderr' + bytes((13, 10))); "
+                "sys.stderr.flush(); "
+                "time.sleep(30)",
+                "partial stdout\n",
+                "partial stderr\n",
+            ),
+        )
+        for stream, command, expected_stdout, expected_stderr in cases:
+            with self.subTest(stream=stream):
+                result = runner._run_check(
+                    _check(sys.executable, "-c", command),
+                    verbose=False,
+                    timeout=0.5,
+                )
+                self.assertFalse(result.passed)
+                self.assertEqual(result.returncode, runner.TIMEOUT_RETURN_CODE)
+                self.assertEqual(result.stdout, expected_stdout)
+                expected_result_stderr = "timed out after 0.5s"
+                if expected_stderr is not None:
+                    expected_result_stderr += f"\n{expected_stderr}"
+                self.assertEqual(result.stderr, expected_result_stderr)
+
     def test_fast_command_still_passes(self):
         result = runner._run_check(
             _check(sys.executable, "-c", "print('ok')"),

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import locale
 import os
 import subprocess
 import sys
@@ -134,6 +135,12 @@ def _all_groups() -> list[str]:
     return sorted(groups)
 
 
+def _normalize_timeout_output(output: str | bytes | None, encoding: str) -> str:
+    if isinstance(output, bytes):
+        output = output.decode(encoding, errors="replace")
+    return (output or "").replace("\r\n", "\n").replace("\r", "\n")
+
+
 def _run_check(check: Check, verbose: bool, timeout: float | None = None) -> CheckResult:
     print(f"[{check.sdk}:{check.group}] {' '.join(check.command)}")
     print(f"  {check.description}")
@@ -151,8 +158,9 @@ def _run_check(check: Check, verbose: bool, timeout: float | None = None) -> Che
     except subprocess.TimeoutExpired as exc:
         duration_s = time.perf_counter() - started
         reason = f"timed out after {timeout:g}s"
-        stdout = exc.stdout or ""
-        stderr = exc.stderr or ""
+        encoding = locale.getpreferredencoding(False)
+        stdout = _normalize_timeout_output(exc.stdout, encoding)
+        stderr = _normalize_timeout_output(exc.stderr, encoding)
         print(f"  FAIL ({reason})")
         if not verbose:
             partial_output = stdout + stderr
@@ -168,7 +176,7 @@ def _run_check(check: Check, verbose: bool, timeout: float | None = None) -> Che
             returncode=TIMEOUT_RETURN_CODE,
             duration_s=duration_s,
             stdout=stdout,
-            stderr=f"{reason}\n{stderr}".strip(),
+            stderr=f"{reason}\n{stderr}" if stderr else reason,
         )
     duration_s = time.perf_counter() - started
     if result.returncode == 0:
