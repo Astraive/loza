@@ -1,6 +1,6 @@
 #[test]
 fn middleware_module_captures_http_request() {
-    let logger = loza::Logger::new(loza::Config::test("web"));
+    let logger = loza::Test("web");
     let result = loza::middleware::tower::capture_request(&logger, "GET", "/health", 200).unwrap();
     assert!(result.encoded.contains("\"kind\":\"http\""));
 }
