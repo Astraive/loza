@@ -152,6 +152,29 @@ class MalformedNativeMetadataTests(unittest.TestCase):
             "sdk-rs", "Cargo.toml", "[package\nname = 'loza'", "loza-rs.yaml"
         )
 
+    def test_non_mapping_native_metadata_is_collected(self) -> None:
+        cases = (
+            ("sdk-js", "package.json", "[]", "loza-js.yaml", "must contain a JSON object"),
+            ("sdk-py", "pyproject.toml", 'project = "unexpected"\n', "loza-py.yaml", "project must be a mapping"),
+            ("sdk-rs", "Cargo.toml", 'package = "unexpected"\n', "loza-rs.yaml", "package must be a mapping"),
+        )
+        for component, filename, content, manifest_name, expected_error in cases:
+            with self.subTest(component=component):
+                with tempfile.TemporaryDirectory() as temporary_directory:
+                    package_root = Path(temporary_directory)
+                    (package_root / filename).write_text(content, encoding="utf-8")
+                    manifest = {
+                        "version": "0.3.0",
+                        "paths": {"root": package_root.as_posix()},
+                    }
+                    errors = validate_manifests.validate_native_metadata(
+                        component, manifest, package_root / manifest_name
+                    )
+
+                self.assertEqual(len(errors), 1, errors)
+                self.assertIn(filename, errors[0])
+                self.assertIn(expected_error, errors[0])
+
 
 if __name__ == "__main__":
     unittest.main()
