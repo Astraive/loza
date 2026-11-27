@@ -268,17 +268,17 @@ func ValidateEventBytes(raw []byte, strict bool) error {{
 }}
 
 func ValidateCollectorResponseMap(payload map[string]any) error {{
-\terrs := ValidationErrors{{}}
-\trequireString(payload, "request_id", "missing_request_id", &errs)
-\trequireString(payload, "status", "missing_status", &errs)
-\t
+	errs := ValidationErrors{{}}
+	requireString(payload, "request_id", "missing_request_id", &errs)
+	requireString(payload, "status", "missing_status", &errs)
+
 \t// Validate status is one of the allowed values
 \tif status, ok := payload["status"].(string); ok {{
 \t\tif _, exists := AllowedCollectorStatuses[strings.TrimSpace(status)]; !exists {{
 \t\t\terrs = append(errs, ValidationError{{Field: "status", Code: "invalid_status", Message: fmt.Sprintf("field \\"status\\" must be one of: {collector_statuses_text}; got %q", status)}})
 \t\t}}
 \t}}
-\t
+
 \toptionalInteger(payload, "accepted", &errs)
 \toptionalInteger(payload, "rejected", &errs)
 \toptionalInteger(payload, "invalid", &errs)
@@ -299,7 +299,7 @@ func ValidateEventMap(payload map[string]any, strict bool) error {{
 
 func ValidateEventMapDetailed(payload map[string]any, strict bool) ValidationErrors {{
 \terrs := ValidationErrors{{}}
-\t
+
 \t// Enforce the per-event byte limit after parsing, independent of payload shape.
 \tencoded, marshalErr := json.Marshal(payload)
 \tif marshalErr == nil && len(encoded) > MaxEventBytes {{
@@ -312,9 +312,9 @@ func ValidateEventMapDetailed(payload map[string]any, strict bool) ValidationErr
 \t\t\terrs = append(errs, ValidationError{{Field: "event_type", Code: "alias_not_allowed", Message: "field \\"event_type\\" is not allowed in strict mode; use \\"event\\" instead"}})
 \t\t}}
 \t}}
-\t
+
 \tnormalized, _ := NormalizeEventAliasesCopyMap(payload)
-\t
+
 \tif strict {{
 \t\tfor key := range normalized {{
 \t\t\tif _, ok := AllowedTopLevelFields[key]; !ok {{
@@ -435,7 +435,7 @@ func requireService(payload map[string]any, errs *ValidationErrors) {{
 
 func ValidateIngestEnvelopeMap(payload map[string]any, strict bool) error {{
 \terrs := ValidationErrors{{}}
-\t
+
 \t// Validate required envelope fields
 \trequireString(payload, "api_version", "missing_api_version", &errs)
 \tif source, ok := payload["source"].(map[string]any); ok {{
@@ -444,7 +444,7 @@ func ValidateIngestEnvelopeMap(payload map[string]any, strict bool) error {{
 \t}} else {{
 \t\terrs = append(errs, ValidationError{{Field: "source", Code: "missing_source", Message: "field \\"source\\" must be an object with sdk and service"}})
 \t}}
-\t
+
 \t// Validate events array
 \tif events, ok := payload["events"].([]any); ok {{
 \t\tfor i, item := range events {{
@@ -467,7 +467,7 @@ func ValidateIngestEnvelopeMap(payload map[string]any, strict bool) error {{
 \t}} else {{
 \t\terrs = append(errs, ValidationError{{Field: "events", Code: "missing_events", Message: "field \\"events\\" must be an array"}})
 \t}}
-\t
+
 \tif len(errs) == 0 {{
 \t\treturn nil
 \t}}

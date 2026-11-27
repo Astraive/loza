@@ -84,4 +84,3 @@ func TestEmitIdempotentWithEnricher(t *testing.T) {
 		t.Fatalf("expected tenant.id=enriched in emitted payload, got %v", payload["tenant"])
 	}
 }
-
