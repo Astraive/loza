@@ -207,7 +207,7 @@ def main() -> int:
         manifest_path = component_manifest(args.component)
         manifest = load_yaml(manifest_path)
 
-        version = str(manifest.get("version", "")).strip()
+        version = str(manifest.get("version", ""))
         validate_version(version)
 
         tag = f"{tag_prefix(args.component, manifest)}{version}"

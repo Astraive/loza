@@ -22,7 +22,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 # SemVer 2 core and numeric prerelease identifiers must not have leading zeroes.
 _NUMERIC_IDENTIFIER = r"(?:0|[1-9][0-9]*)"
-_NON_NUMERIC_IDENTIFIER = r"[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*"
+_NON_NUMERIC_IDENTIFIER = r"[0-9]*[A-Za-z-][0-9A-Za-z-]*"
 _PRERELEASE_IDENTIFIER = rf"(?:{_NUMERIC_IDENTIFIER}|{_NON_NUMERIC_IDENTIFIER})"
 _BUILD_IDENTIFIER = r"[0-9A-Za-z-]+"
 SEMVER_RE = re.compile(

@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -134,6 +135,12 @@ class SemverValidationTests(unittest.TestCase):
                     any("version must be semantic version" in error for error in errors),
                     errors,
                 )
+
+    def test_rejects_long_invalid_prerelease_quickly(self) -> None:
+        version = f"1.2.3-{'a' * 10_000}!"
+        started = time.perf_counter()
+        self.assertIsNone(validate_manifests.SEMVER_RE.fullmatch(version))
+        self.assertLess(time.perf_counter() - started, 0.5)
 
 
 class MalformedNativeMetadataTests(unittest.TestCase):

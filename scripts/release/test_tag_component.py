@@ -83,6 +83,33 @@ class TagGenerationTests(unittest.TestCase):
 
         self.assertEqual(result, 1)
 
+    def test_dry_run_rejects_whitespace_in_manifest_version(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            manifest_path = root / "loza.yaml"
+            manifest_path.write_text(
+                yaml.safe_dump({"version": "1.2.3\n"}),
+                encoding="utf-8",
+            )
+            (root / "release.yaml").write_text(
+                yaml.safe_dump({"components": {"loza": "loza.yaml"}}),
+                encoding="utf-8",
+            )
+
+            original_root = tag_component.ROOT
+            tag_component.ROOT = root
+            try:
+                original_argv = sys.argv
+                sys.argv = ["tag-component.py", "loza", "--dry-run"]
+                try:
+                    result = tag_component.main()
+                finally:
+                    sys.argv = original_argv
+            finally:
+                tag_component.ROOT = original_root
+
+        self.assertEqual(result, 1)
+
 
 if __name__ == "__main__":
     unittest.main()
