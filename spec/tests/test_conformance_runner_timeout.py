@@ -61,6 +61,17 @@ class TestRunCheckTimeout(unittest.TestCase):
                 "partial stdout\n",
                 "partial stderr\n",
             ),
+            (
+                "crlf",
+                "import sys, time; "
+                "sys.stdout.buffer.write(b'partial stdout' + bytes((13, 10))); "
+                "sys.stdout.flush(); "
+                "sys.stderr.buffer.write(b'partial stderr' + bytes((13, 10))); "
+                "sys.stderr.flush(); "
+                "time.sleep(30)",
+                "partial stdout\n",
+                "partial stderr\n",
+            ),
         )
         for stream, command, expected_stdout, expected_stderr in cases:
             with self.subTest(stream=stream):
