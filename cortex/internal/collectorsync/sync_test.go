@@ -8,6 +8,8 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -215,6 +217,106 @@ func TestRunPollCatchupDoesNotAdvanceCursorOnFailure(t *testing.T) {
 	}
 	if !state.Current().Timestamp.IsZero() || state.Current().EventID != "" {
 		t.Fatalf("expected in-memory cursor to remain zero, got %+v", state.Current())
+	}
+}
+
+func TestRunPollCatchupOrdersEqualTimestampsByEventID(t *testing.T) {
+	const timestamp = "2026-01-01T00:00:00Z"
+	makeEvent := func(id string) map[string]any {
+		return map[string]any{
+			"schema_version": "v1",
+			"event_version":  "v1",
+			"version":        "1",
+			"event":          "log",
+			"id":             id,
+			"event_id":       id,
+			"timestamp":      timestamp,
+			"kind":           "log",
+			"service":        "checkout",
+			"provenance":     "collector",
+		}
+	}
+	// Timestamp-only ordering may return this physical order, which can split
+	// the equal-timestamp group before its smallest event ID is fetched.
+	events := []map[string]any{makeEvent("evt-b"), makeEvent("evt-c"), makeEvent("evt-a")}
+	var queryCalls int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/collectors/test/lql/query" {
+			http.NotFound(w, r)
+			return
+		}
+		var request struct {
+			Query      string `json:"query"`
+			Parameters map[string]struct {
+				Value string `json:"value"`
+			} `json:"parameters"`
+			Limit int `json:"limit"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Errorf("decode query request: %v", err)
+			http.Error(w, "invalid query request", http.StatusBadRequest)
+			return
+		}
+		queryCalls++
+		compositeOrder := strings.Contains(request.Query, "| sort timestamp asc, event_id asc | limit 2")
+		if !compositeOrder {
+			t.Errorf("query lacks stable composite order: %q", request.Query)
+		}
+		if request.Limit != 2 {
+			t.Errorf("query limit = %d, want 2", request.Limit)
+		}
+		after := ""
+		if binding, ok := request.Parameters["cursor_id"]; ok {
+			after = binding.Value
+		}
+		page := make([]map[string]any, 0, len(events))
+		for _, event := range events {
+			if event["event_id"].(string) > after {
+				page = append(page, event)
+			}
+		}
+		if compositeOrder {
+			sort.Slice(page, func(i, j int) bool {
+				return page[i]["event_id"].(string) < page[j]["event_id"].(string)
+			})
+		}
+		if len(page) > request.Limit {
+			page = page[:request.Limit]
+		}
+		rows := make([]map[string]any, 0, len(page))
+		for _, event := range page {
+			rows = append(rows, map[string]any{"raw": event})
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(map[string]any{
+			"columns": []string{"raw"},
+			"rows":    rows,
+		}); err != nil {
+			t.Errorf("encode query response: %v", err)
+		}
+	}))
+	defer server.Close()
+
+	cfg := config.CollectorConfig{
+		URL:             server.URL,
+		Collector:       "test",
+		BatchSize:       2,
+		QueryTable:      "events",
+		RawColumn:       "raw",
+		TimestampColumn: "timestamp",
+		CursorPath:      filepath.Join(t.TempDir(), "collector.cursor"),
+	}
+	processor := &fakeBatchProcessor{}
+	state := &cursorState{}
+	if err := runPollCatchup(context.Background(), cfg, collectorbridge.NewClient(cfg), processor, state); err != nil {
+		t.Fatalf("run poll catch-up: %v", err)
+	}
+	got := processor.FlattenedIDs()
+	if len(got) != 3 || got[0] != "evt-a" || got[1] != "evt-b" || got[2] != "evt-c" {
+		t.Fatalf("catch-up lost or reordered equal-timestamp events: %v", got)
+	}
+	if queryCalls != 2 {
+		t.Fatalf("query calls = %d, want two pages", queryCalls)
 	}
 }
 

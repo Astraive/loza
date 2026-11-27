@@ -121,7 +121,7 @@ func (c *Client) FetchEventsSince(ctx context.Context, cursor Cursor, limit int)
 	if len(conditions) > 0 {
 		source += " | where " + strings.Join(conditions, " and ")
 	}
-	source += " | sort timestamp asc | limit " + strconv.Itoa(limit)
+	source += " | sort timestamp asc, event_id asc | limit " + strconv.Itoa(limit)
 	rows, err := c.queryLQLRows(ctx, source, parameters, limit)
 	if err != nil {
 		return nil, cursor, err
