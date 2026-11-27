@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# bootstrap.sh -- One-command setup for a fresh clone (issue #59).
+# bootstrap.sh -- Regenerate protobuf code and verify the generated module (issue #59).
 #
-# Generated protobuf Go code under gen/go/loza/core/ is intentionally not
-# committed. This script installs the pinned protobuf tools if needed,
-# generates that code, and verifies the generated module builds. The ordinary
+# Generated protobuf Go code under gen/go/loza/core/ is committed. This script
+# ensures the pinned protobuf tools are available, regenerates that code when
+# needed, and verifies the generated module builds. The ordinary
 # `go build ./...` / `go test ./...` commands for collector and cortex then
 # work as documented.
 set -euo pipefail
@@ -18,7 +18,7 @@ EXPECTED_GEN=(
     "ingest_grpc.pb.go" "collector_grpc.pb.go" "cortex_grpc.pb.go"
 )
 
-echo "==> Generating protobuf Go code (installing pinned tools if needed)"
+echo "==> Generating protobuf Go code (ensuring pinned tools are available)"
 make proto
 
 for gen in "${EXPECTED_GEN[@]}"; do

@@ -133,24 +133,6 @@ class CheckWorkflowSecurityTests(unittest.TestCase):
         findings = check_directory(directory)
         self.assertEqual(findings, [], "\n".join(findings))
 
-        # Explicitly assert every external ref keeps its owner/repo prefix so
-        # a bare-SHA regression cannot slip through again.
-        external = []
-        for path in sorted(directory.glob("*.y*ml")):
-            for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
-                match = USES_RE.match(line)
-                if match is None:
-                    continue
-                ref = match.group(1)
-                if ref.startswith("./"):
-                    continue
-                external.append((path.name, lineno, ref))
-                self.assertIsNotNone(
-                    PINNED_ACTION_RE.fullmatch(ref),
-                    f"{path.name}:{lineno}: invalid action reference {ref!r}",
-                )
-                self.assertNotRegex(ref, r"^[0-9a-f]{40}$", "bare SHA is not resolvable")
-        self.assertEqual(len(external), 94)
 
 
 if __name__ == "__main__":

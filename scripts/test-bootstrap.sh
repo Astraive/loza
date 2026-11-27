@@ -1,10 +1,8 @@
 #!/usr/bin/env bash
 # test-bootstrap.sh -- Regression test for MASS-0997 (issue #59).
 #
-# Fails if a fresh clone cannot generate its protobuf Go code with the single
-# documented bootstrap command, or if collector/cortex still cannot resolve
-# the generated package. Passes once `make bootstrap` is self-contained and the
-# sync check tolerates a clean tree.
+# Verifies missing committed outputs fail the sync check, bootstrap regenerates
+# them, and collector/cortex resolve the generated package.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -22,27 +20,73 @@ EXPECTED_GEN=(
     "ingest_grpc.pb.go" "collector_grpc.pb.go" "cortex_grpc.pb.go"
 )
 
+BACKUP_DIR="$(mktemp -d)"
+GENERATED_EXISTED=()
+BACKUP_SUCCEEDED=()
+
+restore_generated() {
+    local i gen status=0
+    for i in "${!EXPECTED_GEN[@]}"; do
+        gen="${EXPECTED_GEN[$i]}"
+        if [ "${BACKUP_SUCCEEDED[$i]-}" = yes ]; then
+            cp -p "$BACKUP_DIR/$gen" "$GEN_DIR/$gen" || status=1
+        elif [ "${GENERATED_EXISTED[$i]-}" = no ]; then
+            rm -f "$GEN_DIR/$gen" || status=1
+        fi
+    done
+    if [ "$status" -eq 0 ]; then
+        if ! rm -rf "$BACKUP_DIR"; then
+            echo "✗ Failed to remove backup directory: $BACKUP_DIR" >&2
+            status=1
+        fi
+    else
+        echo "✗ Failed to restore generated files; backups retained at: $BACKUP_DIR" >&2
+    fi
+    return "$status"
+}
+trap restore_generated EXIT
+
+for i in "${!EXPECTED_GEN[@]}"; do
+    gen="${EXPECTED_GEN[$i]}"
+    if [ -e "$GEN_DIR/$gen" ]; then
+        GENERATED_EXISTED[$i]=yes
+        if cp -p "$GEN_DIR/$gen" "$BACKUP_DIR/$gen"; then
+            BACKUP_SUCCEEDED[$i]=yes
+        else
+            fail "failed to back up generated file: $gen"
+        fi
+    else
+        GENERATED_EXISTED[$i]=no
+    fi
+done
+
 clean_generated() {
-    rm -f "$GEN_DIR"/*.pb.go "$GEN_DIR"/*_grpc.pb.go
+    local gen
+    for gen in "${EXPECTED_GEN[@]}"; do
+        rm -f "$GEN_DIR/$gen"
+    done
 }
 
 # 1. The bootstrap entry point and self-bootstrapping proto target must exist.
 grep -Eq '^bootstrap:' Makefile || fail "Makefile has no 'bootstrap' target"
 grep -Eq '^proto:[[:space:]]*proto-tools' Makefile || fail "'make proto' does not install its own tools"
 
-# 2. Policy check: generated .pb.go files are produced on demand, not committed.
-if git ls-files 'gen/go/loza/core/*.pb.go' | grep -q .; then
-    fail "generated .pb.go files are committed (this fix relies on on-demand generation)"
-fi
+# 2. Generated protobuf Go files are intentionally committed and checked for
+# drift; bootstrap must still work without removing those tracked artifacts.
+for gen in "${EXPECTED_GEN[@]}"; do
+    git ls-files --error-unmatch "$GEN_DIR/$gen" >/dev/null || fail "generated protobuf file is not tracked: $gen"
+done
 
 # 3. The one-command bootstrap must be documented for new contributors.
 grep -q 'make bootstrap' README.md || fail "README.md does not document 'make bootstrap'"
 grep -q 'make bootstrap' docs/contributing.md || fail "docs/contributing.md does not document 'make bootstrap'"
 grep -q 'make bootstrap' docs/getting-started.md || fail "docs/getting-started.md does not document 'make bootstrap'"
 
-# 4. Proto sync check must succeed with no generated files present (clean clone).
+# 4. The sync check must reject missing committed outputs.
 clean_generated
-bash scripts/check-proto-sync.sh >/dev/null || fail "check-proto-sync.sh fails on a clean clone"
+if bash scripts/check-proto-sync.sh >/dev/null 2>&1; then
+    fail "check-proto-sync.sh succeeds when committed generated files are missing"
+fi
 
 # 5. End to end: the documented bootstrap makes a clean clone buildable.
 clean_generated
@@ -63,5 +107,15 @@ for component in collector cortex; do
     fi
     echo "✓ $component resolves github.com/astraive/loza/gen/go/loza/core"
 done
+
+# 6. A missing committed generated file must fail the sync check. Bootstrap
+# regenerates the outputs, after which sync and the generated-package build pass.
+rm -f "$GEN_DIR/${EXPECTED_GEN[0]}"
+if bash scripts/check-proto-sync.sh >/dev/null 2>&1; then
+    fail "check-proto-sync.sh succeeds when a committed generated file is missing"
+fi
+make bootstrap >/dev/null || fail "make bootstrap failed after removing a generated file"
+bash scripts/check-proto-sync.sh >/dev/null || fail "check-proto-sync.sh fails after bootstrap"
+(cd "$REPO_ROOT/gen/go" && go build ./...) || fail "gen/go does not build after bootstrap"
 
 echo "PASS: 'make bootstrap' generates protobuf code that resolves from collector and cortex"
