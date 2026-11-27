@@ -38,7 +38,7 @@ export function runWithEvent<T>(event: Event, fn: () => T): T {
  * afterwards. Use this to deliberately isolate work from the current event.
  */
 export function withoutEvent<T>(fn: () => T): T {
-  return storage.run(undefined, fn);
+  return storage.exit(fn);
 }
 
 /** Get the request ID from the current context. */
