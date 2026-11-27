@@ -315,6 +315,53 @@ func TestRecordFeedbackEmptyFeedbackIsNotAnError(t *testing.T) {
 	}
 }
 
+func TestRecordFeedbackSignatureLookupError(t *testing.T) {
+	lookupErr := errors.New("signature store unavailable")
+	remStore := &fakeRemediationStore{
+		remediations: map[string]*models.Remediation{
+			"rem-1": {RemediationID: "rem-1", SignatureID: "sig-1"},
+		},
+	}
+	fbStore := &fakeFeedbackStore{
+		feedbackByRemediation: map[string][]*models.RemediationFeedback{
+			"rem-1": {{RemediationID: "rem-1", OutcomeCode: 200, TimeToResolve: 42}},
+		},
+	}
+	sigStore := &fakeSignatureStoreForLearner{sigs: map[string]*models.IncidentSignature{}, getErr: lookupErr}
+	l := NewLearner(remStore, fbStore, sigStore)
+
+	err := l.RecordFeedback(context.Background(), &models.RemediationFeedback{
+		RemediationID: "rem-1", IncidentID: "inc-1", OutcomeCode: 200, OutcomeCategory: "success",
+	})
+	if !errors.Is(err, lookupErr) {
+		t.Fatalf("expected signature lookup error, got %v", err)
+	}
+	if len(fbStore.saved) != 1 {
+		t.Fatal("expected feedback to be persisted despite signature lookup failure")
+	}
+}
+
+func TestRecordFeedbackMissingSignatureIsNotAnError(t *testing.T) {
+	remStore := &fakeRemediationStore{
+		remediations: map[string]*models.Remediation{
+			"rem-1": {RemediationID: "rem-1", SignatureID: "sig-1"},
+		},
+	}
+	fbStore := &fakeFeedbackStore{
+		feedbackByRemediation: map[string][]*models.RemediationFeedback{
+			"rem-1": {{RemediationID: "rem-1", OutcomeCode: 200, TimeToResolve: 42}},
+		},
+	}
+	l := NewLearner(remStore, fbStore, &fakeSignatureStoreForLearner{sigs: map[string]*models.IncidentSignature{}})
+
+	err := l.RecordFeedback(context.Background(), &models.RemediationFeedback{
+		RemediationID: "rem-1", IncidentID: "inc-1", OutcomeCode: 200, OutcomeCategory: "success",
+	})
+	if err != nil {
+		t.Fatalf("expected missing signature to be skipped, got %v", err)
+	}
+}
+
 // TestSignatureGetErrorHandling verifies that signature lookup failures are
 // only treated as "not found" for genuine missing-signature results. Transient
 // failures (DB outage, timeout, etc.) must be propagated so learning does not
