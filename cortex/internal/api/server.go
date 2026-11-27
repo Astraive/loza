@@ -54,9 +54,19 @@ type Server struct {
 	ready       bool
 }
 
-func NewServer(cfg *config.Config, stor storage.Storage) *Server {
+func NewServer(cfg *config.Config, stor storage.Storage, graphStore ...storage.GraphStore) *Server {
 	topology := topology.NewResolver(stor.Topology())
-	graphBuilder := graph.NewBuilder(stor.Graph())
+	var sharedGraphStore *graph.VersionedGraphStore
+	if len(graphStore) > 0 {
+		if versioned, ok := graphStore[0].(*graph.VersionedGraphStore); ok {
+			sharedGraphStore = versioned
+		} else {
+			sharedGraphStore = graph.NewVersionedGraphStore(graphStore[0])
+		}
+	} else {
+		sharedGraphStore = graph.NewVersionedGraphStore(stor.Graph())
+	}
+	graphBuilder := graph.NewBuilder(sharedGraphStore)
 	matching, err := matcher.NewConfiguredSignatureMatcher(stor.Signatures(), cfg.Matcher)
 	if err != nil {
 		log.Warn().Err(err).Str("mode", cfg.Matcher.Mode).Msg("Matcher mode unavailable, falling back to Go matcher")
@@ -81,10 +91,9 @@ func NewServer(cfg *config.Config, stor storage.Storage) *Server {
 
 	graphBuilder.WithDefaultMaxDepth(cfg.Reconstructor.Graph.DefaultMaxDepth)
 
-	eventProc := processor.NewConfiguredEventProcessor(stor.Events(), stor.Topology(), stor.Graph(), cfg.PIIRedaction)
-
+	eventProc := processor.NewConfiguredEventProcessor(stor.Events(), stor.Topology(), sharedGraphStore, cfg.PIIRedaction)
 	authMiddleware := middleware.NewAuthMiddleware(cfg.Authentication)
-	graphqlServer := NewGraphQLServer(cfg, stor)
+	graphqlServer := newGraphQLServer(cfg, stor, sharedGraphStore)
 
 	corrCfg := correlation.FromConfig(
 		cfg.Correlation.Enabled,
@@ -95,7 +104,7 @@ func NewServer(cfg *config.Config, stor storage.Storage) *Server {
 		cfg.Correlation.ListPageSize,
 		cfg.Correlation.MaxEvents,
 	)
-	analyzer := correlation.NewAnalyzer(corrCfg, stor.Events(), stor.Graph())
+	analyzer := correlation.NewAnalyzer(corrCfg, stor.Events(), sharedGraphStore)
 
 	var rateLimit *middleware.RateLimiter
 	if cfg.RateLimit.Enabled {

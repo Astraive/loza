@@ -9,10 +9,10 @@ import (
 	"google.golang.org/grpc"
 )
 
-func New(cfg *config.Config, stor storage.Storage) *api.GRPCServer {
+func New(cfg *config.Config, stor storage.Storage, graphStore ...storage.GraphStore) *api.GRPCServer {
 	// Redaction is derived from cfg.PIIRedaction inside NewGRPCServer so every
 	// ingestion path shares the same configured redactor.
-	return api.NewGRPCServer(cfg, stor)
+	return api.NewGRPCServer(cfg, stor, graphStore...)
 }
 
 // buildRedactConfig resolves the effective redaction settings from config.

@@ -8,8 +8,8 @@ import (
 	"github.com/astraive/loza/cortex/internal/storage"
 )
 
-func New(cfg *config.Config, stor storage.Storage) *api.Server {
-	return api.NewServer(cfg, stor)
+func New(cfg *config.Config, stor storage.Storage, graphStore ...storage.GraphStore) *api.Server {
+	return api.NewServer(cfg, stor, graphStore...)
 }
 
 func Handler(cfg *config.Config, stor storage.Storage) http.Handler {

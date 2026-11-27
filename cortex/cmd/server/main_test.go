@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/astraive/loza/cortex/internal/config"
+	"github.com/astraive/loza/cortex/internal/graph"
 	"github.com/astraive/loza/cortex/internal/models"
 	"github.com/astraive/loza/cortex/internal/storage"
 	"google.golang.org/grpc"
@@ -292,7 +293,7 @@ func TestSyncProcessorAppliesPIIRedaction(t *testing.T) {
 	}
 
 	// The source-of-truth sync feeds pulled events through ProcessBatch.
-	proc := newSyncProcessor(cfg, stor)
+	proc := newSyncProcessor(cfg, stor, graph.NewVersionedGraphStore(stor.Graph()))
 	batch := []*models.Event{{
 		ID:         "evt-sync",
 		Timestamp:  time.Now(),

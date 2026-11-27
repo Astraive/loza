@@ -7,6 +7,8 @@
 - Environment override parse errors are no longer silently swallowed. `CORTEX_*`
   numeric, duration, and boolean overrides must be well-formed or configuration
   loading fails at startup with an error naming the offending variable.
+- Graph adjacency caches now refresh after successful graph writes made through
+  the shared graph store, including correlation analysis and event processing.
 
 ### Changed
 - Migration note: `config.Default()` now returns `(*Config, error)` so invalid
