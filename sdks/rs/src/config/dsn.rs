@@ -326,7 +326,9 @@ fn percent_decode(value: &str, field: &str) -> Result<String, DsnError> {
         match bytes[index] {
             b'%' => {
                 if index + 2 >= bytes.len() {
-                    return Err(DsnError(format!("{field} has an incomplete percent escape")));
+                    return Err(DsnError(format!(
+                        "{field} has an incomplete percent escape"
+                    )));
                 }
                 let high = hex_value(bytes[index + 1])
                     .ok_or_else(|| DsnError(format!("{field} has an invalid percent escape")))?;

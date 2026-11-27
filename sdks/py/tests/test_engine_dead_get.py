@@ -11,6 +11,4 @@ from loza.cortex.engine import Engine
 
 def test_engine_has_no_unused_get_helper() -> None:
     """The vestigial ``_get`` helper must stay removed from ``Engine``."""
-    assert not hasattr(Engine, "_get"), (
-        "Engine._get was removed as dead code (see #380); do not reintroduce it"
-    )
+    assert not hasattr(Engine, "_get"), "Engine._get was removed as dead code (see #380); do not reintroduce it"

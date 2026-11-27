@@ -29,9 +29,7 @@ def test_train_and_eval_incident_ids_do_not_overlap() -> None:
 
     assert train_ids, "expected train incidents"
     assert eval_ids, "expected eval incidents"
-    assert train_ids.isdisjoint(eval_ids), (
-        f"train/eval incident IDs overlap: {sorted(train_ids & eval_ids)}"
-    )
+    assert train_ids.isdisjoint(eval_ids), f"train/eval incident IDs overlap: {sorted(train_ids & eval_ids)}"
 
 
 def test_incident_ids_encode_phase_and_are_unique() -> None:

@@ -37,12 +37,11 @@ def test_ip_hash_is_keyed_and_trims(monkeypatch):
 
 
 def test_different_secrets_produce_different_digests():
-    assert loza.email_hash("user@example.com", secret=SECRET).value != loza.email_hash(
-        "user@example.com", secret=OTHER_SECRET
-    ).value
-    assert loza.ip_hash("192.168.1.1", secret=SECRET).value != loza.ip_hash(
-        "192.168.1.1", secret=OTHER_SECRET
-    ).value
+    assert (
+        loza.email_hash("user@example.com", secret=SECRET).value
+        != loza.email_hash("user@example.com", secret=OTHER_SECRET).value
+    )
+    assert loza.ip_hash("192.168.1.1", secret=SECRET).value != loza.ip_hash("192.168.1.1", secret=OTHER_SECRET).value
 
 
 def test_env_secret_used_without_explicit_secret(monkeypatch):

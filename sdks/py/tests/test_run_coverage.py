@@ -18,9 +18,7 @@ def _load_run_coverage():
     return module
 
 
-def test_coverage_gate_is_independent_of_caller_cwd(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+def test_coverage_gate_is_independent_of_caller_cwd(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """Running the gate via an absolute path must not depend on the caller's CWD."""
     module = _load_run_coverage()
     calls: list[tuple[list[str], dict[str, object]]] = []

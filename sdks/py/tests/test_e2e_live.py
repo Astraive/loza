@@ -51,20 +51,13 @@ SERVICE_NAME = "e2e-test-service"
 
 def _expected_events(count: int = EVENT_COUNT) -> list[dict]:
     """Build the events emitted by the E2E test, for query-row verification."""
-    return [
-        {"event": f"e2e.test.event_{i}", "service": SERVICE_NAME, "outcome": "success"}
-        for i in range(count)
-    ]
+    return [{"event": f"e2e.test.event_{i}", "service": SERVICE_NAME, "outcome": "success"} for i in range(count)]
 
 
 def _missing_expected_events(rows, expected_events):
     """Return expected events that are absent from collector query ``rows``."""
     seen = {(row.get("event"), row.get("service"), row.get("outcome")) for row in rows}
-    return [
-        event
-        for event in expected_events
-        if (event["event"], event["service"], event["outcome"]) not in seen
-    ]
+    return [event for event in expected_events if (event["event"], event["service"], event["outcome"]) not in seen]
 
 
 @_COLLECTOR_SKIP
@@ -194,10 +187,7 @@ def test_missing_expected_events_detects_absent_event():
 
 def test_missing_expected_events_empty_when_all_present():
     """Verification passes when every emitted event is present in query rows."""
-    rows = [
-        {"event": f"e2e.test.event_{i}", "service": SERVICE_NAME, "outcome": "success"}
-        for i in range(EVENT_COUNT)
-    ]
+    rows = [{"event": f"e2e.test.event_{i}", "service": SERVICE_NAME, "outcome": "success"} for i in range(EVENT_COUNT)]
     assert _missing_expected_events(rows, _expected_events()) == []
 
 

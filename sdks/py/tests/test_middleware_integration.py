@@ -8,7 +8,6 @@ from types import SimpleNamespace
 import pytest
 
 import loza
-import pytest
 from loza.middleware.asgi import Middleware
 
 
@@ -66,6 +65,8 @@ def test_starlette_middleware_records_status_code() -> None:
     from loza.middleware.starlette import Middleware as StarletteMiddleware
 
     asyncio.run(_run_app([], StarletteMiddleware))
+
+
 def test_asgi_middleware_emits_error_event_when_route_resolver_raises() -> None:
     """A failing resolver must not bypass the one-wide-event-per-request lifecycle."""
 
@@ -153,6 +154,8 @@ def test_asgi_middleware_records_ordinary_exception_without_panic_flag() -> None
         assert "panic" not in payload.get("attrs", {})
 
     asyncio.run(run())
+
+
 def test_response_capture_accumulates_without_reset() -> None:
     from loza.middleware.asgi.response import ResponseCapture
 
@@ -491,6 +494,8 @@ def test_django_middleware_uses_route_resolved_during_view_dispatch() -> None:
     payload = json.loads(sink.events[0])
     assert payload["path"] == "/users/7/"
     assert payload["route"] == "users/<int:pk>/"
+
+
 def test_starlette_middleware_without_app_raises_configuration_error() -> None:
     """An unconfigured Starlette middleware must not silently violate the ASGI protocol."""
     from loza.middleware.starlette import Middleware as StarletteMiddleware
@@ -517,6 +522,8 @@ def test_starlette_middleware_without_app_raises_configuration_error() -> None:
         with pytest.raises(RuntimeError, match="no wrapped ASGI app"):
             asyncio.run(instance(scope, receive, send))
         assert sent == []
+
+
 def test_flask_middleware_factory_accepts_extra_config() -> None:
     from loza.middleware.flask import middleware
 
@@ -541,6 +548,8 @@ def test_flask_middleware_factory_still_accepts_service_only() -> None:
     assert instance.app is None
     assert instance.service == "checkout"
     assert instance.config == {}
+
+
 def test_flask_middleware_malformed_status_defaults_to_500() -> None:
     from loza.middleware.flask import Middleware as FlaskMiddleware
 

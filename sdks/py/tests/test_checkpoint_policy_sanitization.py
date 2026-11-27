@@ -77,9 +77,7 @@ def test_standalone_sanitize_event_covers_checkpoints() -> None:
     ctx._drop_keys.add("gamma")
     ctx._hash_keys.add("beta")
     ctx._sensitive_keys.add("alpha")
-    ctx.checkpoints.append(
-        {"name": "db", "alpha": "SENSITIVE_RAW", "beta": HASH_RAW, "gamma": "DROP_RAW"}
-    )
+    ctx.checkpoints.append({"name": "db", "alpha": "SENSITIVE_RAW", "beta": HASH_RAW, "gamma": "DROP_RAW"})
 
     safe = event_module.sanitize_event(ctx)
 

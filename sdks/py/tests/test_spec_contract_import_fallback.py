@@ -16,9 +16,7 @@ from pathlib import Path
 
 import pytest
 
-SPEC_CONTRACT_PATH = (
-    Path(__file__).resolve().parents[1] / "src" / "loza" / "generated" / "spec_contract.py"
-)
+SPEC_CONTRACT_PATH = Path(__file__).resolve().parents[1] / "src" / "loza" / "generated" / "spec_contract.py"
 
 
 def _load_spec_contract(module_name: str):

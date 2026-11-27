@@ -18,7 +18,7 @@ pub const DEFAULT_KEYS: &[&str] = &[
 ];
 
 fn segments(value: &str) -> Vec<&str> {
-    value.split(|c| c == '.' || c == '_').collect()
+    value.split(['.', '_']).collect()
 }
 
 /// Returns true when `needle` appears as a contiguous run of segments in
@@ -36,6 +36,13 @@ pub fn matches_key(key: &str, keys: &[&str]) -> bool {
     let key_segments = segments(&lowered);
     keys.iter()
         .any(|wanted| contains_segments(&key_segments, &segments(wanted)))
+}
+
+pub fn hash_input(value: &serde_json::Value) -> String {
+    match value {
+        serde_json::Value::String(text) => text.clone(),
+        _ => value.to_string(),
+    }
 }
 
 #[cfg(test)]
@@ -76,12 +83,5 @@ mod tests {
         assert!(!matches_key("request.id", DEFAULT_KEYS));
         // Segment matching must not devolve into a loose substring match.
         assert!(!matches_key("tokenizer_mode", DEFAULT_KEYS));
-    }
-}
-
-pub fn hash_input(value: &serde_json::Value) -> String {
-    match value {
-        serde_json::Value::String(text) => text.clone(),
-        _ => value.to_string(),
     }
 }

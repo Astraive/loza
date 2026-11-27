@@ -46,7 +46,7 @@ REPRESENTATIVE_VALUES = [
     "é",
     "😀",
     "\x01",
-    '\x00\x08\x0b\x0c\x0e\x1f',
+    "\x00\x08\x0b\x0c\x0e\x1f",
     'a"b',
     "line\nbreak",
     "back\\slash",

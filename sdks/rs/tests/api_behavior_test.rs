@@ -10,8 +10,7 @@ fn disabled_config_has_no_emitting_sinks() {
     let cfg = Config::disabled();
 
     assert!(
-        !cfg
-            .sinks
+        !cfg.sinks
             .iter()
             .any(|s| matches!(s, SinkConfig::Stdout | SinkConfig::Stderr)),
         "a disabled config must not write events to stdout/stderr, got {:?}",

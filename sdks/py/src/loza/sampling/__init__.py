@@ -42,7 +42,35 @@ is imported directly from ``loza.core.sampler``.
 
 from __future__ import annotations
 
-from ..core.sampler import *  # noqa: F401,F403
+from ..core.sampler import (
+    AllowFields,
+    BlockFields,
+    SampleByEvent,
+    SampleByOutcome,
+    Sampler,
+    ShouldSample,
+    all_sampler,
+    allow_fields,
+    any_sampler,
+    block_fields,
+    not_sampler,
+    sample_all,
+    sample_by_event,
+    sample_by_header,
+    sample_by_outcome,
+    sample_errors,
+    sample_feature_flag,
+    sample_none,
+    sample_random,
+    sample_rate,
+    sample_rate_limited,
+    sample_routes,
+    sample_slow_requests,
+    sample_status_codes,
+    sample_tenants,
+    sample_users,
+    should_sample,
+)
 
 __all__ = [
     "Sampler",

@@ -240,6 +240,8 @@ def test_httpbatch_sink_retries_malformed_response_body() -> None:
     finally:
         server.shutdown()
         server.server_close()
+
+
 _VALID_EVENT = (
     '{"timestamp":"2025-01-01T00:00:00Z","schema_version":"v1","event_version":"v1",'
     '"event_id":"evt_1","service":"checkout","event":"payment.completed","kind":"http"}'
