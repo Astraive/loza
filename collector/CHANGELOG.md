@@ -6,6 +6,7 @@ All notable changes to this project are documented in this file.
 
 ### Fixed
 
+- Correct Collector sink reference examples to use strict fanout output configuration.
 - Preserve earlier NDJSON records when scanner buffers are reused.
 
 ## [0.3.4] - 2026-08-26

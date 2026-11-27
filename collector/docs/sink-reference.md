@@ -1,19 +1,21 @@
 # Sink Reference
 
-The collector supports eight sink implementations. Each sink is configured independently and receives events through the fanout stage.
+The collector's fanout stage supports seven storage and export outputs. Each output receives events through the fanout stage.
 
 ## Configuration
 
-Sinks are configured under the `sinks` section of the collector config file. Each sink has a `name`, `type`, and type-specific configuration fields.
+Configure outputs under `fanout.outputs`. Each entry has common `name`, `role`, `type`, and `enabled` fields. Type-specific settings belong under a nested block named for the output type.
 
 ```yaml
-sinks:
-  - name: primary-db
-    type: duckdb
-    # ... type-specific fields
-  - name: analytics
-    type: clickhouse
-    # ... type-specific fields
+fanout:
+  outputs:
+    - name: primary-db
+      role: primary
+      type: duckdb
+      enabled: true
+      duckdb:
+        path: loza.db
+        table: events
 ```
 
 ## Sink Overview
@@ -21,7 +23,6 @@ sinks:
 | Sink | Type | Batching | Durability | Use Case |
 |---|---|---|---|---|
 | DuckDB | Columnar embedded DB | Micro-batch | File-based | Local query, analytics |
-| Kafka | Distributed log | Per-message | Replicated | Event streaming, fanout |
 | ClickHouse | Columnar OLAP | Micro-batch | Replicated | Analytics, aggregations |
 | Postgres | Relational DB | Per-message | WAL | Metadata, relational queries |
 | Loki | Log aggregation | Micro-batch | Replicated | Log search, dashboards |
@@ -29,28 +30,36 @@ sinks:
 | S3 | Object storage | Micro-batch | Replicated | Cold storage, archival |
 | GCS | Object storage | Micro-batch | Replicated | Cold storage, archival |
 
+Kafka is configured separately as the event bus for queue or hybrid mode; it is not a fanout output. See the [Kafka queue example](../configs/loza.queue.kafka.yaml).
+
 ---
 
 ## DuckDB
 
 Embedded columnar database. The default sink for local development and single-node deployments. Shared with Cortex for incident intelligence.
 
-**Config Fields**
+**Collector YAML fields (`fanout.outputs[].duckdb`)**
 
-| Field | Type | Default | Description |
-|---|---|---|---|
-| path | string | `loza.db` | Database file path |
-| table | string | `events` | Target table name |
-| column_types | map | (auto) | Column type overrides |
+| Field | Type | Description |
+|---|---|---|
+| `path` | string | Database file path |
+| `table` | string | Target table name |
+| `raw_column` | string | Raw event JSON column |
+| `store_raw` | bool | Store raw event JSON |
 
 **Example**
 
 ```yaml
-sinks:
-  - name: local-db
-    type: duckdb
-    path: /data/loza.db
-    table: events
+fanout:
+  outputs:
+    - name: local-db
+      role: primary
+      type: duckdb
+      enabled: true
+      duckdb:
+        path: /data/loza.db
+        table: events
+        store_raw: true
 ```
 
 **Behavior Notes**
@@ -62,41 +71,11 @@ sinks:
 
 ---
 
-## Kafka
+## Kafka Event Bus
 
-Distributed event log for high-throughput streaming and multi-consumer fanout.
-
-**Config Fields**
-
-| Field | Type | Default | Description |
-|---|---|---|---|
-| brokers | string[] | (required) | Kafka broker addresses |
-| topic | string | (required) | Target topic |
-| acks | string | `all` | Acknowledgment mode: `all`, `1`, `0` |
-| enable_idempotence | bool | `true` | Idempotent producer |
-| compression | string | `snappy` | Compression: `none`, `gzip`, `snappy`, `lz4`, `zstd` |
-| max_message_bytes | int | `1048576` | Max message size in bytes |
-| flush_frequency | duration | `100ms` | Producer flush interval |
-
-**Example**
-
-```yaml
-sinks:
-  - name: event-stream
-    type: kafka
-    brokers:
-      - "127.0.0.1:9092"
-    topic: loza-events
-    acks: all
-    enable_idempotence: true
-    compression: snappy
-```
-
-**Behavior Notes**
-
-- Each event is sent as a single Kafka message. The event ID is used as the message key.
-- The producer is created once and reused across flushes.
-- Connection failures trigger the retry/DLQ path.
+Kafka is not a fanout sink, so `type: kafka` is not supported under
+`fanout.outputs`. Queue and hybrid modes use the top-level `kafka` settings;
+see the [queue-mode configuration](../configs/loza.queue.kafka.yaml).
 
 ---
 
@@ -104,25 +83,33 @@ sinks:
 
 Columnar OLAP database for analytics workloads.
 
-**Config Fields**
+**Collector YAML fields (`fanout.outputs[].clickhouse`)**
 
-| Field | Type | Default | Description |
-|---|---|---|---|
-| dsn | string | (required) | ClickHouse connection DSN |
-| table | string | `events` | Target table name |
-| batch_size | int | `1000` | Insert batch size |
-| flush_interval | duration | `5s` | Flush interval |
+| Field | Type | Description |
+|---|---|---|
+| `addrs` | string[] | ClickHouse server addresses |
+| `database` | string | Database name |
+| `username` | string | User name |
+| `password` | string | Password |
+| `table` | string | Target table |
+| `schema` | map[string]string | Column type overrides |
+| `store_raw` | bool | Store raw event JSON |
+| `raw_column` | string | Raw event JSON column |
 
 **Example**
 
 ```yaml
-sinks:
-  - name: analytics
-    type: clickhouse
-    dsn: "clickhouse://localhost:9000/loza"
-    table: events
-    batch_size: 1000
-    flush_interval: 5s
+fanout:
+  outputs:
+    - name: analytics
+      role: secondary
+      type: clickhouse
+      enabled: true
+      clickhouse:
+        addrs:
+          - "127.0.0.1:9000"
+        database: loza
+        table: events
 ```
 
 **Behavior Notes**
@@ -137,23 +124,28 @@ sinks:
 
 Relational database for metadata storage and relational queries.
 
-**Config Fields**
+**Collector YAML fields (`fanout.outputs[].postgres`)**
 
-| Field | Type | Default | Description |
-|---|---|---|---|
-| dsn | string | (required) | PostgreSQL connection DSN |
-| table | string | `events` | Target table name |
-| batch_size | int | `100` | Insert batch size |
-| flush_interval | duration | `5s` | Flush interval |
+| Field | Type | Description |
+|---|---|---|
+| `dsn` | string | PostgreSQL connection DSN |
+| `table` | string | Target table name |
+| `schema` | map[string]string | Column type overrides |
+| `store_raw` | bool | Store raw event JSON |
+| `raw_column` | string | Raw event JSON column |
 
 **Example**
 
 ```yaml
-sinks:
-  - name: metadata
-    type: postgres
-    dsn: "postgres://user:pass@localhost:5432/loza?sslmode=disable"
-    table: events
+fanout:
+  outputs:
+    - name: metadata
+      role: secondary
+      type: postgres
+      enabled: true
+      postgres:
+        dsn: "postgres://user:pass@localhost:5432/loza?sslmode=disable"
+        table: events
 ```
 
 **Behavior Notes**
@@ -168,26 +160,31 @@ sinks:
 
 Log aggregation system for log search and dashboard integration.
 
-**Config Fields**
+**Collector YAML fields (`fanout.outputs[].loki`)**
 
-| Field | Type | Default | Description |
-|---|---|---|---|
-| url | string | (required) | Loki push URL |
-| tenant_id | string | `` | Loki tenant ID (X-Scope-OrgID) |
-| labels | map | `{}` | Static labels to attach |
-| batch_size | int | `100` | Push batch size |
-| flush_interval | duration | `5s` | Push interval |
+| Field | Type | Description |
+|---|---|---|
+| `url` | string | Loki push URL |
+| `tenant_id` | string | Loki tenant ID (`X-Scope-OrgID`) |
+| `labels` | map[string]string | Static labels |
+| `batch_size` | int | Push batch size |
+| `flush_interval` | duration | Push interval |
+| `timeout` | duration | Request timeout |
 
 **Example**
 
 ```yaml
-sinks:
-  - name: logs
-    type: loki
-    url: "http://localhost:3100/loki/api/core/push"
-    tenant_id: loza
-    labels:
-      source: loza-collector
+fanout:
+  outputs:
+    - name: logs
+      role: secondary
+      type: loki
+      enabled: true
+      loki:
+        url: "http://localhost:3100/loki/api/core/push"
+        tenant_id: loza
+        labels:
+          source: loza-collector
 ```
 
 **Behavior Notes**
@@ -202,26 +199,29 @@ sinks:
 
 OpenTelemetry Protocol export for vendor-agnostic event forwarding.
 
-**Config Fields**
+**Collector YAML fields (`fanout.outputs[].otlp`)**
 
-| Field | Type | Default | Description |
-|---|---|---|---|
-| endpoint | string | (required) | OTLP gRPC or HTTP endpoint |
-| protocol | string | `grpc` | Transport: `grpc` or `http` |
-| headers | map | `{}` | Additional headers |
-| insecure | bool | `false` | Disable TLS |
-| batch_size | int | `512` | Export batch size |
-| flush_interval | duration | `5s` | Export interval |
+| Field | Type | Description |
+|---|---|---|
+| `endpoint` | string | OTLP gRPC or HTTP endpoint |
+| `protocol` | string | Transport: `grpc` or `http` |
+| `insecure` | bool | Disable TLS |
+| `timeout` | duration | Export request timeout |
+| `logger` | string | Logger name |
 
 **Example**
 
 ```yaml
-sinks:
-  - name: otlp-export
-    type: otlp
-    endpoint: "otel-collector:4317"
-    protocol: grpc
-    insecure: true
+fanout:
+  outputs:
+    - name: otlp-export
+      role: secondary
+      type: otlp
+      enabled: true
+      otlp:
+        endpoint: "otel-collector:4317"
+        protocol: grpc
+        insecure: true
 ```
 
 **Behavior Notes**
@@ -236,29 +236,34 @@ sinks:
 
 AWS S3 object storage for cold storage and archival.
 
-**Config Fields**
+**Collector YAML fields (`fanout.outputs[].s3`)**
 
-| Field | Type | Default | Description |
-|---|---|---|---|
-| bucket | string | (required) | S3 bucket name |
-| prefix | string | `` | Object key prefix |
-| region | string | `us-east-1` | AWS region |
-| endpoint | string | `` | Custom endpoint (for MinIO, etc.) |
-| batch_size | int | `1000` | Objects per flush |
-| flush_interval | duration | `60s` | Flush interval |
-| format | string | `ndjson` | Output format: `ndjson`, `parquet` |
+| Field | Type | Description |
+|---|---|---|
+| `bucket` | string | S3 bucket name |
+| `prefix` | string | Object key prefix |
+| `region` | string | AWS region |
+| `endpoint` | string | Optional custom endpoint |
+| `access_key` | string | Optional access key |
+| `secret_key` | string | Optional secret key |
+| `schema` | map[string]string | Column type overrides |
+| `batch_size` | int | Objects per flush |
+| `flush_interval` | duration | Flush interval |
 
 **Example**
 
 ```yaml
-sinks:
-  - name: archive
-    type: s3
-    bucket: loza-events
-    prefix: "2026/05/"
-    region: us-east-1
-    format: ndjson
-    flush_interval: 60s
+fanout:
+  outputs:
+    - name: archive
+      role: secondary
+      type: s3
+      enabled: true
+      s3:
+        bucket: loza-events
+        prefix: "2026/05/"
+        region: us-east-1
+        flush_interval: 60s
 ```
 
 **Behavior Notes**
@@ -273,25 +278,29 @@ sinks:
 
 Google Cloud Storage for cold storage and archival.
 
-**Config Fields**
+**Collector YAML fields (`fanout.outputs[].gcs`)**
 
-| Field | Type | Default | Description |
-|---|---|---|---|
-| bucket | string | (required) | GCS bucket name |
-| prefix | string | `` | Object key prefix |
-| batch_size | int | `1000` | Objects per flush |
-| flush_interval | duration | `60s` | Flush interval |
-| format | string | `ndjson` | Output format: `ndjson`, `parquet` |
+| Field | Type | Description |
+|---|---|---|
+| `bucket` | string | GCS bucket name |
+| `prefix` | string | Object key prefix |
+| `credentials_file` | string | Service account credentials file |
+| `schema` | map[string]string | Column type overrides |
+| `batch_size` | int | Objects per flush |
+| `flush_interval` | duration | Flush interval |
 
 **Example**
 
 ```yaml
-sinks:
-  - name: gcs-archive
-    type: gcs
-    bucket: loza-events-gcs
-    prefix: "events/"
-    format: ndjson
+fanout:
+  outputs:
+    - name: gcs-archive
+      role: secondary
+      type: gcs
+      enabled: true
+      gcs:
+        bucket: loza-events-gcs
+        prefix: events/
 ```
 
 **Behavior Notes**
