@@ -34,7 +34,14 @@ restore_generated() {
             rm -f "$GEN_DIR/$gen" || status=1
         fi
     done
-    rm -rf "$BACKUP_DIR" || status=1
+    if [ "$status" -eq 0 ]; then
+        if ! rm -rf "$BACKUP_DIR"; then
+            echo "✗ Failed to remove backup directory: $BACKUP_DIR" >&2
+            status=1
+        fi
+    else
+        echo "✗ Failed to restore generated files; backups retained at: $BACKUP_DIR" >&2
+    fi
     return "$status"
 }
 trap restore_generated EXIT
