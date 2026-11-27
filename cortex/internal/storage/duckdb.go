@@ -1,12 +1,14 @@
 package storage
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
+	"slices"
 	"strings"
 	"time"
 
@@ -1184,6 +1186,10 @@ func (s *DuckDBSignatureStore) FindSimilar(ctx context.Context, sig *models.Inci
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
+
+	slices.SortFunc(results, func(a, b *models.SimilarIncident) int {
+		return cmp.Compare(b.Similarity, a.Similarity)
+	})
 
 	if len(results) > limit {
 		results = results[:limit]

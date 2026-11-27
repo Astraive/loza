@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 ### Fixed
+- DuckDB signature similarity fallback now ranks matches before applying the requested limit.
 - Correlation anomaly detection now reads the typed event level and retains the
   legacy raw-level fallback.
 - Topology alias lookup failures now stop event processing unless the alias is genuinely missing.
