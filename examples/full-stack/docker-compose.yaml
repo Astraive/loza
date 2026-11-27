@@ -1,9 +1,9 @@
 services:
   collector:
     build:
-      context: ../../collector
-      dockerfile: Dockerfile
-    command: ["./loza-collector", "run", "-c", "/app/configs/loza.local.yaml"]
+      context: ../..
+      dockerfile: collector/Dockerfile
+    command: ["loza-collector", "run", "-c", "/app/configs/loza.local.yaml"]
     environment:
       LOZA_STORAGE_ENCRYPTION_KEY: dev-only-not-for-production
     ports:

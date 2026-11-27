@@ -12,6 +12,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/0.2.0/).
   group, so failed `Phase` calls emit a non-zero `status_code` like failed
   `Step` calls instead of `0`.
 
+- Docker Compose examples now build the collector from the repository root and
+  use the binary installed on `PATH`.
+
 ### Changed
 
 - Go SDK migration note (breaking): `core.FinishGroupError`,
