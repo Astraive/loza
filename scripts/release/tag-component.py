@@ -175,7 +175,7 @@ def validate_version(version: str) -> None:
     if not version:
         raise ValueError("manifest version is empty")
 
-    if version.startswith("v") or not SEMVER_RE.match(version):
+    if version.startswith("v") or not SEMVER_RE.fullmatch(version):
         raise ValueError(
             f"manifest version must be semantic version without leading v, got {version!r}"
         )

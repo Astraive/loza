@@ -104,16 +104,36 @@ class SemverValidationTests(unittest.TestCase):
 
     def test_semver_regex_accepts_prerelease_and_build(self) -> None:
         pattern = validate_manifests.SEMVER_RE
-        self.assertTrue(pattern.match("1.2.3"))
-        self.assertTrue(pattern.match("1.2.3-rc.1"))
-        self.assertTrue(pattern.match("1.2.3+build.5"))
-        self.assertTrue(pattern.match("1.2.3-rc.1+build.5"))
-        self.assertFalse(pattern.match("v1.2.3"))
-        self.assertFalse(pattern.match("01.2.3"))
+        self.assertTrue(pattern.fullmatch("1.2.3"))
+        self.assertTrue(pattern.fullmatch("1.2.3-rc.1"))
+        self.assertTrue(pattern.fullmatch("1.2.3+build.5"))
+        self.assertTrue(pattern.fullmatch("1.2.3-rc.1+build.5"))
+        self.assertFalse(pattern.fullmatch("v1.2.3"))
+        self.assertFalse(pattern.fullmatch("01.2.3"))
 
     def test_changed_components_parses_prerelease_and_build(self) -> None:
-        version = "1.2.3-rc.1+build.5"
+        version = "1.2.3-alpha.1+build.001"
         self.assertEqual(changed_components.parse_semver(version, "loza"), (1, 2, 3, version))
+
+    def test_rejects_invalid_identifiers(self) -> None:
+        invalid_versions = (
+            "1.2.3-01",
+            "1.2.3-alpha..1",
+            "1.2.3+build..x",
+        )
+        for version in invalid_versions:
+            with self.subTest(version=version):
+                self.assertIsNone(validate_manifests.SEMVER_RE.fullmatch(version))
+                with self.assertRaises(ValueError):
+                    changed_components.parse_semver(version, "loza")
+
+                with tempfile.TemporaryDirectory() as temporary_directory:
+                    manifest_path = write_release_manifest(Path(temporary_directory), version)
+                    errors = validate_manifests.validate_component("loza", manifest_path.as_posix())
+                self.assertTrue(
+                    any("version must be semantic version" in error for error in errors),
+                    errors,
+                )
 
 
 class MalformedNativeMetadataTests(unittest.TestCase):

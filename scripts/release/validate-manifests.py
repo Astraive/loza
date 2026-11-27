@@ -19,7 +19,17 @@ except ImportError:  # pragma: no cover
 
 
 ROOT = Path(__file__).resolve().parents[2]
-SEMVER_RE = re.compile(r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$")
+
+# SemVer 2 core and numeric prerelease identifiers must not have leading zeroes.
+_NUMERIC_IDENTIFIER = r"(?:0|[1-9][0-9]*)"
+_NON_NUMERIC_IDENTIFIER = r"[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*"
+_PRERELEASE_IDENTIFIER = rf"(?:{_NUMERIC_IDENTIFIER}|{_NON_NUMERIC_IDENTIFIER})"
+_BUILD_IDENTIFIER = r"[0-9A-Za-z-]+"
+SEMVER_RE = re.compile(
+    rf"({_NUMERIC_IDENTIFIER})\.({_NUMERIC_IDENTIFIER})\.({_NUMERIC_IDENTIFIER})"
+    rf"(?:-{_PRERELEASE_IDENTIFIER}(?:\.{_PRERELEASE_IDENTIFIER})*)?"
+    rf"(?:\+{_BUILD_IDENTIFIER}(?:\.{_BUILD_IDENTIFIER})*)?"
+)
 REQUIRED_FIELDS = ("name", "kind", "version", "description", "license", "repository", "module")
 KNOWN_KINDS = {"spec", "docker", "cli", "sdk", "package", "release"}
 KNOWN_LANGUAGES = {"go", "javascript", "python", "rust"}
@@ -213,7 +223,7 @@ def validate_component(component: str, manifest_rel: str) -> list[str]:
         return errors
 
     version = str(manifest["version"])
-    if version.startswith("v") or not SEMVER_RE.match(version):
+    if version.startswith("v") or not SEMVER_RE.fullmatch(version):
         errors.append(f"{component}: version must be semantic version without leading v, got {version!r}")
     if manifest["kind"] not in KNOWN_KINDS:
         errors.append(f"{component}: kind must be one of {sorted(KNOWN_KINDS)}, got {manifest['kind']!r}")

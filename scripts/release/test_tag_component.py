@@ -18,12 +18,30 @@ SPEC.loader.exec_module(tag_component)
 
 class ValidateVersionTests(unittest.TestCase):
     def test_accepts_semantic_versions(self) -> None:
-        for version in ("1.2.3", "0.0.0", "10.20.30", "1.2.3-alpha.1", "1.2.3+build.5"):
+        for version in (
+            "1.2.3",
+            "0.0.0",
+            "10.20.30",
+            "1.2.3-alpha.1",
+            "1.2.3+build.5",
+            "1.2.3-alpha.1+build.001",
+        ):
             with self.subTest(version=version):
                 tag_component.validate_version(version)
 
     def test_rejects_malformed_versions(self) -> None:
-        for version in ("1.2", "abc", "1.2.3.4", "01.2.3", "1.2.3 ", "1.2.3/4"):
+        for version in (
+            "1.2",
+            "abc",
+            "1.2.3.4",
+            "01.2.3",
+            "1.2.3 ",
+            "1.2.3/4",
+            "1.2.3-01",
+            "1.2.3-alpha..1",
+            "1.2.3+build..x",
+            "1.2.3\n",
+        ):
             with self.subTest(version=version):
                 with self.assertRaises(ValueError):
                     tag_component.validate_version(version)
