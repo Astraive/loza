@@ -1,9 +1,9 @@
+import http from 'node:http';
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { Logger } from '../src/core/logger.ts';
 import { MemorySink, HTTPBatchSink } from '../src/sinks/standard-sinks.ts';
 import { String as AttrString, SensitiveString } from '../src/core/event.ts';
-
 describe('Logger', () => {
   it('creates logger with config', () => {
     const loza = new Logger({ service: 'test' });
@@ -181,6 +181,42 @@ describe('Logger', () => {
     const cfg = loza.getConfig();
     assert.equal(cfg.collectorUrl, 'http://localhost:9308/events');
   });
+  it('forwards configured stats handlers to the logger-created HTTP sink', async () => {
+    const server = http.createServer((_request, response) => {
+      response.setHeader('content-type', 'application/json');
+      response.end(JSON.stringify({
+        acks: [{ index: 0, status: 'accepted' }],
+        errors: [],
+        request_id: 'request-1',
+      }));
+    });
+    const listening = Promise.withResolvers<void>();
+    server.listen(0, '127.0.0.1', listening.resolve);
+    await listening.promise;
+    const address = server.address();
+    assert.ok(address && typeof address !== 'string');
+    let configuredAcks = 0;
+    const logger = new Logger({
+      service: 'checkout',
+      collectorUrl: `http://127.0.0.1:${address.port}`,
+      batchSize: 1,
+      maxRetries: 0,
+      statsHandler: { onCollectorAck(data) { configuredAcks += data.acks.length; } },
+    });
+    try {
+      const event = logger.startEvent({ event: 'test' });
+      logger.finish(event, 'success');
+      await logger.emit(event);
+      await logger.flush();
+      assert.equal(configuredAcks, 1);
+    } finally {
+      await logger.shutdown();
+      const closed = Promise.withResolvers<void>();
+      server.close(error => error ? closed.reject(error) : closed.resolve());
+      await closed.promise;
+    }
+  });
+
 
   it('explicit sink takes precedence over collectorUrl', async () => {
     const sink = new MemorySink();
