@@ -448,11 +448,43 @@ func eventProtoToMap(event *lozav1.Event) (map[string]interface{}, error) {
 	if event.Event != "" {
 		rawMap["event"] = event.Event
 	}
-	if event.Level != lozav1.EventLevel_EVENT_LEVEL_UNSPECIFIED {
-		rawMap["level"] = event.Level.String()
+	switch event.Level {
+	case lozav1.EventLevel_EVENT_LEVEL_DEBUG:
+		rawMap["level"] = "debug"
+	case lozav1.EventLevel_EVENT_LEVEL_INFO:
+		rawMap["level"] = "info"
+	case lozav1.EventLevel_EVENT_LEVEL_WARN:
+		rawMap["level"] = "warn"
+	case lozav1.EventLevel_EVENT_LEVEL_ERROR:
+		rawMap["level"] = "error"
+	case lozav1.EventLevel_EVENT_LEVEL_NOTICE:
+		rawMap["level"] = "notice"
+	case lozav1.EventLevel_EVENT_LEVEL_FATAL:
+		rawMap["level"] = "fatal"
 	}
-	if event.Outcome != lozav1.EventOutcome_EVENT_OUTCOME_UNSPECIFIED {
-		rawMap["outcome"] = event.Outcome.String()
+	switch event.Outcome {
+	case lozav1.EventOutcome_EVENT_OUTCOME_SUCCESS:
+		rawMap["outcome"] = "success"
+	case lozav1.EventOutcome_EVENT_OUTCOME_ERROR:
+		rawMap["outcome"] = "error"
+	case lozav1.EventOutcome_EVENT_OUTCOME_PARTIAL:
+		rawMap["outcome"] = "partial"
+	case lozav1.EventOutcome_EVENT_OUTCOME_ABANDONED:
+		rawMap["outcome"] = "abandoned"
+	case lozav1.EventOutcome_EVENT_OUTCOME_RETRIED:
+		rawMap["outcome"] = "retried"
+	case lozav1.EventOutcome_EVENT_OUTCOME_CANCELLED:
+		rawMap["outcome"] = "cancelled"
+	case lozav1.EventOutcome_EVENT_OUTCOME_TIMEOUT:
+		rawMap["outcome"] = "timeout"
+	case lozav1.EventOutcome_EVENT_OUTCOME_SKIPPED:
+		rawMap["outcome"] = "skipped"
+	case lozav1.EventOutcome_EVENT_OUTCOME_REJECTED:
+		rawMap["outcome"] = "rejected"
+	case lozav1.EventOutcome_EVENT_OUTCOME_QUARANTINED:
+		rawMap["outcome"] = "quarantined"
+	case lozav1.EventOutcome_EVENT_OUTCOME_UNKNOWN:
+		rawMap["outcome"] = "unknown"
 	}
 	if event.DurationMs != 0 {
 		rawMap["duration_ms"] = event.DurationMs
