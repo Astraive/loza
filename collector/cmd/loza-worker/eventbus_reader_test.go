@@ -7,7 +7,20 @@ import (
 	"time"
 
 	"github.com/astraive/loza/collector/internal/eventbus"
+	"github.com/astraive/loza/collector/internal/eventbus/memory"
 )
+
+type observedMemoryBus struct {
+	eventbus.Bus
+	finished chan struct{}
+}
+
+func (b *observedMemoryBus) Subscribe(ctx context.Context, topic, group string, handler eventbus.Handler) error {
+	return b.Bus.Subscribe(ctx, topic, group, func(hCtx context.Context, msg eventbus.Message) error {
+		defer close(b.finished)
+		return handler(hCtx, msg)
+	})
+}
 
 // capturingBus records the handler passed to Subscribe so tests can invoke it
 // directly with a caller-controlled context, mirroring how the redis and kafka
@@ -105,5 +118,38 @@ func TestEventbusHandlerUnblocksOnCancelWhenBufferFull(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("handler did not unblock after context cancellation")
+	}
+}
+func TestMemoryBusReaderCloseUnblocksFullBuffer(t *testing.T) {
+	actual, err := memory.New(context.Background(), eventbus.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bus := &observedMemoryBus{Bus: actual, finished: make(chan struct{})}
+	reader := newEventbusQueueReader(bus, "events", "worker")
+	reader.ch = make(chan queueRecord, 1)
+	if _, err := reader.Poll(context.Background(), time.Millisecond); err != nil {
+		t.Fatal(err)
+	}
+	reader.ch <- queueRecord{}
+	publishDone := make(chan error, 1)
+	go func() {
+		publishDone <- actual.Publish(context.Background(), "events", []eventbus.Envelope{{ID: "event"}})
+	}()
+	select {
+	case <-bus.finished:
+		t.Fatal("handler finished while the queue was full")
+	case <-time.After(50 * time.Millisecond):
+	}
+	if err := reader.Close(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-bus.finished:
+	case <-time.After(time.Second):
+		t.Fatal("reader Close did not release the memory-bus handler")
+	}
+	if err := <-publishDone; err != nil {
+		t.Fatal(err)
 	}
 }
