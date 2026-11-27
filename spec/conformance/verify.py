@@ -1334,22 +1334,24 @@ def check_parity() -> MainCheck:
 
 # ── Runner ───────────────────────────────────────────────────────────────────
 
-ALL_CATEGORIES = [
-    check_lifecycle,
-    check_fields,
-    check_wire_format,
-    check_sampling,
-    check_redaction,
-    check_delivery,
-    check_config,
-    check_schemas,
-    check_cortex,
-    check_collector,
-    check_timing,
-    check_domain_helpers,
-    check_logging_helpers,
-    check_parity,
-]
+CATEGORY_REGISTRY = {
+    "LIFECYCLE": check_lifecycle,
+    "FIELDS": check_fields,
+    "WIRE_FORMAT": check_wire_format,
+    "SAMPLING": check_sampling,
+    "REDACTION": check_redaction,
+    "DELIVERY": check_delivery,
+    "CONFIG": check_config,
+    "SCHEMAS": check_schemas,
+    "CORTEX": check_cortex,
+    "COLLECTOR": check_collector,
+    "TIMING": check_timing,
+    "DOMAIN": check_domain_helpers,
+    "LOGGING": check_logging_helpers,
+    "PARITY": check_parity,
+}
+
+ALL_CATEGORIES = list(CATEGORY_REGISTRY.values())
 
 
 def run_all(verbose: bool = False) -> list[MainCheck]:
@@ -1424,13 +1426,20 @@ def main() -> int:
     args = parser.parse_args()
 
     if args.category:
-        cat_fn = next((f for f in ALL_CATEGORIES if f().__id__ == args.category.upper()), None)
+        category_id = args.category.upper()
+        cat_fn = CATEGORY_REGISTRY.get(category_id)
+        if cat_fn not in ALL_CATEGORIES:
+            cat_fn = None
         if cat_fn is None:
             # Try by function name
-            cat_fn = next((f for f in ALL_CATEGORIES
-                          if f.__name__ == f"check_{args.category.lower()}"), None)
+            cat_fn = next(
+                (f for f in ALL_CATEGORIES if f.__name__ == f"check_{args.category.lower()}"),
+                None,
+            )
         if cat_fn is None:
-            available = [f().id for f in ALL_CATEGORIES]
+            available = [
+                name for name, function in CATEGORY_REGISTRY.items() if function in ALL_CATEGORIES
+            ]
             print(f"Unknown category: {args.category}")
             print(f"Available: {', '.join(available)}")
             return 1

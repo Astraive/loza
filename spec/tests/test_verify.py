@@ -96,6 +96,56 @@ class TestSkippedReporting(unittest.TestCase):
         self.assertTrue(report["categories"][0]["subchecks"][0]["skipped"])
 
 
+class TestCategorySelection(unittest.TestCase):
+    def test_registered_category_runs_once_and_reports_main_check_id(self):
+        calls = 0
+
+        def check_timing_once():
+            nonlocal calls
+            calls += 1
+            return verify.check_timing()
+
+        check_timing_once.__name__ = "check_timing"
+        registry = dict(verify.CATEGORY_REGISTRY)
+        registry["TIMING"] = check_timing_once
+        output = io.StringIO()
+        with (
+            patch.object(verify, "CATEGORY_REGISTRY", registry),
+            patch.object(verify, "ALL_CATEGORIES", [check_timing_once]),
+            patch.object(sys, "argv", ["verify.py", "--category", "TIMING", "--json"]),
+            contextlib.redirect_stdout(output),
+        ):
+            exit_code = verify.main()
+
+        report = json.loads(output.getvalue())
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(calls, 1)
+        self.assertEqual(report["categories"][0]["id"], "TIMING")
+        self.assertEqual(report["total_checks"], 10)
+
+    def test_unknown_category_lists_ids_without_running_checks(self):
+        calls = []
+
+        def check_timing_once():
+            calls.append("called")
+            return verify.check_timing()
+
+        check_timing_once.__name__ = "check_timing"
+        output = io.StringIO()
+        with (
+            patch.object(verify, "CATEGORY_REGISTRY", {"TIMING": check_timing_once}),
+            patch.object(verify, "ALL_CATEGORIES", [check_timing_once]),
+            patch.object(sys, "argv", ["verify.py", "--category", "UNKNOWN"]),
+            contextlib.redirect_stdout(output),
+        ):
+            exit_code = verify.main()
+
+        self.assertEqual(exit_code, 1)
+        self.assertEqual(calls, [])
+        self.assertIn("Unknown category: UNKNOWN", output.getvalue())
+        self.assertIn("Available: TIMING", output.getvalue())
+
+
 class TestMissingFixtureCallSites(unittest.TestCase):
     def test_collector_fixture_subchecks_are_skipped_not_failed(self):
         # Simulate the fixtures being unavailable -- the exact condition from

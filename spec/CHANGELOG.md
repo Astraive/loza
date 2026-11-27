@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `spec/conformance/verify.py`: category selection resolves IDs without running checks.
+  It runs the selected category once and lists available IDs for unknown names.
+
 - `spec/services/dedupe_store.py`: a configured but unreachable Redis backend no longer
   silently downgrades to per-process local dedupe. `build_store()` now fails closed with
   `RedisUnavailableError` and logs the underlying error. **Migration:** deployments that
