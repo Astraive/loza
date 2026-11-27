@@ -16,6 +16,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/0.2.0/).
   and agent/ai kind fields instead of treating successful submission as proof
   that the fields were preserved.
 
+- Go benchmark JSON parsers now read `ns/op`, `B/op`, and `allocs/op` from
+  their correct tokens and report malformed or empty benchmark output as a
+  failure instead of passing with no results.
+
+- `sinkHealth()` now consults the sink's optional `health()` method instead of always
+  reporting `healthy`; sinks whose health check resolves to `false` report `unhealthy`.
+
 ### Changed
 
 - Go SDK migration note (breaking): `core.FinishGroupError`,
@@ -23,11 +30,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/0.2.0/).
   explicit `statusCode int` between `err` and the trailing attrs, mirroring
   `FinishProcessError`. Update `FinishGroupError(h, err, attrs...)` to
   `FinishGroupError(h, err, statusCode, attrs...)`.
-- `sinkHealth()` now consults the sink's optional `health()` method instead of always
-  reporting `healthy`; sinks whose health check resolves to `false` report `unhealthy`.
-
-### Changed
-
 - Migration note: `sinkHealth()` (the `health()` helper in the JavaScript SDK) is now
   `async` and resolves to `{ name, status }` with `status` being `'healthy' | 'unhealthy'`.
   Callers must `await` the result (`await sinkHealth(sink)`) instead of reading the object
