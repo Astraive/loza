@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import locale
 import os
 import subprocess
 import sys
@@ -151,8 +152,13 @@ def _run_check(check: Check, verbose: bool, timeout: float | None = None) -> Che
     except subprocess.TimeoutExpired as exc:
         duration_s = time.perf_counter() - started
         reason = f"timed out after {timeout:g}s"
+        encoding = locale.getpreferredencoding(False)
         stdout = exc.stdout or ""
         stderr = exc.stderr or ""
+        if isinstance(stdout, bytes):
+            stdout = stdout.decode(encoding, errors="replace")
+        if isinstance(stderr, bytes):
+            stderr = stderr.decode(encoding, errors="replace")
         print(f"  FAIL ({reason})")
         if not verbose:
             partial_output = stdout + stderr
