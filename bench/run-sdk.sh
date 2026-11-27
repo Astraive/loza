@@ -28,23 +28,8 @@ run_go_sdk() {
     cd "$REPO_ROOT/sdks/go/bench"
     local out="$RESULTS_DIR/sdk-go-${TIMESTAMP}.json"
     go test -bench=. -benchmem -count=1 -json ./... 2>/dev/null | \
-        python3 -c "
-import sys, json
-results = []
-for line in sys.stdin:
-    try:
-        obj = json.loads(line)
-        if obj.get('Action') == 'output' and 'Benchmark' in obj.get('Output', ''):
-            parts = obj['Output'].strip().split()
-            if len(parts) >= 4 and parts[0].startswith('Benchmark'):
-                entry = {'name': parts[0], 'iterations': int(parts[1]), 'ns_per_op': float(parts[2]), 'pass': True}
-                if len(parts) >= 6:
-                    entry['bytes_per_op'] = int(parts[3])
-                    entry['allocs_per_op'] = int(parts[5])
-                results.append(entry)
-    except: pass
-json.dump({'suite':'sdk-go','component':'sdks/go','timestamp':'$TIMESTAMP','results':results,'summary':{'total':len(results),'passed':len(results),'failed':0}}, sys.stdout, indent=2)
-" > "$out" 2>/dev/null && echo "  PASS: sdk-go" || echo "  FAIL: sdk-go"
+        python3 "$SCRIPT_DIR/lib/parse-go-json.py" sdk-go sdks/go "$TIMESTAMP" \
+        > "$out" && echo "  PASS: sdk-go" || echo "  FAIL: sdk-go"
     cd "$REPO_ROOT"
 }
 
