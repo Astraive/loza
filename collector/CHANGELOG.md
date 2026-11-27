@@ -14,6 +14,8 @@ All notable changes to this project are documented in this file.
   process one entry at a time, and recover abandoned entries after 30s idle.
 - Negotiate response compression using quality values and avoid explicitly rejected encodings.
 
+- Correct the Go SDK connection example to handle HTTP sink construction errors.
+
 ## [0.3.4] - 2026-08-26
 
 ### Security
