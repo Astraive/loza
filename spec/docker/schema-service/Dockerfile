@@ -3,6 +3,8 @@ FROM python:3.11-slim
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 
+ENV SCHEMA_SERVICE_PORT=8080
+
 WORKDIR /app/spec
 
 COPY spec/requirements-service.txt ./
@@ -21,4 +23,4 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 CMD pytho
 
 USER loza
 
-CMD ["python", "-u", "services/schema_service.py", "--host", "0.0.0.0", "--port", "8080"]
+CMD ["python", "-u", "services/schema_service.py", "--host", "0.0.0.0"]

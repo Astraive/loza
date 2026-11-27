@@ -1,4 +1,5 @@
 import http.client
+import json
 import os
 import sys
 import tempfile
@@ -13,7 +14,7 @@ repo_root = Path(__file__).resolve().parents[2]
 spec_dir = repo_root / "spec"
 sys.path.insert(0, str(spec_dir))
 
-from services.schema_service import SchemaServiceHandler
+from services.schema_service import SchemaServiceHandler, _env_int
 
 
 class TestSchemaServicePathContainment(unittest.TestCase):
@@ -110,21 +111,56 @@ class TestSchemaServiceSchemas(unittest.TestCase):
 
 class TestSchemaServiceDockerHealthcheck(unittest.TestCase):
     def test_image_port_and_default_healthcheck_match_service(self):
-        dockerfile = (spec_dir / "docker" / "schema-service" / "Dockerfile").read_text()
-        self.assertIn("EXPOSE 8080", dockerfile)
-        self.assertIn('"--port", "8080"', dockerfile)
+        dockerfile = spec_dir / "docker" / "schema-service" / "Dockerfile"
+        dockerfile_lines = dockerfile.read_text(encoding="utf-8").splitlines()
+        image_port = int(
+            next(
+                line.split("=", 1)[1]
+                for line in dockerfile_lines
+                if line.startswith("ENV SCHEMA_SERVICE_PORT=")
+            )
+        )
+        exposed_port = int(
+            next(
+                line.split()[1]
+                for line in dockerfile_lines
+                if line.startswith("EXPOSE ")
+            )
+        )
+        command = json.loads(
+            next(
+                line.removeprefix("CMD ").strip()
+                for line in dockerfile_lines
+                if line.startswith("CMD ")
+            )
+        )
+        self.assertEqual(exposed_port, image_port)
+        self.assertNotIn("--port", command)
 
         healthcheck_dir = spec_dir / "docker" / "schema-service"
         sys.path.insert(0, str(healthcheck_dir))
         try:
             import healthcheck
 
+            with patch.dict(
+                os.environ, {"SCHEMA_SERVICE_PORT": str(image_port)}, clear=True
+            ):
+                self.assertEqual(
+                    _env_int("SCHEMA_SERVICE_PORT", 9315), image_port
+                )
+                with patch("healthcheck.urllib.request.urlopen") as urlopen:
+                    urlopen.return_value.__enter__.return_value.status = 200
+                    self.assertEqual(healthcheck.main(), 0)
+                    urlopen.assert_called_once_with(
+                        f"http://127.0.0.1:{image_port}/health", timeout=2
+                    )
+
             with patch.dict(os.environ, {}, clear=True):
                 with patch("healthcheck.urllib.request.urlopen") as urlopen:
                     urlopen.return_value.__enter__.return_value.status = 200
                     self.assertEqual(healthcheck.main(), 0)
                     urlopen.assert_called_once_with(
-                        "http://127.0.0.1:8080/health", timeout=2
+                        "http://127.0.0.1:9315/health", timeout=2
                     )
         finally:
             sys.path.remove(str(healthcheck_dir))
