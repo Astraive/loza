@@ -42,11 +42,15 @@ class FakeKafkaError:
     _TRANSPORT = -195
     _INVALID_ARG = -186
 
-    def __init__(self, code):
+    def __init__(self, code, retriable=None):
         self._code = code
+        self._retriable = retriable
 
     def code(self):
         return self._code
+
+    def retriable(self):
+        return self._retriable
 
 
 class FakeKafkaException(Exception):
@@ -56,12 +60,17 @@ class FakeKafkaException(Exception):
 
 
 class FakeProducer:
-    def __init__(self, _config, fail_first=0, error_on_attempt=None, error=None):
+    def __init__(
+        self, _config, fail_first=0, error_on_attempt=None, error=None,
+        callback_error_on_attempt=None, callback_error=None,
+    ):
         self.config = dict(_config)
         self.calls = []
         self.fail_first = fail_first
         self.error_on_attempt = error_on_attempt
         self.error = error
+        self.callback_error_on_attempt = callback_error_on_attempt
+        self.callback_error = callback_error
         self.produce_attempts = 0
         self.flush_calls = []
 
@@ -73,7 +82,12 @@ class FakeProducer:
             raise RuntimeError("transient-produce-error")
         self.calls.append({"topic": topic, "value": value, "key": key, "headers": headers})
         if on_delivery is not None:
-            on_delivery(None, object())
+            callback_error = (
+                self.callback_error
+                if self.produce_attempts == self.callback_error_on_attempt
+                else None
+            )
+            on_delivery(callback_error, object())
 
     def poll(self, _timeout):
         return None
@@ -204,6 +218,51 @@ class TestKafkaAdapter(unittest.TestCase):
         with self.assertRaises(FakeKafkaException):
             permanent_adapter.produce({"event_id": "evt-2"})
         self.assertEqual(permanent.produce_attempts, 1)
+
+    def test_delivery_callback_errors_follow_kafka_retryability(self):
+        cases = (
+            ("transient", FakeKafkaError(FakeKafkaError._TRANSPORT), 2, False),
+            ("permanent", FakeKafkaError(99), 1, True),
+            ("unknown", RuntimeError("unknown callback error"), 1, True),
+            ("retriable-unknown-code", FakeKafkaError(777, retriable=True), 2, False),
+            ("permanent-unknown-code", FakeKafkaError(777, retriable=False), 1, True),
+        )
+        for label, callback_error, attempts, should_fail in cases:
+            with self.subTest(error=label):
+                producer = FakeProducer(
+                    {},
+                    callback_error_on_attempt=1,
+                    callback_error=callback_error,
+                )
+                sleeps = []
+                adapter = KafkaAdapter(
+                    KafkaConfig(
+                        brokers="localhost:9092",
+                        topic="events",
+                        group_id="g1",
+                        dlq_topic="events.dlq",
+                    ),
+                    retry_policy=RetryPolicy(
+                        max_attempts=3,
+                        base_delay_seconds=0.01,
+                        max_delay_seconds=0.1,
+                        jitter_ratio=0.0,
+                    ),
+                    producer_cls=lambda _cfg: producer,
+                    consumer_cls=lambda _cfg: FakeConsumer({}),
+                    kafka_error_cls=FakeKafkaError,
+                    sleep_fn=sleeps.append,
+                    random_fn=lambda: 0.0,
+                )
+
+                if should_fail:
+                    with self.assertRaisesRegex(RuntimeError, "Kafka delivery error"):
+                        adapter.produce({"event_id": "evt-callback"})
+                else:
+                    adapter.produce({"event_id": "evt-callback"})
+
+                self.assertEqual(producer.produce_attempts, attempts)
+                self.assertEqual(len(sleeps), attempts - 1)
 
     def test_producer_enables_idempotence_and_allows_override(self):
         configs = []
