@@ -158,6 +158,11 @@ def _run_check(
         reason = f"timed out after {timeout:g}s"
         stdout = exc.stdout or ""
         stderr = exc.stderr or ""
+        # TimeoutExpired may expose captured output as bytes despite text=True.
+        if isinstance(stdout, bytes):
+            stdout = stdout.decode("utf-8", errors="replace")
+        if isinstance(stderr, bytes):
+            stderr = stderr.decode("utf-8", errors="replace")
         print(f"  FAIL ({reason})", file=sys.stderr)
         if not verbose or json_output:
             partial_output = stdout + stderr
