@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 ### Fixed
+- DuckDB remediation statistics round fractional average resolution times to the nearest second.
 - DuckDB signature similarity fallback now ranks matches before applying the requested limit.
 - Correlation anomaly detection now reads the typed event level and retains the
   legacy raw-level fallback.

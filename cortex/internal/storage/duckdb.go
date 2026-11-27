@@ -1385,7 +1385,7 @@ func (s *DuckDBRemediationStore) ListBySignature(ctx context.Context, signatureI
 	var stats []*models.RemediationStats
 	for rows.Next() {
 		var s models.RemediationStats
-		var avgTime sql.NullInt64
+		var avgTime sql.NullFloat64
 		if err := rows.Scan(&s.Action, &s.TotalAttempts, &s.SuccessfulCount, &avgTime); err != nil {
 			return nil, err
 		}
@@ -1393,7 +1393,9 @@ func (s *DuckDBRemediationStore) ListBySignature(ctx context.Context, signatureI
 			s.SuccessRate = float64(s.SuccessfulCount) / float64(s.TotalAttempts)
 		}
 		if avgTime.Valid {
-			s.AvgTimeToResolve = avgTime.Int64
+			// RemediationStats exposes whole seconds, so fractional averages
+			// are rounded to the nearest second.
+			s.AvgTimeToResolve = int64(math.Round(avgTime.Float64))
 		}
 		stats = append(stats, &s)
 	}
