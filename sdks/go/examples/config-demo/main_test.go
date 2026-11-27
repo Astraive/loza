@@ -92,11 +92,67 @@ func TestRunEnvExampleSuccessPrintsValues(t *testing.T) {
 		t.Fatalf("runEnvExample returned unexpected error: %v", err)
 	}
 	got := out.String()
-	if !strings.Contains(got, "Service:") {
-		t.Errorf("successful example did not print configuration values:\n%s", got)
+	const heading = "2. Configuration via environment variables:"
+	if count := strings.Count(got, heading); count != 1 {
+		t.Errorf("environment example printed heading %d times, want 1:\n%s", count, got)
+	}
+	if len(s.calls) != len(envVars) {
+		t.Errorf("environment example set %d variables, want %d", len(s.calls), len(envVars))
 	}
 }
 
+func TestMainRunsEnvExampleOnce(t *testing.T) {
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "main.go", nil, 0)
+	if err != nil {
+		t.Fatalf("parse main.go: %v", err)
+	}
+
+	var mainFn *ast.FuncDecl
+	for _, decl := range file.Decls {
+		if fn, ok := decl.(*ast.FuncDecl); ok && fn.Name.Name == "main" {
+			mainFn = fn
+			break
+		}
+	}
+	if mainFn == nil {
+		t.Fatal("main function not found in main.go")
+	}
+
+	runCalls := 0
+	headings := 0
+	setterCalls := 0
+	ast.Inspect(mainFn.Body, func(n ast.Node) bool {
+		switch node := n.(type) {
+		case *ast.CallExpr:
+			switch fn := node.Fun.(type) {
+			case *ast.Ident:
+				if fn.Name == "runEnvExample" {
+					runCalls++
+				}
+			case *ast.SelectorExpr:
+				if fn.Sel.Name == "Setenv" {
+					setterCalls++
+				}
+			}
+		case *ast.BasicLit:
+			if node.Kind == token.STRING && strings.Trim(node.Value, "\"") == "2. Configuration via environment variables:" {
+				headings++
+			}
+		}
+		return true
+	})
+
+	if runCalls != 1 {
+		t.Errorf("runEnvExample called %d times in main.go, want 1", runCalls)
+	}
+	if headings != 0 {
+		t.Errorf("inline Example 2 heading appears %d times in main.go, want 0 (heading is printed by runEnvExample)", headings)
+	}
+	if setterCalls != 0 {
+		t.Errorf("inline os.Setenv calls appear %d times in main.go, want 0 (setters are called by runEnvExample)", setterCalls)
+	}
+}
 // TestMainShutsDownLoggerExactlyOnce guards against re-introducing a second
 // Logger.Shutdown call in the config demo. Shutdown is not idempotent: it
 // flushes and closes every sink on each call, and fileSink.Close closes the

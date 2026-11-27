@@ -93,23 +93,6 @@ func main() {
 		fmt.Printf("  Aborting demo: environment configuration failed.\n")
 		return
 	}
-	// Example 2: Configuration via environment variables
-	fmt.Println("2. Configuration via environment variables:")
-	os.Setenv("LOZA_SERVICE_NAME", "env-service")
-	os.Setenv("LOZA_SERVICE_VERSION", "2.0.0")
-	os.Setenv("LOZA_ENVIRONMENT", "staging")
-	os.Setenv("LOZA_COLLECTOR_URL", "http://env-collector:9308")
-	os.Setenv("LOZA_TENANT_ID", "tenant-env")
-	os.Setenv("LOZA_FLUSH_INTERVAL", "15s")
-
-	cfg2 := loza.Dev()
-	cfg2 = loza.LoadFromEnv(cfg2)
-	fmt.Printf("  Service: %s\n", cfg2.Service)
-	fmt.Printf("  Version: %s\n", cfg2.Version)
-	fmt.Printf("  Environment: %s\n", cfg2.Environment)
-	fmt.Printf("  CollectorURL: %s\n", cfg2.CollectorURL)
-	fmt.Printf("  TenantID: %s\n", cfg2.TenantID)
-	fmt.Printf("  FlushInterval: %s\n\n", cfg2.FlushInterval)
 
 	// Example 3: Configuration precedence (code > env > defaults)
 	fmt.Println("3. Configuration precedence (code > env > defaults):")
