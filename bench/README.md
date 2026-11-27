@@ -11,6 +11,10 @@ Central benchmark orchestration for the LOZA monorepo. All benchmark results are
 ./bench/run-cortex.sh                 # Run cortex PCE benchmarks only
 ```
 
+## Exit Status
+
+`run-sdk.sh` and `run-collector.sh` return nonzero if any requested benchmark child fails. Missing SDK runtimes remain skipped, and the collector's optional `BenchmarkLoad` remains a `SKIP` when the benchmark is absent.
+
 ## Benchmark Suites
 
 | Suite | Component | Language | What is Measured | Target |
