@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 ### Fixed
+- Record feedback now reports operational signature lookup failures while treating missing signatures as a skipped update.
 - Environment override parse errors are no longer silently swallowed. `CORTEX_*`
   numeric, duration, and boolean overrides must be well-formed or configuration
   loading fails at startup with an error naming the offending variable.

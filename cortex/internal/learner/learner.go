@@ -98,20 +98,25 @@ func (l *Learner) RecordFeedback(ctx context.Context, feedback *models.Remediati
 		// records cannot overwrite each other's counter and average updates.
 		l.signatureMu.Lock()
 		sig, err := l.signatureStore.Get(ctx, remediation.SignatureID)
-		if err == nil {
-			sig.OccurrenceCount++
-
-			avgTime := totalTime / int64(len(allFeedback))
-			if avgTime > 0 && sig.OccurrenceCount > 1 {
-				oldTotal := sig.AvgResolutionTime * int64(sig.OccurrenceCount-1)
-				sig.AvgResolutionTime = (oldTotal + avgTime) / int64(sig.OccurrenceCount)
-			} else if avgTime > 0 {
-				sig.AvgResolutionTime = avgTime
+		if err != nil {
+			l.signatureMu.Unlock()
+			if isSignatureNotFound(err) {
+				return nil // feedback is persisted; skip a missing signature
 			}
+			return fmt.Errorf("get signature %q: %w", remediation.SignatureID, err)
+		}
+		sig.OccurrenceCount++
 
-			if saveErr := l.signatureStore.Save(ctx, sig); saveErr != nil {
-				log.Warn().Err(saveErr).Str("signature_id", sig.SignatureID).Msg("failed to save updated signature")
-			}
+		avgTime := totalTime / int64(len(allFeedback))
+		if avgTime > 0 && sig.OccurrenceCount > 1 {
+			oldTotal := sig.AvgResolutionTime * int64(sig.OccurrenceCount-1)
+			sig.AvgResolutionTime = (oldTotal + avgTime) / int64(sig.OccurrenceCount)
+		} else if avgTime > 0 {
+			sig.AvgResolutionTime = avgTime
+		}
+
+		if saveErr := l.signatureStore.Save(ctx, sig); saveErr != nil {
+			log.Warn().Err(saveErr).Str("signature_id", sig.SignatureID).Msg("failed to save updated signature")
 		}
 		l.signatureMu.Unlock()
 	}
