@@ -2,8 +2,10 @@ package reconstructor
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"math"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -12,6 +14,7 @@ import (
 	"github.com/astraive/loza/cortex/internal/learner"
 	"github.com/astraive/loza/cortex/internal/matcher"
 	"github.com/astraive/loza/cortex/internal/models"
+	"github.com/astraive/loza/cortex/internal/storage"
 )
 
 type fakeReconGraphStore struct {
@@ -652,5 +655,116 @@ func TestExtractSymptomsLogLevels(t *testing.T) {
 				t.Fatalf("expected no symptoms, got %d: %+v", len(symptoms), symptoms)
 			}
 		})
+	}
+}
+
+func TestReconstructionIncludesFractionalRemediationAverage(t *testing.T) {
+	ctx := context.Background()
+	stor, err := storage.NewDuckDBStorage(filepath.Join(t.TempDir(), "reconstruction.duckdb"))
+	if err != nil {
+		t.Fatalf("open DuckDB: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := stor.Close(); err != nil {
+			t.Errorf("close DuckDB: %v", err)
+		}
+	})
+	if err := stor.Init(ctx); err != nil {
+		t.Fatalf("initialize DuckDB: %v", err)
+	}
+
+	now := time.Now().UTC()
+	historyIncidentID := "history-incident"
+	if err := stor.Incidents().Save(ctx, &models.Incident{
+		ID:             historyIncidentID,
+		Timestamp:      now,
+		Status:         "resolved",
+		Severity:       "medium",
+		PrimaryService: "svc-a",
+	}); err != nil {
+		t.Fatalf("save historical incident: %v", err)
+	}
+
+	remediations := stor.Remediations()
+	feedback := stor.Feedback()
+	for _, sample := range []struct {
+		remediationID string
+		duration      int64
+	}{
+		{remediationID: "remediation-10", duration: 10},
+		{remediationID: "remediation-11", duration: 11},
+	} {
+		if err := remediations.Save(ctx, &models.Remediation{
+			RemediationID: sample.remediationID,
+			IncidentID:    historyIncidentID,
+			SignatureID:   "history-signature",
+			Action:        "restart",
+			Timestamp:     now,
+		}); err != nil {
+			t.Fatalf("save remediation %q: %v", sample.remediationID, err)
+		}
+		if err := feedback.Save(ctx, &models.RemediationFeedback{
+			FeedbackID:    "feedback-" + sample.remediationID,
+			RemediationID: sample.remediationID,
+			IncidentID:    historyIncidentID,
+			OutcomeCode:   200,
+			TimeToResolve: sample.duration,
+			Timestamp:     now,
+		}); err != nil {
+			t.Fatalf("save feedback for %q: %v", sample.remediationID, err)
+		}
+	}
+
+	graphStore := &fakeReconGraphStore{nodes: map[string]*models.Node{}, edges: map[string][]*models.Edge{}}
+	buildReconIncidentGraph(graphStore, "inc-1")
+	incidentStore := &fakeReconIncidentStore{
+		incidents: map[string]*models.Incident{
+			"inc-1": {ID: "inc-1", SignatureID: "sig-1", Status: "active", Severity: "high", PrimaryService: "svc-a"},
+		},
+	}
+	signatureStore := &fakeReconSignatureStore{
+		sigs: map[string]*models.IncidentSignature{
+			"sig-1": {
+				SignatureID: "sig-1", Shape: "error_rate",
+				Symptoms: []models.SymptomType{models.SymptomTypeErrorRate}, FeatureVector: []float64{1, 1},
+			},
+			"history-signature": {
+				SignatureID: "history-signature", Shape: "error_rate",
+				Symptoms: []models.SymptomType{models.SymptomTypeErrorRate}, FeatureVector: []float64{1, 1},
+			},
+		},
+	}
+	learnerSvc := learner.NewLearner(remediations, feedback, signatureStore)
+	matcherSvc := matcher.NewSignatureMatcher(signatureStore)
+	recon := NewIncidentReconstructor(graph.NewBuilder(graphStore), matcherSvc, learnerSvc, incidentStore)
+
+	result, err := recon.ReconstructFast(ctx, "inc-1")
+	if err != nil {
+		t.Fatalf("reconstruct incident: %v", err)
+	}
+	if result.Partial {
+		t.Fatalf("reconstruction is partial: %v", result.Warnings)
+	}
+	if len(result.SuggestedActions) != 1 || result.SuggestedActions[0].AvgTimeToResolve != 11 {
+		t.Fatalf("suggested actions = %+v, want one action with average resolution time 11 seconds", result.SuggestedActions)
+	}
+	if !strings.Contains(result.Explain, "avg resolution: 11s") {
+		t.Errorf("explanation %q does not report the rounded average", result.Explain)
+	}
+
+	payload, err := json.Marshal(result)
+	if err != nil {
+		t.Fatalf("marshal reconstruction response: %v", err)
+	}
+	var response struct {
+		SuggestedActions []struct {
+			AvgTimeToResolve int64 `json:"avg_time_to_resolve_seconds"`
+		} `json:"suggested_actions"`
+	}
+	if err := json.Unmarshal(payload, &response); err != nil {
+		t.Fatalf("decode reconstruction response: %v", err)
+	}
+	if len(response.SuggestedActions) != 1 || response.SuggestedActions[0].AvgTimeToResolve != 11 {
+		t.Errorf("response suggested actions = %+v, want average resolution time 11 seconds", response.SuggestedActions)
 	}
 }
