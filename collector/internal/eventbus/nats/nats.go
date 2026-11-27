@@ -71,12 +71,13 @@ type natsBus struct {
 }
 
 // subscription holds the shutdown hooks for one Subscribe call. cancel stops
-// the consumer's context (unblocking a pending iter.Next via NextContext) and
-// stop invalidates the message iterator.
+// the consumer's context, stop invalidates the iterator, and stopBus releases
+// the hook connecting the subscription to the bus lifecycle.
 type subscription struct {
-	cancel context.CancelFunc
-	stop   func()
-	subs   []*jetstream.Consumer
+	cancel  context.CancelFunc
+	stop    func()
+	stopBus func() bool
+	subs    []*jetstream.Consumer
 }
 
 // New creates a new NATS JetStream event bus.
@@ -183,9 +184,9 @@ func (b *natsBus) Subscribe(ctx context.Context, topic string, group string, han
 		durable = b.cfg.Durable
 	}
 
-	// Derive the consumer's lifetime context from the bus context so that
-	// Close stops every consumer, while the bus itself stays alive.
-	subCtx, cancel := context.WithCancel(b.ctx)
+	// A subscription ends when either its caller or the whole bus closes.
+	subCtx, cancel := context.WithCancel(ctx)
+	stopBus := context.AfterFunc(b.ctx, cancel)
 
 	consumer, err := b.js.CreateOrUpdateConsumer(ctx, b.cfg.Stream, jetstream.ConsumerConfig{
 		Durable:       durable,
@@ -195,12 +196,14 @@ func (b *natsBus) Subscribe(ctx context.Context, topic string, group string, han
 		AckWait:       30 * time.Second,
 	})
 	if err != nil {
+		stopBus()
 		cancel()
 		return fmt.Errorf("eventbus/nats: create consumer: %w", err)
 	}
 
 	iter, err := consumer.Messages(jetstream.PullMaxMessages(10))
 	if err != nil {
+		stopBus()
 		cancel()
 		return fmt.Errorf("eventbus/nats: messages: %w", err)
 	}
@@ -208,11 +211,12 @@ func (b *natsBus) Subscribe(ctx context.Context, topic string, group string, han
 	b.mu.Lock()
 	if b.closed.Load() {
 		b.mu.Unlock()
+		stopBus()
 		cancel()
 		iter.Stop()
 		return eventbus.ErrBusClosed
 	}
-	b.subs = append(b.subs, subscription{cancel: cancel, stop: iter.Stop})
+	b.subs = append(b.subs, subscription{cancel: cancel, stop: iter.Stop, stopBus: stopBus})
 	b.mu.Unlock()
 
 	go b.consume(subCtx, iter, subject, handler)
@@ -294,6 +298,7 @@ func (b *natsBus) Close(_ context.Context) error {
 	}
 	b.mu.Lock()
 	for _, sub := range b.subs {
+		sub.stopBus()
 		sub.cancel()
 		sub.stop()
 	}

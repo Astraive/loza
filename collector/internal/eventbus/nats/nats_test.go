@@ -368,3 +368,69 @@ func TestPublishDLQNonNilReason(t *testing.T) {
 		t.Fatal("PublishDLQ() did not set dlq_time")
 	}
 }
+
+type contextTestJetStream struct {
+	jetstream.JetStream
+	consumer jetstream.Consumer
+}
+
+func (j contextTestJetStream) CreateOrUpdateConsumer(context.Context, string, jetstream.ConsumerConfig) (jetstream.Consumer, error) {
+	return j.consumer, nil
+}
+
+type contextTestConsumer struct {
+	jetstream.Consumer
+	iter jetstream.MessagesContext
+}
+
+func (c contextTestConsumer) Messages(...jetstream.PullMessagesOpt) (jetstream.MessagesContext, error) {
+	return c.iter, nil
+}
+
+type contextTestIterator struct {
+	jetstream.MessagesContext
+	first   jetstream.Msg
+	stopped chan struct{}
+}
+
+func (i *contextTestIterator) Next(...jetstream.NextOpt) (jetstream.Msg, error) {
+	if i.first != nil {
+		msg := i.first
+		i.first = nil
+		return msg, nil
+	}
+	<-i.stopped
+	return nil, jetstream.ErrMsgIteratorClosed
+}
+
+func (i *contextTestIterator) Stop() { close(i.stopped) }
+
+func TestSubscribeCallerContextCancelsHandler(t *testing.T) {
+	busCtx, busCancel := context.WithCancel(context.Background())
+	iter := &contextTestIterator{first: ackTestMsg(t, "context-event"), stopped: make(chan struct{})}
+	b := &natsBus{ctx: busCtx, cancel: busCancel, js: contextTestJetStream{consumer: contextTestConsumer{iter: iter}}}
+	defer b.Close(context.Background())
+
+	callerCtx, callerCancel := context.WithCancel(context.Background())
+	defer callerCancel()
+	handled := make(chan context.Context, 1)
+	if err := b.Subscribe(callerCtx, "events", "worker", func(ctx context.Context, msg eventbus.Message) error {
+		handled <- ctx
+		return msg.Ack(ctx)
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	var handlerCtx context.Context
+	select {
+	case handlerCtx = <-handled:
+	case <-time.After(time.Second):
+		t.Fatal("handler was not called")
+	}
+	callerCancel()
+	select {
+	case <-handlerCtx.Done():
+	case <-time.After(time.Second):
+		t.Fatalf("caller cancellation did not reach handler context: %v", handlerCtx.Err())
+	}
+}
