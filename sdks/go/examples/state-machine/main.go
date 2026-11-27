@@ -213,7 +213,7 @@ func invalidTransitions() error {
 		}
 	}
 
-	// Repeated public logger emits are idempotent.
+	// Calling Emit after successful delivery is idempotent.
 	fmt.Println("\nAttempting to emit again:")
 	if err := loza.Emit(ctx); err != nil {
 		return reportError("Emit", err)

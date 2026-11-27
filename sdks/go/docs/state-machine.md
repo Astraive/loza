@@ -107,8 +107,8 @@ const (
 
 ## Invalid State Transitions
 
-The following transitions are rejected with appropriate errors. Repeated calls to
-the public `Logger.Emit` API are idempotent and return nil.
+The following transitions are rejected with appropriate errors. The public
+`Logger.Emit` API returns nil for repeated calls after successful emission.
 
 - Cannot modify an `emitted` event (returns `EventClosedError`)
 - Cannot finish an `emitted` event (returns `EventClosedError`)
@@ -408,7 +408,8 @@ Some methods automatically transition states:
 2. **Check errors**: Always check errors from state-modifying methods
 3. **Use GetState() for debugging**: Query event state when troubleshooting
 4. **Handle terminal states**: Be prepared for `EventClosedError` in long-running contexts
-5. **Rely on idempotent public emits**: `Logger.Emit` is safe to call both explicitly and via `defer`
+5. **Rely on idempotent public emits**: Calls after successful emission return nil, so
+   an explicit call and a deferred call can coexist.
 
 ## Future Enhancements
 

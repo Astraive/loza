@@ -78,7 +78,8 @@ created → active → finished → emitting → emitted
 ### Error Types
 
 - `EventClosedError`: Returned when trying to modify a terminal state event
-- `DuplicateEmitError`: Returned by the internal `beginEmit()` guard; public logger emits are idempotent
+- `DuplicateEmitError`: Returned by internal `beginEmit()` for already-emitted events;
+  repeated public logger calls after successful emission are idempotent.
 - `EventAlreadyFinishedError`: Returned when trying to finish an already-finished event
 
 ## Expected Output

@@ -47,7 +47,7 @@ type DuplicateFieldError struct {
 
 // DuplicateEmitError reports that the internal beginEmit transition rejected an
 // event that already reached the emitted terminal state. Public logger Emit
-// methods are idempotent.
+// methods return nil for already-emitted events.
 type DuplicateEmitError struct {
 	EventID string
 }

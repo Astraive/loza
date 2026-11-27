@@ -54,7 +54,7 @@ type (
 	// DuplicateFieldError is returned for ErrorOnDuplicate policy violations.
 	DuplicateFieldError = core.DuplicateFieldError
 	// DuplicateEmitError reports an already-emitted event rejected by the internal
-	// state transition guard; public Logger Emit calls are idempotent.
+	// state transition guard; public Logger Emit calls for emitted events return nil.
 	DuplicateEmitError = core.DuplicateEmitError
 	// EventClosedError is returned when mutating or finishing a closed event.
 	EventClosedError = core.EventClosedError
