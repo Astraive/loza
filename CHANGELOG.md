@@ -8,6 +8,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/0.2.0/).
 
 ### Fixed
 
+- Kafka adapter: preserve callback delivery error codes so only transient Kafka
+  delivery failures are retried; permanent and unknown callback errors fail fast.
+
 - Go SDK: `FinishGroupError` now records the supplied error status code on the
   group, so failed `Phase` calls emit a non-zero `status_code` like failed
   `Step` calls instead of `0`.

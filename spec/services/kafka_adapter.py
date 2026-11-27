@@ -40,6 +40,14 @@ _TRANSIENT_KAFKA_ERROR_NAMES = (
 )
 
 
+class _KafkaDeliveryError(RuntimeError):
+    """RuntimeError-compatible delivery failure retaining the Kafka error."""
+
+    def __init__(self, error: Any):
+        self.error = error
+        super().__init__(f"Kafka delivery error: {error}")
+
+
 @dataclass(frozen=True)
 class RetryPolicy:
     max_attempts: int = 3
@@ -264,6 +272,8 @@ class KafkaAdapter:
                     transient_codes.add(value)
             return code in transient_codes
 
+        if isinstance(exc, _KafkaDeliveryError):
+            return False
         return isinstance(exc, _RETRYABLE_EXCEPTIONS)
 
     def _produce_with_retry(
@@ -315,4 +325,4 @@ class KafkaAdapter:
         if pending:
             raise RuntimeError(f"Kafka flush timed out with {pending} pending messages")
         if delivery_error["value"] is not None:
-            raise RuntimeError(f"Kafka delivery error: {delivery_error['value']}")
+            raise _KafkaDeliveryError(delivery_error["value"])
