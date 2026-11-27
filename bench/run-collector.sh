@@ -9,6 +9,7 @@ TIMESTAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 mkdir -p "$RESULTS_DIR"
 
 source "$SCRIPT_DIR/lib/json-reporter.sh"
+BENCH_FAILED=0
 
 if ! command -v go &>/dev/null; then
     echo "ERROR: go is required for collector benchmarks"
@@ -22,16 +23,26 @@ echo "=== Collector Benchmarks ==="
 # --- DuckDB Sink ---
 echo "--- DuckDB Sink ---"
 DUCKDB_OUT="$RESULTS_DIR/collector-duckdb-${TIMESTAMP}.json"
-go test ./internal/sinks/duckdb -run='^$' -bench=. -benchmem -count=1 -json 2>/dev/null | \
+if go test ./internal/sinks/duckdb -run='^$' -bench=. -benchmem -count=1 -json 2>/dev/null | \
     python3 "$SCRIPT_DIR/lib/parse-go-json.py" collector-duckdb collector "$TIMESTAMP" \
-    > "$DUCKDB_OUT" && echo "  PASS: collector-duckdb" || echo "  FAIL: collector-duckdb"
+    > "$DUCKDB_OUT"; then
+    echo "  PASS: collector-duckdb"
+else
+    echo "  FAIL: collector-duckdb"
+    BENCH_FAILED=1
+fi
 
 # --- Projection ---
 echo "--- Projection ---"
 PROJ_OUT="$RESULTS_DIR/collector-projection-${TIMESTAMP}.json"
-go test ./internal/sinks/internal/projection -run='^$' -bench=. -benchmem -count=1 -json 2>/dev/null | \
+if go test ./internal/sinks/internal/projection -run='^$' -bench=. -benchmem -count=1 -json 2>/dev/null | \
     python3 "$SCRIPT_DIR/lib/parse-go-json.py" collector-projection collector "$TIMESTAMP" \
-    > "$PROJ_OUT" && echo "  PASS: collector-projection" || echo "  FAIL: collector-projection"
+    > "$PROJ_OUT"; then
+    echo "  PASS: collector-projection"
+else
+    echo "  FAIL: collector-projection"
+    BENCH_FAILED=1
+fi
 
 # --- Load Test ---
 echo "--- Load Test ---"
@@ -53,8 +64,10 @@ PY
     fi
 else
     echo "  FAIL: collector-load"
+    BENCH_FAILED=1
 fi
 
 cd "$REPO_ROOT"
 echo ""
 echo "Results saved to: $RESULTS_DIR/"
+exit "$BENCH_FAILED"
