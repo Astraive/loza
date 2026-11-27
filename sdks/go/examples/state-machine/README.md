@@ -45,7 +45,7 @@ Demonstrates error event lifecycle:
 Shows what happens when you try invalid operations:
 - Modifying an emitted event (fails with EventClosedError)
 - Finishing an emitted event (fails with EventClosedError)
-- Emitting an event twice (fails with DuplicateEmitError)
+- Repeating `Emit()` after an event is emitted is idempotent (returns nil; no duplicate event)
 
 ### 4. Array Field Operations
 
@@ -78,7 +78,7 @@ created → active → finished → emitting → emitted
 ### Error Types
 
 - `EventClosedError`: Returned when trying to modify a terminal state event
-- `DuplicateEmitError`: Returned when trying to emit an already-emitted event
+- `DuplicateEmitError`: Returned by the internal `beginEmit()` guard; public logger emits are idempotent
 - `EventAlreadyFinishedError`: Returned when trying to finish an already-finished event
 
 ## Expected Output
@@ -109,7 +109,7 @@ Attempting to finish emitted event:
 ✗ Cannot finish: Event <id> is in state emitted
 
 Attempting to emit again:
-✗ Cannot emit: Event <id> already emitted
+✓ Repeated Emit returned nil; no duplicate event
 
 Example 4: Array Field Operations
 Initial state: created

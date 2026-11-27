@@ -45,8 +45,9 @@ type DuplicateFieldError struct {
 	Key string
 }
 
-// DuplicateEmitError is returned when Emit is called after an event has already
-// reached the emitted terminal state.
+// DuplicateEmitError reports that the internal beginEmit transition rejected an
+// event that already reached the emitted terminal state. Public logger Emit
+// methods are idempotent.
 type DuplicateEmitError struct {
 	EventID string
 }

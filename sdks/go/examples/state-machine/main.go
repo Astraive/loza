@@ -213,16 +213,12 @@ func invalidTransitions() error {
 		}
 	}
 
-	// Try to emit again
+	// Repeated public logger emits are idempotent.
 	fmt.Println("\nAttempting to emit again:")
 	if err := loza.Emit(ctx); err != nil {
-		var duplicate *loza.DuplicateEmitError
-		if errors.As(err, &duplicate) {
-			fmt.Printf("✗ Cannot emit: Event %s already emitted\n", duplicate.EventID)
-		} else {
-			return reportError("Emit", err)
-		}
+		return reportError("Emit", err)
 	}
+	fmt.Println("✓ Repeated Emit returned nil; no duplicate event")
 	return nil
 }
 

@@ -6,6 +6,8 @@ All notable changes to the LOZA Go SDK are documented in this file.
 
 ### Changed
 
+- Corrected the state-machine docs and example for idempotent public emits;
+  `DuplicateEmitError` now refers to the internal state-transition guard.
 - **Migration note:** `core.ExpandDotKeys` now returns an additional trailing `error`
   and validates that `keys`, `kinds` and `values` have equal length. Callers must
   update from five return values to six and handle the new error (mismatched inputs
