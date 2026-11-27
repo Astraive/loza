@@ -5,6 +5,8 @@
 ### Fixed
 - DuckDB remediation statistics round fractional average resolution times to the nearest second.
 - DuckDB signature similarity fallback now ranks matches before applying the requested limit.
+- GraphQL ingestion now parses required RFC3339 timestamps into typed events for
+  single and batch mutations.
 - Correlation anomaly detection now reads the typed event level and retains the
   legacy raw-level fallback.
 - Topology alias lookup failures now stop event processing unless the alias is genuinely missing.

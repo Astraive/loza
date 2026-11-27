@@ -104,7 +104,7 @@ type redactionTestTopologyStore struct{}
 func (*redactionTestTopologyStore) SaveAlias(context.Context, *models.ServiceAlias) error { return nil }
 
 func (*redactionTestTopologyStore) GetAlias(context.Context, string, string) (*models.ServiceAlias, error) {
-	return nil, errors.New("not found")
+	return nil, storage.ErrNotFound
 }
 
 func (*redactionTestTopologyStore) GetHistory(context.Context, string) ([]*models.ServiceAlias, error) {
@@ -226,4 +226,82 @@ func TestGraphQLServerAppliesPIIRedaction(t *testing.T) {
 	// processor used by every GraphQL ingest mutation.
 	srv := NewGraphQLServer(redactionTestConfig(), newRedactionTestStorage(events))
 	assertPIIRedacted(t, events, srv.processor)
+}
+
+func TestGraphQLIngestMapsTimestampToTypedEvent(t *testing.T) {
+	events := &redactionTestEventStore{}
+	srv := NewGraphQLServer(redactionTestConfig(), newRedactionTestStorage(events))
+	singleMutation := `mutation IngestOne($event: EventInput!) { ingestEvent(event: $event) { status } }`
+	singleTimestamp := "2026-01-01T12:00:00.123Z"
+	result := srv.executeQuery(context.Background(), singleMutation, map[string]interface{}{
+		"event": map[string]interface{}{
+			"id": "evt-graphql-single", "timestamp": singleTimestamp, "service": "api",
+			"kind": "log", "provenance": "loza",
+		},
+	}, "")
+	if len(result.Errors) != 0 {
+		t.Fatalf("single ingest errors: %+v", result.Errors)
+	}
+	if len(events.saved) != 1 {
+		t.Fatalf("single ingest saved %d events, want 1", len(events.saved))
+	}
+	expectedSingle, err := time.Parse(time.RFC3339Nano, singleTimestamp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !events.saved[0].Timestamp.Equal(expectedSingle) {
+		t.Errorf("single event timestamp = %s, want %s", events.saved[0].Timestamp, expectedSingle)
+	}
+	if _, ok := events.saved[0].Raw["timestamp"]; ok {
+		t.Error("typed timestamp was also copied into Raw")
+	}
+
+	batchTimestamp := "2026-01-02T03:04:05Z"
+	batchMutation := `mutation IngestBatch($events: [EventInput!]!) { ingestBatch(events: $events) { status count } }`
+	result = srv.executeQuery(context.Background(), batchMutation, map[string]interface{}{
+		"events": []interface{}{
+			map[string]interface{}{
+				"id": "evt-graphql-batch", "timestamp": batchTimestamp, "service": "api",
+				"kind": "log", "provenance": "loza",
+			},
+		},
+	}, "")
+	if len(result.Errors) != 0 {
+		t.Fatalf("batch ingest errors: %+v", result.Errors)
+	}
+	if len(events.saved) != 2 {
+		t.Fatalf("batch ingest saved %d total events, want 2", len(events.saved))
+	}
+	expectedBatch, err := time.Parse(time.RFC3339Nano, batchTimestamp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !events.saved[1].Timestamp.Equal(expectedBatch) {
+		t.Errorf("batch event timestamp = %s, want %s", events.saved[1].Timestamp, expectedBatch)
+	}
+
+	result = srv.executeQuery(context.Background(), singleMutation, map[string]interface{}{
+		"event": map[string]interface{}{
+			"id": "evt-graphql-invalid", "timestamp": "not-a-timestamp",
+			"service": "api", "kind": "log", "provenance": "loza",
+		},
+	}, "")
+	if len(result.Errors) == 0 {
+		t.Fatal("invalid timestamp was accepted")
+	}
+	if len(events.saved) != 2 {
+		t.Fatalf("invalid timestamp saved an event; total saved = %d", len(events.saved))
+	}
+
+	result = srv.executeQuery(context.Background(), singleMutation, map[string]interface{}{
+		"event": map[string]interface{}{
+			"id": "evt-graphql-missing", "service": "api", "kind": "log", "provenance": "loza",
+		},
+	}, "")
+	if len(result.Errors) == 0 {
+		t.Fatal("missing timestamp was accepted")
+	}
+	if len(events.saved) != 2 {
+		t.Fatalf("missing timestamp saved an event; total saved = %d", len(events.saved))
+	}
 }

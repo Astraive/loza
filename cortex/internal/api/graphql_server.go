@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"sort"
+	"time"
 
 	"github.com/astraive/loza/cortex/internal/config"
 	"github.com/astraive/loza/cortex/internal/graph"
@@ -368,6 +369,7 @@ func (s *GraphQLServer) initSchema() error {
 		Name: "EventInput",
 		Fields: graphql.InputObjectConfigFieldMap{
 			"id":         &graphql.InputObjectFieldConfig{Type: graphql.NewNonNull(graphql.ID)},
+			"timestamp":  &graphql.InputObjectFieldConfig{Type: graphql.NewNonNull(graphql.String)},
 			"service":    &graphql.InputObjectFieldConfig{Type: graphql.NewNonNull(graphql.String)},
 			"kind":       &graphql.InputObjectFieldConfig{Type: graphql.NewNonNull(graphql.String)},
 			"provenance": &graphql.InputObjectFieldConfig{Type: graphql.String},
@@ -447,13 +449,17 @@ func (s *GraphQLServer) initSchema() error {
 	return nil
 }
 
-func (s *GraphQLServer) handleIngestEvent(ctx context.Context, vars map[string]interface{}) (interface{}, error) {
-	eventMap, ok := vars["event"].(map[string]interface{})
-	if !ok {
-		return nil, newGraphQLClientError("event variables required")
+func graphQLEventFromInput(eventMap map[string]interface{}) (*models.Event, error) {
+	timestampText, ok := eventMap["timestamp"].(string)
+	if !ok || timestampText == "" {
+		return nil, newGraphQLClientError("event timestamp is required")
+	}
+	timestamp, err := time.Parse(time.RFC3339Nano, timestampText)
+	if err != nil {
+		return nil, newGraphQLClientError("event timestamp must be RFC3339")
 	}
 
-	event := &models.Event{}
+	event := &models.Event{Timestamp: timestamp}
 	if id, ok := eventMap["id"].(string); ok {
 		event.ID = id
 	}
@@ -467,11 +473,27 @@ func (s *GraphQLServer) handleIngestEvent(ctx context.Context, vars map[string]i
 		event.Provenance = provenance
 	}
 
-	event.Raw = make(map[string]interface{})
-	for k, v := range eventMap {
-		if k != "id" && k != "service" && k != "kind" && k != "provenance" {
-			event.Raw[k] = v
+	event.Raw = make(map[string]interface{}, len(eventMap))
+	for key, value := range eventMap {
+		switch key {
+		case "id", "timestamp", "service", "kind", "provenance":
+			continue
+		default:
+			event.Raw[key] = value
 		}
+	}
+	return event, nil
+}
+
+func (s *GraphQLServer) handleIngestEvent(ctx context.Context, vars map[string]interface{}) (interface{}, error) {
+	eventMap, ok := vars["event"].(map[string]interface{})
+	if !ok {
+		return nil, newGraphQLClientError("event variables required")
+	}
+
+	event, err := graphQLEventFromInput(eventMap)
+	if err != nil {
+		return nil, err
 	}
 
 	if err := s.processor.ProcessEvent(ctx, event); err != nil {
@@ -494,25 +516,9 @@ func (s *GraphQLServer) handleIngestBatch(ctx context.Context, vars map[string]i
 			continue
 		}
 
-		event := &models.Event{}
-		if id, ok := eventMap["id"].(string); ok {
-			event.ID = id
-		}
-		if service, ok := eventMap["service"].(string); ok {
-			event.Service = service
-		}
-		if kind, ok := eventMap["kind"].(string); ok {
-			event.Kind = models.EventKind(kind)
-		}
-		if provenance, ok := eventMap["provenance"].(string); ok {
-			event.Provenance = provenance
-		}
-
-		event.Raw = make(map[string]interface{})
-		for k, v := range eventMap {
-			if k != "id" && k != "service" && k != "kind" && k != "provenance" {
-				event.Raw[k] = v
-			}
+		event, err := graphQLEventFromInput(eventMap)
+		if err != nil {
+			return nil, err
 		}
 		events = append(events, event)
 	}
