@@ -175,7 +175,7 @@ def validate_version(version: str) -> None:
     if not version:
         raise ValueError("manifest version is empty")
 
-    if version.startswith("v") or not SEMVER_RE.match(version):
+    if version.startswith("v") or not SEMVER_RE.fullmatch(version):
         raise ValueError(
             f"manifest version must be semantic version without leading v, got {version!r}"
         )
@@ -207,7 +207,7 @@ def main() -> int:
         manifest_path = component_manifest(args.component)
         manifest = load_yaml(manifest_path)
 
-        version = str(manifest.get("version", "")).strip()
+        version = str(manifest.get("version", ""))
         validate_version(version)
 
         tag = f"{tag_prefix(args.component, manifest)}{version}"

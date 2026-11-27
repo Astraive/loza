@@ -18,12 +18,30 @@ SPEC.loader.exec_module(tag_component)
 
 class ValidateVersionTests(unittest.TestCase):
     def test_accepts_semantic_versions(self) -> None:
-        for version in ("1.2.3", "0.0.0", "10.20.30", "1.2.3-alpha.1", "1.2.3+build.5"):
+        for version in (
+            "1.2.3",
+            "0.0.0",
+            "10.20.30",
+            "1.2.3-alpha.1",
+            "1.2.3+build.5",
+            "1.2.3-alpha.1+build.001",
+        ):
             with self.subTest(version=version):
                 tag_component.validate_version(version)
 
     def test_rejects_malformed_versions(self) -> None:
-        for version in ("1.2", "abc", "1.2.3.4", "01.2.3", "1.2.3 ", "1.2.3/4"):
+        for version in (
+            "1.2",
+            "abc",
+            "1.2.3.4",
+            "01.2.3",
+            "1.2.3 ",
+            "1.2.3/4",
+            "1.2.3-01",
+            "1.2.3-alpha..1",
+            "1.2.3+build..x",
+            "1.2.3\n",
+        ):
             with self.subTest(version=version):
                 with self.assertRaises(ValueError):
                     tag_component.validate_version(version)
@@ -44,6 +62,33 @@ class TagGenerationTests(unittest.TestCase):
             manifest_path = root / "loza.yaml"
             manifest_path.write_text(
                 yaml.safe_dump({"version": "1.2"}),
+                encoding="utf-8",
+            )
+            (root / "release.yaml").write_text(
+                yaml.safe_dump({"components": {"loza": "loza.yaml"}}),
+                encoding="utf-8",
+            )
+
+            original_root = tag_component.ROOT
+            tag_component.ROOT = root
+            try:
+                original_argv = sys.argv
+                sys.argv = ["tag-component.py", "loza", "--dry-run"]
+                try:
+                    result = tag_component.main()
+                finally:
+                    sys.argv = original_argv
+            finally:
+                tag_component.ROOT = original_root
+
+        self.assertEqual(result, 1)
+
+    def test_dry_run_rejects_whitespace_in_manifest_version(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            manifest_path = root / "loza.yaml"
+            manifest_path.write_text(
+                yaml.safe_dump({"version": "1.2.3\n"}),
                 encoding="utf-8",
             )
             (root / "release.yaml").write_text(

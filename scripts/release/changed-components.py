@@ -4,9 +4,9 @@
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import os
-import re
 import subprocess
 import sys
 from pathlib import Path
@@ -20,7 +20,21 @@ except ImportError:  # pragma: no cover
 
 
 ROOT = Path(__file__).resolve().parents[2]
-SEMVER_RE = re.compile(r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$")
+
+
+def _load_semver_re() -> Any:
+    """Reuse the canonical SemVer pattern from the manifest validator."""
+    spec = importlib.util.spec_from_file_location(
+        "loza_validate_manifests", Path(__file__).with_name("validate-manifests.py")
+    )
+    if spec is None or spec.loader is None:
+        raise RuntimeError("could not load validate-manifests.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.SEMVER_RE
+
+
+SEMVER_RE = _load_semver_re()
 
 
 def run_git(args: list[str], check: bool = True) -> str:
@@ -50,7 +64,7 @@ def load_base_yaml(ref: str, path: str) -> dict[str, Any] | None:
 
 def parse_semver(version: Any, component: str) -> tuple[int, int, int, str]:
     value = str(version)
-    match = SEMVER_RE.match(value)
+    match = SEMVER_RE.fullmatch(value)
     if value.startswith("v") or not match:
         raise ValueError(f"{component}: invalid semver {value!r}; use X.Y.Z without leading v")
     return int(match.group(1)), int(match.group(2)), int(match.group(3)), value
