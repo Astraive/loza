@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Prometheus exposition preserves carriage returns as literal label content
+  instead of emitting the unsupported `\r` escape sequence.
+
 ### Security
 
 - `email_hash` and `ip_hash` now pseudonymize with keyed HMAC-SHA256 instead of
