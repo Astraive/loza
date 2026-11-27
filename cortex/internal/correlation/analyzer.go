@@ -41,9 +41,11 @@ type Config struct {
 	AnalysisInterval          time.Duration `yaml:"analysis_interval"`
 	CoOccurrenceWindow        time.Duration `yaml:"co_occurrence_window"`
 	DeploymentAdjacencyWindow time.Duration `yaml:"deployment_adjacency_window"`
-	MinCoOccurrenceCount      int           `yaml:"min_co_occurrence_count"`
-	ListPageSize              int           `yaml:"list_page_size"`
-	MaxEvents                 int           `yaml:"max_events"`
+	// MinCoOccurrenceCount is the minimum number of qualifying event pairs for
+	// an unordered service pair before co-occurrence edges are persisted.
+	MinCoOccurrenceCount int `yaml:"min_co_occurrence_count"`
+	ListPageSize         int `yaml:"list_page_size"`
+	MaxEvents            int `yaml:"max_events"`
 }
 
 // DefaultConfig returns sensible defaults.
@@ -220,10 +222,12 @@ func (a *Analyzer) listRecentEvents(ctx context.Context) ([]*models.Event, error
 	return recent, nil
 }
 
-// synthesizeCoOccurrence creates co_occurred edges between events from different
-// services within a sliding time window that share anomaly signals.
+// synthesizeCoOccurrence creates co_occurred edges between anomalous events from
+// different services within a sliding time window. It emits edges only after
+// the minimum qualifying pair count for that unordered service pair is met.
 func (a *Analyzer) synthesizeCoOccurrence(ctx context.Context, events []*models.Event) error {
 	window := a.cfg.CoOccurrenceWindow
+	windowSeconds := window.Seconds()
 	var persistenceErrors []error
 
 	// Collect all anomalous events. A co-occurrence is decided by the actual
@@ -237,8 +241,38 @@ func (a *Analyzer) synthesizeCoOccurrence(ctx context.Context, events []*models.
 		}
 	}
 
-	// For each pair of anomalous events from different services, apply a real
-	// overlap test against the configured window.
+	minimum := a.cfg.MinCoOccurrenceCount
+	if minimum < 1 {
+		minimum = 1
+	}
+
+	type servicePair struct {
+		first  string
+		second string
+	}
+	var pairCounts map[servicePair]int
+	if minimum > 1 && len(anomalies) > 1 {
+		pairCounts = make(map[servicePair]int)
+		for i, e1 := range anomalies {
+			for _, e2 := range anomalies[i+1:] {
+				if e1.Service == e2.Service {
+					continue
+				}
+				if math.Abs(e1.Timestamp.Sub(e2.Timestamp).Seconds()) > windowSeconds {
+					continue
+				}
+
+				first, second := e1.Service, e2.Service
+				if first > second {
+					first, second = second, first
+				}
+				pairCounts[servicePair{first: first, second: second}]++
+			}
+		}
+	}
+
+	// Persist qualifying anomalous event pairs only when their service pair has
+	// enough in-window evidence in this synthesis pass.
 	seen := make(map[string]bool)
 	for i, e1 := range anomalies {
 		for _, e2 := range anomalies[i+1:] {
@@ -247,8 +281,17 @@ func (a *Analyzer) synthesizeCoOccurrence(ctx context.Context, events []*models.
 			}
 
 			timeDelta := math.Abs(e1.Timestamp.Sub(e2.Timestamp).Seconds())
-			if timeDelta > window.Seconds() {
+			if timeDelta > windowSeconds {
 				continue
+			}
+			if minimum > 1 {
+				first, second := e1.Service, e2.Service
+				if first > second {
+					first, second = second, first
+				}
+				if pairCounts[servicePair{first: first, second: second}] < minimum {
+					continue
+				}
 			}
 
 			// Order endpoints by ID so the edge ID is deterministic regardless
@@ -264,7 +307,7 @@ func (a *Analyzer) synthesizeCoOccurrence(ctx context.Context, events []*models.
 			}
 			seen[edgeID] = true
 
-			weight := 1.0 / (1.0 + timeDelta/window.Seconds())
+			weight := 1.0 / (1.0 + timeDelta/windowSeconds)
 
 			if err := a.saveEdge(ctx, &models.Edge{
 				ID:         edgeID,
@@ -274,7 +317,7 @@ func (a *Analyzer) synthesizeCoOccurrence(ctx context.Context, events []*models.
 				Weight:     weight,
 				Attributes: map[string]interface{}{
 					"time_delta_seconds": timeDelta,
-					"window_seconds":     window.Seconds(),
+					"window_seconds":     windowSeconds,
 				},
 				CreatedAt: time.Now(),
 			}); err != nil {

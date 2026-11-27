@@ -4,6 +4,8 @@
 
 ### Fixed
 - DuckDB remediation statistics round fractional average resolution times to the nearest second.
+- Correlation synthesis now applies the minimum qualifying anomalous event-pair
+  count per service pair before persisting co-occurrence edges.
 - DuckDB signature similarity fallback now ranks matches before applying the requested limit.
 - GraphQL ingestion now parses required RFC3339 timestamps into typed events for
   single and batch mutations.

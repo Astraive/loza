@@ -136,6 +136,7 @@ func TestAnalyzeScansEventsBeyondFirstPage(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.ListPageSize = pageSize
 	cfg.MaxEvents = maxEvents
+	cfg.MinCoOccurrenceCount = 1
 	analyzer := NewAnalyzer(cfg, store, graph)
 
 	if err := analyzer.analyze(context.Background()); err != nil {
@@ -277,7 +278,9 @@ func TestDisabledAnalyzerReportsDisabledAndExitsImmediately(t *testing.T) {
 func TestSynthesizeCoOccurrenceReturnsPersistenceErrors(t *testing.T) {
 	persistErr := errors.New("persist edge")
 	graph := &failingGraphStore{err: persistErr}
-	analyzer := NewAnalyzer(DefaultConfig(), nil, graph)
+	cfg := DefaultConfig()
+	cfg.MinCoOccurrenceCount = 1
+	analyzer := NewAnalyzer(cfg, nil, graph)
 	now := time.Now()
 	events := []*models.Event{
 		{ID: "evt-a", Service: "api", Kind: models.EventKindLog, Timestamp: now, Raw: map[string]any{"level": "error"}},
@@ -328,9 +331,66 @@ func TestIsAnomalyUsesTypedLevelAndLegacyFallback(t *testing.T) {
 	}
 }
 
+func TestSynthesizeCoOccurrenceHonorsMinimumCount(t *testing.T) {
+	start := time.Date(2026, time.January, 2, 3, 4, 0, 0, time.UTC)
+	anomaly := func(id, service string, offset time.Duration) *models.Event {
+		return &models.Event{
+			ID:        id,
+			Service:   service,
+			Kind:      models.EventKindIncidentSignal,
+			Timestamp: start.Add(offset),
+		}
+	}
+	singlePair := []*models.Event{
+		anomaly("api-1", "api", 0),
+		anomaly("db-1", "db", 0),
+	}
+	repeatedPair := []*models.Event{
+		anomaly("api-1", "api", 0),
+		anomaly("api-2", "api", time.Second),
+		anomaly("db-1", "db", 2*time.Second),
+		anomaly("db-2", "db", 3*time.Second),
+	}
+	separatePairs := []*models.Event{
+		anomaly("api-1", "api", 0),
+		anomaly("db-1", "db", 0),
+		anomaly("worker-1", "worker", 10*time.Minute),
+		anomaly("cache-1", "cache", 10*time.Minute),
+	}
+	tests := []struct {
+		name    string
+		minimum int
+		events  []*models.Event
+		want    int
+	}{
+		{name: "one occurrence meets minimum one", minimum: 1, events: singlePair, want: 1},
+		{name: "one occurrence below minimum three", minimum: 3, events: singlePair},
+		{name: "repeated pairs meet minimum three", minimum: 3, events: repeatedPair, want: 4},
+		{name: "counts are per service pair", minimum: 2, events: separatePairs},
+		{name: "nonpositive minimum behaves as one", minimum: 0, events: singlePair, want: 1},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			cfg := DefaultConfig()
+			cfg.MinCoOccurrenceCount = test.minimum
+			graph := &capturingGraphStore{}
+			analyzer := NewAnalyzer(cfg, nil, graph)
+			if err := analyzer.synthesizeCoOccurrence(context.Background(), test.events); err != nil {
+				t.Fatalf("synthesizeCoOccurrence returned error: %v", err)
+			}
+			if len(graph.edges) != test.want {
+				t.Fatalf("got %d co-occurrence edges, want %d", len(graph.edges), test.want)
+			}
+		})
+	}
+}
+
 func TestSynthesizeCoOccurrenceUsesTypedLogLevels(t *testing.T) {
 	graph := &capturingGraphStore{}
-	analyzer := NewAnalyzer(DefaultConfig(), nil, graph)
+	cfg := DefaultConfig()
+	cfg.MinCoOccurrenceCount = 1
+	analyzer := NewAnalyzer(cfg, nil, graph)
 	timestamp := time.Date(2026, time.January, 2, 3, 4, 0, 0, time.UTC)
 	events := []*models.Event{
 		{ID: "evt-a", Service: "api", Kind: models.EventKindLog, Level: "error", Timestamp: timestamp},
@@ -381,7 +441,9 @@ func TestSynthesizeDeploymentAdjacencyUsesTypedLogLevel(t *testing.T) {
 // must still be correlated. The old fixed-bucket implementation skipped them.
 func TestSynthesizeCoOccurrenceCrossesMinuteBoundaryWithinWindow(t *testing.T) {
 	graph := &capturingGraphStore{}
-	analyzer := NewAnalyzer(DefaultConfig(), nil, graph)
+	cfg := DefaultConfig()
+	cfg.MinCoOccurrenceCount = 1
+	analyzer := NewAnalyzer(cfg, nil, graph)
 
 	start := time.Date(2026, time.January, 2, 3, 4, 59, 0, time.UTC) // 03:04:59
 	events := []*models.Event{
