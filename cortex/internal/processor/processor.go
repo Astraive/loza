@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -247,14 +248,21 @@ func (p *EventProcessor) createLinkEdges(ctx context.Context, event *models.Even
 	return errors.Join(errs...)
 }
 
-func (p *EventProcessor) createGraphNodes(ctx context.Context, event *models.Event) error {
-	canonicalService := event.Service
+func (p *EventProcessor) resolveCanonicalService(ctx context.Context, event *models.Event) (string, error) {
+	alias, err := p.topology.GetAlias(ctx, event.Service, event.Timestamp.Format(time.RFC3339))
+	if err == nil {
+		return alias.Canonical, nil
+	}
+	if errors.Is(err, storage.ErrNotFound) || errors.Is(err, sql.ErrNoRows) {
+		return event.Service, nil
+	}
+	return "", fmt.Errorf("failed to resolve service alias %q: %w", event.Service, err)
+}
 
-	// A service without a registered alias is the common case; GetAlias reports
-	// that as a not-found error, so keep the raw service name as the fallback
-	// rather than failing the whole event.
-	if alias, err := p.topology.GetAlias(ctx, event.Service, event.Timestamp.Format(time.RFC3339)); err == nil {
-		canonicalService = alias.Canonical
+func (p *EventProcessor) createGraphNodes(ctx context.Context, event *models.Event) error {
+	canonicalService, err := p.resolveCanonicalService(ctx, event)
+	if err != nil {
+		return err
 	}
 
 	if err := p.saveCoreGraphArtifacts(ctx, event, canonicalService); err != nil {
@@ -341,11 +349,9 @@ func (p *EventProcessor) createGraphNodesBatch(ctx context.Context, events []*mo
 	seenEdges := make(map[string]struct{})
 
 	for _, event := range events {
-		canonicalService := event.Service
-		// GetAlias reports services without a registered alias as not found;
-		// that is expected, so keep the raw service name as the fallback.
-		if alias, err := p.topology.GetAlias(ctx, event.Service, event.Timestamp.Format(time.RFC3339)); err == nil {
-			canonicalService = alias.Canonical
+		canonicalService, err := p.resolveCanonicalService(ctx, event)
+		if err != nil {
+			return err
 		}
 
 		if err := p.saveCoreGraphArtifacts(ctx, event, canonicalService); err != nil {

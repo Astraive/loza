@@ -3,6 +3,7 @@ package processor
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"strings"
@@ -118,7 +119,8 @@ func (f *fakeEventStore) ListLifecycleSummaries(context.Context, *storage.Lifecy
 }
 
 type fakeTopologyStoreForProcessor struct {
-	alias *models.ServiceAlias
+	alias       *models.ServiceAlias
+	getAliasErr error
 }
 
 func (f *fakeTopologyStoreForProcessor) SaveAlias(context.Context, *models.ServiceAlias) error {
@@ -126,10 +128,13 @@ func (f *fakeTopologyStoreForProcessor) SaveAlias(context.Context, *models.Servi
 }
 
 func (f *fakeTopologyStoreForProcessor) GetAlias(_ context.Context, alias, timestamp string) (*models.ServiceAlias, error) {
+	if f.getAliasErr != nil {
+		return nil, f.getAliasErr
+	}
 	if f.alias != nil && f.alias.Alias == alias {
 		return f.alias, nil
 	}
-	return nil, errors.New("not found")
+	return nil, storage.ErrNotFound
 }
 
 func (f *fakeTopologyStoreForProcessor) GetHistory(context.Context, string) ([]*models.ServiceAlias, error) {
@@ -891,6 +896,83 @@ func TestProcessEventReturnsIncidentLookupError(t *testing.T) {
 	}
 }
 
+func TestAuditProcessorReportsTopologyLookupOutage(t *testing.T) {
+	lookupErr := errors.New("topology store unavailable")
+
+	t.Run("single event", func(t *testing.T) {
+		events := &fakeEventStore{}
+		graphStore := &fakeGraphStoreForProcessor{}
+		topology := &fakeTopologyStoreForProcessor{getAliasErr: lookupErr}
+		p := NewEventProcessor(events, topology, graphStore)
+		event := &models.Event{
+			ID:         "evt-topology-outage",
+			Timestamp:  time.Now(),
+			Kind:       models.EventKindLog,
+			Service:    "svc-a",
+			Provenance: "jsonl",
+		}
+
+		err := p.ProcessEvent(context.Background(), event)
+		if !errors.Is(err, lookupErr) {
+			t.Fatalf("expected topology lookup failure to be returned, got %v", err)
+		}
+		if len(events.saved) != 1 {
+			t.Fatalf("expected event persistence before topology lookup, got %d saved events", len(events.saved))
+		}
+		if len(graphStore.nodes) != 0 {
+			t.Fatalf("expected graph writes to stop after topology lookup failure, got %d nodes", len(graphStore.nodes))
+		}
+	})
+
+	t.Run("batch", func(t *testing.T) {
+		events := &fakeEventStore{}
+		graphStore := &fakeGraphStoreForProcessor{}
+		topology := &fakeTopologyStoreForProcessor{getAliasErr: lookupErr}
+		p := NewEventProcessor(events, topology, graphStore)
+		batch := []*models.Event{{
+			ID:         "evt-batch-topology-outage",
+			Timestamp:  time.Now(),
+			Kind:       models.EventKindLog,
+			Service:    "svc-a",
+			Provenance: "jsonl",
+		}}
+
+		err := p.ProcessBatch(context.Background(), batch)
+		if !errors.Is(err, lookupErr) {
+			t.Fatalf("expected batch topology lookup failure to be returned, got %v", err)
+		}
+		if len(events.batchSaved) != 1 {
+			t.Fatalf("expected batch persistence before topology lookup, got %d saved batches", len(events.batchSaved))
+		}
+		if len(graphStore.nodes) != 0 {
+			t.Fatalf("expected graph writes to stop after topology lookup failure, got %d nodes", len(graphStore.nodes))
+		}
+	})
+}
+
+func TestProcessEventFallsBackForMissingTopologyAlias(t *testing.T) {
+	graphStore := &fakeGraphStoreForProcessor{}
+	p := NewEventProcessor(
+		&fakeEventStore{},
+		&fakeTopologyStoreForProcessor{getAliasErr: sql.ErrNoRows},
+		graphStore,
+	)
+	event := &models.Event{
+		ID:         "evt-missing-topology-alias",
+		Timestamp:  time.Now(),
+		Kind:       models.EventKindLog,
+		Service:    "svc-a",
+		Provenance: "jsonl",
+	}
+
+	if err := p.ProcessEvent(context.Background(), event); err != nil {
+		t.Fatalf("expected missing alias to fall back to the raw service name, got %v", err)
+	}
+	if len(graphStore.nodes) == 0 || graphStore.nodes[0].ID != "svc-a" {
+		t.Fatalf("expected graph service node to use raw service name svc-a, got %+v", graphStore.nodes)
+	}
+}
+
 func TestProcessBatchReturnsLinkEdgeSaveError(t *testing.T) {
 	errLink := errors.New("batch link edge save failed")
 	graphStore := &fakeGraphStoreForProcessor{
@@ -933,6 +1015,30 @@ func TestProcessBatchReturnsIncidentLookupError(t *testing.T) {
 
 	if err := p.ProcessBatch(context.Background(), batch); !errors.Is(err, errLookup) {
 		t.Fatalf("expected batch incident lookup failure to be returned, got %v", err)
+	}
+}
+
+func TestProcessBatchReturnsTopologyLookupError(t *testing.T) {
+	lookupErr := errors.New("batch topology store unavailable")
+	events := &fakeEventStore{}
+	p := NewEventProcessor(
+		events,
+		&fakeTopologyStoreForProcessor{getAliasErr: lookupErr},
+		&fakeGraphStoreForProcessor{},
+	)
+	batch := []*models.Event{{
+		ID:         "evt-batch-topology-error",
+		Timestamp:  time.Now(),
+		Kind:       models.EventKindLog,
+		Service:    "svc-a",
+		Provenance: "jsonl",
+	}}
+
+	if err := p.ProcessBatch(context.Background(), batch); !errors.Is(err, lookupErr) {
+		t.Fatalf("expected batch topology lookup failure to be returned, got %v", err)
+	}
+	if len(events.batchSaved) != 1 {
+		t.Fatalf("expected batch persistence before topology lookup, got %d saved batches", len(events.batchSaved))
 	}
 }
 
