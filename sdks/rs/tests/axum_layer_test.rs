@@ -43,7 +43,8 @@ async fn loza_layer_emits_request_event_when_layered_on_a_router() {
     assert_eq!(event["kind"].as_str(), Some("http"));
     assert_eq!(event["http"]["method"].as_str(), Some("GET"));
     assert_eq!(event["http"]["path"].as_str(), Some("/health"));
-    assert_eq!(event["attrs"]["status_code"].as_u64(), Some(200));
+    assert_eq!(event["status_code"].as_u64(), Some(200));
+    assert_eq!(event["http"]["status_code"].as_u64(), Some(200));
     assert_eq!(event["outcome"].as_str(), Some("success"));
     assert_eq!(
         event["http"]["user_agent"].as_str(),
@@ -84,5 +85,6 @@ async fn loza_middleware_from_fn_still_emits_request_event() {
     let event: Value = serde_json::from_str(&events[0]).expect("event must be valid JSON");
     assert_eq!(event["event"].as_str(), Some("http.request"));
     assert_eq!(event["service"].as_str(), Some("catalog"));
-    assert_eq!(event["attrs"]["status_code"].as_u64(), Some(200));
+    assert_eq!(event["status_code"].as_u64(), Some(200));
+    assert_eq!(event["http"]["status_code"].as_u64(), Some(200));
 }
