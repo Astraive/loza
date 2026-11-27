@@ -293,6 +293,89 @@ func TestSynthesizeCoOccurrenceReturnsPersistenceErrors(t *testing.T) {
 	}
 }
 
+func TestIsAnomalyUsesTypedLevelAndLegacyFallback(t *testing.T) {
+	tests := []struct {
+		name  string
+		kind  models.EventKind
+		level string
+		raw   map[string]any
+		want  bool
+	}{
+		{name: "typed error log", kind: models.EventKindLog, level: "error", want: true},
+		{name: "typed fatal Loza event", kind: models.EventKindLozaEvent, level: "fatal", want: true},
+		{
+			name:  "typed info takes precedence over legacy raw error",
+			kind:  models.EventKindLog,
+			level: "info",
+			raw:   map[string]any{"level": "error"},
+			want:  false,
+		},
+		{
+			name: "legacy raw error fallback",
+			kind: models.EventKindLog,
+			raw:  map[string]any{"level": "error"},
+			want: true,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			event := &models.Event{Kind: test.kind, Level: test.level, Raw: test.raw}
+			if got := isAnomaly(event); got != test.want {
+				t.Fatalf("isAnomaly(%+v) = %v, want %v", event, got, test.want)
+			}
+		})
+	}
+}
+
+func TestSynthesizeCoOccurrenceUsesTypedLogLevels(t *testing.T) {
+	graph := &capturingGraphStore{}
+	analyzer := NewAnalyzer(DefaultConfig(), nil, graph)
+	timestamp := time.Date(2026, time.January, 2, 3, 4, 0, 0, time.UTC)
+	events := []*models.Event{
+		{ID: "evt-a", Service: "api", Kind: models.EventKindLog, Level: "error", Timestamp: timestamp},
+		{ID: "evt-b", Service: "db", Kind: models.EventKindLog, Level: "fatal", Timestamp: timestamp.Add(time.Second)},
+	}
+
+	if err := analyzer.synthesizeCoOccurrence(context.Background(), events); err != nil {
+		t.Fatalf("synthesizeCoOccurrence returned error: %v", err)
+	}
+	if len(graph.edges) != 1 {
+		t.Fatalf("expected one co-occurrence edge for typed error logs, got %d", len(graph.edges))
+	}
+	if graph.edges[0].Type != models.EdgeTypeCoOccurred ||
+		graph.edges[0].FromNodeID != "evt-a" || graph.edges[0].ToNodeID != "evt-b" {
+		t.Fatalf("unexpected co-occurrence edge: %+v", graph.edges[0])
+	}
+}
+
+func TestSynthesizeDeploymentAdjacencyUsesTypedLogLevel(t *testing.T) {
+	graph := &capturingGraphStore{}
+	analyzer := NewAnalyzer(DefaultConfig(), nil, graph)
+	timestamp := time.Date(2026, time.January, 2, 3, 4, 0, 0, time.UTC)
+	events := []*models.Event{
+		{ID: "deploy-1", Service: "api", Kind: models.EventKindDeploy, Timestamp: timestamp},
+		{
+			ID:        "anomaly-1",
+			Service:   "db",
+			Kind:      models.EventKindLog,
+			Level:     "error",
+			Timestamp: timestamp.Add(2 * time.Minute),
+		},
+	}
+
+	if err := analyzer.synthesizeDeploymentAdjacency(context.Background(), events); err != nil {
+		t.Fatalf("synthesizeDeploymentAdjacency returned error: %v", err)
+	}
+	if len(graph.edges) != 1 {
+		t.Fatalf("expected one deployment-adjacent edge for typed error log, got %d", len(graph.edges))
+	}
+	if graph.edges[0].Type != models.EdgeTypeDeploymentAdjacent ||
+		graph.edges[0].FromNodeID != "deploy-1" || graph.edges[0].ToNodeID != "anomaly-1" {
+		t.Fatalf("unexpected deployment-adjacent edge: %+v", graph.edges[0])
+	}
+}
+
 // Regression for MASS-0300: two anomalous events from different services that
 // fall within the configured sliding window but straddle a 1-minute boundary
 // must still be correlated. The old fixed-bucket implementation skipped them.

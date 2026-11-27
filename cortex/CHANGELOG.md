@@ -3,6 +3,8 @@
 ## [Unreleased]
 
 ### Fixed
+- Correlation anomaly detection now reads the typed event level and retains the
+  legacy raw-level fallback.
 - Topology alias lookup failures now stop event processing unless the alias is genuinely missing.
 - Environment override parse errors are no longer silently swallowed. `CORTEX_*`
   numeric, duration, and boolean overrides must be well-formed or configuration

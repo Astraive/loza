@@ -381,12 +381,15 @@ func isAnomaly(event *models.Event) bool {
 		return true
 	}
 
-	// Check for error-level logs
+	// Check for error-level logs. The typed field is canonical; Raw is a
+	// fallback for legacy events.
 	if event.Kind == models.EventKindLog || event.Kind == models.EventKindLozaEvent {
-		if level, ok := event.Raw["level"].(string); ok {
-			if level == "error" || level == "fatal" {
-				return true
-			}
+		level := event.Level
+		if level == "" {
+			level, _ = event.Raw["level"].(string)
+		}
+		if level == "error" || level == "fatal" {
+			return true
 		}
 	}
 
