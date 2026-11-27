@@ -134,9 +134,14 @@ def _all_groups() -> list[str]:
     return sorted(groups)
 
 
-def _run_check(check: Check, verbose: bool, timeout: float | None = None) -> CheckResult:
-    print(f"[{check.sdk}:{check.group}] {' '.join(check.command)}")
-    print(f"  {check.description}")
+def _run_check(
+    check: Check,
+    verbose: bool,
+    timeout: float | None = None,
+    json_output: bool = False,
+) -> CheckResult:
+    print(f"[{check.sdk}:{check.group}] {' '.join(check.command)}", file=sys.stderr)
+    print(f"  {check.description}", file=sys.stderr)
     if timeout is None:
         timeout = _check_timeout_seconds()
     started = time.perf_counter()
@@ -144,7 +149,7 @@ def _run_check(check: Check, verbose: bool, timeout: float | None = None) -> Che
         result = subprocess.run(
             list(check.command),
             cwd=check.cwd,
-            capture_output=not verbose,
+            capture_output=not verbose or json_output,
             text=True,
             timeout=timeout,
         )
@@ -153,11 +158,11 @@ def _run_check(check: Check, verbose: bool, timeout: float | None = None) -> Che
         reason = f"timed out after {timeout:g}s"
         stdout = exc.stdout or ""
         stderr = exc.stderr or ""
-        print(f"  FAIL ({reason})")
-        if not verbose:
+        print(f"  FAIL ({reason})", file=sys.stderr)
+        if not verbose or json_output:
             partial_output = stdout + stderr
             if partial_output.strip():
-                print(partial_output.strip()[:5000])
+                print(partial_output.strip()[:5000], file=sys.stderr)
         return CheckResult(
             sdk=check.sdk,
             group=check.group,
@@ -172,7 +177,11 @@ def _run_check(check: Check, verbose: bool, timeout: float | None = None) -> Che
         )
     duration_s = time.perf_counter() - started
     if result.returncode == 0:
-        print("  PASS")
+        if verbose and json_output:
+            for output in (result.stdout or "", result.stderr or ""):
+                if output:
+                    print(output, end="" if output.endswith("\n") else "\n", file=sys.stderr)
+        print("  PASS", file=sys.stderr)
         return CheckResult(
             sdk=check.sdk,
             group=check.group,
@@ -185,11 +194,15 @@ def _run_check(check: Check, verbose: bool, timeout: float | None = None) -> Che
             stdout=result.stdout or "",
             stderr=result.stderr or "",
         )
-    print("  FAIL")
-    if not verbose:
+    print("  FAIL", file=sys.stderr)
+    if verbose and json_output:
+        for output in (result.stdout or "", result.stderr or ""):
+            if output:
+                print(output, end="" if output.endswith("\n") else "\n", file=sys.stderr)
+    elif not verbose:
         output = (result.stdout or "") + (result.stderr or "")
         if output.strip():
-            print(output.strip()[:5000])
+            print(output.strip()[:5000], file=sys.stderr)
     return CheckResult(
         sdk=check.sdk,
         group=check.group,
@@ -231,7 +244,7 @@ def _is_python_sdk_installed() -> bool:
 
 def _skip_result(check: Check, reason: str) -> CheckResult:
     """Create a CheckResult for a check that was not executed."""
-    print(f"[{check.sdk}:{check.group}] SKIP ({reason})")
+    print(f"[{check.sdk}:{check.group}] SKIP ({reason})", file=sys.stderr)
     return CheckResult(
         sdk=check.sdk,
         group=check.group,
@@ -340,7 +353,7 @@ def main() -> int:
                 results.append(_skip_result(check, "python sdk not installed"))
                 continue
 
-        results.append(_run_check(check, args.verbose))
+        results.append(_run_check(check, args.verbose, json_output=args.json))
     if args.json:
         _print_json(results)
 

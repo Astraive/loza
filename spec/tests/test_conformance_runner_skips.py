@@ -106,6 +106,28 @@ class TestSkippedCheckAccounting(unittest.TestCase):
         self.assertIn("WARNING", stderr.getvalue())
         self.assertIn("no collector", stderr.getvalue())
 
+    def test_json_main_writes_only_json_to_stdout(self):
+        check = runner.Check(
+            "go",
+            "state_machine",
+            (sys.executable, "-c", "print('ok')"),
+            Path(__file__).resolve().parent,
+            "finite stdout regression probe",
+        )
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+        with mock.patch.object(runner, "SDK_GROUPS", {"go": [check]}), mock.patch.object(
+            sys, "argv", ["runner.py", "--sdk", "go", "--verbose", "--json"]
+        ), redirect_stdout(stdout), redirect_stderr(stderr):
+            exit_code = runner.main()
+
+        self.assertEqual(exit_code, 0)
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(payload["summary"], {"total": 1, "passed": 1, "failed": 0, "skipped": 0})
+        self.assertEqual(payload["checks"][0]["stdout"].strip(), "ok")
+        self.assertIn("PASS", stderr.getvalue())
+        self.assertIn("ok", stderr.getvalue())
+
 
 if __name__ == "__main__":
     unittest.main()
