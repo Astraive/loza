@@ -72,3 +72,66 @@ func TestDuckDBGetAliasWithValidTimestamp(t *testing.T) {
 		t.Fatalf("GetAlias = %+v, want canonical %q", got, "gateway")
 	}
 }
+
+func TestDuckDBFindSimilarRanksFallbackBeforeLimit(t *testing.T) {
+	ctx := context.Background()
+	stor, err := NewDuckDBStorage(filepath.Join(t.TempDir(), "similarity.duckdb"))
+	if err != nil {
+		t.Fatalf("open DuckDB: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := stor.Close(); err != nil {
+			t.Errorf("close DuckDB: %v", err)
+		}
+	})
+	if err := stor.Init(ctx); err != nil {
+		t.Fatalf("initialize DuckDB: %v", err)
+	}
+
+	signatures := stor.Signatures()
+	query := &models.IncidentSignature{
+		SignatureID: "query",
+		Shape:       "api_timeout",
+		Symptoms:    []models.SymptomType{models.SymptomTypeTimeout},
+	}
+	for _, candidate := range []*models.IncidentSignature{
+		{
+			SignatureID:     "popular-weaker",
+			Shape:           "api_timeout_related",
+			Symptoms:        []models.SymptomType{models.SymptomTypeTimeout},
+			OccurrenceCount: 100,
+		},
+		{
+			SignatureID:     "exact",
+			Shape:           query.Shape,
+			Symptoms:        []models.SymptomType{models.SymptomTypeTimeout},
+			OccurrenceCount: 1,
+		},
+	} {
+		if err := signatures.Save(ctx, candidate); err != nil {
+			t.Fatalf("save signature %q: %v", candidate.SignatureID, err)
+		}
+	}
+
+	ranked, err := signatures.FindSimilar(ctx, query, 2)
+	if err != nil {
+		t.Fatalf("FindSimilar limit 2: %v", err)
+	}
+	if len(ranked) != 2 {
+		t.Fatalf("FindSimilar limit 2 returned %d results, want 2", len(ranked))
+	}
+	if ranked[0].IncidentID != "exact" {
+		t.Errorf("first result = %q, want exact signature", ranked[0].IncidentID)
+	}
+	if ranked[0].Similarity <= ranked[1].Similarity {
+		t.Errorf("results are not ranked by similarity: first=%v second=%v", ranked[0].Similarity, ranked[1].Similarity)
+	}
+
+	top, err := signatures.FindSimilar(ctx, query, 1)
+	if err != nil {
+		t.Fatalf("FindSimilar limit 1: %v", err)
+	}
+	if len(top) != 1 || top[0].IncidentID != "exact" {
+		t.Errorf("FindSimilar limit 1 = %+v, want only exact signature", top)
+	}
+}
