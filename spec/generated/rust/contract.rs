@@ -188,6 +188,7 @@ pub const CONTRACT_JSON: &str = r#"{
     "source_sdks": [
       "loza-cli",
       "loza-go",
+      "loza-js",
       "loza-py",
       "loza-rs"
     ]
