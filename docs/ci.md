@@ -120,10 +120,13 @@ This workflow runs focused tests only for components that actually changed.
 
 ### openapi-gen.yml
 
-**Triggers:** manual dispatch only.
+**Triggers:** pull requests and pushes when the generator script, regression test, or workflow changes; manual dispatch for generation.
 
 **Jobs:**
-- **generate** — Runs OpenAPI generator script, uploads generated clients
+- **validate** — Runs the generator output-contract test with a fake Docker CLI.
+- **generate** — Manual dispatch only; runs `tools/generate_openapi.sh` and uploads Go, Python, Rust, and TypeScript Fetch clients for the canonical collector OpenAPI spec.
+
+Run locally with Docker installed and running: `./tools/generate_openapi.sh`. The pinned OpenAPI Generator CLI image is `openapitools/openapi-generator-cli:v7.12.0`; generated clients are written to `generated/openapi/{go,python,rust,typescript-fetch}`.
 
 ## Release Workflows
 
