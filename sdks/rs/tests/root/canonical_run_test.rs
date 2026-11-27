@@ -2,7 +2,9 @@
 fn root_lifecycle_exports_emit() {
     let logger = loza::Test("root");
     let mut ctx = logger.start_event(loza::Params::new("root.run"));
-    logger.finish(&mut ctx, "success");
+    logger
+        .finish(&mut ctx, "success")
+        .expect("finish event");
     assert!(logger.emit(&ctx).unwrap().contains("\"schema_version\":\"v1\""));
 }
 
