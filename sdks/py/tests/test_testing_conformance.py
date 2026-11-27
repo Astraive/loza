@@ -84,6 +84,8 @@ def test_golden_test_update_flag_creates_and_compares(tmp_path):
     # Re-running with update=True rebaselines an existing golden.
     golden_test(str(target), {"event": "test", "message": "changed"}, update=True)
     assert golden_test(str(target), {"event": "test", "message": "changed"}) is True
+
+
 def test_snapshot_event_is_independent_of_later_event_mutation():
     event = {
         "event_id": "evt_1",

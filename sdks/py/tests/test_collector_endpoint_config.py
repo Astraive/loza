@@ -47,9 +47,13 @@ def test_credentialed_dsn_installs_scoped_credential_free_endpoint(dsn, username
 
 def test_api_key_requires_https_for_non_local_endpoints() -> None:
     with pytest.raises(ValueError, match="require HTTPS"):
-        Config.dev("checkout").with_collector_endpoint("http://collector.example:80").with_api_key("lz_sec_live_key").validate()
+        Config.dev("checkout").with_collector_endpoint("http://collector.example:80").with_api_key(
+            "lz_sec_live_key"
+        ).validate()
     with pytest.raises(ValueError, match="require HTTPS"):
-        Config.dev("checkout").with_collector_endpoint("loza://collector.example/events?tls=false").with_api_key("lz_sec_live_key").validate()
+        Config.dev("checkout").with_collector_endpoint("loza://collector.example/events?tls=false").with_api_key(
+            "lz_sec_live_key"
+        ).validate()
     with pytest.raises(ValueError, match="require HTTPS"):
         CollectorClient("http://collector.example/events", api_key="lz_sec_live_key")
 

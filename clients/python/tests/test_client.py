@@ -62,7 +62,7 @@ def test_api_key_over_plaintext_http_is_rejected():
             Client(config)
         except Exception as error:
             assert getattr(error, "category", None) == ErrorCategory.INVALID_CONFIGURATION
-            assert "require TLS" in str(error)
+            assert "requires TLS" in str(error)
         else:
             raise AssertionError(f"expected plaintext API-key rejection for {config}")
 

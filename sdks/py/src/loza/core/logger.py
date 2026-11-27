@@ -21,7 +21,6 @@ from .config import (
 )
 from .duplicate_policy import apply_duplicate
 from .errors import EventClosedError, EventValidationError
-from .hashing import hash_sensitive_value
 from .hashing import secure_hash
 from .event import (
     EVENT_ACTIVE,
@@ -568,7 +567,6 @@ class Logger:
         ctx.mark_partial(reason)
 
     def clone_event(self, ctx: EventContext) -> EventContext:
-        import copy
 
         return copy.deepcopy(ctx)
 
@@ -800,24 +798,6 @@ class Logger:
     def _sanitize_event(self, ctx: EventContext) -> EventContext:
         """Create a sanitized copy by delegating to the standalone sanitize_event."""
         return sanitize_event(ctx)
-
-    @staticmethod
-    def _sanitize_checkpoint(
-        checkpoint: dict[str, object],
-        drop_keys: set[str],
-        hash_keys: set[str],
-        sensitive_keys: set[str],
-    ) -> None:
-        """Apply the same drop/hash/sensitive policies to a checkpoint payload."""
-        for key in drop_keys:
-            checkpoint.pop(key, None)
-        for key in hash_keys:
-            value = checkpoint.get(key)
-            if value is not None:
-                checkpoint[key] = hashlib.sha256(str(value).encode("utf-8")).hexdigest()
-        for key in sensitive_keys:
-            if checkpoint.get(key) is not None:
-                checkpoint[key] = "[REDACTED]"
 
     @staticmethod
     def _hash_at_path(target: dict[str, Any], key: str) -> None:

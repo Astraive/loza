@@ -32,10 +32,7 @@ def validate_policy(policy: str) -> None:
     value instead of reporting the configuration error.
     """
     if policy not in VALID_POLICIES:
-        raise ValueError(
-            f"unknown duplicate policy: {policy!r}; "
-            f"expected one of {sorted(VALID_POLICIES)}"
-        )
+        raise ValueError(f"unknown duplicate policy: {policy!r}; expected one of {sorted(VALID_POLICIES)}")
 
 
 def apply_duplicate(target: dict[str, Any], key: str, value: Any, policy: str) -> None:

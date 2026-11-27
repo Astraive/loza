@@ -13,14 +13,16 @@ if TYPE_CHECKING:
 
 # Keys owned by the timing events themselves. User-supplied attrs must never be
 # allowed to replace these measured values in to_dict() output.
-_RESERVED_EVENT_KEYS = frozenset({
-    "step",
-    "name",
-    "started_at_ms",
-    "ended_at_ms",
-    "duration_ms",
-    "status_code",
-})
+_RESERVED_EVENT_KEYS = frozenset(
+    {
+        "step",
+        "name",
+        "started_at_ms",
+        "ended_at_ms",
+        "duration_ms",
+        "status_code",
+    }
+)
 
 
 def _non_reserved_attrs(attrs: dict[str, object]) -> dict[str, object]:

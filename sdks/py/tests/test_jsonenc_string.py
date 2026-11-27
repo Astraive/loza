@@ -18,7 +18,5 @@ from loza.jsonenc.string import join_path
         (["a", ".", "..", "b"], "a.b"),
     ],
 )
-def test_join_path_drops_segments_that_are_empty_after_stripping(
-    impl, parts: list[str], expected: str
-) -> None:
+def test_join_path_drops_segments_that_are_empty_after_stripping(impl, parts: list[str], expected: str) -> None:
     assert impl(parts) == expected

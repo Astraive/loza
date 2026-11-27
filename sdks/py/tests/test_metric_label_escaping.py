@@ -12,7 +12,7 @@ from loza.core import metric
 def test_escape_label_value_escapes_carriage_return(module) -> None:
     assert module._escape_label_value("a\rb") == "a\\rb"
     # Existing escapes remain intact and introduced backslashes are not re-escaped.
-    assert module._escape_label_value("a\\b\nc\r\n\"d") == "a\\\\b\\nc\\r\\n\\\"d"
+    assert module._escape_label_value('a\\b\nc\r\n"d') == 'a\\\\b\\nc\\r\\n\\"d'
 
 
 @pytest.mark.parametrize("module", [metric, legacy_metrics])

@@ -70,7 +70,5 @@ def test_get_does_not_hang_on_stale_empty_observation(pool_type) -> None:
     for thread in threads:
         thread.join(timeout=5)
 
-    assert not any(thread.is_alive() for thread in threads), (
-        "get() blocked forever after a stale empty() observation"
-    )
+    assert not any(thread.is_alive() for thread in threads), "get() blocked forever after a stale empty() observation"
     assert sorted(results) == ["factory", "item"]

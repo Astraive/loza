@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from loza.utils.ndjson import decode_lines, encode_line
 
 
@@ -32,9 +34,6 @@ def test_decode_lines_splits_only_on_newline() -> None:
 def test_decode_lines_tolerates_crlf_and_blank_lines() -> None:
     text = '{"a":1}\r\n\r\n{"a":2}\r\n'
     assert decode_lines(text) == [{"a": 1}, {"a": 2}]
-import pytest
-
-from loza.utils.ndjson import decode_lines, encode_line
 
 
 def test_encode_line_emits_standard_json() -> None:

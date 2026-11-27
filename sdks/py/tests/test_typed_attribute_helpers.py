@@ -51,6 +51,8 @@ def test_masked_zero_suffix_does_not_leak_value():
 def test_masked_zero_prefix_does_not_leak_value():
     assert loza.masked("k", "abcdef", 0, 2).value == "****ef"
     assert loza.masked("k", "abcdef", 0, 0).value == "******"
+
+
 def test_group_nested_key_over_conflicting_scalar():
     """A scalar at an intermediate key must not crash when a later attr nests under it."""
     group = loza.Group(loza.Int("a", 1), loza.Int("a.b", 2))
@@ -62,6 +64,8 @@ def test_group_nested_key_over_conflicting_scalar():
 
     # The existing last-writer-wins behavior for leaf keys is preserved.
     assert loza.Group(loza.Int("a", 1), loza.Int("a", 3)).value == {"a": 3}
+
+
 def test_enum_rejects_value_outside_allowed_set():
     with pytest.raises(ValueError):
         loza.enum_("color", "purple", "red", "green", "blue")
