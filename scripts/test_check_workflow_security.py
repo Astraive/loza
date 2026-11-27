@@ -150,7 +150,7 @@ class CheckWorkflowSecurityTests(unittest.TestCase):
                     f"{path.name}:{lineno}: invalid action reference {ref!r}",
                 )
                 self.assertNotRegex(ref, r"^[0-9a-f]{40}$", "bare SHA is not resolvable")
-        self.assertEqual(len(external), 94)
+        self.assertEqual(len(external), 106)
 
 
 if __name__ == "__main__":
