@@ -174,7 +174,7 @@ def _run_check(check: Check, verbose: bool, timeout: float | None = None) -> Che
             returncode=TIMEOUT_RETURN_CODE,
             duration_s=duration_s,
             stdout=stdout,
-            stderr=f"{reason}\n{stderr}".strip(),
+            stderr=f"{reason}\n{stderr}" if stderr else reason,
         )
     duration_s = time.perf_counter() - started
     if result.returncode == 0:

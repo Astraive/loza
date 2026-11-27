@@ -50,7 +50,7 @@ class TestRunCheckTimeout(unittest.TestCase):
                 "print('partial stderr', file=sys.stderr, flush=True); "
                 "time.sleep(30)",
                 "",
-                "partial stderr",
+                "partial stderr\n",
             ),
             (
                 "both",
@@ -59,7 +59,7 @@ class TestRunCheckTimeout(unittest.TestCase):
                 "print('partial stderr', file=sys.stderr, flush=True); "
                 "time.sleep(30)",
                 "partial stdout\n",
-                "partial stderr",
+                "partial stderr\n",
             ),
         )
         for stream, command, expected_stdout, expected_stderr in cases:
@@ -72,9 +72,10 @@ class TestRunCheckTimeout(unittest.TestCase):
                 self.assertFalse(result.passed)
                 self.assertEqual(result.returncode, runner.TIMEOUT_RETURN_CODE)
                 self.assertEqual(result.stdout, expected_stdout)
-                self.assertIn("timed out", result.stderr)
+                expected_result_stderr = "timed out after 0.5s"
                 if expected_stderr is not None:
-                    self.assertIn(expected_stderr, result.stderr)
+                    expected_result_stderr += f"\n{expected_stderr}"
+                self.assertEqual(result.stderr, expected_result_stderr)
 
     def test_fast_command_still_passes(self):
         result = runner._run_check(
