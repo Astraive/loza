@@ -3,11 +3,10 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "LOZA Cortex Feedback",
   "type": "object",
-  "required": ["incident_id", "remediation_id", "success"],
+  "required": ["incident_id", "remediation_id", "outcome_code"],
   "properties": {
     "feedback_id": {
-      "type": "string",
-      "description": "Unique feedback ID (generated if not provided)"
+      "type": "string"
     },
     "incident_id": {
       "type": "string",
@@ -17,27 +16,24 @@
       "type": "string",
       "minLength": 1
     },
-    "success": {
-      "type": "boolean",
-      "description": "Whether the remediation resolved the incident"
+    "outcome_code": {
+      "type": "integer",
+      "minimum": 100,
+      "maximum": 599
     },
-    "outcome": {
+    "outcome_category": {
       "type": "string",
-      "enum": ["success", "failed", "partial", "unknown"]
+      "enum": ["pending", "success", "partial", "failed"]
     },
     "time_to_resolve_seconds": {
-      "type": "integer",
-      "minimum": 0,
-      "description": "Time from incident start to resolution"
-    },
-    "notes": {
-      "type": "string",
-      "description": "Human notes on the remediation"
+      "type": "integer"
     },
     "timestamp": {
       "type": "string",
-      "format": "date-time",
-      "description": "When feedback was recorded"
+      "format": "date-time"
+    },
+    "notes": {
+      "type": "string"
     }
   },
   "additionalProperties": false

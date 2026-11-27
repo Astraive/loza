@@ -7,39 +7,19 @@
   "properties": {
     "id": {
       "type": "string",
-      "minLength": 1,
-      "description": "Unique node ID"
+      "minLength": 1
     },
     "type": {
       "type": "string",
-      "enum": [
-        "service",
-        "event",
-        "trace",
-        "span",
-        "request",
-        "deployment",
-        "metric",
-        "log",
-        "incident",
-        "remediation",
-        "resource"
-      ],
-      "description": "Node type"
+      "enum": ["service", "deployment", "incident", "metric", "log"]
     },
     "label": {
       "type": "string",
-      "minLength": 1,
-      "description": "Human-readable label"
-    },
-    "service": {
-      "type": "string",
-      "description": "Service this node belongs to"
+      "minLength": 1
     },
     "attributes": {
-      "type": "object",
-      "additionalProperties": true,
-      "description": "Additional attributes"
+      "type": ["object", "null"],
+      "additionalProperties": true
     },
     "created_at": {
       "type": "string",

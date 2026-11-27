@@ -7,46 +7,44 @@
   "properties": {
     "id": {
       "type": "string",
-      "minLength": 1,
-      "description": "Unique edge ID"
+      "minLength": 1
     },
     "from_node_id": {
       "type": "string",
-      "minLength": 1,
-      "description": "Source node ID"
+      "minLength": 1
     },
     "to_node_id": {
       "type": "string",
-      "minLength": 1,
-      "description": "Target node ID"
+      "minLength": 1
     },
     "type": {
       "type": "string",
       "enum": [
-        "depends_on",
         "same_trace",
         "same_incident",
-        "parent_span",
-        "calls",
+        "service_renamed_to",
+        "depends_on",
         "deployed_before",
         "metric_spiked_after",
         "log_error_after",
         "caused_probably",
         "remediated_by",
-        "similar_shape"
-      ],
-      "description": "Edge type"
+        "similar_shape",
+        "same_family",
+        "co_occurred",
+        "deployment_adjacent",
+        "remediation_sequence",
+        "inferred_causality"
+      ]
     },
     "weight": {
       "type": "number",
       "minimum": 0,
-      "maximum": 1,
-      "description": "Confidence or evidence weight"
+      "maximum": 1
     },
     "attributes": {
-      "type": "object",
-      "additionalProperties": true,
-      "description": "Additional attributes"
+      "type": ["object", "null"],
+      "additionalProperties": true
     },
     "created_at": {
       "type": "string",

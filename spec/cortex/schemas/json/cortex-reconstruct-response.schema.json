@@ -5,77 +5,296 @@
   "type": "object",
   "required": [
     "incident_id",
-    "status",
-    "severity",
-    "primary_service",
-    "affected_services",
-    "nodes",
-    "edges"
+    "timestamp",
+    "causal_chain",
+    "related_services",
+    "similar_incidents",
+    "symptoms",
+    "suggested_actions",
+    "confidence",
+    "explain"
   ],
   "properties": {
     "incident_id": {
-      "type": "string",
-      "minLength": 1
+      "type": "string"
     },
-    "status": {
+    "timestamp": {
       "type": "string",
-      "enum": ["open", "investigating", "mitigated", "resolved", "unknown"]
+      "format": "date-time"
     },
-    "severity": {
-      "type": "string",
-      "enum": ["critical", "high", "medium", "low", "unknown"]
+    "causal_chain": {
+      "type": ["array", "null"],
+      "items": {
+        "oneOf": [
+          {
+            "$ref": "#/$defs/CausalEvent"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      }
     },
-    "primary_service": {
-      "type": "string",
-      "minLength": 1
-    },
-    "affected_services": {
-      "type": "array",
+    "related_services": {
+      "type": ["array", "null"],
       "items": {
         "type": "string"
       }
     },
-    "nodes": {
-      "type": "array",
+    "similar_incidents": {
+      "type": ["array", "null"],
       "items": {
-        "$ref": "cortex-graph-node.schema.json"
-      }
-    },
-    "edges": {
-      "type": "array",
-      "items": {
-        "$ref": "cortex-graph-edge.schema.json"
-      }
-    },
-    "evidence": {
-      "type": "array",
-      "items": {
-        "type": "object",
-        "required": ["event_id", "reason", "confidence"],
-        "properties": {
-          "event_id": {
-            "type": "string"
+        "oneOf": [
+          {
+            "$ref": "#/$defs/SimilarIncident"
           },
-          "reason": {
-            "type": "string"
-          },
-          "confidence": {
-            "type": "number",
-            "minimum": 0,
-            "maximum": 1
+          {
+            "type": "null"
           }
-        }
+        ]
       }
     },
-    "summary": {
-      "type": "string",
-      "description": "Human-readable RCA summary"
+    "symptoms": {
+      "type": ["array", "null"],
+      "items": {
+        "$ref": "#/$defs/Symptom"
+      }
+    },
+    "suggested_actions": {
+      "type": ["array", "null"],
+      "items": {
+        "$ref": "#/$defs/RemediationAction"
+      }
+    },
+    "partial": {
+      "type": "boolean"
+    },
+    "warnings": {
+      "type": ["array", "null"],
+      "items": {
+        "type": "string"
+      }
     },
     "confidence": {
       "type": "number",
       "minimum": 0,
-      "maximum": 1,
-      "description": "Overall confidence in reconstruction"
+      "maximum": 1
+    },
+    "explain": {
+      "type": "string"
+    },
+    "explain_report": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/ExplainReport"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "$defs": {
+    "CausalEvent": {
+      "type": "object",
+      "required": [
+        "event_id",
+        "timestamp",
+        "kind",
+        "service",
+        "description",
+        "attributes",
+        "causal_edge",
+        "signal_density"
+      ],
+      "properties": {
+        "event_id": {
+          "type": "string"
+        },
+        "timestamp": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "service": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "attributes": {
+          "type": ["object", "null"],
+          "additionalProperties": true
+        },
+        "causal_edge": {
+          "type": "string"
+        },
+        "signal_density": {
+          "type": "number"
+        }
+      },
+      "additionalProperties": false
+    },
+    "RemediationAction": {
+      "type": "object",
+      "required": [
+        "action",
+        "description",
+        "success_rate",
+        "avg_time_to_resolve_seconds",
+        "priority"
+      ],
+      "properties": {
+        "action": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "success_rate": {
+          "type": "number"
+        },
+        "avg_time_to_resolve_seconds": {
+          "type": "integer"
+        },
+        "priority": {
+          "type": "integer"
+        }
+      },
+      "additionalProperties": false
+    },
+    "SimilarIncident": {
+      "type": "object",
+      "required": [
+        "incident_id",
+        "timestamp",
+        "similarity",
+        "shape",
+        "resolution",
+        "resolution_time_seconds",
+        "success_rate"
+      ],
+      "properties": {
+        "incident_id": {
+          "type": "string"
+        },
+        "timestamp": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "similarity": {
+          "type": "number"
+        },
+        "shape": {
+          "type": "string"
+        },
+        "resolution": {
+          "type": "string"
+        },
+        "resolution_time_seconds": {
+          "type": "integer"
+        },
+        "success_rate": {
+          "type": "number"
+        }
+      },
+      "additionalProperties": false
+    },
+    "Symptom": {
+      "type": "object",
+      "required": ["type", "service", "description"],
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": [
+            "latency_spike",
+            "error_rate",
+            "timeout",
+            "memory_leak",
+            "cpu_spike",
+            "deployment_fail"
+          ]
+        },
+        "service": {
+          "type": "string"
+        },
+        "metric": {
+          "type": "string"
+        },
+        "threshold": {
+          "type": "number"
+        },
+        "observed": {
+          "type": "number"
+        },
+        "description": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ExplainReport": {
+      "type": "object",
+      "required": [
+        "narrative",
+        "confidence_breakdown",
+        "key_findings",
+        "data_gaps",
+        "alternative_hypotheses"
+      ],
+      "properties": {
+        "narrative": {
+          "type": "string"
+        },
+        "confidence_breakdown": {
+          "$ref": "#/$defs/ConfidenceBreakdown"
+        },
+        "key_findings": {
+          "type": ["array", "null"],
+          "items": {
+            "type": "string"
+          }
+        },
+        "data_gaps": {
+          "type": ["array", "null"],
+          "items": {
+            "type": "string"
+          }
+        },
+        "alternative_hypotheses": {
+          "type": ["array", "null"],
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "ConfidenceBreakdown": {
+      "type": "object",
+      "required": [
+        "causal_chain_strength",
+        "symptom_coverage",
+        "historical_match",
+        "remediation_confidence"
+      ],
+      "properties": {
+        "causal_chain_strength": {
+          "type": "number"
+        },
+        "symptom_coverage": {
+          "type": "number"
+        },
+        "historical_match": {
+          "type": "number"
+        },
+        "remediation_confidence": {
+          "type": "number"
+        }
+      },
+      "additionalProperties": false
     }
   },
   "additionalProperties": false

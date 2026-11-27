@@ -1,3 +1,4 @@
+import json
 import sys
 import tempfile
 import unittest
@@ -84,6 +85,66 @@ class TestCortexContractSchemas(unittest.TestCase):
                 FileNotFoundError, "cortex-event.schema.json"
             ):
                 model.build_cortex_contract(spec_root)
+
+    def test_schema_enums_and_api_models_match_contract(self):
+        contract = model.build_cortex_contract(repo_root / "spec")
+
+        def schema(name):
+            path = repo_root / contract["schemas"][name]
+            return json.loads(path.read_text(encoding="utf-8"))
+
+        event = schema("event")
+        self.assertEqual(
+            event["properties"]["kind"]["enum"],
+            contract["event_kinds"],
+        )
+        self.assertEqual(
+            event["properties"]["provenance"]["enum"],
+            ["", *contract["provenance"]],
+        )
+        self.assertEqual(
+            schema("graph_node")["properties"]["type"]["enum"],
+            contract["graph_node_types"],
+        )
+        self.assertEqual(
+            schema("graph_edge")["properties"]["type"]["enum"],
+            contract["graph_edge_types"],
+        )
+
+        feedback = schema("feedback")
+        self.assertEqual(
+            feedback["required"],
+            ["incident_id", "remediation_id", "outcome_code"],
+        )
+        self.assertIn("outcome_category", feedback["properties"])
+        self.assertNotIn("success", feedback["properties"])
+        self.assertNotIn("outcome", feedback["properties"])
+
+        response = schema("reconstruct_response")
+        self.assertEqual(
+            response["required"],
+            [
+                "incident_id",
+                "timestamp",
+                "causal_chain",
+                "related_services",
+                "similar_incidents",
+                "symptoms",
+                "suggested_actions",
+                "confidence",
+                "explain",
+            ],
+        )
+        self.assertNotIn("status", response["properties"])
+        self.assertNotIn("nodes", response["properties"])
+        self.assertEqual(
+            contract["routes"]["record_feedback"],
+            "POST /feedback/incident",
+        )
+        self.assertEqual(
+            contract["routes"]["record_remediation"],
+            "POST /feedback/remediation",
+        )
 
 
 if __name__ == "__main__":
