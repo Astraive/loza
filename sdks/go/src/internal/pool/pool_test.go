@@ -65,7 +65,7 @@ func TestGetIgnoresPoisonedValue(t *testing.T) {
 			return &buf
 		},
 	}
-	bytePool.Put("not a *[]byte")
+	bytePool.Put((*string)(nil))
 
 	buf := Get()
 	if buf == nil {

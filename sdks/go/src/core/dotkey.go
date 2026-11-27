@@ -39,6 +39,7 @@ type LeafValue struct {
 // Returns two slices:
 //   - plain: attrs whose keys have no dot (or dot expansion is disabled)
 //   - groups: map[topKey]*DotNode for merged nested objects
+//
 // The three input slices must have equal length because they are indexed in
 // parallel; a mismatch returns ErrDotKeyLengthMismatch instead of panicking.
 //

@@ -95,6 +95,7 @@ func TestVersionFromFilesFallsBackWhenOnlyNestedVersion(t *testing.T) {
 		t.Errorf("versionFromFiles() = %q, want fallback %q", got, fallbackVersion)
 	}
 }
+
 // TestLoadVersionStripsInlineComment verifies that an inline YAML comment on
 // the version line is not returned as part of the parsed version. This is a
 // regression test for the defect where `version: 0.4.2 # comment` was returned
