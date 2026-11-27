@@ -24,6 +24,10 @@ Central benchmark orchestration for the LOZA monorepo. All benchmark results are
 | Load Test | collector | Go | Sustained throughput (5000 events/5s) | >500 events/sec |
 | Cortex PCE | cortex (via sdks/py) | Python | Cold start, throughput, reconstruction latency | p95 <2s |
 
+The aggregate runner reports the Rust SDK benchmark suite as skipped until a
+real Cargo benchmark harness is available; it does not emit placeholder
+results.
+
 ## JSON Output Format
 
 Results are saved to `results/<suite>-<timestamp>.json`:
