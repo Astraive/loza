@@ -15,6 +15,7 @@ import (
 	lozacortex "github.com/astraive/loza/cortex"
 	"github.com/astraive/loza/cortex/internal/collectorsync"
 	"github.com/astraive/loza/cortex/internal/config"
+	"github.com/astraive/loza/cortex/internal/graph"
 	"github.com/astraive/loza/cortex/internal/logging"
 	"github.com/astraive/loza/cortex/internal/processor"
 	"github.com/astraive/loza/cortex/internal/storage"
@@ -83,12 +84,12 @@ func main() {
 	processCtx, stopSignals := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stopSignals()
 
-	syncProcessor := newSyncProcessor(cfg, stor)
-
+	graphStore := graph.NewVersionedGraphStore(stor.Graph())
+	syncProcessor := newSyncProcessor(cfg, stor, graphStore)
 	// Single server construction path: build the Cortex server once, start its
 	// correlation analyzer under the managed process context, and reuse its
 	// router for the HTTP server below.
-	cortexSrv := httpserver.New(cfg, stor)
+	cortexSrv := httpserver.New(cfg, stor, graphStore)
 	defer cortexSrv.Stop()
 	analyzerDone := cortexSrv.StartAnalyzer(processCtx)
 
@@ -102,7 +103,7 @@ func main() {
 
 	var grpcReady <-chan *grpc.Server
 	if cfg.GRPC.Enabled {
-		grpcReady = startGRPCServer(cfg, stor)
+		grpcReady = startGRPCServer(cfg, stor, graphStore)
 	}
 
 	log.Info().Str("addr", httpAddr(cfg)).Msg("Starting HTTP server")
@@ -159,8 +160,8 @@ func runHTTPServer(httpSrv *http.Server, errCh chan<- error) {
 // newSyncProcessor builds the EventProcessor used by the collector source-of-truth
 // sync. It routes through the shared factory so PII redaction is applied on the
 // sync ingestion path just like HTTP, gRPC and GraphQL.
-func newSyncProcessor(cfg *config.Config, stor storage.Storage) *processor.EventProcessor {
-	return processor.NewConfiguredEventProcessor(stor.Events(), stor.Topology(), stor.Graph(), cfg.PIIRedaction)
+func newSyncProcessor(cfg *config.Config, stor storage.Storage, graphStore storage.GraphStore) *processor.EventProcessor {
+	return processor.NewConfiguredEventProcessor(stor.Events(), stor.Topology(), graphStore, cfg.PIIRedaction)
 }
 
 func startCollectorSync(ctx context.Context, cfg config.CollectorConfig, proc collectorsync.BatchProcessor) <-chan struct{} {
@@ -219,7 +220,7 @@ func grpcServerOptions(cfg *config.Config, tlsCfg *tls.Config) ([]grpc.ServerOpt
 // that hands the constructed *grpc.Server back to the caller. The channel is
 // closed without a value if setup fails (e.g. TLS or listener setup errors), so
 // a caller waiting for shutdown never blocks on a server that will not arrive.
-func startGRPCServer(cfg *config.Config, stor storage.Storage) <-chan *grpc.Server {
+func startGRPCServer(cfg *config.Config, stor storage.Storage, graphStores ...storage.GraphStore) <-chan *grpc.Server {
 	ready := make(chan *grpc.Server, 1)
 	go func() {
 		defer close(ready)
@@ -243,7 +244,7 @@ func startGRPCServer(cfg *config.Config, stor storage.Storage) <-chan *grpc.Serv
 		}
 
 		server := grpc.NewServer(opts...)
-		grpcSvc := grpcserver.New(cfg, stor)
+		grpcSvc := grpcserver.New(cfg, stor, graphStores...)
 		grpcSvc.RegisterServer(server)
 
 		// Hand off before Serve blocks so shutdown can always reach the server,

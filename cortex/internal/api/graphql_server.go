@@ -72,15 +72,19 @@ func publicGraphQLResolverError(err error) (error, bool) {
 }
 
 func NewGraphQLServer(cfg *config.Config, stor storage.Storage) *GraphQLServer {
+	return newGraphQLServer(cfg, stor, graph.NewVersionedGraphStore(stor.Graph()))
+}
+
+func newGraphQLServer(cfg *config.Config, stor storage.Storage, graphStore *graph.VersionedGraphStore) *GraphQLServer {
 	topology := topology.NewResolver(stor.Topology())
-	graphBuilder := graph.NewBuilder(stor.Graph())
+	graphBuilder := graph.NewBuilder(graphStore)
 	matching, err := matcher.NewConfiguredSignatureMatcher(stor.Signatures(), cfg.Matcher)
 	if err != nil {
 		matching = matcher.NewSignatureMatcher(stor.Signatures())
 	}
 	remediation := learner.NewLearner(stor.Remediations(), stor.Feedback(), stor.Signatures())
 	recon := reconstructor.NewIncidentReconstructor(graphBuilder, matching, remediation, stor.Incidents())
-	eventProc := processor.NewConfiguredEventProcessor(stor.Events(), stor.Topology(), stor.Graph(), cfg.PIIRedaction)
+	eventProc := processor.NewConfiguredEventProcessor(stor.Events(), stor.Topology(), graphStore, cfg.PIIRedaction)
 
 	server := &GraphQLServer{
 		config:      cfg,

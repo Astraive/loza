@@ -40,9 +40,19 @@ type GRPCServer struct {
 	ready       bool
 }
 
-func NewGRPCServer(cfg *config.Config, stor storage.Storage) *GRPCServer {
+func NewGRPCServer(cfg *config.Config, stor storage.Storage, graphStore ...storage.GraphStore) *GRPCServer {
 	topology := topology.NewResolver(stor.Topology())
-	graphBuilder := graph.NewBuilder(stor.Graph())
+	var sharedGraphStore *graph.VersionedGraphStore
+	if len(graphStore) > 0 {
+		if versioned, ok := graphStore[0].(*graph.VersionedGraphStore); ok {
+			sharedGraphStore = versioned
+		} else {
+			sharedGraphStore = graph.NewVersionedGraphStore(graphStore[0])
+		}
+	} else {
+		sharedGraphStore = graph.NewVersionedGraphStore(stor.Graph())
+	}
+	graphBuilder := graph.NewBuilder(sharedGraphStore)
 	matching, err := matcher.NewConfiguredSignatureMatcher(stor.Signatures(), cfg.Matcher)
 	if err != nil {
 		log.Warn().Err(err).Str("mode", cfg.Matcher.Mode).Msg("Matcher mode unavailable, falling back to Go matcher")
@@ -50,7 +60,7 @@ func NewGRPCServer(cfg *config.Config, stor storage.Storage) *GRPCServer {
 	}
 	remediation := learner.NewLearner(stor.Remediations(), stor.Feedback(), stor.Signatures())
 	recon := reconstructor.NewIncidentReconstructor(graphBuilder, matching, remediation, stor.Incidents())
-	eventProc := processor.NewConfiguredEventProcessor(stor.Events(), stor.Topology(), stor.Graph(), cfg.PIIRedaction)
+	eventProc := processor.NewConfiguredEventProcessor(stor.Events(), stor.Topology(), sharedGraphStore, cfg.PIIRedaction)
 
 	return &GRPCServer{
 		config:      cfg,

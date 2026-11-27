@@ -48,15 +48,33 @@ func (c *AdjacencyCache) Invalidate() {
 
 type Builder struct {
 	graphStore      storage.GraphStore
+	versionedStore  *VersionedGraphStore
 	adjCache        *AdjacencyCache
+	revisionMu      sync.Mutex
+	cacheRevision   uint64
 	defaultMaxDepth int
 }
 
 func NewBuilder(store storage.GraphStore) *Builder {
+	versionedStore, ok := store.(*VersionedGraphStore)
+	if !ok {
+		versionedStore = NewVersionedGraphStore(store)
+	}
 	return &Builder{
-		graphStore:      store,
+		graphStore:      versionedStore,
+		versionedStore:  versionedStore,
 		adjCache:        NewAdjacencyCache(),
+		cacheRevision:   versionedStore.Version(),
 		defaultMaxDepth: 3,
+	}
+}
+
+func (b *Builder) syncCacheRevision(revision uint64) {
+	b.revisionMu.Lock()
+	defer b.revisionMu.Unlock()
+	if revision != b.cacheRevision {
+		b.adjCache.Invalidate()
+		b.cacheRevision = revision
 	}
 }
 
@@ -120,6 +138,18 @@ func (b *Builder) TraverseGraph(ctx context.Context, startNodeID string, opts mo
 		opts.MaxDepth = b.defaultMaxDepth
 	}
 
+	var view *models.GraphView
+	err := b.versionedStore.WithReadLock(func(store storage.GraphStore, revision uint64) error {
+		b.syncCacheRevision(revision)
+		var err error
+		view, err = b.traverseGraphLocked(ctx, store, startNodeID, opts)
+		return err
+	})
+	return view, err
+}
+
+// traverseGraphLocked reads one graph revision while the versioned store read lock is held.
+func (b *Builder) traverseGraphLocked(ctx context.Context, store storage.GraphStore, startNodeID string, opts models.TraversalOptions) (*models.GraphView, error) {
 	visited := make(map[string]bool)
 	var queue []string
 	queue = append(queue, startNodeID)
@@ -133,14 +163,14 @@ func (b *Builder) TraverseGraph(ctx context.Context, startNodeID string, opts mo
 	currentDepth := 0
 	for len(queue) > 0 && currentDepth < opts.MaxDepth {
 		levelSize := len(queue)
-		for i := 0; i < levelSize; i++ {
+		for i := range levelSize {
 			nodeID := queue[i]
 			if visited[nodeID] {
 				continue
 			}
 			visited[nodeID] = true
 
-			node, err := b.graphStore.GetNode(ctx, nodeID)
+			node, err := store.GetNode(ctx, nodeID)
 			if err != nil {
 				if errors.Is(err, storage.ErrNotFound) {
 					continue
@@ -161,11 +191,10 @@ func (b *Builder) TraverseGraph(ctx context.Context, startNodeID string, opts mo
 			// an unloaded node apart from one cached with zero edges.
 			edges, ok := b.adjCache.GetEdges(nodeID)
 			if !ok {
-				fetched, err := b.graphStore.GetEdges(ctx, nodeID, "")
+				edges, err = store.GetEdges(ctx, nodeID, "")
 				if err != nil {
 					return nil, fmt.Errorf("load graph edges for %q: %w", nodeID, err)
 				}
-				edges = fetched
 				b.adjCache.SetEdges(nodeID, edges)
 			}
 

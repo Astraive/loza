@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/astraive/loza/cortex/internal/correlation"
 	"github.com/astraive/loza/cortex/internal/models"
 	"github.com/astraive/loza/cortex/internal/storage"
 )
@@ -19,6 +20,9 @@ type fakeGraphStore struct {
 	edgeErr       error
 	saveErr       error
 	getEdgesCalls int
+	edgeSaved     chan struct{}
+	nodeStarted   chan struct{}
+	releaseNode   chan struct{}
 }
 
 func (f *fakeGraphStore) SaveNode(_ context.Context, node *models.Node) error {
@@ -33,6 +37,10 @@ func (f *fakeGraphStore) SaveNode(_ context.Context, node *models.Node) error {
 func (f *fakeGraphStore) GetNode(_ context.Context, id string) (*models.Node, error) {
 	if f.nodeErr != nil {
 		return nil, f.nodeErr
+	}
+	if f.nodeStarted != nil {
+		close(f.nodeStarted)
+		<-f.releaseNode
 	}
 	if node, ok := f.nodes[id]; ok {
 		return node, nil
@@ -59,9 +67,14 @@ func (f *fakeGraphStore) SaveEdge(_ context.Context, edge *models.Edge) error {
 	}
 	f.savedEdges = append(f.savedEdges, edge)
 	f.edges[edge.FromNodeID] = append(f.edges[edge.FromNodeID], edge)
+	if f.edgeSaved != nil {
+		select {
+		case f.edgeSaved <- struct{}{}:
+		default:
+		}
+	}
 	return nil
 }
-
 func (f *fakeGraphStore) GetEdges(_ context.Context, nodeID string, edgeType string) ([]*models.Edge, error) {
 	f.getEdgesCalls++
 	if f.edgeErr != nil {
@@ -75,7 +88,6 @@ func (f *fakeGraphStore) GetEdges(_ context.Context, nodeID string, edgeType str
 	}
 	return out, nil
 }
-
 func (f *fakeGraphStore) Traverse(ctx context.Context, startNodeID string, opts models.TraversalOptions) (*models.GraphView, error) {
 	return nil, nil
 }
@@ -256,6 +268,83 @@ func TestTraverseGraphSeesEdgesAddedAfterFirstTraversal(t *testing.T) {
 	}
 }
 
+type analyzerEventStore struct {
+	storage.EventStore
+	events []*models.Event
+}
+
+func (s *analyzerEventStore) List(context.Context, int, int) ([]*models.Event, error) {
+	return s.events, nil
+}
+
+// TestAnalyzerWritesRefreshExistingBuilder primes a reader's adjacency cache,
+// persists a correlated edge through the real analyzer, and verifies that the
+// existing reader sees the new topology on its next traversal.
+func TestAnalyzerWritesRefreshExistingBuilder(t *testing.T) {
+	ctx := context.Background()
+	now := time.Now()
+	store := &fakeGraphStore{
+		nodes: map[string]*models.Node{
+			"event-a": {ID: "event-a", Type: models.NodeTypeIncident, Label: "event-a", CreatedAt: now},
+			"event-b": {ID: "event-b", Type: models.NodeTypeIncident, Label: "event-b", CreatedAt: now},
+		},
+		edges:     map[string][]*models.Edge{},
+		edgeSaved: make(chan struct{}, 1),
+	}
+	builder := NewBuilder(store)
+	opts := models.TraversalOptions{MaxDepth: 2}
+
+	before, err := builder.TraverseGraph(ctx, "event-a", opts)
+	if err != nil {
+		t.Fatalf("prime traversal: %v", err)
+	}
+	if len(before.Nodes) != 1 {
+		t.Fatalf("prime traversal: expected only root node, got %d nodes", len(before.Nodes))
+	}
+
+	events := &analyzerEventStore{events: []*models.Event{
+		{ID: "event-a", Service: "service-a", Kind: models.EventKindIncidentSignal, Timestamp: now},
+		{ID: "event-b", Service: "service-b", Kind: models.EventKindIncidentSignal, Timestamp: now.Add(time.Second)},
+	}}
+	cfg := correlation.DefaultConfig()
+	cfg.Enabled = true
+	analyzer := correlation.NewAnalyzer(cfg, events, builder.GraphStore())
+	analyzerCtx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	go func() {
+		analyzer.Run(analyzerCtx)
+		close(done)
+	}()
+	select {
+	case <-store.edgeSaved:
+	case <-time.After(time.Second):
+		cancel()
+		<-done
+		t.Fatal("analyzer did not persist a graph edge")
+	}
+	cancel()
+	<-done
+
+	persisted, err := builder.GraphStore().GetEdges(ctx, "event-a", "")
+	if err != nil {
+		t.Fatalf("read persisted edges: %v", err)
+	}
+	if len(persisted) == 0 {
+		t.Fatal("analyzer did not persist a graph edge")
+	}
+
+	after, err := builder.TraverseGraph(ctx, "event-a", opts)
+	if err != nil {
+		t.Fatalf("traverse after analysis: %v", err)
+	}
+	if len(after.Nodes) != 2 {
+		t.Fatalf("traverse after analysis: expected both connected nodes, got %d", len(after.Nodes))
+	}
+	if len(after.Edges) == 0 {
+		t.Fatal("traverse after analysis did not include the analyzer's edge")
+	}
+}
+
 // Regression test: both write paths invalidate the adjacency cache, and a
 // failed write leaves a previously populated cache untouched.
 func TestGraphWritesInvalidateAdjacencyCache(t *testing.T) {
@@ -359,8 +448,59 @@ func TestTraverseGraphCachesEmptyEdgeResults(t *testing.T) {
 			t.Fatalf("traverse #%d: expected 0 edges, got %d", i+1, len(view.Edges))
 		}
 	}
-
 	if store.getEdgesCalls != 1 {
 		t.Fatalf("expected empty edge result to be cached after the first traversal (1 store call), got %d", store.getEdgesCalls)
+	}
+}
+
+func TestTraverseSerializesCachedAdjacencyWithSharedWrites(t *testing.T) {
+	store := &fakeGraphStore{
+		nodes:       map[string]*models.Node{"n1": {ID: "n1", Type: models.NodeTypeService}},
+		edges:       map[string][]*models.Edge{},
+		nodeStarted: make(chan struct{}),
+		releaseNode: make(chan struct{}),
+	}
+	builder := NewBuilder(store)
+	builder.adjCache.SetEdges("n1", nil)
+	type traversalResult struct {
+		view *models.GraphView
+		err  error
+	}
+	done := make(chan traversalResult, 1)
+	go func() {
+		view, err := builder.TraverseGraph(context.Background(), "n1", models.TraversalOptions{MaxDepth: 1})
+		done <- traversalResult{view: view, err: err}
+	}()
+	<-store.nodeStarted
+	store.nodeStarted = nil
+	writeLockAvailable := builder.versionedStore.mu.TryLock()
+	if writeLockAvailable {
+		builder.versionedStore.mu.Unlock()
+	}
+	close(store.releaseNode)
+	result := <-done
+	if result.err != nil {
+		t.Fatal(result.err)
+	}
+	if writeLockAvailable {
+		t.Fatal("mutation lock was available while cached adjacency was being traversed")
+	}
+	if len(result.view.Edges) != 0 {
+		t.Fatalf("expected cached empty adjacency, got %#v", result.view.Edges)
+	}
+	if err := builder.versionedStore.SaveEdge(context.Background(), &models.Edge{
+		ID: "e1", FromNodeID: "n1", ToNodeID: "n1", Type: models.EdgeTypeDependsOn, Weight: 1,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	view, err := builder.TraverseGraph(context.Background(), "n1", models.TraversalOptions{MaxDepth: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(view.Edges) != 1 || view.Edges[0].ID != "e1" {
+		t.Fatalf("subsequent traversal did not observe shared-store mutation: %#v", view.Edges)
+	}
+	if store.getEdgesCalls != 1 {
+		t.Fatalf("expected mutation to refresh cached adjacency once, got %d calls", store.getEdgesCalls)
 	}
 }
