@@ -36,12 +36,6 @@ type LeafValue struct {
 // replaces an existing branch, and a branch never drops an existing value.
 // Repeated identical leaf keys use last-write-wins.
 //
-// Returns two slices:
-//   - plain: attrs whose keys have no dot (or dot expansion is disabled)
-//   - groups: map[topKey]*DotNode for merged nested objects
-// The three input slices must have equal length because they are indexed in
-// parallel; a mismatch returns ErrDotKeyLengthMismatch instead of panicking.
-//
 // Returns five slices:
 //   - plainKeys/plainKinds/plainValues: attrs whose keys have no dot
 //   - groupKeys/groupRoots: top-level keys mapped to merged nested objects

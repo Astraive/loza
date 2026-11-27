@@ -85,8 +85,7 @@ func TestVersionFromFilesSkipsFilesWithoutTopLevelVersion(t *testing.T) {
 func TestVersionFromFilesFallsBackWhenOnlyNestedVersion(t *testing.T) {
 	t.Parallel()
 
-	dir := t.TempDir()
-	path := filepath.Join(dir, "loza.yaml")
+	path := filepath.Join(t.TempDir(), "nested.yaml")
 	if err := os.WriteFile(path, []byte("component:\n  version: 9.9.9\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -95,6 +94,7 @@ func TestVersionFromFilesFallsBackWhenOnlyNestedVersion(t *testing.T) {
 		t.Errorf("versionFromFiles() = %q, want fallback %q", got, fallbackVersion)
 	}
 }
+
 // TestLoadVersionStripsInlineComment verifies that an inline YAML comment on
 // the version line is not returned as part of the parsed version. This is a
 // regression test for the defect where `version: 0.4.2 # comment` was returned
