@@ -8,6 +8,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/0.2.0/).
 
 ### Fixed
 
+- CLI load generation now uses Collector acknowledgement counts, including
+  partial, invalid, and quarantined outcomes, when reporting accepted events
+  and throughput.
+
 - Go SDK: `FinishGroupError` now records the supplied error status code on the
   group, so failed `Phase` calls emit a non-zero `status_code` like failed
   `Step` calls instead of `0`.

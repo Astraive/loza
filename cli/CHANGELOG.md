@@ -8,6 +8,9 @@ All notable changes to this project are documented in this file.
 
 - Align CLI command examples with the current parsers and verify their output
   through finite command tests.
+- Count load-generator outcomes from Collector acknowledgements, including
+  partial batches.
+
 
 ## [0.3.4] - 2026-08-26
 
