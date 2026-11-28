@@ -6,14 +6,12 @@ import (
 	"os"
 	"strings"
 
-	lozacli "github.com/astraive/loza/cli"
 	"github.com/astraive/loza/cli/internal/client"
 	"github.com/astraive/loza/cli/internal/commands"
 	"github.com/astraive/loza/cli/internal/config"
 	"github.com/astraive/loza/cli/internal/output"
+	"github.com/astraive/loza/cli/internal/version"
 )
-
-var version = lozacli.Version
 
 // validOutputFormats is the set of formats accepted by the global --output
 // flag. csv is included because QueryCommand reads the format from the
@@ -211,7 +209,7 @@ func Run(args []string) error {
 
 	switch args[0] {
 	case "version", "-v", "--version":
-		fmt.Println("loza version", version)
+		fmt.Println("loza version", version.Version)
 		return nil
 	case "help", "--help", "-h":
 		printHelp()
@@ -311,7 +309,7 @@ func Run(args []string) error {
 }
 
 func printHelp() {
-	output.PrintSection("LOZA CLI v" + version)
+	output.PrintSection("LOZA CLI v" + version.Version)
 	fmt.Println("\nData Plane (collector):")
 	fmt.Println("  emit         Emit events to collector")
 	fmt.Println("  query        Query events via SQL")
