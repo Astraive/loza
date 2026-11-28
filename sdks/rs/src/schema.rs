@@ -134,9 +134,21 @@ impl Schema for DefaultSchemaType {
     }
 }
 
+pub(crate) fn event_value_for_schema(event: &EventContext, schema: &SchemaConfig) -> Value {
+    let value = if matches!(schema, SchemaConfig::ECS)
+        && matches!(event.duration_ms, Some(duration_ms) if duration_ms > u64::MAX as u128)
+    {
+        let mut bounded_event = event.clone();
+        bounded_event.duration_ms = Some(u64::MAX as u128);
+        serde_json::to_value(&bounded_event)
+    } else {
+        serde_json::to_value(event)
+    };
+    value.unwrap_or_else(|_| Value::Object(Map::new()))
+}
+
 pub fn encode_schema(event: &EventContext, schema: &SchemaConfig) -> Value {
-    let value =
-        normalize_default_value(serde_json::to_value(event).unwrap_or(Value::Object(Map::new())));
+    let value = normalize_default_value(event_value_for_schema(event, schema));
     match schema {
         SchemaConfig::Default | SchemaConfig::Nested => value,
         SchemaConfig::Flat => flatten_value(value),
@@ -262,6 +274,16 @@ fn otel_value(value: Value) -> Value {
 
 fn ecs_value(value: Value) -> Value {
     let obj = value.as_object().cloned().unwrap_or_default();
+    let duration = obj
+        .get("duration_ms")
+        .and_then(Value::as_u64)
+        .map(|duration_ms| {
+            let duration_ns = duration_ms
+                .saturating_mul(1_000_000)
+                .min(i64::MAX as u64);
+            Value::Number(duration_ns.into())
+        })
+        .unwrap_or(Value::Null);
     serde_json::json!({
         "@timestamp": obj.get("timestamp").cloned().unwrap_or(Value::Null),
         "event": {
@@ -269,7 +291,7 @@ fn ecs_value(value: Value) -> Value {
             "action": obj.get("event").cloned().unwrap_or(Value::Null),
             "kind": obj.get("kind").cloned().unwrap_or(Value::Null),
             "outcome": obj.get("outcome").cloned().unwrap_or(Value::Null),
-            "duration": obj.get("duration_ms").cloned().unwrap_or(Value::Null),
+            "duration": duration,
         },
         "log": {"level": obj.get("level").cloned().unwrap_or(Value::Null)},
         "service": {"name": obj.get("service").cloned().unwrap_or(Value::Null)},

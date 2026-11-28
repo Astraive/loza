@@ -91,6 +91,43 @@ mod tests {
     }
 
     #[test]
+    fn ecs_duration_converts_milliseconds_to_bounded_nanoseconds() {
+        let encoded = encode_schema_from_value(
+            json!({"duration_ms": 7}),
+            &SchemaConfig::ECS,
+        );
+        assert_eq!(encoded["event"]["duration"], json!(7_000_000));
+
+        let overflow = encode_schema_from_value(
+            json!({"duration_ms": u64::MAX}),
+            &SchemaConfig::ECS,
+        );
+        assert_eq!(overflow["event"]["duration"], json!(i64::MAX));
+
+        let logger = crate::New(crate::Config::test("ecs-duration")
+            .with_schema(SchemaConfig::ECS));
+        let mut event = EventContext::new("ecs-duration", Params::new("request"));
+        event.duration_ms = Some(u128::MAX);
+
+        let encoded = encode_schema(&event, &SchemaConfig::ECS);
+        assert_eq!(encoded["event"]["duration"], json!(i64::MAX));
+        assert_eq!(encoded["service"]["name"], json!("ecs-duration"));
+
+        let mut logger_event = EventContext::new("ecs-duration", Params::new("request"));
+        logger_event.duration_ms = Some(7);
+        let emitted = logger.emit(&logger_event).unwrap();
+        let emitted: serde_json::Value = serde_json::from_str(&emitted).unwrap();
+        assert_eq!(emitted["event"]["duration"], json!(7_000_000));
+
+        let mut overflow_event = EventContext::new("ecs-duration", Params::new("request"));
+        overflow_event.duration_ms = Some(u128::MAX);
+        let emitted = logger.emit(&overflow_event).unwrap();
+        let emitted: serde_json::Value = serde_json::from_str(&emitted).unwrap();
+        assert_eq!(emitted["event"]["duration"], json!(i64::MAX));
+        assert_eq!(emitted["service"]["name"], json!("ecs-duration"));
+    }
+
+    #[test]
     fn otel_schema_converts_rfc3339_timestamp_to_unix_nanos() {
         let mut event = EventContext::new("service", Params::new("checkout"));
         event.timestamp = "2026-11-17T00:00:00.123456789Z".into();
