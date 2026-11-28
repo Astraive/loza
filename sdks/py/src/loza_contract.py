@@ -194,6 +194,7 @@ CONTRACT = {
   "source_sdks": [
   "loza-cli",
   "loza-go",
+  "loza-js",
   "loza-py",
   "loza-rs"
 ]

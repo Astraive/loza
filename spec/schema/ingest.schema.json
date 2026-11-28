@@ -21,7 +21,7 @@
                   "oneOf": [
                     {
                       "type": "string",
-                      "enum": ["loza-go", "loza-py", "loza-rs", "loza-cli"]
+                      "enum": ["loza-go", "loza-js", "loza-py", "loza-rs", "loza-cli"]
                     },
                     {
                       "type": "object",
@@ -29,7 +29,7 @@
                       "properties": {
                         "name": {
                           "type": "string",
-                          "enum": ["loza-go", "loza-py", "loza-rs", "loza-cli"]
+                          "enum": ["loza-go", "loza-js", "loza-py", "loza-rs", "loza-cli"]
                         },
                 "version": {
                   "type": "string",
