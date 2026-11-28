@@ -175,7 +175,11 @@ func withResponseCompression(next http.Handler) http.Handler {
 		case "zstd":
 			encoder, err := newZstdResponseWriter(staged)
 			if err != nil {
-				next.ServeHTTP(w, r)
+				logJSON("error", "response_compression_init_failed", map[string]any{
+					"encoding": encoding,
+					"error":    err.Error(),
+				})
+				http.Error(w, "compression failure", http.StatusInternalServerError)
 				return
 			}
 			writer = encoder

@@ -211,6 +211,43 @@ func TestResponseCompressionNegotiatesAcceptEncoding(t *testing.T) {
 	}
 }
 
+func TestResponseCompressionZstdInitializationFailureReturnsError(t *testing.T) {
+	originalFactory := newZstdResponseWriter
+	newZstdResponseWriter = func(io.Writer) (io.WriteCloser, error) {
+		return nil, errors.New("simulated zstd initialization failure")
+	}
+	defer func() { newZstdResponseWriter = originalFactory }()
+
+	called := false
+	recorder := httptest.NewRecorder()
+	handler := withResponseCompression(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		called = true
+		_, _ = io.WriteString(w, "uncompressed fallback")
+	}))
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set("Accept-Encoding", "zstd, identity;q=0")
+	handler.ServeHTTP(recorder, req)
+
+	res := recorder.Result()
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want %d", res.StatusCode, http.StatusInternalServerError)
+	}
+	if got := res.Header.Get("Content-Encoding"); got != "" {
+		t.Fatalf("Content-Encoding = %q, want no encoded representation", got)
+	}
+	if called {
+		t.Fatal("handler ran after zstd initialization failed")
+	}
+	body, err := io.ReadAll(res.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	if !strings.Contains(string(body), "compression failure") {
+		t.Fatalf("body = %q, want compression failure response", body)
+	}
+}
+
 func TestResponseCompressionCloseFailureIsNotCommitted(t *testing.T) {
 	var logs bytes.Buffer
 	origLogOutput := log.Writer()
