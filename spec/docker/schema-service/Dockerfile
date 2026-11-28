@@ -9,6 +9,7 @@ COPY spec/requirements-service.txt ./
 COPY spec/services ./services
 COPY spec/generated ./generated
 COPY spec/schema ./schema
+COPY spec/schemas/json ./schemas/json
 COPY spec/docker/schema-service/healthcheck.py ./docker/schema-service/healthcheck.py
 
 RUN pip install --no-cache-dir -r requirements-service.txt \
