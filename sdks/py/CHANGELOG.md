@@ -4,8 +4,8 @@
 
 ### Fixed
 
-- Preserve process, group, and timer start attributes in emitted entries;
-  apply path-aware sensitive/hash/drop policies while keeping timing fields.
+- Preserve positional `Attr` policies through timing helper and facade APIs;
+  apply path-aware sensitive/hash/drop policies while preserving timing fields.
 
 ### Security
 

@@ -231,3 +231,57 @@ def test_timing_path_policies_preserve_reserved_fields():
         "timer-drop",
     ):
         assert secret not in sink.events[0]
+
+
+def test_facade_timing_policies_apply_before_completion_overrides():
+    logger, sink = loza.TestLogger()
+    ctx = logger.start_event(loza.Params(event="test.facade.timing.policies"))
+
+    loza.process(
+        ctx,
+        "process",
+        loza.Attr("process_secret", "process-start-secret", sensitive=True),
+    ).finish(process_secret="process-completion-secret")
+    loza.start_process(
+        ctx,
+        "start_process",
+        loza.Attr("process_hash", "process-start-hash", hash_value=True),
+    ).finish(process_hash="process-completion-hash")
+    loza.timer(
+        ctx,
+        "timer",
+        loza.Attr("timer_secret", "timer-start-secret", sensitive=True),
+    ).stop(timer_secret="timer-completion-secret")
+    loza.start_timer(
+        ctx,
+        "start_timer",
+        loza.Attr("timer_drop", "timer-start-drop", drop=True),
+    ).stop(timer_drop="timer-completion-drop")
+    loza.start_group(
+        ctx,
+        "group",
+        loza.Attr("group_secret", "group-start-secret", sensitive=True),
+    ).finish(group_secret="group-completion-secret")
+
+    logger.finish(ctx, "success")
+    logger.emit(ctx)
+    payload = json.loads(sink.events[0])
+
+    assert payload["processes"][0]["process_secret"] == "[REDACTED]"
+    assert payload["processes"][1]["process_hash"] != "process-completion-hash"
+    assert payload["timers"][0]["timer_secret"] == "[REDACTED]"
+    assert "timer_drop" not in payload["timers"][1]
+    assert payload["groups"][0]["group_secret"] == "[REDACTED]"
+    for secret in (
+        "process-start-secret",
+        "process-completion-secret",
+        "process-start-hash",
+        "process-completion-hash",
+        "timer-start-secret",
+        "timer-completion-secret",
+        "timer-start-drop",
+        "timer-completion-drop",
+        "group-start-secret",
+        "group-completion-secret",
+    ):
+        assert secret not in sink.events[0]
