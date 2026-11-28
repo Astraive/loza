@@ -44,20 +44,31 @@ func (r *eventbusQueueReader) Poll(ctx context.Context, timeout time.Duration) (
 
 		handler := func(hCtx context.Context, msg eventbus.Message) error {
 			env := msg.Envelope()
+			committed := make(chan error, 1)
 			rec := queueRecord{
 				value: append([]byte(nil), env.Body...),
 				commit: func(cCtx context.Context) error {
-					return msg.Ack(cCtx)
+					err := msg.Ack(cCtx)
+					committed <- err
+					return err
 				},
 			}
+			// Some adapters acknowledge when the handler returns nil, so keep
+			// it open until the worker invokes the commit callback.
 			select {
 			case r.ch <- rec:
-				return nil
+				select {
+				case err := <-committed:
+					return err
+				case <-hCtx.Done():
+					return hCtx.Err()
+				case <-subCtx.Done():
+					return subCtx.Err()
+				}
 			case <-hCtx.Done():
-				// Backpressure or Close cancelled the subscription while the
-				// buffer was full. Returning an error lets the adapter Nack /
-				// redeliver instead of leaking this consume goroutine.
 				return hCtx.Err()
+			case <-subCtx.Done():
+				return subCtx.Err()
 			}
 		}
 
@@ -100,5 +111,7 @@ func (r *eventbusQueueReader) Close() error {
 	if r.cancel != nil {
 		r.cancel()
 	}
-	return r.bus.Close(context.Background())
+	closeCtx, cancel := context.WithTimeout(context.Background(), workerCommitTimeout)
+	defer cancel()
+	return r.bus.Close(closeCtx)
 }

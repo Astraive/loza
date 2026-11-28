@@ -14,6 +14,7 @@ import (
 
 	"github.com/astraive/loza/collector/internal/eventbus"
 	"github.com/redis/go-redis/v9"
+	"github.com/rs/zerolog/log"
 )
 
 func init() {
@@ -24,15 +25,35 @@ func init() {
 // failing is redelivered before it is moved to the dead-letter stream.
 const maxRedisDeliveryAttempts = 3
 
+const redisNackTimeout = 2 * time.Second
+
+const redisReadBlock = time.Second
+
+// Pending entries are reclaimed only after this idle period. Active handlers
+// refresh their pending-entry claim before the threshold expires.
+const redisPendingClaimIdle = 30 * time.Second
+
+const redisPendingClaimInterval = 5 * time.Second
+
+const redisClaimHeartbeatInterval = 10 * time.Second
+
+// Claim one abandoned entry before starting its handler.
+const redisPendingClaimCount = 1
+
 var errNackWithoutCause = errors.New("eventbus/redis: message nacked without cause")
 
 type redisBus struct {
-	client *redis.Client
-	cfg    eventbus.RedisConfig
-	dlqCfg string
-	closed atomic.Bool
-	mu     sync.Mutex
-	subs   []context.CancelFunc
+	client                 *redis.Client
+	cfg                    eventbus.RedisConfig
+	dlqCfg                 string
+	closed                 atomic.Bool
+	closing                atomic.Bool
+	mu                     sync.Mutex
+	subs                   []context.CancelFunc
+	subsWg                 sync.WaitGroup
+	pendingClaimIdle       time.Duration
+	pendingClaimInterval   time.Duration
+	claimHeartbeatInterval time.Duration
 }
 
 // New creates a new Redis Streams event bus.
@@ -76,13 +97,23 @@ func New(_ context.Context, cfg eventbus.Config) (eventbus.Bus, error) {
 	}
 
 	return &redisBus{
-		client: client,
-		cfg:    rc,
-		dlqCfg: cfg.DLQTopic,
+		client:                 client,
+		cfg:                    rc,
+		dlqCfg:                 cfg.DLQTopic,
+		pendingClaimIdle:       redisPendingClaimIdle,
+		pendingClaimInterval:   redisPendingClaimInterval,
+		claimHeartbeatInterval: redisClaimHeartbeatInterval,
 	}, nil
 }
 
 func (b *redisBus) Publish(ctx context.Context, topic string, events []eventbus.Envelope) error {
+	if b.closed.Load() || b.closing.Load() {
+		return eventbus.ErrBusClosed
+	}
+	return b.publish(ctx, topic, events)
+}
+
+func (b *redisBus) publish(ctx context.Context, topic string, events []eventbus.Envelope) error {
 	if b.closed.Load() {
 		return eventbus.ErrBusClosed
 	}
@@ -116,7 +147,7 @@ func (b *redisBus) Publish(ctx context.Context, topic string, events []eventbus.
 }
 
 func (b *redisBus) Subscribe(ctx context.Context, topic string, group string, handler eventbus.Handler) error {
-	if b.closed.Load() {
+	if b.closed.Load() || b.closing.Load() {
 		return eventbus.ErrBusClosed
 	}
 
@@ -141,10 +172,19 @@ func (b *redisBus) Subscribe(ctx context.Context, topic string, group string, ha
 
 	subCtx, cancel := context.WithCancel(ctx)
 	b.mu.Lock()
+	if b.closed.Load() || b.closing.Load() {
+		b.mu.Unlock()
+		cancel()
+		return eventbus.ErrBusClosed
+	}
 	b.subs = append(b.subs, cancel)
+	b.subsWg.Add(1)
 	b.mu.Unlock()
 
-	go b.consume(subCtx, stream, consumerGroup, consumerName, handler)
+	go func() {
+		defer b.subsWg.Done()
+		b.consume(subCtx, stream, consumerGroup, consumerName, handler)
+	}()
 	return nil
 }
 
@@ -160,19 +200,25 @@ func isBusyGroupErr(err error) bool {
 }
 
 func (b *redisBus) consume(ctx context.Context, stream, group, consumer string, handler eventbus.Handler) {
+	var nextPendingClaim time.Time
 	for {
 		if ctx.Err() != nil {
 			return
+		}
+		if nextPendingClaim.IsZero() || !time.Now().Before(nextPendingClaim) {
+			if !b.claimPending(ctx, stream, group, consumer, handler) {
+				return
+			}
+			nextPendingClaim = time.Now().Add(b.pendingClaimInterval)
 		}
 
 		streams, err := b.client.XReadGroup(ctx, &redis.XReadGroupArgs{
 			Group:    group,
 			Consumer: consumer,
 			Streams:  []string{stream, ">"},
-			Count:    10,
-			Block:    5 * time.Second,
+			Count:    1, // Keep unleased prefetched entries out of the PEL.
+			Block:    redisReadBlock,
 		}).Result()
-
 		if err != nil {
 			if ctx.Err() != nil {
 				return
@@ -186,37 +232,175 @@ func (b *redisBus) consume(ctx context.Context, stream, group, consumer string, 
 
 		for _, s := range streams {
 			for _, msg := range s.Messages {
-				env, ok := decodeMessage(msg)
-				if !ok {
-					// Malformed payloads can never be handled; ack them so the
-					// pending entry does not leak.
-					_ = b.client.XAck(ctx, stream, group, msg.ID)
-					continue
+				if !b.handleMessage(ctx, stream, group, consumer, msg, handler) {
+					return
 				}
-
-				busMsg := &redisMessage{
-					id:       env.ID,
-					topic:    stream,
-					env:      env,
-					client:   b.client,
-					stream:   stream,
-					group:    group,
-					streamID: msg.ID,
-					bus:      b,
-				}
-				if handlerErr := handler(ctx, busMsg); handlerErr != nil {
-					// The handler returned an error without Ack/Nack-ing the
-					// message itself, so release it here. Simply leaving the
-					// entry pending strands it forever: this consumer only ever
-					// reads new entries with ">" and never revisits the PEL.
-					// Nack is settle-guarded, so a handler that already Nack'd
-					// before returning the error will not double-release it.
-					_ = busMsg.Nack(ctx, handlerErr)
-					continue
-				}
-				_ = busMsg.Ack(ctx)
 			}
 		}
+	}
+}
+
+func (b *redisBus) claimPending(
+	ctx context.Context,
+	stream, group, consumer string,
+	handler eventbus.Handler,
+) bool {
+	pending, err := b.client.XPendingExt(ctx, &redis.XPendingExtArgs{
+		Stream: stream,
+		Group:  group,
+		Idle:   b.pendingClaimIdle,
+		Start:  "-",
+		End:    "+",
+		Count:  redisPendingClaimCount,
+	}).Result()
+	if err != nil {
+		if ctx.Err() == nil {
+			log.Error().Err(err).Str("stream", stream).Str("group", group).
+				Msg("failed to inspect Redis pending entries")
+		}
+		return ctx.Err() == nil
+	}
+	if len(pending) == 0 {
+		return true
+	}
+
+	ids := make([]string, 0, len(pending))
+	for _, entry := range pending {
+		ids = append(ids, entry.ID)
+	}
+	messages, err := b.client.XClaim(ctx, &redis.XClaimArgs{
+		Stream:   stream,
+		Group:    group,
+		Consumer: consumer,
+		MinIdle:  b.pendingClaimIdle,
+		Messages: ids,
+	}).Result()
+	if err != nil {
+		if ctx.Err() == nil {
+			log.Error().Err(err).Str("stream", stream).Str("group", group).
+				Msg("failed to claim stale Redis pending entries")
+		}
+		return ctx.Err() == nil
+	}
+	for _, msg := range messages {
+		if !b.handleMessage(ctx, stream, group, consumer, msg, handler) {
+			return false
+		}
+	}
+	return true
+}
+
+func (b *redisBus) handleMessage(
+	ctx context.Context,
+	stream, group, consumer string,
+	msg redis.XMessage,
+	handler eventbus.Handler,
+) bool {
+	if ctx.Err() != nil {
+		return false
+	}
+	env, ok := decodeMessage(msg)
+	if !ok {
+		ackCtx, ackCancel := context.WithTimeout(context.WithoutCancel(ctx), redisNackTimeout)
+		err := b.client.XAck(ackCtx, stream, group, msg.ID).Err()
+		ackCancel()
+		if err != nil {
+			log.Error().Err(err).Str("stream", stream).Str("message_id", msg.ID).
+				Msg("failed to acknowledge malformed Redis message")
+		}
+		return ctx.Err() == nil
+	}
+
+	busMsg := &redisMessage{
+		id:       env.ID,
+		topic:    stream,
+		env:      env,
+		client:   b.client,
+		stream:   stream,
+		group:    group,
+		streamID: msg.ID,
+		bus:      b,
+	}
+	handlerCtx, cancelHandler := context.WithCancel(ctx)
+	defer cancelHandler()
+	var leaseLost atomic.Bool
+	stopHeartbeat := b.keepClaimAlive(handlerCtx, stream, group, consumer, msg.ID, func() {
+		leaseLost.Store(true)
+		cancelHandler()
+	})
+	handlerErr := func() error {
+		defer stopHeartbeat()
+		return handler(handlerCtx, busMsg)
+	}()
+	if leaseLost.Load() {
+		return ctx.Err() == nil
+	}
+	if handlerErr != nil {
+		// An interrupted handler was not committed. Leave it pending so a later
+		// consumer can claim it without spending the retry budget.
+		if ctx.Err() != nil {
+			return false
+		}
+		nackCtx, nackCancel := context.WithTimeout(context.WithoutCancel(ctx), redisNackTimeout)
+		err := busMsg.Nack(nackCtx, handlerErr)
+		nackCancel()
+		if err != nil {
+			log.Error().Err(err).Str("stream", stream).Str("message_id", msg.ID).
+				Msg("failed to release Redis message; it remains pending for recovery")
+		}
+		return ctx.Err() == nil
+	}
+	if ctx.Err() != nil {
+		return false
+	}
+	if err := busMsg.Ack(ctx); err != nil {
+		log.Error().Err(err).Str("stream", stream).Str("message_id", msg.ID).
+			Msg("failed to acknowledge Redis message; it remains pending for recovery")
+	}
+	return ctx.Err() == nil
+}
+
+// keepClaimAlive refreshes an active consumer's pending-entry idle time so
+// another consumer cannot reclaim a long-running handler. JUSTID avoids
+// incrementing Redis's delivery count for these lease renewals.
+func (b *redisBus) keepClaimAlive(
+	ctx context.Context,
+	stream, group, consumer, messageID string,
+	cancelHandler context.CancelFunc,
+) func() {
+	heartbeatCtx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		ticker := time.NewTicker(b.claimHeartbeatInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-heartbeatCtx.Done():
+				return
+			case <-ticker.C:
+				renewCtx, renewCancel := context.WithTimeout(heartbeatCtx, redisNackTimeout)
+				_, err := b.client.XClaimJustID(renewCtx, &redis.XClaimArgs{
+					Stream:   stream,
+					Group:    group,
+					Consumer: consumer,
+					MinIdle:  0,
+					Messages: []string{messageID},
+				}).Result()
+				renewCancel()
+				if err != nil && heartbeatCtx.Err() == nil {
+					log.Error().Err(err).Str("stream", stream).Str("group", group).
+						Str("consumer", consumer).Str("message_id", messageID).
+						Msg("failed to refresh active Redis message claim; canceling handler")
+					cancelHandler()
+					return
+				}
+			}
+		}
+	}()
+	return func() {
+		cancel()
+		<-done
 	}
 }
 
@@ -247,31 +431,47 @@ func (b *redisBus) failMessage(ctx context.Context, stream, group, streamID stri
 	}
 	env.Attempts++
 	if env.Attempts >= maxRedisDeliveryAttempts {
-		if dlqErr := b.PublishDLQ(ctx, env, cause); dlqErr == nil {
+		if dlqErr := b.publishDLQ(ctx, env, cause); dlqErr == nil {
 			return b.client.XAck(ctx, stream, group, streamID).Err()
 		}
 		// If the DLQ is unavailable, requeue instead of losing the message.
 	}
-	if pubErr := b.Publish(ctx, stream, []eventbus.Envelope{env}); pubErr != nil {
+	if pubErr := b.publish(ctx, stream, []eventbus.Envelope{env}); pubErr != nil {
 		return pubErr
 	}
 	return b.client.XAck(ctx, stream, group, streamID).Err()
 }
 
-func (b *redisBus) Close(_ context.Context) error {
-	if !b.closed.CompareAndSwap(false, true) {
+func (b *redisBus) Close(ctx context.Context) error {
+	b.mu.Lock()
+	if b.closing.Load() {
+		b.mu.Unlock()
 		return nil
 	}
-	b.mu.Lock()
+	b.closing.Store(true)
 	for _, cancel := range b.subs {
 		cancel()
 	}
+	b.subs = nil
 	b.mu.Unlock()
-	return b.client.Close()
+
+	done := make(chan struct{})
+	go func() {
+		b.subsWg.Wait()
+		close(done)
+	}()
+	var waitErr error
+	select {
+	case <-done:
+	case <-ctx.Done():
+		waitErr = ctx.Err()
+	}
+	b.closed.Store(true)
+	return errors.Join(waitErr, b.client.Close())
 }
 
 func (b *redisBus) Health(ctx context.Context) eventbus.Health {
-	if b.closed.Load() {
+	if b.closed.Load() || b.closing.Load() {
 		return eventbus.Health{OK: false, Detail: "closed"}
 	}
 	if err := b.client.Ping(ctx).Err(); err != nil {
@@ -281,6 +481,13 @@ func (b *redisBus) Health(ctx context.Context) eventbus.Health {
 }
 
 func (b *redisBus) PublishDLQ(ctx context.Context, original eventbus.Envelope, reason error) error {
+	if b.closed.Load() || b.closing.Load() {
+		return eventbus.ErrBusClosed
+	}
+	return b.publishDLQ(ctx, original, reason)
+}
+
+func (b *redisBus) publishDLQ(ctx context.Context, original eventbus.Envelope, reason error) error {
 	dlqTopic := b.dlqCfg
 	if dlqTopic == "" {
 		dlqTopic = "loza.events.dlq"
@@ -290,7 +497,7 @@ func (b *redisBus) PublishDLQ(ctx context.Context, original eventbus.Envelope, r
 	}
 	original.Headers["dlq_reason"] = eventbus.DLQReasonString(reason)
 	original.Headers["dlq_time"] = time.Now().UTC().Format(time.RFC3339Nano)
-	return b.Publish(ctx, dlqTopic, []eventbus.Envelope{original})
+	return b.publish(ctx, dlqTopic, []eventbus.Envelope{original})
 }
 
 type redisMessage struct {

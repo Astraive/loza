@@ -9,10 +9,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/alicebob/miniredis/v2"
 	collectorevent "github.com/astraive/loza/collector/internal/event"
 	"github.com/astraive/loza/collector/internal/eventbus"
 	"github.com/astraive/loza/collector/internal/eventbus/memory"
+	redisadapter "github.com/astraive/loza/collector/internal/eventbus/redis"
 	"github.com/astraive/loza/collector/internal/processing"
+	goredis "github.com/redis/go-redis/v9"
 )
 
 // capturingBus records the handler passed to Subscribe so tests can invoke it
@@ -67,15 +70,21 @@ func TestEventbusHandlerSendsWhenBufferHasRoom(t *testing.T) {
 
 	body := []byte(`{"event":"checkout"}`)
 	msg := &fakeMessage{env: eventbus.Envelope{ID: "m1", Body: body}}
-	if err := handler(context.Background(), msg); err != nil {
-		t.Fatalf("handler returned error with room in buffer: %v", err)
-	}
-	body[0] = 'x'
+	done := make(chan error, 1)
+	go func() {
+		done <- handler(context.Background(), msg)
+	}()
 
 	select {
 	case rec := <-r.ch:
+		body[0] = 'x'
 		if !bytes.Equal(rec.value, []byte(`{"event":"checkout"}`)) {
 			t.Fatalf("record value = %q, want original event body", rec.value)
+		}
+		select {
+		case err := <-done:
+			t.Fatalf("handler returned before worker commit: %v", err)
+		default:
 		}
 		if err := rec.commit(context.Background()); err != nil {
 			t.Fatalf("commit: %v", err)
@@ -83,7 +92,15 @@ func TestEventbusHandlerSendsWhenBufferHasRoom(t *testing.T) {
 		if !msg.acked {
 			t.Fatal("record commit did not acknowledge the bus message")
 		}
-	default:
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Fatalf("handler returned an error after commit: %v", err)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("handler did not return after worker commit")
+		}
+	case <-time.After(time.Second):
 		t.Fatal("handler did not enqueue a record")
 	}
 }
@@ -163,6 +180,224 @@ func TestWorkerEventBusPreservesOriginalPayload(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("sink payload = %s, want original event %s", sink.payload, original)
+	}
+}
+
+func TestRedisWorkerAcknowledgmentWaitsForCommit(t *testing.T) {
+	const (
+		stream = "loza.worker.ack"
+		group  = "loza-worker-ack-test"
+	)
+	mr := miniredis.RunT(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	bus, err := redisadapter.New(ctx, eventbus.Config{
+		Type:          "redis",
+		Topic:         stream,
+		ConsumerGroup: group,
+		Redis: eventbus.RedisConfig{
+			Addr:   mr.Addr(),
+			Stream: stream,
+			Group:  group,
+		},
+	})
+	if err != nil {
+		t.Fatalf("new Redis bus: %v", err)
+	}
+	reader := newEventbusQueueReader(bus, stream, group)
+	defer func() {
+		if err := reader.Close(); err != nil {
+			t.Errorf("close reader: %v", err)
+		}
+	}()
+	client := goredis.NewClient(&goredis.Options{Addr: mr.Addr()})
+	defer func() {
+		if err := client.Close(); err != nil {
+			t.Errorf("close Redis client: %v", err)
+		}
+	}()
+
+	if records, err := reader.Poll(ctx, 50*time.Millisecond); err != nil {
+		t.Fatalf("subscribe reader: %v", err)
+	} else if len(records) != 0 {
+		t.Fatalf("records before publish = %d, want 0", len(records))
+	}
+	err = bus.Publish(ctx, stream, []eventbus.Envelope{{
+		ID:        "worker-ack-1",
+		Event:     "checkout",
+		Timestamp: time.Now().UTC(),
+		Body:      []byte(`{"event":"checkout"}`),
+	}})
+	if err != nil {
+		t.Fatalf("publish event: %v", err)
+	}
+	records, err := reader.Poll(ctx, time.Second)
+	if err != nil {
+		t.Fatalf("poll event: %v", err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("records = %d, want 1", len(records))
+	}
+
+	pending, err := client.XPending(ctx, stream, group).Result()
+	if err != nil {
+		t.Fatalf("pending before worker commit: %v", err)
+	}
+	if pending.Count != 1 {
+		t.Fatalf("pending before worker commit = %d, want 1", pending.Count)
+	}
+	if err := records[0].commit(ctx); err != nil {
+		t.Fatalf("worker commit: %v", err)
+	}
+	pending, err = client.XPending(ctx, stream, group).Result()
+	if err != nil {
+		t.Fatalf("pending after worker commit: %v", err)
+	}
+	if pending.Count != 0 {
+		t.Fatalf("pending after worker commit = %d, want 0", pending.Count)
+	}
+}
+
+func TestRedisWorkerCloseLeavesUncommittedMessageRecoverable(t *testing.T) {
+	const (
+		stream = "loza.worker.shutdown"
+		group  = "loza-worker-shutdown-test"
+	)
+	mr := miniredis.RunT(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	cfg := eventbus.Config{
+		Type:          "redis",
+		Topic:         stream,
+		ConsumerGroup: group,
+		Redis: eventbus.RedisConfig{
+			Addr:   mr.Addr(),
+			Stream: stream,
+			Group:  group,
+		},
+	}
+	newBus := func() eventbus.Bus {
+		bus, err := redisadapter.New(ctx, cfg)
+		if err != nil {
+			t.Fatalf("new Redis bus: %v", err)
+		}
+		return bus
+	}
+
+	bus := newBus()
+	reader := newEventbusQueueReader(bus, stream, group)
+	defer func() {
+		if err := reader.Close(); err != nil {
+			t.Errorf("close reader: %v", err)
+		}
+	}()
+	client := goredis.NewClient(&goredis.Options{Addr: mr.Addr()})
+	defer func() {
+		if err := client.Close(); err != nil {
+			t.Errorf("close Redis client: %v", err)
+		}
+	}()
+
+	if records, err := reader.Poll(ctx, 50*time.Millisecond); err != nil {
+		t.Fatalf("subscribe reader: %v", err)
+	} else if len(records) != 0 {
+		t.Fatalf("records before publish = %d, want 0", len(records))
+	}
+	body := []byte(`{"event":"shutdown"}`)
+	if err := bus.Publish(ctx, stream, []eventbus.Envelope{{
+		ID:        "worker-shutdown-1",
+		Event:     "shutdown",
+		Timestamp: time.Now().UTC(),
+		Body:      body,
+	}}); err != nil {
+		t.Fatalf("publish event: %v", err)
+	}
+	records, err := reader.Poll(ctx, time.Second)
+	if err != nil {
+		t.Fatalf("poll event: %v", err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("records = %d, want 1", len(records))
+	}
+
+	if err := reader.Close(); err != nil {
+		t.Fatalf("close reader with an uncommitted record: %v", err)
+	}
+	pending, err := client.XPending(ctx, stream, group).Result()
+	if err != nil {
+		t.Fatalf("pending after reader close: %v", err)
+	}
+	if pending.Count != 1 {
+		t.Fatalf("pending after reader close = %d, want 1 for recovery", pending.Count)
+	}
+	length, err := client.XLen(ctx, stream).Result()
+	if err != nil {
+		t.Fatalf("stream length after reader close: %v", err)
+	}
+	if length != 1 {
+		t.Fatalf("stream length after reader close = %d, want 1 without a retry copy", length)
+	}
+
+	mr.SetTime(time.Now().Add(time.Hour))
+	retryReader := newEventbusQueueReader(newBus(), stream, group)
+	defer func() {
+		if err := retryReader.Close(); err != nil {
+			t.Errorf("close retry reader: %v", err)
+		}
+	}()
+	retried, err := retryReader.Poll(ctx, time.Second)
+	if err != nil {
+		t.Fatalf("poll recovered event: %v", err)
+	}
+	if len(retried) != 1 {
+		t.Fatalf("recovered records = %d, want 1", len(retried))
+	}
+	if !bytes.Equal(retried[0].value, body) {
+		t.Fatalf("recovered payload = %s, want %s", retried[0].value, body)
+	}
+	if err := retried[0].commit(ctx); err != nil {
+		t.Fatalf("commit recovered event: %v", err)
+	}
+	pending, err = client.XPending(ctx, stream, group).Result()
+	if err != nil {
+		t.Fatalf("pending after retry commit: %v", err)
+	}
+	if pending.Count != 0 {
+		t.Fatalf("pending after retry commit = %d, want 0", pending.Count)
+	}
+}
+
+func TestEventbusHandlerUnblocksOnReaderCloseBeforeCommit(t *testing.T) {
+	bus := &capturingBus{}
+	r := newEventbusQueueReader(bus, "topic", "group")
+	handler := registerHandler(t, r, bus)
+
+	done := make(chan error, 1)
+	go func() {
+		done <- handler(context.Background(), &fakeMessage{env: eventbus.Envelope{ID: "m1"}})
+	}()
+	select {
+	case <-r.ch:
+	case <-time.After(time.Second):
+		t.Fatal("handler did not enqueue a record")
+	}
+	select {
+	case err := <-done:
+		t.Fatalf("handler returned before commit: %v", err)
+	default:
+	}
+
+	if err := r.Close(); err != nil {
+		t.Fatalf("close reader: %v", err)
+	}
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("handler error = %v, want context.Canceled", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("handler did not unblock after reader close")
 	}
 }
 
