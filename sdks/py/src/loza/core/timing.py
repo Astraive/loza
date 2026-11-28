@@ -241,6 +241,24 @@ class StopwatchHandle:
 # --- Timing helper methods (added to EventContext at runtime) ---
 
 
+def _register_timing_attr_policies(ctx: Any, attrs: tuple[Attr, ...]) -> None:
+    """Preserve positional Attr policies for the event sanitizer."""
+    for attr in attrs:
+        if attr.drop:
+            keys = getattr(ctx, "_drop_keys", None)
+            if keys is not None:
+                keys.add(attr.key)
+            continue
+        if attr.hash_value:
+            keys = getattr(ctx, "_hash_keys", None)
+            if keys is not None:
+                keys.add(attr.key)
+        if attr.sensitive:
+            keys = getattr(ctx, "_sensitive_keys", None)
+            if keys is not None:
+                keys.add(attr.key)
+
+
 def _attrs_to_fields(attrs: tuple[Attr, ...], fields: dict[str, Any]) -> dict[str, Any]:
     """Convert positional ``Attr`` objects into keyword fields.
 
@@ -252,14 +270,17 @@ def _attrs_to_fields(attrs: tuple[Attr, ...], fields: dict[str, Any]) -> dict[st
 
 
 def with_process(ctx: Any, name: str, *attrs: Attr, **fields: Any) -> ProcessHandle:
+    _register_timing_attr_policies(ctx, attrs)
     return ctx.start_process(name, **_attrs_to_fields(attrs, fields))
 
 
 def with_group(ctx: Any, name: str, *attrs: Attr, **fields: Any) -> GroupHandle:
+    _register_timing_attr_policies(ctx, attrs)
     return ctx.start_group(name, **_attrs_to_fields(attrs, fields))
 
 
 def with_timer(ctx: Any, name: str, *attrs: Attr, **fields: Any) -> TimerHandle:
+    _register_timing_attr_policies(ctx, attrs)
     return ctx.start_timer(name, **_attrs_to_fields(attrs, fields))
 
 

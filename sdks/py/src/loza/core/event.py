@@ -361,28 +361,35 @@ def sanitize_event(ctx: EventContext) -> EventContext:
         bucket, local = _resolve_bucket(safe, key)
         _redact_at_path(bucket, local)
     for checkpoint in safe.checkpoints:
-        _sanitize_checkpoint(checkpoint, ctx._drop_keys, ctx._hash_keys, ctx._sensitive_keys)
+        _sanitize_attr_fields(
+            checkpoint, ctx._drop_keys, ctx._hash_keys, ctx._sensitive_keys
+        )
+    for entries in (safe.processes, safe.groups, safe.timers):
+        for entry in entries:
+            _sanitize_attr_fields(
+                entry, ctx._drop_keys, ctx._hash_keys, ctx._sensitive_keys
+            )
     return safe
 
 
-def _sanitize_checkpoint(
-    checkpoint: dict[str, Any],
+def _sanitize_attr_fields(
+    fields: dict[str, Any],
     drop_keys: set[str],
     hash_keys: set[str],
     sensitive_keys: set[str],
 ) -> None:
-    """Apply the same drop/hash/sensitive policies to a checkpoint payload."""
+    """Apply drop/hash/sensitive policies to a nested event entry."""
     for key in drop_keys:
-        checkpoint.pop(key, None)
+        fields.pop(key, None)
     for key in hash_keys:
-        value = checkpoint.get(key)
+        value = fields.get(key)
         if value is not None:
             # Use the same keyed pseudonym as the top-level hash path so a
-            # bare SHA-256 of sensitive checkpoint data never leaks.
-            checkpoint[key] = secure_hash(value)
+            # bare SHA-256 of sensitive event data never leaks.
+            fields[key] = secure_hash(value)
     for key in sensitive_keys:
-        if checkpoint.get(key) is not None:
-            checkpoint[key] = "[REDACTED]"
+        if fields.get(key) is not None:
+            fields[key] = "[REDACTED]"
 
 
 def _hash_at_path(target: dict[str, Any], key: str) -> None:

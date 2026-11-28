@@ -111,3 +111,55 @@ def test_real_context_emits_start_attributes_and_completion_attributes_win():
     assert payload["groups"][0]["tier"] == "gold"
     assert payload["timers"][0]["db"] == "postgres"
     assert payload["timers"][0]["operation"] == "fetch"
+
+def test_timing_attr_policies_apply_to_entries_and_registered_keys():
+    logger, sink = loza.TestLogger()
+    ctx = logger.start_event(loza.Params(event="test.timing.attrs.policies"))
+    logger.enrich(ctx, loza.Attr("registered_policy", "registered-secret", sensitive=True))
+
+    process = loza.with_process(
+        ctx,
+        "step",
+        loza.Attr("process_secret", "process-secret", sensitive=True),
+        loza.Attr("process_hash", "process-hash", hash_value=True),
+        loza.Attr("process_drop", "process-drop", drop=True),
+        registered_policy="process-registered",
+    )
+    process.finish()
+    group = loza.with_group(
+        ctx,
+        "phase",
+        loza.Attr("group_secret", "group-secret", sensitive=True),
+        loza.Attr("group_hash", "group-hash", hash_value=True),
+        loza.Attr("group_drop", "group-drop", drop=True),
+        registered_policy="group-registered",
+    )
+    group.finish()
+    timer = loza.with_timer(
+        ctx,
+        "span",
+        loza.Attr("timer_secret", "timer-secret", sensitive=True),
+        loza.Attr("timer_hash", "timer-hash", hash_value=True),
+        loza.Attr("timer_drop", "timer-drop", drop=True),
+        registered_policy="timer-registered",
+    )
+    timer.stop()
+
+    logger.finish(ctx, "success")
+    logger.emit(ctx)
+    payload = json.loads(sink.events[0])
+
+    for section, prefix in (
+        ("processes", "process"),
+        ("groups", "group"),
+        ("timers", "timer"),
+    ):
+        entry = payload[section][0]
+        assert entry[f"{prefix}_secret"] == "[REDACTED]"
+        assert entry[f"{prefix}_hash"] != f"{prefix}-hash"
+        assert f"{prefix}_drop" not in entry
+        assert entry["registered_policy"] == "[REDACTED]"
+    assert "registered-secret" not in sink.events[0]
+    assert "process-secret" not in sink.events[0]
+    assert "group-secret" not in sink.events[0]
+    assert "timer-secret" not in sink.events[0]

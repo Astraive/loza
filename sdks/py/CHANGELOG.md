@@ -4,8 +4,8 @@
 
 ### Fixed
 
-- Preserve process, group, and timer start attributes in emitted entries;
-  finish/stop attributes override matching start keys.
+- Preserve process, group, and timer start attributes in emitted entries and
+  apply sensitive/hash/drop policies; finish/stop attrs override matching keys.
 
 ### Security
 
