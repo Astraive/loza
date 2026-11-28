@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"sync"
 	"time"
@@ -45,12 +44,8 @@ func (r *eventbusQueueReader) Poll(ctx context.Context, timeout time.Duration) (
 
 		handler := func(hCtx context.Context, msg eventbus.Message) error {
 			env := msg.Envelope()
-			value, err := json.Marshal(env)
-			if err != nil {
-				return msg.Nack(hCtx, err)
-			}
 			rec := queueRecord{
-				value: value,
+				value: append([]byte(nil), env.Body...),
 				commit: func(cCtx context.Context) error {
 					return msg.Ack(cCtx)
 				},
