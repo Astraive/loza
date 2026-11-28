@@ -21,11 +21,13 @@ rejected by `validateConfig` before any request is sent.
 ## Quick Start
 
 ```typescript
-import { loza } from '@astraive/loza';
+import {
+  loza, configure, production, userId, cartId, featureFlag, int, retryable,
+} from '@astraive/loza';
 
 // Configure
-loza.configure(
-  loza.production('checkout')
+configure(
+  production('checkout')
     .withCollectorEndpoint('http://localhost:9308')
 );
 
@@ -38,17 +40,17 @@ const ctx = loza.startEvent({
 });
 
 loza.append(ctx,
-  loza.userId('u_123'),
-  loza.cartId('cart_456'),
-  loza.featureFlag('checkout_v2', 'on'),
+  userId('u_123'),
+  cartId('cart_456'),
+  featureFlag('checkout_v2', 'on'),
 );
 
 loza.checkpoint(ctx, 'payment_started');
 
 try {
-  loza.finish(ctx, 'success', loza.int('status_code', 200));
+  loza.finish(ctx, 'success', int('status_code', 200));
 } catch (err) {
-  loza.finishError(ctx, err, loza.retryable(true));
+  loza.finishError(ctx, err, retryable(true));
 } finally {
   await loza.emit(ctx);
 }
@@ -64,7 +66,7 @@ The main flow: `startEvent` -> `enrich` -> `checkpoint` -> `finish`/`finishError
 import {
   startEvent, startHttpEvent, startJobEvent, startQueueEvent,
   startCliEvent, startCronEvent,
-  append, enrich, set, merge, del, get, getGroup,
+  append, enrich, set, merge, del, get, getGroup, string, int,
   checkpoint, finish, finishError, emit, flush, shutdown,
 } from '@astraive/loza';
 
@@ -233,19 +235,21 @@ try {
 One-shot events without requiring `startEvent`:
 
 ```typescript
-import { loza } from '@astraive/loza';
+import { loza, string } from '@astraive/loza';
 
-await loza.info('worker started', loza.string('queue', 'emails'));
-await loza.error('payment failed', loza.string('provider', 'stripe'));
+await loza.info('worker started', string('queue', 'emails'));
+await loza.error('payment failed', string('provider', 'stripe'));
 ```
 
 ## Logger Instances
 
 ```typescript
-import { loza, createLoza } from '@astraive/loza';
+import {
+  loza, createLoza, configure, production, dev, test, string,
+} from '@astraive/loza';
 
 // Default API — configure once, use everywhere
-loza.configure(loza.production('checkout').withCollectorEndpoint('http://127.0.0.1:9308'));
+configure(production('checkout').withCollectorEndpoint('http://127.0.0.1:9308'));
 loza.info('server started');
 
 // Custom instance
@@ -257,13 +261,13 @@ const audit = loza.alias('audit-service');
 audit.info('audit trail started');
 
 // Presets
-const cfg = loza.dev('checkout');       // pretty JSON, stdout, sync, debug level
-const cfg2 = loza.production('checkout'); // compact JSON, stdout, async, info level
-const cfg3 = loza.test('checkout');       // sync, no sinks, debug level
+const cfg = dev('checkout');       // pretty JSON, stdout, sync, debug level
+const cfg2 = production('checkout'); // compact JSON, stdout, async, info level
+const cfg3 = test('checkout');       // sync, no sinks, debug level
 
 // Instance methods
 const ctx = logger.startEvent({ event: 'checkout.request' });
-logger.enrich(ctx, loza.string('key', 'value'));
+logger.enrich(ctx, string('key', 'value'));
 logger.finish(ctx, 'success');
 await logger.emit(ctx);
 await logger.flush();

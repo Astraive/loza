@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented in this file.
 
+## [Unreleased]
+
+### Fixed
+
+- Correct the JavaScript README examples to import configuration factories and
+  attribute constructors separately from the `loza` logger instance.
+
 ## [0.3.4] - 2026-08-26
 
 ### Changed
