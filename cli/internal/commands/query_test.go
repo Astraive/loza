@@ -166,3 +166,60 @@ func TestQueryCommandSendsExactLargeInteger(t *testing.T) {
 		t.Fatalf("wire value = %s, want %s (precision lost)", param.Value, raw)
 	}
 }
+
+func TestDocumentedQueryExamplesPrintJSON(t *testing.T) {
+	const response = `{"columns":["service"],"rows":[["payment-service"]]}`
+	tests := []struct {
+		name  string
+		args  []string
+		path  string
+		query string
+	}{
+		{
+			name:  "LQL",
+			args:  []string{"-q", "FROM events", "--limit", "10", "--format", "json"},
+			path:  "/lql/query",
+			query: "FROM events",
+		},
+		{
+			name: "raw SQL",
+			args: []string{
+				"-q",
+				"SELECT service, count(*) FROM events GROUP BY service ORDER BY count(*) DESC",
+				"--raw-sql", "--engine", "duckdb", "--format", "json",
+			},
+			path:  "/query",
+			query: "SELECT service, count(*) FROM events GROUP BY service ORDER BY count(*) DESC",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var gotBody string
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path != tt.path {
+					t.Errorf("request path = %q, want %q", r.URL.Path, tt.path)
+				}
+				body, err := io.ReadAll(r.Body)
+				if err != nil {
+					t.Errorf("read query request: %v", err)
+				}
+				gotBody = string(body)
+				_, _ = w.Write([]byte(response))
+			}))
+			defer srv.Close()
+
+			out, err := captureStdout(t, func() error {
+				return QueryCommand(context.Background(), config.Config{CollectorURL: srv.URL}, tt.args)
+			})
+			if err != nil {
+				t.Fatalf("query: %v", err)
+			}
+			if out != response+"\n" {
+				t.Fatalf("query output = %q, want %q", out, response+"\n")
+			}
+			if !strings.Contains(gotBody, tt.query) {
+				t.Fatalf("request body %q does not contain query %q", gotBody, tt.query)
+			}
+		})
+	}
+}

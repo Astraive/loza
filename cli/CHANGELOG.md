@@ -1,6 +1,14 @@
 # Changelog
 
 All notable changes to this project are documented in this file.
+
+## [Unreleased]
+
+### Fixed
+
+- Align CLI command examples with the current parsers and verify their output
+  through finite command tests.
+
 ## [0.3.4] - 2026-08-26
 
 ### Changed

@@ -135,34 +135,46 @@ func TestStreamEventsEchoesNonJSONLines(t *testing.T) {
 	}
 }
 
-// TestWatchAndTailCommandsUseSharedFormatter checks the wiring end to end:
-// both commands consume the same stream and render identical common columns.
+// TestWatchAndTailCommandsUseSharedFormatter checks the command wiring, filter
+// flags, and output used by the CLI guide examples against a finite local stream.
 func TestWatchAndTailCommandsUseSharedFormatter(t *testing.T) {
 	withoutColor(t)
 
+	const docsStreamLine = `{"level":"error","timestamp":"2026-01-02T03:04:05Z","service":"payment-service","event":"payment.failed","release":"v1.2.3","trace_flags":"01","errors":[{"code":"E1"}]}`
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/tail" {
-			t.Fatalf("unexpected path %s", r.URL.Path)
+			t.Errorf("unexpected path %s", r.URL.Path)
 		}
-		_, _ = w.Write([]byte(streamTestLine + "\n"))
+		filters := r.URL.Query()
+		for key, want := range map[string]string{
+			"kind":    "http_request",
+			"service": "payment-service",
+			"level":   "error",
+		} {
+			if got := filters.Get(key); got != want {
+				t.Errorf("filter %s = %q, want %q", key, got, want)
+			}
+		}
+		_, _ = w.Write([]byte(docsStreamLine + "\n"))
 	}))
 	defer srv.Close()
 
 	cfg := config.Config{CollectorURL: srv.URL}
+	args := []string{"--service", "payment-service", "--kind", "http_request", "--level", "error"}
 	watchOut, err := captureStdout(t, func() error {
-		return WatchCommand(context.Background(), cfg, nil)
+		return WatchCommand(context.Background(), cfg, args)
 	})
 	if err != nil {
 		t.Fatalf("WatchCommand: %v", err)
 	}
 	tailOut, err := captureStdout(t, func() error {
-		return TailCommand(context.Background(), cfg, nil)
+		return TailCommand(context.Background(), cfg, args)
 	})
 	if err != nil {
 		t.Fatalf("TailCommand: %v", err)
 	}
 
-	wantBase := "2026-01-02T03:04:05Z error checkout payment.failed"
+	wantBase := "2026-01-02T03:04:05Z error payment-service payment.failed"
 	if !strings.HasSuffix(watchOut, wantBase+"\n") {
 		t.Fatalf("watch output = %q, want suffix %q", watchOut, wantBase+"\n")
 	}
