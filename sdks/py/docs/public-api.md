@@ -22,7 +22,7 @@ The Python SDK public API surface, aligned with the cross-language parity manife
 | `checkpoint(ctx, name, *attrs)` | Record a named checkpoint with timestamp. |
 | `finish(ctx, outcome, *attrs)` | Finish the event with an outcome. |
 | `finish_error(ctx, error, *attrs)` | Finish the event with an error outcome. |
-| `emit(ctx)` | Serialize and send the event to the sink. Returns event ID. |
+| `emit(ctx)` | Serialize and send the event to the sink. Returns encoded event JSON when synchronous sink delivery completes or an async pipeline enqueue succeeds; returns `""` for sampled events, oversized-event drops, offline buffering, or sink delivery failure. A sink failure may occur after another sink accepted the payload. Access the event ID via `ctx.event_id`. |
 | `flush()` | Flush buffered events. |
 | `shutdown()` | Shut down the logger. |
 

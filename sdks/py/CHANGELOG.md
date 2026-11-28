@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- `emit(ctx)` returns encoded event JSON when synchronous sink delivery
+  completes or an async pipeline enqueue succeeds. It returns `""` for
+  sampled events, oversized-event drops, offline buffering, or sink delivery
+  failure. A sink failure may occur after another sink accepted the payload.
+  Retrieve the event ID from `ctx.event_id`.
+
 ### Security
 
 - `email_hash` and `ip_hash` now pseudonymize with keyed HMAC-SHA256 instead of
