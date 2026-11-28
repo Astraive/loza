@@ -1,5 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import Koa from 'koa';
+import { once } from 'node:events';
 import { lozaHttpMiddleware } from '../src/middleware/http.ts';
 import { lozaMiddleware } from '../src/middleware/express.ts';
 import { lozaKoaMiddleware } from '../src/middleware/koa.ts';
@@ -202,17 +204,79 @@ describe('framework middleware', () => {
     assert.equal(res.end(), 'ended');
   });
 
-  it('finishes Koa events after success and error', async () => {
+  it('finishes Koa events and rethrows route errors', async () => {
     let successRan = false;
     await lozaKoaMiddleware({ service: 'koa' })(
       { method: 'GET', path: '/ok', route: { path: '/ok' }, headers: {}, socket: {}, status: 201 },
       async () => { successRan = true; },
     );
     assert.equal(successRan, true);
-    await assert.doesNotReject(() => lozaKoaMiddleware()(
-      { method: 'GET', path: '/bad', headers: {}, socket: {}, status: 500 },
-      async () => { throw new Error('boom'); },
-    ));
+
+    const original = new Error('boom');
+    await assert.rejects(
+      () => lozaKoaMiddleware()(
+        { method: 'GET', path: '/bad', headers: {}, socket: {}, status: 500 },
+        async () => { throw original; },
+      ),
+      (error) => error === original,
+    );
+  });
+
+  it('preserves the Koa route error through the real dispatcher if telemetry emit fails', async () => {
+    const app = new Koa();
+    const original = new Error('finite application error');
+    let receivedError: unknown;
+    app.use(async (ctx, next) => {
+      try {
+        await next();
+      } catch (error) {
+        receivedError = error;
+        ctx.status = 503;
+        ctx.body = 'handled application error';
+      }
+    });
+    app.use(lozaKoaMiddleware({ service: 'koa-error' }));
+    app.use(async () => { throw original; });
+
+    const originalFinishError = Logger.prototype.finishError;
+    const originalEmit = Logger.prototype.emit;
+    let finishErrorCalls = 0;
+    let emitCalls = 0;
+    Logger.prototype.finishError = function (
+      this: Logger,
+      ...args: Parameters<Logger['finishError']>
+    ) {
+      finishErrorCalls += 1;
+      return originalFinishError.apply(this, args);
+    };
+    Logger.prototype.emit = async function (
+      this: Logger,
+      _ctx: Parameters<Logger['emit']>[0],
+    ) {
+      emitCalls += 1;
+      throw new Error('telemetry delivery failed');
+    };
+
+    const server = app.listen(0, '127.0.0.1');
+    await once(server, 'listening');
+    try {
+      const address = server.address();
+      assert.ok(address && typeof address !== 'string');
+      const response = await fetch(`http://127.0.0.1:${address.port}/finite`);
+      assert.equal(response.status, 503);
+      assert.equal(await response.text(), 'handled application error');
+    } finally {
+      Logger.prototype.finishError = originalFinishError;
+      Logger.prototype.emit = originalEmit;
+      const closed = once(server, 'close');
+      server.closeAllConnections?.();
+      server.close();
+      await closed;
+    }
+
+    assert.equal(receivedError, original);
+    assert.equal(finishErrorCalls, 1);
+    assert.equal(emitCalls, 1);
   });
 
   it('finishes Fastify reply promises on fulfillment and rejection', async () => {

@@ -243,8 +243,13 @@ describe('Coverage boundaries', () => {
 
     const koa = lozaKoaMiddleware();
     await koa({ method: 'GET', path: '/koa', headers: {}, status: 200 }, async () => {});
-    await koa({ method: 'GET', path: '/koa-error', headers: {}, status: 0 }, async () => { throw new Error('koa'); });
-
+    await assert.rejects(
+      () => koa(
+        { method: 'GET', path: '/koa-error', headers: {}, status: 0 },
+        async () => { throw new Error('koa'); },
+      ),
+      /koa/,
+    );
     const next = lozaNextMiddleware();
     await next({ url: '/next', headers: { get: (_name: string) => undefined } }, async () => ({ status: 200 }));
     await assert.rejects(
