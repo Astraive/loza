@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+
+### Fixed
+
+- Corrected the custom schema example to read the timestamp from
+  `EventView.to_dict()`, which returns the canonical event timestamp.
 ### Security
 
 - `email_hash` and `ip_hash` now pseudonymize with keyed HMAC-SHA256 instead of

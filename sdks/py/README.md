@@ -374,9 +374,9 @@ cfg = loza.production("checkout").with_schema(loza.ECSchema())
 # Custom schema
 def my_schema(ev):
     return {
-        "ts": ev.timestamp(),
+        "ts": ev.to_dict()["timestamp"],
         "service": ev.service(),
-        "requestId": ev.request_id(),
+        "requestId": ev.to_dict()["request_id"],
         "took": ev.duration_ms(),
         "fields": ev.attrs(),
     }
