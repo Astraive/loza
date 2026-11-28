@@ -163,3 +163,71 @@ def test_timing_attr_policies_apply_to_entries_and_registered_keys():
     assert "process-secret" not in sink.events[0]
     assert "group-secret" not in sink.events[0]
     assert "timer-secret" not in sink.events[0]
+
+def test_timing_path_policies_preserve_reserved_fields():
+    logger, sink = loza.TestLogger()
+    ctx = logger.start_event(loza.Params(event="test.timing.path.policies"))
+    logger.enrich(
+        ctx,
+        loza.Attr("account.token", "registered-token", sensitive=True),
+        loza.Attr("account.hash", "registered-hash", hash_value=True),
+        loza.Attr("account.drop", "registered-drop", drop=True),
+        loza.Attr("name", "registered-name", sensitive=True),
+        loza.Attr("duration_ms", 500, drop=True),
+        loza.Attr("step", 500, hash_value=True),
+        loza.Attr("status_code", 500, sensitive=True),
+    )
+
+    def account(prefix: str) -> dict[str, str]:
+        return {
+            "token": f"{prefix}-token",
+            "hash": f"{prefix}-hash",
+            "drop": f"{prefix}-drop",
+        }
+
+    process = loza.with_process(
+        ctx, "process-name", account=account("process"), step=999, duration_ms=999
+    )
+    process.finish(status_code=201)
+    group = loza.with_group(
+        ctx, "group-name", account=account("group"), step=999, duration_ms=999
+    )
+    group.finish(status_code=202)
+    timer = loza.with_timer(
+        ctx, "timer-name", account=account("timer"), step=999, duration_ms=999
+    )
+    timer.stop(status_code=203)
+
+    logger.finish(ctx, "success")
+    logger.emit(ctx)
+    payload = json.loads(sink.events[0])
+
+    expected = (
+        ("processes", "process-name", 201, "process"),
+        ("groups", "group-name", 202, "group"),
+        ("timers", "timer-name", 203, "timer"),
+    )
+    for section, name, status_code, prefix in expected:
+        entry = payload[section][0]
+        assert entry["name"] == name
+        assert isinstance(entry["duration_ms"], int)
+        assert entry["status_code"] == status_code
+        assert entry["account"]["token"] == "[REDACTED]"
+        assert entry["account"]["hash"] != f"{prefix}-hash"
+        assert "drop" not in entry["account"]
+    assert payload["processes"][0]["step"] == 1
+    for secret in (
+        "registered-token",
+        "registered-hash",
+        "registered-name",
+        "process-token",
+        "process-hash",
+        "process-drop",
+        "group-token",
+        "group-hash",
+        "group-drop",
+        "timer-token",
+        "timer-hash",
+        "timer-drop",
+    ):
+        assert secret not in sink.events[0]

@@ -21,6 +21,7 @@ EVENT_EMITTING = "emitting"
 EVENT_EMITTED = "emitted"
 EVENT_FAILED_VALIDATION = "failed_validation"
 EVENT_DELIVERY_FAILED = "delivery_failed"
+_RESERVED_CHECKPOINT_KEYS = frozenset({"name", "at_ms"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -351,6 +352,8 @@ def sanitize_event(ctx: EventContext) -> EventContext:
     if not ctx._drop_keys and not ctx._hash_keys and not ctx._sensitive_keys:
         return ctx
     safe = copy.deepcopy(ctx)
+    from .timing import _RESERVED_EVENT_KEYS
+
     for key in ctx._drop_keys:
         bucket, local = _resolve_bucket(safe, key)
         _delete_path(bucket, local)
@@ -362,12 +365,20 @@ def sanitize_event(ctx: EventContext) -> EventContext:
         _redact_at_path(bucket, local)
     for checkpoint in safe.checkpoints:
         _sanitize_attr_fields(
-            checkpoint, ctx._drop_keys, ctx._hash_keys, ctx._sensitive_keys
+            checkpoint,
+            ctx._drop_keys,
+            ctx._hash_keys,
+            ctx._sensitive_keys,
+            _RESERVED_CHECKPOINT_KEYS,
         )
     for entries in (safe.processes, safe.groups, safe.timers):
         for entry in entries:
             _sanitize_attr_fields(
-                entry, ctx._drop_keys, ctx._hash_keys, ctx._sensitive_keys
+                entry,
+                ctx._drop_keys,
+                ctx._hash_keys,
+                ctx._sensitive_keys,
+                _RESERVED_EVENT_KEYS,
             )
     return safe
 
@@ -377,19 +388,29 @@ def _sanitize_attr_fields(
     drop_keys: set[str],
     hash_keys: set[str],
     sensitive_keys: set[str],
+    reserved_keys: frozenset[str] = frozenset(),
 ) -> None:
-    """Apply drop/hash/sensitive policies to a nested event entry."""
+    """Apply path-aware policies to user attrs without altering reserved fields."""
     for key in drop_keys:
-        fields.pop(key, None)
+        if key not in reserved_keys:
+            fields.pop(key, None)
+        path_root = key.partition(".")[0]
+        if "." in key and path_root not in reserved_keys:
+            _delete_path(fields, key)
     for key in hash_keys:
-        value = fields.get(key)
-        if value is not None:
-            # Use the same keyed pseudonym as the top-level hash path so a
-            # bare SHA-256 of sensitive event data never leaks.
-            fields[key] = secure_hash(value)
+        if key not in reserved_keys:
+            value = fields.get(key)
+            if value is not None:
+                fields[key] = secure_hash(value)
+        path_root = key.partition(".")[0]
+        if "." in key and path_root not in reserved_keys:
+            _hash_at_path(fields, key)
     for key in sensitive_keys:
-        if fields.get(key) is not None:
+        if key not in reserved_keys and fields.get(key) is not None:
             fields[key] = "[REDACTED]"
+        path_root = key.partition(".")[0]
+        if "." in key and path_root not in reserved_keys:
+            _redact_at_path(fields, key)
 
 
 def _hash_at_path(target: dict[str, Any], key: str) -> None:
