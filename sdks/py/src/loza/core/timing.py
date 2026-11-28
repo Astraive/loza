@@ -112,18 +112,28 @@ def _now_ms(started_at: datetime) -> int:
 class ProcessHandle:
     """Tracks a named process step with automatic duration."""
 
-    __slots__ = ("_event", "_name", "_step", "_started_at", "_started_at_ms")
+    __slots__ = ("_event", "_name", "_step", "_started_at", "_started_at_ms", "_attrs")
 
-    def __init__(self, event: Any, name: str, step: int, started_at: datetime):
+    def __init__(
+        self,
+        event: Any,
+        name: str,
+        step: int,
+        started_at: datetime,
+        attrs: dict[str, object] | None = None,
+    ):
         self._event = event
         self._name = name
         self._step = step
         self._started_at = started_at
         self._started_at_ms = _now_ms(event.started_at)
+        self._attrs = attrs
 
     def finish(self, **attrs: object) -> None:
         now = datetime.now(timezone.utc)
         ended_ms = int((now - self._event.started_at).total_seconds() * 1000)
+        if self._attrs:
+            attrs = self._attrs | attrs
         status_code, clean_attrs = _extract_status_code(attrs)
         entry = EventProcess(
             step=self._step,
@@ -147,14 +157,23 @@ class ProcessHandle:
 class TimerHandle:
     """Tracks a named duration measurement."""
 
-    __slots__ = ("_event", "_name", "_started_at")
+    __slots__ = ("_event", "_name", "_started_at", "_attrs")
 
-    def __init__(self, event: Any, name: str, started_at: datetime):
+    def __init__(
+        self,
+        event: Any,
+        name: str,
+        started_at: datetime,
+        attrs: dict[str, object] | None = None,
+    ):
         self._event = event
         self._name = name
         self._started_at = started_at
+        self._attrs = attrs
 
     def stop(self, **attrs: object) -> None:
+        if self._attrs:
+            attrs = self._attrs | attrs
         duration_ms = int((datetime.now(timezone.utc) - self._started_at).total_seconds() * 1000)
         status_code, clean_attrs = _extract_status_code(attrs)
         entry = EventTimer(
@@ -172,17 +191,26 @@ class TimerHandle:
 class GroupHandle:
     """Tracks a parent phase containing processes."""
 
-    __slots__ = ("_event", "_name", "_started_at", "_started_at_ms")
+    __slots__ = ("_event", "_name", "_started_at", "_started_at_ms", "_attrs")
 
-    def __init__(self, event: Any, name: str, started_at: datetime):
+    def __init__(
+        self,
+        event: Any,
+        name: str,
+        started_at: datetime,
+        attrs: dict[str, object] | None = None,
+    ):
         self._event = event
         self._name = name
         self._started_at = started_at
         self._started_at_ms = _now_ms(event.started_at)
+        self._attrs = attrs
 
     def finish(self, **attrs: object) -> None:
         now = datetime.now(timezone.utc)
         ended_ms = int((now - self._event.started_at).total_seconds() * 1000)
+        if self._attrs:
+            attrs = self._attrs | attrs
         status_code, clean_attrs = _extract_status_code(attrs)
         entry = EventGroup(
             name=self._name,
@@ -213,6 +241,24 @@ class StopwatchHandle:
 # --- Timing helper methods (added to EventContext at runtime) ---
 
 
+def _register_timing_attr_policies(ctx: Any, attrs: tuple[Attr, ...]) -> None:
+    """Preserve positional Attr policies for the event sanitizer."""
+    for attr in attrs:
+        if attr.drop:
+            keys = getattr(ctx, "_drop_keys", None)
+            if keys is not None:
+                keys.add(attr.key)
+            continue
+        if attr.hash_value:
+            keys = getattr(ctx, "_hash_keys", None)
+            if keys is not None:
+                keys.add(attr.key)
+        if attr.sensitive:
+            keys = getattr(ctx, "_sensitive_keys", None)
+            if keys is not None:
+                keys.add(attr.key)
+
+
 def _attrs_to_fields(attrs: tuple[Attr, ...], fields: dict[str, Any]) -> dict[str, Any]:
     """Convert positional ``Attr`` objects into keyword fields.
 
@@ -224,14 +270,17 @@ def _attrs_to_fields(attrs: tuple[Attr, ...], fields: dict[str, Any]) -> dict[st
 
 
 def with_process(ctx: Any, name: str, *attrs: Attr, **fields: Any) -> ProcessHandle:
+    _register_timing_attr_policies(ctx, attrs)
     return ctx.start_process(name, **_attrs_to_fields(attrs, fields))
 
 
 def with_group(ctx: Any, name: str, *attrs: Attr, **fields: Any) -> GroupHandle:
+    _register_timing_attr_policies(ctx, attrs)
     return ctx.start_group(name, **_attrs_to_fields(attrs, fields))
 
 
 def with_timer(ctx: Any, name: str, *attrs: Attr, **fields: Any) -> TimerHandle:
+    _register_timing_attr_policies(ctx, attrs)
     return ctx.start_timer(name, **_attrs_to_fields(attrs, fields))
 
 

@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Preserve positional `Attr` policies through timing helper and facade APIs;
+  apply path-aware sensitive/hash/drop policies while preserving timing fields.
+
 ### Security
 
 - `email_hash` and `ip_hash` now pseudonymize with keyed HMAC-SHA256 instead of
