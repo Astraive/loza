@@ -400,7 +400,7 @@ The same event lifecycle is available in every LOZA SDK:
 
 | Operation | Rust | Go | Python | JavaScript |
 |---|---|---|---|---|
-| Configure | `loza::configure(config)` | `loza.Configure(config)` | `loza.configure(config)` | `loza.configure(config)` |
+| Configure | `loza::configure(config)` / `loza::Configure(config)?` | `loza.Configure(config)` | `loza.configure(config)` | `loza.configure(config)` |
 | Start event | `loza::start_event(params)` | `loza.StartEvent(ctx, params)` | `loza.start_event(params)` | `loza.startEvent(params)` |
 | Enrich | `loza::enrich(&mut ctx, attrs)` | `loza.Enrich(ctx, attrs...)` | `loza.enrich(ctx, attrs...)` | `loza.enrich(ctx, attrs...)` |
 | Checkpoint | `loza::checkpoint(&mut ctx, name)` | `loza.Checkpoint(ctx, name)` | `loza.checkpoint(ctx, name)` | `loza.checkpoint(ctx, name)` |

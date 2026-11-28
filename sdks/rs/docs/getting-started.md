@@ -170,7 +170,7 @@ The same event lifecycle is available in every LOZA SDK:
 
 | Operation | Rust | Go | Python | JavaScript |
 |---|---|---|---|---|
-| Configure | `loza::configure(config)` | `loza.Configure(config)` | `loza.configure(config)` | `configure(config)` |
+| Configure | `loza::configure(config)` / `loza::Configure(config)?` | `loza.Configure(config)` | `loza.configure(config)` | `configure(config)` |
 | Start event | `loza::start_event(None, params)` | `loza.StartEvent(ctx, params)` | `loza.start_event(event=...)` | `startEvent(params)` |
 | Enrich | `loza::enrich(&mut ctx, attrs)` | `loza.Enrich(ctx, attrs...)` | `loza.enrich(ctx, attrs...)` | `enrich(ctx, attrs...)` |
 | Finish | `loza::finish(&mut ctx)` | `loza.Finish(ctx, outcome)` | `loza.finish(ctx, outcome)` | `finish(ctx, outcome)` |

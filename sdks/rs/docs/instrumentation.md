@@ -1404,7 +1404,7 @@ async fn cleanup_expired_sessions(logger: &Logger) -> Result<(), CronError> {
 | `Production(service)`   | `production(service)`   | `Logger`                |
 | `Test(service)`         | `test(service)`         | `Logger`                |
 | `Default(service)`      | --                      | `Logger`                |
-| `Configure(config)`     | `configure(config)`     | `Result<Logger, Error>` (global) |
+| `Configure(config)`     | `configure(config)`     | `Result<Logger, LozaError>` (installs global logger) |
 | `default()`             | `default()`             | `Logger` (global)       |
 
 ### Global Functions (use global logger)

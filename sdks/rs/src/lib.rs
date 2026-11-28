@@ -88,8 +88,9 @@ pub fn NewClient(config: Config) -> Logger {
     Logger::new(config)
 }
 
-pub fn Configure(config: Config) -> Logger {
-    Logger::new(config)
+/// Install a logger as the global default and return it.
+pub fn Configure(config: Config) -> Result<Logger, LozaError> {
+    configure(config)
 }
 
 /// Install a logger as the global default and return it.

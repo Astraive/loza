@@ -6,6 +6,9 @@ All notable changes to the LOZA Rust SDK are documented in this file.
 
 ### Fixed
 
+- PascalCase `Configure(config)` now installs and returns the global logger like
+  `configure(config)`, with both APIs returning `Result<Logger, LozaError>`.
+
 - Event mutators no longer discard the `ensure_mutable` lifecycle check:
   `set_attr`, `append_attr`, `merge_group`, `delete_attr`,
   `checkpoint_with_attrs`, `start_process`, `start_timer`, `start_group`, and
