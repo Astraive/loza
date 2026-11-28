@@ -124,3 +124,59 @@ func TestCheckpointEmitImmediatelyProducesStandaloneEvent(t *testing.T) {
 		t.Fatalf("unexpected checkpoint event name: %#v", checkpointPayload["event"])
 	}
 }
+
+func TestDeleteDottedKeyRemovesLiteralAndGroupAttrsFromWire(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		attr Attr
+	}{
+		{name: "literal", attr: String("cache.status", "warm")},
+		{name: "group", attr: Group("cache", String("status", "warm"))},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			logger, store, err := TestLogger()
+			if err != nil {
+				t.Fatalf("create test logger: %v", err)
+			}
+			ctx := logger.StartEvent(context.Background(), Params{
+				Event: "delete.dotted",
+				Kind:  "event",
+			})
+			if err := logger.Enrich(ctx, tc.attr); err != nil {
+				t.Fatalf("enrich: %v", err)
+			}
+			if err := logger.Delete(ctx, "cache.status"); err != nil {
+				t.Fatalf("delete: %v", err)
+			}
+			if value, ok := logger.Get(ctx, "cache.status"); ok {
+				t.Fatalf("Get after Delete = (%v, true), want absent", value)
+			}
+			if err := logger.Finish(ctx, "success"); err != nil {
+				t.Fatalf("finish: %v", err)
+			}
+			if err := logger.Emit(ctx); err != nil {
+				t.Fatalf("emit: %v", err)
+			}
+			if err := logger.Flush(context.Background()); err != nil {
+				t.Fatalf("flush: %v", err)
+			}
+			if store.Len() != 1 {
+				t.Fatalf("emitted events = %d, want 1", store.Len())
+			}
+
+			var payload map[string]any
+			if err := json.Unmarshal(bytes.TrimSpace(store.Raw()[0]), &payload); err != nil {
+				t.Fatalf("unmarshal event: %v", err)
+			}
+			attrs, _ := payload["attrs"].(map[string]any)
+			if _, exists := attrs["cache.status"]; exists {
+				t.Fatalf("literal cache.status remains in attrs: %#v", attrs)
+			}
+			if cache, ok := attrs["cache"].(map[string]any); ok {
+				if _, exists := cache["status"]; exists {
+					t.Fatalf("nested cache.status remains in attrs: %#v", cache)
+				}
+			}
+		})
+	}
+}

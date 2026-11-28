@@ -11,6 +11,11 @@ All notable changes to the LOZA Go SDK are documented in this file.
   update from five return values to six and handle the new error (mismatched inputs
   return `core.ErrDotKeyLengthMismatch` instead of panicking with an index-out-of-range).
 
+### Fixed
+
+- `Event.Delete` now removes direct dotted-key attributes and matching group
+  children.
+
 ## [0.3.4] - 2026-08-26
 
 ### Changed
