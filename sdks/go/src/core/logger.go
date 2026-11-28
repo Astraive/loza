@@ -492,7 +492,8 @@ func (l *Logger) FinishGroupError(h *GroupHandle, err error, statusCode int, att
 }
 
 // Emit encodes and delivers the canonical event in ctx to all sinks.
-// Idempotent — safe to call via defer and also explicitly.
+// Repeated calls after successful delivery are idempotent and return nil; safe to
+// call explicitly as well as via defer.
 func (l *Logger) Emit(ctx context.Context) error {
 	ev := loadEvent(ctx)
 	if ev == nil {

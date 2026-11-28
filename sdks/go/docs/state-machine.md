@@ -107,11 +107,12 @@ const (
 
 ## Invalid State Transitions
 
-The following transitions are **rejected** with appropriate errors:
+The following transitions are rejected with appropriate errors. The public
+`Logger.Emit` API returns nil for repeated calls after successful emission.
 
 - Cannot modify an `emitted` event (returns `EventClosedError`)
 - Cannot finish an `emitted` event (returns `EventClosedError`)
-- Cannot emit an `emitted` event twice (returns `DuplicateEmitError`)
+- Internal `beginEmit()` rejects an already-emitted event (returns `DuplicateEmitError`)
 - Cannot finish an event twice (returns `EventAlreadyFinishedError`)
 - Cannot modify a `validation_failed` event (returns `EventClosedError`)
 - Cannot modify a `delivery_failed` event (returns `EventClosedError`)
@@ -232,7 +233,9 @@ type EventClosedError struct {
 
 ### DuplicateEmitError
 
-Returned when attempting to emit an event that has already been emitted.
+`DuplicateEmitError` is returned by the internal `beginEmit()` transition when it
+rejects an already-emitted event. Public `Logger.Emit`, `EmitEvent`, and
+`EmitEventWithContext` calls are idempotent and return nil for emitted events.
 
 ```go
 type DuplicateEmitError struct {
@@ -338,14 +341,10 @@ if err != nil {
     }
 }
 
-// Try to emit again - will fail
+// Calling Emit again after successful emission is idempotent and returns nil.
 err = loza.Emit(ctx)
 if err != nil {
-    var duplicate *loza.DuplicateEmitError
-    if errors.As(err, &duplicate) {
-        // Event already emitted
-        fmt.Printf("Event %s already emitted\n", duplicate.EventID)
-    }
+    fmt.Printf("Unexpected repeated Emit error: %v\n", err)
 }
 ```
 
@@ -409,7 +408,8 @@ Some methods automatically transition states:
 2. **Check errors**: Always check errors from state-modifying methods
 3. **Use GetState() for debugging**: Query event state when troubleshooting
 4. **Handle terminal states**: Be prepared for `EventClosedError` in long-running contexts
-5. **Don't retry emitted events**: Check for `DuplicateEmitError` to avoid duplicate emissions
+5. **Rely on idempotent public emits**: Calls after successful emission return nil, so
+   an explicit call and a deferred call can coexist.
 
 ## Future Enhancements
 
