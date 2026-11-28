@@ -159,6 +159,22 @@ func TestResponseCompressionNegotiatesAcceptEncoding(t *testing.T) {
 			wantStatus:     http.StatusOK,
 		},
 		{
+			name:           "malformed_quality_rejected",
+			acceptEncoding: []string{"gzip;q=bogus", "identity;q=0"},
+			wantStatus:     http.StatusNotAcceptable,
+		},
+		{
+			name:           "duplicate_quality_parameter_rejected",
+			acceptEncoding: []string{"gzip;q=0.5;q=1", "identity;q=0"},
+			wantStatus:     http.StatusNotAcceptable,
+		},
+		{
+			name:           "duplicate_coding_uses_highest_quality",
+			acceptEncoding: []string{"gzip;q=0.2, gzip;q=0.8, identity;q=0.5"},
+			wantEncoding:   "gzip",
+			wantStatus:     http.StatusOK,
+		},
+		{
 			name:           "identity_rejected",
 			acceptEncoding: []string{"gzip;q=0", "identity;q=0"},
 			wantStatus:     http.StatusNotAcceptable,
