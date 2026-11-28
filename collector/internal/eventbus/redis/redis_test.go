@@ -472,21 +472,51 @@ func TestRedisClaimRenewalFailureCancelsHandlerAndLeavesMessagePending(t *testin
 
 	handlerStarted := make(chan struct{}, 1)
 	handlerCanceled := make(chan struct{}, 1)
-	handler := func(handlerCtx context.Context, _ eventbus.Message) error {
-		handlerStarted <- struct{}{}
-		<-handlerCtx.Done()
-		handlerCanceled <- struct{}{}
-		return handlerCtx.Err()
+	secondHandlerStarted := make(chan struct{}, 1)
+	releaseFirst := make(chan struct{}, 1)
+	releaseSecond := make(chan struct{}, 1)
+	defer func() {
+		select {
+		case releaseFirst <- struct{}{}:
+		default:
+		}
+	}()
+	defer func() {
+		select {
+		case releaseSecond <- struct{}{}:
+		default:
+		}
+	}()
+	var firstCalls atomic.Int32
+	const (
+		firstID  = "redis-claim-renewal-failure-1"
+		secondID = "redis-claim-renewal-failure-2"
+	)
+	handler := func(handlerCtx context.Context, msg eventbus.Message) error {
+		switch msg.Envelope().ID {
+		case firstID:
+			if firstCalls.Add(1) == 1 {
+				handlerStarted <- struct{}{}
+				<-handlerCtx.Done()
+				handlerCanceled <- struct{}{}
+				<-releaseFirst
+				return handlerCtx.Err()
+			}
+		case secondID:
+			secondHandlerStarted <- struct{}{}
+			<-releaseSecond
+		}
+		return nil
 	}
 	if err := redisBus.Subscribe(ctx, stream, group, handler); err != nil {
 		t.Fatalf("subscribe: %v", err)
 	}
 	env := eventbus.Envelope{
-		ID: "redis-claim-renewal-failure-1", Event: "test.claim-renewal-failure",
+		ID: firstID, Event: "test.claim-renewal-failure",
 		Timestamp: time.Now(), Body: []byte(`{"x":1}`),
 	}
 	if err := redisBus.Publish(ctx, stream, []eventbus.Envelope{env}); err != nil {
-		t.Fatalf("publish: %v", err)
+		t.Fatalf("publish first message: %v", err)
 	}
 	select {
 	case <-handlerStarted:
@@ -501,12 +531,26 @@ func TestRedisClaimRenewalFailureCancelsHandlerAndLeavesMessagePending(t *testin
 		t.Fatal("handler continued after its Redis claim could not be renewed")
 	}
 	server.SetError("")
+	second := eventbus.Envelope{
+		ID: secondID, Event: "test.claim-renewal-failure",
+		Timestamp: time.Now(), Body: []byte(`{"x":2}`),
+	}
+	if err := redisBus.Publish(ctx, stream, []eventbus.Envelope{second}); err != nil {
+		t.Fatalf("publish second message: %v", err)
+	}
+	releaseFirst <- struct{}{}
+	select {
+	case <-secondHandlerStarted:
+	case <-time.After(redisNackTimeout + 2*time.Second):
+		t.Fatal("second handler did not start")
+	}
 
 	pending, err := redisBus.client.XPending(ctx, stream, group).Result()
 	if err != nil {
-		t.Fatalf("inspect pending entry: %v", err)
+		t.Fatalf("inspect pending entries: %v", err)
 	}
-	if pending.Count != 1 {
-		t.Fatalf("pending count = %d, want 1 after claim renewal failure", pending.Count)
+	if pending.Count != 2 {
+		t.Fatalf("pending count = %d, want 2 (abandoned message and active second message)", pending.Count)
 	}
+	releaseSecond <- struct{}{}
 }
