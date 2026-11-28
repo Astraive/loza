@@ -6,7 +6,7 @@ cfg := loza.Production().
 	WithSchema(loza.CustomSchema(func(v loza.EventView) map[string]any {
 		return map[string]any{
 			"ts":         v.Timestamp(),
-			"event_name": v.Event(),
+			"event_name": v.Name(),
 			"service":    v.Service(),
 			"status":     v.StatusCode(),
 			"outcome":    v.Outcome(),
