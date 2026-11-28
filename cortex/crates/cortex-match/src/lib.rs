@@ -31,7 +31,7 @@ impl Matcher {
     }
 
     pub fn with_k(mut self, k: usize) -> Self {
-        self.topk = TopK::new(k);
+        self.topk = self.topk.with_k(k);
         self
     }
 
@@ -148,6 +148,47 @@ mod tests {
 
         let matches = matcher.top_k(&query, &candidates);
         assert_eq!(matches.len(), 10);
+    }
+
+    #[test]
+    fn with_k_preserves_configured_threshold_and_metric() {
+        let signature = |name: &str, feature_vector: Vec<f64>| {
+            let mut signature = Signature::new();
+            signature.shape = name.to_string();
+            signature.symptom_classes = vec![SymptomClass::Latency];
+            signature.feature_vector = feature_vector;
+            signature
+        };
+        let query = signature("query", vec![1.0, 0.0]);
+        let weak = signature("weak", vec![0.0, 1.0]);
+        let exact = signature("exact", vec![1.0, 0.0]);
+        let candidates = vec![weak.clone(), exact];
+
+        let threshold_before_k = Matcher::new()
+            .with_threshold(0.8)
+            .with_k(2)
+            .top_k(&query, &candidates);
+        let threshold_after_k = Matcher::new()
+            .with_k(2)
+            .with_threshold(0.8)
+            .top_k(&query, &candidates);
+
+        assert_eq!(threshold_before_k.len(), 1);
+        assert_eq!(threshold_after_k.len(), 1);
+        assert_eq!(threshold_before_k[0].signature_id, "exact");
+        assert_eq!(threshold_after_k[0].signature_id, "exact");
+
+        let cosine_before_k = Matcher::new()
+            .with_metric("cosine")
+            .with_k(2)
+            .score(&query, &weak);
+        let cosine_after_k = Matcher::new()
+            .with_k(2)
+            .with_metric("cosine")
+            .score(&query, &weak);
+
+        assert!(cosine_before_k.abs() < 1e-6);
+        assert!((cosine_after_k - cosine_before_k).abs() < 1e-6);
     }
 
     #[test]

@@ -20,6 +20,8 @@
   loading fails at startup with an error naming the offending variable.
 - Graph adjacency caches now refresh after successful graph writes made through
   the shared graph store, including correlation analysis and event processing.
+- Rust matcher `with_k` now preserves the configured similarity threshold and
+  metric instead of resetting them to defaults.
 
 ### Changed
 - Migration note: `config.Default()` now returns `(*Config, error)` so invalid
