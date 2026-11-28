@@ -5,6 +5,10 @@ All notable changes to the LOZA Go SDK are documented in this file.
 ## [Unreleased]
 
 ### Changed
+### Fixed
+
+- `Event.Set` now replaces all duplicate ordinary attrs for a key, keeping
+  direct reads and serialized event values consistent.
 
 - **Migration note:** `core.ExpandDotKeys` now returns an additional trailing `error`
   and validates that `keys`, `kinds` and `values` have equal length. Callers must

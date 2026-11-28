@@ -432,17 +432,30 @@ func (e *Event) Set(attrs ...Attr) error {
 		if e.applyCanonical(a) {
 			continue
 		}
-		replaced := false
+		first := -1
 		for i := range e.Attrs {
 			if e.Attrs[i].Key == a.Key {
-				e.Attrs[i] = a
-				replaced = true
+				first = i
 				break
 			}
 		}
-		if !replaced {
+		if first == -1 {
 			e.Attrs = append(e.Attrs, a)
+			continue
 		}
+		e.Attrs[first] = a
+		write := first + 1
+		for read := first + 1; read < len(e.Attrs); read++ {
+			if e.Attrs[read].Key == a.Key {
+				continue
+			}
+			if write != read {
+				e.Attrs[write] = e.Attrs[read]
+			}
+			write++
+		}
+		clear(e.Attrs[write:])
+		e.Attrs = e.Attrs[:write]
 	}
 	return nil
 }
