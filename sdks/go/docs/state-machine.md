@@ -341,7 +341,7 @@ if err != nil {
     }
 }
 
-// Repeated calls to the public logger API are idempotent and return nil.
+// Calling Emit again after successful emission is idempotent and returns nil.
 err = loza.Emit(ctx)
 if err != nil {
     fmt.Printf("Unexpected repeated Emit error: %v\n", err)
