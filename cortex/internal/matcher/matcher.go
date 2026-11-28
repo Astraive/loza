@@ -123,6 +123,7 @@ type SignatureMatcher struct {
 	engine         Matcher
 	cacheTTL       time.Duration
 	cacheSize      int
+	minSimilarity  float64
 	cacheMu        sync.RWMutex
 	cacheLoadMu    sync.Mutex
 	cacheLoadedAt  time.Time
@@ -146,11 +147,15 @@ func NewSignatureMatcherWithEngine(store storage.SignatureStore, engine Matcher,
 	if cfg.CacheTTL == 0 {
 		cfg.CacheTTL = 30 * time.Second
 	}
+	if cfg.MinSimilarityThreshold == 0 {
+		cfg.MinSimilarityThreshold = 0.5
+	}
 	return &SignatureMatcher{
 		signatureStore: store,
 		engine:         engine,
 		cacheTTL:       cfg.CacheTTL,
 		cacheSize:      cfg.CacheSize,
+		minSimilarity:  cfg.MinSimilarityThreshold,
 	}
 }
 
@@ -447,7 +452,7 @@ func (m *SignatureMatcher) FindSimilar(ctx context.Context, signature *models.In
 		if fallbackErr != nil {
 			return nil, fmt.Errorf("failed to find similar: %w", fallbackErr)
 		}
-		return similar, nil
+		return filterSimilarByThreshold(similar, m.minSimilarity), nil
 	}
 
 	filtered := make([]*models.IncidentSignature, 0, len(candidates))
@@ -467,7 +472,7 @@ func (m *SignatureMatcher) FindSimilar(ctx context.Context, signature *models.In
 
 	similar := make([]*models.SimilarIncident, 0, len(matches))
 	for _, match := range matches {
-		if match.Signature == nil || match.Similarity < 0.5 {
+		if match.Signature == nil || match.Similarity < m.minSimilarity {
 			continue
 		}
 		resolution := ""
@@ -485,6 +490,16 @@ func (m *SignatureMatcher) FindSimilar(ctx context.Context, signature *models.In
 	}
 
 	return similar, nil
+}
+
+func filterSimilarByThreshold(similar []*models.SimilarIncident, threshold float64) []*models.SimilarIncident {
+	filtered := make([]*models.SimilarIncident, 0, len(similar))
+	for _, match := range similar {
+		if match != nil && match.Similarity >= threshold {
+			filtered = append(filtered, match)
+		}
+	}
+	return filtered
 }
 
 func (m *SignatureMatcher) RegisterSignature(ctx context.Context, signature *models.IncidentSignature) error {

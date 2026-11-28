@@ -16,6 +16,7 @@ type fakeSignatureStore struct {
 	saved     []*models.IncidentSignature
 	similar   map[string][]*models.SimilarIncident
 	listCalls int
+	listErr   error
 }
 
 func (f *fakeSignatureStore) Save(_ context.Context, sig *models.IncidentSignature) error {
@@ -33,6 +34,9 @@ func (f *fakeSignatureStore) Get(_ context.Context, id string) (*models.Incident
 
 func (f *fakeSignatureStore) List(_ context.Context, limit int) ([]*models.IncidentSignature, error) {
 	f.listCalls++
+	if f.listErr != nil {
+		return nil, f.listErr
+	}
 	var out []*models.IncidentSignature
 	for _, sig := range f.sigs {
 		out = append(out, sig)
@@ -353,6 +357,120 @@ func TestNewConfiguredSignatureMatcher(t *testing.T) {
 
 	if _, err := NewConfiguredSignatureMatcher(store, config.MatcherConfig{Mode: "rust"}); !errors.Is(err, ErrRustNotAvailable) {
 		t.Fatalf("expected rust matcher to be optional and unavailable, got %v", err)
+	}
+}
+
+func TestFindSimilarUsesConfiguredThreshold(t *testing.T) {
+	query := &models.IncidentSignature{
+		SignatureID:   "query",
+		Symptoms:      []models.SymptomType{models.SymptomTypeTimeout},
+		FeatureVector: []float64{1, 0},
+	}
+	high := &models.IncidentSignature{
+		SignatureID:   "high",
+		Symptoms:      []models.SymptomType{models.SymptomTypeTimeout},
+		FeatureVector: []float64{1, 0},
+	}
+	low := &models.IncidentSignature{SignatureID: "low"}
+
+	for _, tc := range []struct {
+		name       string
+		threshold  float64
+		wantIDs    []string
+		wantScores []float64
+	}{
+		{
+			name:       "zero uses default 0.5 threshold",
+			threshold:  0,
+			wantIDs:    []string{"high"},
+			wantScores: []float64{0.9},
+		},
+		{
+			name:       "configured threshold below default",
+			threshold:  0.05,
+			wantIDs:    []string{"high", "low"},
+			wantScores: []float64{0.9, 0.1},
+		},
+		{
+			name:       "threshold 0.5",
+			threshold:  0.5,
+			wantIDs:    []string{"high"},
+			wantScores: []float64{0.9},
+		},
+		{
+			name:      "threshold 0.95",
+			threshold: 0.95,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := &fakeSignatureStore{sigs: map[string]*models.IncidentSignature{
+				query.SignatureID: query,
+				high.SignatureID:  high,
+				low.SignatureID:   low,
+			}}
+			svc := NewSignatureMatcherWithEngine(store, NewGoMatcher(1), config.MatcherConfig{
+				CacheSize:              10,
+				MinSimilarityThreshold: tc.threshold,
+			})
+			matches, err := svc.FindSimilar(context.Background(), query, 5)
+			if err != nil {
+				t.Fatalf("find similar: %v", err)
+			}
+			if len(matches) != len(tc.wantIDs) {
+				t.Fatalf("expected %d matches, got %d: %v", len(tc.wantIDs), len(matches), matches)
+			}
+			for i, wantID := range tc.wantIDs {
+				if matches[i].IncidentID != wantID {
+					t.Errorf("match %d ID = %q, want %q", i, matches[i].IncidentID, wantID)
+				}
+				if matches[i].Similarity != tc.wantScores[i] {
+					t.Errorf("match %q similarity = %v, want %v", wantID, matches[i].Similarity, tc.wantScores[i])
+				}
+			}
+		})
+	}
+}
+
+func TestFindSimilarFallbackUsesConfiguredThreshold(t *testing.T) {
+	query := &models.IncidentSignature{SignatureID: "query"}
+	store := &fakeSignatureStore{
+		sigs:    map[string]*models.IncidentSignature{},
+		listErr: errors.New("list failed"),
+		similar: map[string][]*models.SimilarIncident{
+			"query": {
+				{IncidentID: "high", Similarity: 0.9},
+				{IncidentID: "medium", Similarity: 0.8},
+				{IncidentID: "low", Similarity: 0.4},
+			},
+		},
+	}
+	for _, tc := range []struct {
+		name      string
+		threshold float64
+		wantIDs   []string
+	}{
+		{name: "default threshold", threshold: 0, wantIDs: []string{"high", "medium"}},
+		{name: "high threshold retains qualifying result", threshold: 0.85, wantIDs: []string{"high"}},
+		{name: "below storage default admits low score", threshold: 0.3, wantIDs: []string{"high", "medium", "low"}},
+		{name: "above all results", threshold: 0.95},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			svc := NewSignatureMatcherWithEngine(store, NewGoMatcher(1), config.MatcherConfig{
+				MinSimilarityThreshold: tc.threshold,
+			})
+			matches, err := svc.FindSimilar(context.Background(), query, 5)
+			if err != nil {
+				t.Fatalf("find similar: %v", err)
+			}
+			if len(matches) != len(tc.wantIDs) {
+				t.Fatalf("expected %d matches, got %d: %v", len(tc.wantIDs), len(matches), matches)
+			}
+			for i, wantID := range tc.wantIDs {
+				if matches[i].IncidentID != wantID {
+					t.Errorf("match %d ID = %q, want %q", i, matches[i].IncidentID, wantID)
+				}
+			}
+		})
 	}
 }
 

@@ -1169,19 +1169,17 @@ func (s *DuckDBSignatureStore) FindSimilar(ctx context.Context, sig *models.Inci
 		}
 
 		similarity := computeSimilarity(sig, &candidate)
-		if similarity >= 0.5 {
-			resolution := ""
-			if len(candidate.Remediation) > 0 {
-				resolution = candidate.Remediation[0]
-			}
-			results = append(results, &models.SimilarIncident{
-				IncidentID:     candidate.SignatureID,
-				Similarity:     similarity,
-				Shape:          candidate.Shape,
-				Resolution:     resolution,
-				ResolutionTime: candidate.AvgResolutionTime,
-			})
+		resolution := ""
+		if len(candidate.Remediation) > 0 {
+			resolution = candidate.Remediation[0]
 		}
+		results = append(results, &models.SimilarIncident{
+			IncidentID:     candidate.SignatureID,
+			Similarity:     similarity,
+			Shape:          candidate.Shape,
+			Resolution:     resolution,
+			ResolutionTime: candidate.AvgResolutionTime,
+		})
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -1277,8 +1275,7 @@ func (s *DuckDBSignatureStore) findSimilarSQL(ctx context.Context, sig *models.I
 			END AS similarity
 		FROM incident_signatures
 		WHERE signature_id != $1
-		  AND decay_factor >= 0.1
-		HAVING similarity >= 0.3
+		AND decay_factor >= 0.1
 		ORDER BY similarity DESC
 		LIMIT $3
 	`
