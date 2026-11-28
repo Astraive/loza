@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any
 
 from ... import Error, Info, Warn
@@ -9,7 +10,12 @@ class LoguruSink:
     def __call__(self, message: Any) -> None:
         record = getattr(message, "record", {})
         text = str(getattr(message, "message", message)).strip()
-        level = str(record.get("level", {}).get("name", "INFO")).lower() if isinstance(record, dict) else "info"
+        raw_level = record.get("level", "INFO") if isinstance(record, Mapping) else "INFO"
+        if isinstance(raw_level, Mapping):
+            raw_level = raw_level.get("name", "INFO")
+        else:
+            raw_level = getattr(raw_level, "name", raw_level)
+        level = str(raw_level).lower()
         if level in {"error", "critical"}:
             Error(text)
         elif level == "warning":

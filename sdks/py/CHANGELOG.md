@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Loguru integration now reads level names from Loguru's attribute-based level
+  objects, as well as mapping- and string-based levels.
+
+
 ### Security
 
 - `email_hash` and `ip_hash` now pseudonymize with keyed HMAC-SHA256 instead of
