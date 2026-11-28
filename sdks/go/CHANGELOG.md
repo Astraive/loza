@@ -53,9 +53,9 @@ All notable changes to the LOZA Go SDK are documented in this file.
 
 - Lightweight SDK boundary:
   - core (`github.com/astraive/loza/sdks/go`)
-  - middleware (`github.com/astraive/loza/sdks/go/middleware`)
-  - integrations (`github.com/astraive/loza/sdks/go/integrations`)
-  - collector transport (`github.com/astraive/loza/sdks/go/sinks/httpbatch`)
+  - middleware (`github.com/astraive/loza/sdks/go/src/middleware`)
+  - integrations (`github.com/astraive/loza/sdks/go/src/integrations`)
+  - collector transport (`github.com/astraive/loza/sdks/go/src/sinks/httpbatch`)
   - heavy production sinks are collector-owned
 - New `testkit` package for test capture/assert helpers.
 - Dependency boundary conformance test for root module.
@@ -70,5 +70,5 @@ All notable changes to the LOZA Go SDK are documented in this file.
 
 ### Breaking
 
-- Removed `loza.Capture` and `loza.AssertEvent`; use `github.com/astraive/loza/sdks/go/testkit`.
-- Removed root middleware wrapper; use `github.com/astraive/loza/sdks/go/middleware/nethttp`.
+- Removed `loza.Capture` and `loza.AssertEvent`; use `github.com/astraive/loza/sdks/go/src/testkit`.
+- Removed root middleware wrapper; use `github.com/astraive/loza/sdks/go/src/middleware/nethttp`.

@@ -67,5 +67,5 @@ All notable changes to this project are documented in this file.
 
 ### Breaking
 
-- Removed `loza.Capture` and `loza.AssertEvent`; use `github.com/astraive/loza/sdks/go/testkit`.
-- Removed root middleware wrapper; use `github.com/astraive/loza/sdks/go/middleware/nethttp`.
+- Removed `loza.Capture` and `loza.AssertEvent`; use `github.com/astraive/loza/sdks/go/src/testkit`.
+- Removed root middleware wrapper; use `github.com/astraive/loza/sdks/go/src/middleware/nethttp`.
