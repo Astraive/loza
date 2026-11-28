@@ -1,4 +1,6 @@
 import http.client
+import shlex
+import shutil
 import sys
 import tempfile
 import threading
@@ -104,6 +106,65 @@ class TestSchemaServiceSchemas(unittest.TestCase):
         # The containment check must use the same corrected base as the target.
         status, _ = self._get("/schemas/../loza-spec.yaml")
         self.assertEqual(status, 403)
+
+
+class TestSchemaServiceImageLayout(unittest.TestCase):
+    def test_docker_copy_layout_serves_schema_and_contract(self):
+        dockerfile = repo_root / "spec" / "docker" / "schema-service" / "Dockerfile"
+        copy_instructions = []
+        for line in dockerfile.read_text(encoding="utf-8").splitlines():
+            if not line.startswith("COPY "):
+                continue
+            parts = shlex.split(line)
+            self.assertEqual(len(parts), 3, f"unsupported COPY instruction: {line}")
+            copy_instructions.append((parts[1], parts[2]))
+        self.assertTrue(copy_instructions)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            image_root = Path(tmp) / "app" / "spec"
+            image_root.mkdir(parents=True)
+            for source, destination in copy_instructions:
+                source_path = repo_root / source
+                destination_path = image_root / destination
+                if source_path.is_dir():
+                    shutil.copytree(source_path, destination_path, dirs_exist_ok=True)
+                    continue
+                if destination.endswith("/") or destination in (".", "./") or destination_path.is_dir():
+                    destination_path /= source_path.name
+                destination_path.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(source_path, destination_path)
+
+            with patch.object(SchemaServiceHandler, "_spec_root", return_value=image_root):
+                server = ThreadingHTTPServer(("127.0.0.1", 0), SchemaServiceHandler)
+                thread = threading.Thread(target=server.serve_forever, daemon=True)
+                thread.start()
+                try:
+                    def get(path):
+                        conn = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=5)
+                        try:
+                            conn.request("GET", path)
+                            response = conn.getresponse()
+                            return response.status, response.read()
+                        finally:
+                            conn.close()
+
+                    schema_status, schema_body = get("/schemas/event.schema.json")
+                    contract_status, contract_body = get("/contract")
+                finally:
+                    server.shutdown()
+                    server.server_close()
+                    thread.join(timeout=5)
+
+        self.assertEqual(schema_status, 200)
+        self.assertEqual(
+            schema_body,
+            (spec_dir / "schemas" / "json" / "event.schema.json").read_bytes(),
+        )
+        self.assertEqual(contract_status, 200)
+        self.assertEqual(
+            contract_body,
+            (spec_dir / "generated" / "contract" / "loza-contract.json").read_bytes(),
+        )
 
 
 if __name__ == "__main__":
