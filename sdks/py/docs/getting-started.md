@@ -59,8 +59,9 @@ loza.finish(ctx, "success",
 )
 
 # 5. Emit the event to the configured sink.
-event_id = loza.emit(ctx)
-print(f"Emitted event: {event_id}")
+payload = loza.emit(ctx)
+print(f"Emitted event payload: {payload}")
+print(f"Event ID: {ctx.event_id}")
 
 # 6. Flush buffered events and shut down.
 loza.flush()
@@ -77,7 +78,7 @@ Every call in this example goes through the module-level `loza.*` facade, which 
 | Start event | `loza.start_event(Params(...))` | Creates a new `EventContext` with a UUIDv7 event ID and initial metadata. |
 | Enrich | `loza.enrich(ctx, *attrs)` | Adds typed attributes to the event. Attributes are merged into the event map. |
 | Finish | `loza.finish(ctx, outcome, *attrs)` | Marks the event as finished, records the outcome, and calculates duration. |
-| Emit | `loza.emit(ctx)` | Serializes the event and sends it to the configured sink. Returns the event ID. |
+| Emit | `loza.emit(ctx)` | Serializes the event and sends it to the configured sink. Returns encoded event JSON when synchronous sink delivery completes or an async pipeline enqueue succeeds; returns `""` for sampled events, oversized-event drops, offline buffering, or sink delivery failure. A sink failure may occur after another sink accepted the payload. The event ID is available as `ctx.event_id`. |
 | Flush | `loza.flush()` | Flushes any buffered events in async sinks. |
 | Shutdown | `loza.shutdown()` | Shuts down the logger, flushing remaining events. |
 

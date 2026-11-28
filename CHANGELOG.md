@@ -7,6 +7,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/0.2.0/).
 ## [Unreleased]
 
 ### Fixed
+- Python SDK: `emit(ctx)` returns encoded event JSON when synchronous sink
+  delivery succeeds or an async pipeline enqueue succeeds. It returns `""` for
+  sampled events, oversized-event drops, offline buffering, or sink delivery
+  failure; a sink failure may occur after another sink accepted the payload.
+  Retrieve the event ID from `ctx.event_id`.
 
 - Go SDK: `FinishGroupError` now records the supplied error status code on the
   group, so failed `Phase` calls emit a non-zero `status_code` like failed
