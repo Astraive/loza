@@ -251,31 +251,29 @@ loza schema fetch --output schema.json --version v2
 
 ## Emit Commands
 
-### loza emit
+### loza emit sample
 
-Send a single event to the collector.
-
-```bash
-loza emit
-```
+Create and send a sample event. Use `--print` to inspect it without sending.
 
 **Flags**
 
 | Flag | Description |
 |---|---|
-| `--service` | Source service name (required) |
-| `--type` | Event type (required) |
-| `--attr` | Attribute in key=value format (repeatable) |
-| `--file` | Read event from JSON file |
-| `--stdin` | Read event from stdin |
+| `--service` | Source service name (default: `loza-cli`) |
+| `--event` | Event name (default: `sample.event`) |
+| `--kind` | Event kind (default: `cli`) |
+| `--outcome` | Event outcome (default: `success`) |
+| `--level` | Event level (default: `info`) |
+| `--attrs` | Custom attributes as a JSON object |
+| `--print` | Print the envelope without sending it |
+| `--output` | Write the envelope to a file |
 
 **Example**
 
 ```bash
-loza emit --service payment-service --type http_request \
-  --attr status_code=500 --attr path=/api/charge --attr latency_ms=4500
-
-echo '{"service":"test","event_type":"custom"}' | loza emit --stdin
+loza emit sample --service payment-service --event payment.failed --kind http_request \
+  --outcome error --level error --print \
+  --attrs '{"status_code":500,"path":"/api/charge","latency_ms":4500}'
 ```
 
 ---
@@ -284,73 +282,66 @@ echo '{"service":"test","event_type":"custom"}' | loza emit --stdin
 
 ### loza query
 
-Execute a SQL query against the collector's DuckDB storage.
-
-```bash
-loza query "SQL_STATEMENT"
-```
+The `-q` value is LQL by default. Add `--raw-sql` to execute explicit SQL against
+the collector's DuckDB storage; `--engine` selects the SQL engine.
 
 **Flags**
 
 | Flag | Description |
 |---|---|
-| `--output` | Output format: `text`, `json`, `csv` (default: `text`) |
-| `--limit` | Max rows to return |
+| `-q` | LQL query or, with `--raw-sql`, explicit SQL (required) |
+| `--raw-sql` | Interpret `-q` as SQL instead of LQL |
+| `--engine` | SQL engine for `--raw-sql` (default: `duckdb`) |
+| `--format` | Output format: `table`, `json`, or `csv` |
+| `--limit` | Maximum rows for LQL queries (0 uses the collector default) |
+| `--param` | Typed LQL parameter in `key=value` form (repeatable) |
 
-**Example**
+**Examples**
 
 ```bash
-loza query "SELECT service, count(*) FROM events GROUP BY service ORDER BY count(*) DESC"
-loza query "SELECT * FROM events WHERE timestamp > now() - interval '1 hour'" --output json
+loza query -q "FROM events" --limit 10 --format json
+loza query -q "SELECT service, count(*) FROM events GROUP BY service ORDER BY count(*) DESC" \
+  --raw-sql --engine duckdb --format json
 ```
 
 ---
 
 ### loza tail
 
-Stream events in real time from the collector.
-
-```bash
-loza tail
-```
+Stream matching events in real time from the collector.
 
 **Flags**
 
 | Flag | Description |
 |---|---|
+| `--kind` | Filter by event kind |
 | `--service` | Filter by service name |
-| `--type` | Filter by event type |
-| `--filter` | Attribute filter in key=value format (repeatable) |
-| `--since` | Start time (e.g., `5m`, `1h`) |
+| `--level` | Filter by level |
 
 **Example**
 
 ```bash
-loza tail --service payment-service --since 5m
-loza tail --type http_request --filter status_code=500
+loza tail --service payment-service --kind http_request --level error
 ```
 
 ---
 
 ### loza watch
 
-Watch events and display real-time statistics.
-
-```bash
-loza watch
-```
+Watch matching events in real time.
 
 **Flags**
 
 | Flag | Description |
 |---|---|
-| `--interval` | Refresh interval (default: `1s`) |
-| `--service` | Filter by service |
+| `--kind` | Filter by event kind |
+| `--service` | Filter by service name |
+| `--level` | Filter by level |
 
 **Example**
 
 ```bash
-loza watch --interval 2s --service payment-service
+loza watch --service payment-service --kind http_request --level error
 ```
 
 ---

@@ -55,7 +55,11 @@ func TestEmitSamplePrintsEnvelope(t *testing.T) {
 	os.Stdout = w
 	defer func() { os.Stdout = old }()
 
-	err := EmitCommand(cfg, []string{"sample", "--service", "checkout", "--event", "payment.completed", "--print"})
+	err := EmitCommand(cfg, []string{
+		"sample", "--service", "payment-service", "--event", "payment.failed",
+		"--kind", "http_request", "--outcome", "error", "--level", "error",
+		"--print", "--attrs", `{"status_code":500,"path":"/api/charge","latency_ms":4500}`,
+	})
 	_ = w.Close()
 	if err != nil {
 		t.Fatalf("emit sample: %v", err)
@@ -63,8 +67,16 @@ func TestEmitSamplePrintsEnvelope(t *testing.T) {
 	buf := make([]byte, 8192)
 	n, _ := r.Read(buf)
 	out := string(buf[:n])
-	if !strings.Contains(out, `"event": "payment.completed"`) {
-		t.Fatalf("expected printed sample event, got %s", out)
+	for _, expected := range []string{
+		`"event": "payment.failed"`,
+		`"kind": "http_request"`,
+		`"status_code": 500`,
+		`"path": "/api/charge"`,
+		`"latency_ms": 4500`,
+	} {
+		if !strings.Contains(out, expected) {
+			t.Errorf("expected printed sample to contain %s, got %s", expected, out)
+		}
 	}
 }
 

@@ -46,7 +46,7 @@ The CLI authenticates with the collector using `Authorization: Bearer <key>`. Se
 ```bash
 # Production
 export LOZA_API_KEY=lz_sec_live_k_xxx_yyyy
-loza query "SELECT * FROM events LIMIT 10"
+loza query -q "SELECT * FROM events LIMIT 10" --raw-sql --engine duckdb
 
 # Local dev (no auth)
 export LOZA_COLLECTOR_URL=http://localhost:9308
@@ -76,26 +76,28 @@ Shows the collector's uptime, version, configured sinks, and current event count
 ### Query Events
 
 ```bash
-loza query "SELECT * FROM events WHERE service = 'payment-service' LIMIT 10"
+loza query -q "FROM events" --limit 10 --format json
 ```
 
-Executes a SQL query against the collector's DuckDB storage.
+Queries use LQL by default. Add `--raw-sql` to run SQL explicitly.
 
 ### Tail Events
 
 ```bash
-loza tail --service payment-service
+loza tail --service payment-service --kind http_request --level error
 ```
 
-Streams events in real time from the collector. Use `--kind`, `--service`, or `--level` to narrow by event kind, service name, or severity level.
+Streams matching events in real time. Use `--kind`, `--service`, and `--level` to narrow results.
 
 ### Emit a Test Event
 
 ```bash
-loza emit sample --kind http_request --outcome success --level info --attrs status_code=200,path=/api/test
+loza emit sample --service payment-service --event payment.failed \
+  --kind http_request --outcome error --level error --print \
+  --attrs '{"status_code":500,"path":"/api/charge","latency_ms":4500}'
 ```
 
-Sends a single test event to the collector for validation.
+Prints a sample envelope without sending it. Omit `--print` to send it to the collector.
 
 ## Command Categories
 
