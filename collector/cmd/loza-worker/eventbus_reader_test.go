@@ -259,7 +259,7 @@ func TestRedisWorkerAcknowledgmentWaitsForCommit(t *testing.T) {
 	}
 }
 
-func TestRedisWorkerCloseRequeuesUncommittedMessage(t *testing.T) {
+func TestRedisWorkerCloseLeavesUncommittedMessageRecoverable(t *testing.T) {
 	const (
 		stream = "loza.worker.shutdown"
 		group  = "loza-worker-shutdown-test"
@@ -328,10 +328,18 @@ func TestRedisWorkerCloseRequeuesUncommittedMessage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("pending after reader close: %v", err)
 	}
-	if pending.Count != 0 {
-		t.Fatalf("pending after reader close = %d, want 0 after requeue", pending.Count)
+	if pending.Count != 1 {
+		t.Fatalf("pending after reader close = %d, want 1 for recovery", pending.Count)
+	}
+	length, err := client.XLen(ctx, stream).Result()
+	if err != nil {
+		t.Fatalf("stream length after reader close: %v", err)
+	}
+	if length != 1 {
+		t.Fatalf("stream length after reader close = %d, want 1 without a retry copy", length)
 	}
 
+	mr.SetTime(time.Now().Add(time.Hour))
 	retryReader := newEventbusQueueReader(newBus(), stream, group)
 	defer func() {
 		if err := retryReader.Close(); err != nil {
@@ -340,16 +348,16 @@ func TestRedisWorkerCloseRequeuesUncommittedMessage(t *testing.T) {
 	}()
 	retried, err := retryReader.Poll(ctx, time.Second)
 	if err != nil {
-		t.Fatalf("poll retried event: %v", err)
+		t.Fatalf("poll recovered event: %v", err)
 	}
 	if len(retried) != 1 {
-		t.Fatalf("retried records = %d, want 1", len(retried))
+		t.Fatalf("recovered records = %d, want 1", len(retried))
 	}
 	if !bytes.Equal(retried[0].value, body) {
-		t.Fatalf("retried payload = %s, want %s", retried[0].value, body)
+		t.Fatalf("recovered payload = %s, want %s", retried[0].value, body)
 	}
 	if err := retried[0].commit(ctx); err != nil {
-		t.Fatalf("commit retried event: %v", err)
+		t.Fatalf("commit recovered event: %v", err)
 	}
 	pending, err = client.XPending(ctx, stream, group).Result()
 	if err != nil {

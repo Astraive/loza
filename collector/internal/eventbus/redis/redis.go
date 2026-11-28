@@ -14,6 +14,7 @@ import (
 
 	"github.com/astraive/loza/collector/internal/eventbus"
 	"github.com/redis/go-redis/v9"
+	"github.com/rs/zerolog/log"
 )
 
 func init() {
@@ -27,6 +28,14 @@ const maxRedisDeliveryAttempts = 3
 const redisNackTimeout = 2 * time.Second
 
 const redisReadBlock = time.Second
+
+// Pending entries are reclaimed only after this idle period to avoid stealing
+// messages from active consumers.
+const redisPendingClaimIdle = 30 * time.Second
+
+const redisPendingClaimInterval = 5 * time.Second
+
+const redisPendingClaimCount = 10
 
 var errNackWithoutCause = errors.New("eventbus/redis: message nacked without cause")
 
@@ -182,9 +191,16 @@ func isBusyGroupErr(err error) bool {
 }
 
 func (b *redisBus) consume(ctx context.Context, stream, group, consumer string, handler eventbus.Handler) {
+	var nextPendingClaim time.Time
 	for {
 		if ctx.Err() != nil {
 			return
+		}
+		if nextPendingClaim.IsZero() || !time.Now().Before(nextPendingClaim) {
+			if !b.claimPending(ctx, stream, group, consumer, handler) {
+				return
+			}
+			nextPendingClaim = time.Now().Add(redisPendingClaimInterval)
 		}
 
 		streams, err := b.client.XReadGroup(ctx, &redis.XReadGroupArgs{
@@ -194,7 +210,6 @@ func (b *redisBus) consume(ctx context.Context, stream, group, consumer string, 
 			Count:    10,
 			Block:    redisReadBlock,
 		}).Result()
-
 		if err != nil {
 			if ctx.Err() != nil {
 				return
@@ -208,40 +223,118 @@ func (b *redisBus) consume(ctx context.Context, stream, group, consumer string, 
 
 		for _, s := range streams {
 			for _, msg := range s.Messages {
-				env, ok := decodeMessage(msg)
-				if !ok {
-					// Malformed payloads can never be handled; ack them so the
-					// pending entry does not leak.
-					_ = b.client.XAck(ctx, stream, group, msg.ID)
-					continue
+				if !b.handleMessage(ctx, stream, group, msg, handler) {
+					return
 				}
-
-				busMsg := &redisMessage{
-					id:       env.ID,
-					topic:    stream,
-					env:      env,
-					client:   b.client,
-					stream:   stream,
-					group:    group,
-					streamID: msg.ID,
-					bus:      b,
-				}
-				if handlerErr := handler(ctx, busMsg); handlerErr != nil {
-					// The handler returned an error without Ack/Nack-ing the
-					// message itself, so release it here. Simply leaving the
-					// entry pending strands it forever: this consumer only ever
-					// reads new entries with ">" and never revisits the PEL.
-					// Nack is settle-guarded, so a handler that already Nack'd
-					// before returning the error will not double-release it.
-					nackCtx, nackCancel := context.WithTimeout(context.WithoutCancel(ctx), redisNackTimeout)
-					_ = busMsg.Nack(nackCtx, handlerErr)
-					nackCancel()
-					continue
-				}
-				_ = busMsg.Ack(ctx)
 			}
 		}
 	}
+}
+
+func (b *redisBus) claimPending(
+	ctx context.Context,
+	stream, group, consumer string,
+	handler eventbus.Handler,
+) bool {
+	pending, err := b.client.XPendingExt(ctx, &redis.XPendingExtArgs{
+		Stream: stream,
+		Group:  group,
+		Idle:   redisPendingClaimIdle,
+		Start:  "-",
+		End:    "+",
+		Count:  redisPendingClaimCount,
+	}).Result()
+	if err != nil {
+		if ctx.Err() == nil {
+			log.Error().Err(err).Str("stream", stream).Str("group", group).
+				Msg("failed to inspect Redis pending entries")
+		}
+		return ctx.Err() == nil
+	}
+	if len(pending) == 0 {
+		return true
+	}
+
+	ids := make([]string, 0, len(pending))
+	for _, entry := range pending {
+		ids = append(ids, entry.ID)
+	}
+	messages, err := b.client.XClaim(ctx, &redis.XClaimArgs{
+		Stream:   stream,
+		Group:    group,
+		Consumer: consumer,
+		MinIdle:  redisPendingClaimIdle,
+		Messages: ids,
+	}).Result()
+	if err != nil {
+		if ctx.Err() == nil {
+			log.Error().Err(err).Str("stream", stream).Str("group", group).
+				Msg("failed to claim stale Redis pending entries")
+		}
+		return ctx.Err() == nil
+	}
+	for _, msg := range messages {
+		if !b.handleMessage(ctx, stream, group, msg, handler) {
+			return false
+		}
+	}
+	return true
+}
+
+func (b *redisBus) handleMessage(
+	ctx context.Context,
+	stream, group string,
+	msg redis.XMessage,
+	handler eventbus.Handler,
+) bool {
+	if ctx.Err() != nil {
+		return false
+	}
+	env, ok := decodeMessage(msg)
+	if !ok {
+		ackCtx, ackCancel := context.WithTimeout(context.WithoutCancel(ctx), redisNackTimeout)
+		err := b.client.XAck(ackCtx, stream, group, msg.ID).Err()
+		ackCancel()
+		if err != nil {
+			log.Error().Err(err).Str("stream", stream).Str("message_id", msg.ID).
+				Msg("failed to acknowledge malformed Redis message")
+		}
+		return ctx.Err() == nil
+	}
+
+	busMsg := &redisMessage{
+		id:       env.ID,
+		topic:    stream,
+		env:      env,
+		client:   b.client,
+		stream:   stream,
+		group:    group,
+		streamID: msg.ID,
+		bus:      b,
+	}
+	if handlerErr := handler(ctx, busMsg); handlerErr != nil {
+		// An interrupted handler was not committed. Leave it pending so a later
+		// consumer can claim it without spending the retry budget.
+		if ctx.Err() != nil {
+			return false
+		}
+		nackCtx, nackCancel := context.WithTimeout(context.WithoutCancel(ctx), redisNackTimeout)
+		err := busMsg.Nack(nackCtx, handlerErr)
+		nackCancel()
+		if err != nil {
+			log.Error().Err(err).Str("stream", stream).Str("message_id", msg.ID).
+				Msg("failed to release Redis message; it remains pending for recovery")
+		}
+		return ctx.Err() == nil
+	}
+	if ctx.Err() != nil {
+		return false
+	}
+	if err := busMsg.Ack(ctx); err != nil {
+		log.Error().Err(err).Str("stream", stream).Str("message_id", msg.ID).
+			Msg("failed to acknowledge Redis message; it remains pending for recovery")
+	}
+	return ctx.Err() == nil
 }
 
 // decodeMessage extracts the envelope from a Redis stream entry.
