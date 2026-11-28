@@ -10,7 +10,8 @@ All notable changes to this project are documented in this file.
 - Preserve earlier NDJSON records when scanner buffers are reused.
 - Convert gRPC event level and outcome enums to canonical lowercase JSON values.
 - Pass the event-bus envelope body to the worker processor without serializing transport metadata.
-- Keep Redis worker messages pending until the worker's deferred commit.
+- Keep Redis worker messages pending until commit and requeue uncommitted
+  messages on shutdown for another worker to retry.
 
 ## [0.3.4] - 2026-08-26
 

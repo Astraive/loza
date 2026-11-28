@@ -259,6 +259,107 @@ func TestRedisWorkerAcknowledgmentWaitsForCommit(t *testing.T) {
 	}
 }
 
+func TestRedisWorkerCloseRequeuesUncommittedMessage(t *testing.T) {
+	const (
+		stream = "loza.worker.shutdown"
+		group  = "loza-worker-shutdown-test"
+	)
+	mr := miniredis.RunT(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	cfg := eventbus.Config{
+		Type:          "redis",
+		Topic:         stream,
+		ConsumerGroup: group,
+		Redis: eventbus.RedisConfig{
+			Addr:   mr.Addr(),
+			Stream: stream,
+			Group:  group,
+		},
+	}
+	newBus := func() eventbus.Bus {
+		bus, err := redisadapter.New(ctx, cfg)
+		if err != nil {
+			t.Fatalf("new Redis bus: %v", err)
+		}
+		return bus
+	}
+
+	bus := newBus()
+	reader := newEventbusQueueReader(bus, stream, group)
+	defer func() {
+		if err := reader.Close(); err != nil {
+			t.Errorf("close reader: %v", err)
+		}
+	}()
+	client := goredis.NewClient(&goredis.Options{Addr: mr.Addr()})
+	defer func() {
+		if err := client.Close(); err != nil {
+			t.Errorf("close Redis client: %v", err)
+		}
+	}()
+
+	if records, err := reader.Poll(ctx, 50*time.Millisecond); err != nil {
+		t.Fatalf("subscribe reader: %v", err)
+	} else if len(records) != 0 {
+		t.Fatalf("records before publish = %d, want 0", len(records))
+	}
+	body := []byte(`{"event":"shutdown"}`)
+	if err := bus.Publish(ctx, stream, []eventbus.Envelope{{
+		ID:        "worker-shutdown-1",
+		Event:     "shutdown",
+		Timestamp: time.Now().UTC(),
+		Body:      body,
+	}}); err != nil {
+		t.Fatalf("publish event: %v", err)
+	}
+	records, err := reader.Poll(ctx, time.Second)
+	if err != nil {
+		t.Fatalf("poll event: %v", err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("records = %d, want 1", len(records))
+	}
+
+	if err := reader.Close(); err != nil {
+		t.Fatalf("close reader with an uncommitted record: %v", err)
+	}
+	pending, err := client.XPending(ctx, stream, group).Result()
+	if err != nil {
+		t.Fatalf("pending after reader close: %v", err)
+	}
+	if pending.Count != 0 {
+		t.Fatalf("pending after reader close = %d, want 0 after requeue", pending.Count)
+	}
+
+	retryReader := newEventbusQueueReader(newBus(), stream, group)
+	defer func() {
+		if err := retryReader.Close(); err != nil {
+			t.Errorf("close retry reader: %v", err)
+		}
+	}()
+	retried, err := retryReader.Poll(ctx, time.Second)
+	if err != nil {
+		t.Fatalf("poll retried event: %v", err)
+	}
+	if len(retried) != 1 {
+		t.Fatalf("retried records = %d, want 1", len(retried))
+	}
+	if !bytes.Equal(retried[0].value, body) {
+		t.Fatalf("retried payload = %s, want %s", retried[0].value, body)
+	}
+	if err := retried[0].commit(ctx); err != nil {
+		t.Fatalf("commit retried event: %v", err)
+	}
+	pending, err = client.XPending(ctx, stream, group).Result()
+	if err != nil {
+		t.Fatalf("pending after retry commit: %v", err)
+	}
+	if pending.Count != 0 {
+		t.Fatalf("pending after retry commit = %d, want 0", pending.Count)
+	}
+}
+
 func TestEventbusHandlerUnblocksOnReaderCloseBeforeCommit(t *testing.T) {
 	bus := &capturingBus{}
 	r := newEventbusQueueReader(bus, "topic", "group")

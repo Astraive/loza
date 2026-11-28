@@ -24,15 +24,21 @@ func init() {
 // failing is redelivered before it is moved to the dead-letter stream.
 const maxRedisDeliveryAttempts = 3
 
+const redisNackTimeout = 2 * time.Second
+
+const redisReadBlock = time.Second
+
 var errNackWithoutCause = errors.New("eventbus/redis: message nacked without cause")
 
 type redisBus struct {
-	client *redis.Client
-	cfg    eventbus.RedisConfig
-	dlqCfg string
-	closed atomic.Bool
-	mu     sync.Mutex
-	subs   []context.CancelFunc
+	client  *redis.Client
+	cfg     eventbus.RedisConfig
+	dlqCfg  string
+	closed  atomic.Bool
+	closing atomic.Bool
+	mu      sync.Mutex
+	subs    []context.CancelFunc
+	subsWg  sync.WaitGroup
 }
 
 // New creates a new Redis Streams event bus.
@@ -83,6 +89,13 @@ func New(_ context.Context, cfg eventbus.Config) (eventbus.Bus, error) {
 }
 
 func (b *redisBus) Publish(ctx context.Context, topic string, events []eventbus.Envelope) error {
+	if b.closed.Load() || b.closing.Load() {
+		return eventbus.ErrBusClosed
+	}
+	return b.publish(ctx, topic, events)
+}
+
+func (b *redisBus) publish(ctx context.Context, topic string, events []eventbus.Envelope) error {
 	if b.closed.Load() {
 		return eventbus.ErrBusClosed
 	}
@@ -116,7 +129,7 @@ func (b *redisBus) Publish(ctx context.Context, topic string, events []eventbus.
 }
 
 func (b *redisBus) Subscribe(ctx context.Context, topic string, group string, handler eventbus.Handler) error {
-	if b.closed.Load() {
+	if b.closed.Load() || b.closing.Load() {
 		return eventbus.ErrBusClosed
 	}
 
@@ -141,10 +154,19 @@ func (b *redisBus) Subscribe(ctx context.Context, topic string, group string, ha
 
 	subCtx, cancel := context.WithCancel(ctx)
 	b.mu.Lock()
+	if b.closed.Load() || b.closing.Load() {
+		b.mu.Unlock()
+		cancel()
+		return eventbus.ErrBusClosed
+	}
 	b.subs = append(b.subs, cancel)
+	b.subsWg.Add(1)
 	b.mu.Unlock()
 
-	go b.consume(subCtx, stream, consumerGroup, consumerName, handler)
+	go func() {
+		defer b.subsWg.Done()
+		b.consume(subCtx, stream, consumerGroup, consumerName, handler)
+	}()
 	return nil
 }
 
@@ -170,7 +192,7 @@ func (b *redisBus) consume(ctx context.Context, stream, group, consumer string, 
 			Consumer: consumer,
 			Streams:  []string{stream, ">"},
 			Count:    10,
-			Block:    5 * time.Second,
+			Block:    redisReadBlock,
 		}).Result()
 
 		if err != nil {
@@ -211,7 +233,9 @@ func (b *redisBus) consume(ctx context.Context, stream, group, consumer string, 
 					// reads new entries with ">" and never revisits the PEL.
 					// Nack is settle-guarded, so a handler that already Nack'd
 					// before returning the error will not double-release it.
-					_ = busMsg.Nack(ctx, handlerErr)
+					nackCtx, nackCancel := context.WithTimeout(context.WithoutCancel(ctx), redisNackTimeout)
+					_ = busMsg.Nack(nackCtx, handlerErr)
+					nackCancel()
 					continue
 				}
 				_ = busMsg.Ack(ctx)
@@ -247,31 +271,47 @@ func (b *redisBus) failMessage(ctx context.Context, stream, group, streamID stri
 	}
 	env.Attempts++
 	if env.Attempts >= maxRedisDeliveryAttempts {
-		if dlqErr := b.PublishDLQ(ctx, env, cause); dlqErr == nil {
+		if dlqErr := b.publishDLQ(ctx, env, cause); dlqErr == nil {
 			return b.client.XAck(ctx, stream, group, streamID).Err()
 		}
 		// If the DLQ is unavailable, requeue instead of losing the message.
 	}
-	if pubErr := b.Publish(ctx, stream, []eventbus.Envelope{env}); pubErr != nil {
+	if pubErr := b.publish(ctx, stream, []eventbus.Envelope{env}); pubErr != nil {
 		return pubErr
 	}
 	return b.client.XAck(ctx, stream, group, streamID).Err()
 }
 
-func (b *redisBus) Close(_ context.Context) error {
-	if !b.closed.CompareAndSwap(false, true) {
+func (b *redisBus) Close(ctx context.Context) error {
+	b.mu.Lock()
+	if b.closing.Load() {
+		b.mu.Unlock()
 		return nil
 	}
-	b.mu.Lock()
+	b.closing.Store(true)
 	for _, cancel := range b.subs {
 		cancel()
 	}
+	b.subs = nil
 	b.mu.Unlock()
-	return b.client.Close()
+
+	done := make(chan struct{})
+	go func() {
+		b.subsWg.Wait()
+		close(done)
+	}()
+	var waitErr error
+	select {
+	case <-done:
+	case <-ctx.Done():
+		waitErr = ctx.Err()
+	}
+	b.closed.Store(true)
+	return errors.Join(waitErr, b.client.Close())
 }
 
 func (b *redisBus) Health(ctx context.Context) eventbus.Health {
-	if b.closed.Load() {
+	if b.closed.Load() || b.closing.Load() {
 		return eventbus.Health{OK: false, Detail: "closed"}
 	}
 	if err := b.client.Ping(ctx).Err(); err != nil {
@@ -281,6 +321,13 @@ func (b *redisBus) Health(ctx context.Context) eventbus.Health {
 }
 
 func (b *redisBus) PublishDLQ(ctx context.Context, original eventbus.Envelope, reason error) error {
+	if b.closed.Load() || b.closing.Load() {
+		return eventbus.ErrBusClosed
+	}
+	return b.publishDLQ(ctx, original, reason)
+}
+
+func (b *redisBus) publishDLQ(ctx context.Context, original eventbus.Envelope, reason error) error {
 	dlqTopic := b.dlqCfg
 	if dlqTopic == "" {
 		dlqTopic = "loza.events.dlq"
@@ -290,7 +337,7 @@ func (b *redisBus) PublishDLQ(ctx context.Context, original eventbus.Envelope, r
 	}
 	original.Headers["dlq_reason"] = eventbus.DLQReasonString(reason)
 	original.Headers["dlq_time"] = time.Now().UTC().Format(time.RFC3339Nano)
-	return b.Publish(ctx, dlqTopic, []eventbus.Envelope{original})
+	return b.publish(ctx, dlqTopic, []eventbus.Envelope{original})
 }
 
 type redisMessage struct {

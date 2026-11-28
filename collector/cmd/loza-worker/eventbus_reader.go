@@ -111,5 +111,7 @@ func (r *eventbusQueueReader) Close() error {
 	if r.cancel != nil {
 		r.cancel()
 	}
-	return r.bus.Close(context.Background())
+	closeCtx, cancel := context.WithTimeout(context.Background(), workerCommitTimeout)
+	defer cancel()
+	return r.bus.Close(closeCtx)
 }
