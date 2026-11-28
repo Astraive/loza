@@ -17,7 +17,7 @@ from loza import (
     production, configure, start_http_event, enrich, checkpoint,
     finish, finish_error, emit, shutdown,
     String, Int, Bool, UserID, OrderID, CartID, Amount, Currency,
-    FeatureFlag, HTTPBatchSink,
+    FeatureFlag, HTTPBatchSink, Params,
 )
 
 # Configure
@@ -28,7 +28,7 @@ configure(
 )
 
 # Instrument a checkout request
-ctx = start_http_event(None, event="checkout.request", method="POST", path="/checkout")
+ctx = start_http_event(Params(event="checkout.request", kind="http", method="POST", path="/checkout"))
 
 enrich(ctx,
     UserID("u_123"),
@@ -80,11 +80,11 @@ from loza import (
 ctx = start_event(Params(event="order.created", kind="event"))
 
 # Typed starters
-ctx = start_http_event(None, event="http.request", method="POST", path="/checkout")
-ctx = start_job_event(None, event="job.send_email")
-ctx = start_queue_event(None, event="queue.process")
-ctx = start_cli_event(None, event="cli.run")
-ctx = start_cron_event(None, event="cron.daily_billing")
+ctx = start_http_event(Params(event="http.request", kind="http", method="POST", path="/checkout"))
+ctx = start_job_event(Params(event="job.send_email", kind="job"))
+ctx = start_queue_event(Params(event="queue.process", kind="queue"))
+ctx = start_cli_event(Params(event="cli.run", kind="cli"))
+ctx = start_cron_event(Params(event="cron.daily_billing", kind="cron"))
 ```
 
 ### Enriching Events
@@ -167,9 +167,9 @@ from loza import process
 p = process(ctx, "authorize_payment")
 try:
     result = authorize_payment()
-    p.finish(String("payment.status", result.status), Int("status_code", 200))
+    p.finish(**{"payment.status": result.status, "status_code": 200})
 except Exception as e:
-    p.finish_error(e, Int("status_code", 402))
+    p.finish_error(e, status_code=402)
     raise
 ```
 
@@ -182,9 +182,9 @@ from loza import start_group
 g = start_group(ctx, "payment_flow")
 try:
     # ... multiple processes ...
-    g.finish(String("payment.provider", "stripe"), Int("status_code", 200))
+    g.finish(**{"payment.provider": "stripe", "status_code": 200})
 except Exception as e:
-    g.finish(Int("status_code", 402))
+    g.finish(status_code=402)
     raise
 ```
 
@@ -196,7 +196,7 @@ from loza import start_timer
 # Measure a specific operation
 t = start_timer(ctx, "db.cart_lookup")
 cart = db.carts.find_by_id(cart_id)
-t.stop(Int("db.rows", 1))
+t.stop(**{"db.rows": 1})
 ```
 
 ### Stopwatch
@@ -480,19 +480,19 @@ enrich(ctx,
 
 ```python
 from loza.testkit.helpers import (
-    test_logger, capture, assert_event, assert_redacted, assert_has_checkpoint,
+    TestLogger, Capture, AssertEvent, AssertRedacted, AssertHasCheckpoint,
 )
 
 # Create test logger with memory sink
-logger, store = test_logger("test")
+logger, sink = TestLogger("test")
 
-# Capture events from a function
-events = capture(lambda: some_function())
+# Capture events from a function; the callback receives a test logger.
+events = Capture(lambda logger: some_function(logger))
 
 # Assert
-assert_event(events[0], "user.id", "u_123")
-assert_redacted(events[0], "password")
-assert_has_checkpoint(events[0], "payment_started")
+AssertEvent(events[0], **{"user.id": "u_123"})
+AssertRedacted(events[0], "attrs.password")
+AssertHasCheckpoint(events[0], "payment_started")
 ```
 
 ---
@@ -509,10 +509,10 @@ configure(production("checkout").with_sink(
 ))
 
 def handle_checkout(user, cart, payment_method):
-    ctx = start_http_event(None,
-        event="checkout.request",
-        method="POST",
-        path="/checkout",
+    ctx = start_http_event(
+        Params(
+            event="checkout.request", kind="http", method="POST", path="/checkout",
+        )
     )
 
     enrich(ctx,
@@ -530,7 +530,7 @@ def handle_checkout(user, cart, payment_method):
     # Validate cart
     p = process(ctx, "validate_cart")
     validate_cart(cart)
-    p.finish(Int("status_code", 200))
+    p.finish(status_code=200)
 
     checkpoint(ctx, "payment_started")
 
@@ -538,12 +538,12 @@ def handle_checkout(user, cart, payment_method):
     p = process(ctx, "process_payment")
     try:
         result = process_payment(cart, payment_method)
-        p.finish(
-            String("payment.provider", result.provider),
-            Int("status_code", 200),
-        )
+        p.finish(**{
+            "payment.provider": result.provider,
+            "status_code": 200,
+        })
     except Exception as e:
-        p.finish_error(e, Int("status_code", 402))
+        p.finish_error(e, status_code=402)
         raise
 
     checkpoint(ctx, "order_created")
@@ -551,7 +551,7 @@ def handle_checkout(user, cart, payment_method):
     # Create order
     p = process(ctx, "create_order")
     order = create_order(cart, result)
-    p.finish(String("order.id", order.id))
+    p.finish(**{"order.id": order.id})
 
     enrich(ctx,
         OrderID(order.id),
@@ -573,10 +573,10 @@ def process_payment_with_retry(ctx, cart, max_retries=3):
         p = process(ctx, f"payment_attempt_{attempt + 1}")
         try:
             result = charge_card(cart)
-            p.finish(String("payment.status", "success"))
+            p.finish(**{"payment.status": "success"})
             return result
         except TransientError as e:
-            p.finish_error(e, Retryable(True))
+            p.finish_error(e, **{"error.retryable": True})
             if attempt < max_retries - 1:
                 checkpoint(ctx, f"retry_scheduled_{attempt + 1}")
                 time.sleep(2 ** attempt)
@@ -590,7 +590,7 @@ def process_payment_with_retry(ctx, cart, max_retries=3):
 
 ```python
 def send_email_job(user_id, template):
-    ctx = start_job_event(None, event="job.send_email")
+    ctx = start_job_event(Params(event="job.send_email", kind="job"))
 
     enrich(ctx,
         UserID(user_id),
@@ -599,16 +599,16 @@ def send_email_job(user_id, template):
 
     p = process(ctx, "load_user")
     user = load_user(user_id)
-    p.finish(Int("status_code", 200))
+    p.finish(status_code=200)
 
     p = process(ctx, "render_template")
     body = render_template(template, user)
-    p.finish(Int("email.length", len(body)))
+    p.finish(**{"email.length": len(body)})
 
     p = process(ctx, "send_email")
     try:
         send_email(user.email, body)
-        p.finish(Int("status_code", 200))
+        p.finish(status_code=200)
         finish(ctx, "success")
     except Exception as e:
         p.finish_error(e)
@@ -621,7 +621,7 @@ def send_email_job(user_id, template):
 
 ```python
 def process_queue_message(message):
-    ctx = start_queue_event(None, event="queue.process")
+    ctx = start_queue_event(Params(event="queue.process", kind="queue"))
 
     enrich(ctx,
         String("queue.name", "emails"),
@@ -642,13 +642,13 @@ def process_queue_message(message):
 
 ```python
 def daily_billing():
-    ctx = start_cron_event(None, event="cron.daily_billing")
+    ctx = start_cron_event(Params(event="cron.daily_billing", kind="cron"))
 
     checkpoint(ctx, "started")
 
     p = process(ctx, "load_customers")
     customers = load_active_customers()
-    p.finish(Int("customers.count", len(customers)))
+    p.finish(**{"customers.count": len(customers)})
 
     processed = 0
     errors = 0
@@ -672,25 +672,25 @@ def daily_billing():
 
 ```python
 def login_handler(username, password):
-    ctx = start_http_event(None,
-        event="auth.login.request",
-        method="POST",
-        path="/auth/login",
+    ctx = start_http_event(
+        Params(
+            event="auth.login.request", kind="http", method="POST", path="/auth/login",
+        )
     )
 
     p = process(ctx, "validate_credentials")
     try:
         user = validate_credentials(username, password)
-        p.finish(Int("status_code", 200))
+        p.finish(status_code=200)
     except AuthError as e:
-        p.finish_error(e, Int("status_code", 401))
+        p.finish_error(e, status_code=401)
         finish_error(ctx, e, ErrorCode("invalid_credentials"))
         emit(ctx)
         raise
 
     p = process(ctx, "generate_token")
     token = generate_token(user)
-    p.finish(Int("token.length", len(token)))
+    p.finish(**{"token.length": len(token)})
 
     enrich(ctx, UserID(user.id), String("user.role", user.role))
     finish(ctx, "success", Int("status_code", 200))
