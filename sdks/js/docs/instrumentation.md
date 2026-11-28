@@ -1106,10 +1106,10 @@ it("should track process steps", async () => {
   });
 
   const event = JSON.parse(events[0]);
-  expect(event.process).toHaveLength(3);
-  expect(event.process[0].name).toBe("extract");
-  expect(event.process[1].name).toBe("transform");
-  expect(event.process[2].name).toBe("load");
+  expect(event.processes).toHaveLength(3);
+  expect(event.processes[0].name).toBe("extract");
+  expect(event.processes[1].name).toBe("transform");
+  expect(event.processes[2].name).toBe("load");
 });
 ```
 

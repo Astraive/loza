@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented in this file.
 
+## [Unreleased]
+
+### Fixed
+
+- Correct the instrumentation guide's process-timing assertions to use the
+  canonical `processes` field.
+
 ## [0.3.4] - 2026-08-26
 
 ### Changed
