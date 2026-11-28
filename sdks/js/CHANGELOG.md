@@ -2,6 +2,12 @@
 
 All notable changes to this project are documented in this file.
 
+## [Unreleased]
+
+### Fixed
+
+- Koa middleware now preserves downstream errors after finishing telemetry.
+
 ## [0.3.4] - 2026-08-26
 
 ### Changed

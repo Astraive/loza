@@ -27,6 +27,8 @@ export function lozaKoaMiddleware(opts: KoaMiddlewareOptions = {}) {
       AttrString('http.remote_ip', ctx.ip || ctx.socket?.remoteAddress || ''),
     );
 
+    let routeFailed = false;
+    let routeError: unknown;
     try {
       // Scope downstream handling with run(); context is restored afterwards.
       await runWithEvent(ev, () => next());
@@ -36,13 +38,24 @@ export function lozaKoaMiddleware(opts: KoaMiddlewareOptions = {}) {
         AttrInt('status_code', ctx.status),
         AttrInt('duration_ms', durationMs),
       );
-    } catch (err: any) {
+    } catch (err: unknown) {
+      routeFailed = true;
+      routeError = err;
       const durationMs = Date.now() - startedAt;
-      loza.finishError(ev, err,
-        AttrInt('status_code', ctx.status || 500),
-        AttrInt('duration_ms', durationMs),
-      );
+      try {
+        loza.finishError(ev, err,
+          AttrInt('status_code', ctx.status || 500),
+          AttrInt('duration_ms', durationMs),
+        );
+      } catch {
+        // A telemetry finalization failure must not replace the route error.
+      }
     }
-    await loza.emit(ev).catch(() => {});
+    try {
+      await loza.emit(ev);
+    } catch {
+      // A telemetry delivery failure must not replace the route error.
+    }
+    if (routeFailed) throw routeError;
   };
 }
