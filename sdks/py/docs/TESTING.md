@@ -55,16 +55,17 @@ sdks/py/tests/
 Capture emitted events in memory for assertions:
 
 ```python
+import json
 import loza
 
 sink = loza.MemorySink()
 logger = loza.new(loza.test("my-test").with_sink(sink))
 
 ctx = logger.start_event(loza.Params(event="test.event"))
-loza.finish(ctx, "success")
-loza.emit(ctx)
+logger.finish(ctx, "success")
+logger.emit(ctx)
 
-events = sink.events()
+events = [json.loads(encoded) for encoded in sink.events]
 assert len(events) == 1
 assert events[0]["event"] == "test.event"
 ```
@@ -101,6 +102,7 @@ Conformance checks include:
 Use `MemorySink` and `loza.test()` for isolated unit tests:
 
 ```python
+import json
 import loza
 
 
@@ -109,11 +111,11 @@ def test_enrich_sets_attributes():
     logger = loza.new(loza.test("t").with_sink(sink))
 
     ctx = logger.start_event(loza.Params(event="test.enrich"))
-    loza.enrich(ctx, loza.String("key", "value"))
-    loza.finish(ctx, "success")
-    loza.emit(ctx)
+    logger.enrich(ctx, loza.String("key", "value"))
+    logger.finish(ctx, "success")
+    logger.emit(ctx)
 
-    event = sink.events()[0]
+    event = json.loads(sink.events[0])
     assert event["attrs"]["key"] == "value"
 ```
 

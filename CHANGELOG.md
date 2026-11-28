@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/0.2.0/).
 
 ### Fixed
 
+- Python SDK documentation now reads `MemorySink`'s encoded JSON strings from its `events` list and decodes them before inspecting event fields.
+
 - Go SDK: `FinishGroupError` now records the supplied error status code on the
   group, so failed `Phase` calls emit a non-zero `status_code` like failed
   `Step` calls instead of `0`.

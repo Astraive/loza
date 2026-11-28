@@ -297,6 +297,7 @@ level = loza.ParseLevel("info")  # loza.LevelInfo
 ## Sinks
 
 ```python
+import json
 import loza
 
 cfg = loza.production("checkout").with_sink(loza.StdoutSink())
@@ -304,10 +305,12 @@ cfg = loza.production("checkout").with_sink(loza.FileSink("logs/app.log"))
 cfg = loza.production("checkout").with_sink(loza.HTTPBatchSink("http://collector:9308/events"))
 
 # For testing
-sink, store = loza.MemorySink()
-logger = loza.create_loza(service="checkout", sink=sink)
-# ... use logger ...
-events = store.events()
+sink = loza.MemorySink()
+logger = loza.new(loza.test("checkout").with_sink(sink))
+ctx = logger.start_event(loza.Params(event="checkout.test"))
+logger.finish(ctx, "success")
+logger.emit(ctx)
+event = json.loads(sink.events[0])
 ```
 
 ## Sampling
@@ -456,6 +459,8 @@ if loza.HasEvent(ctx):
 ## Testing
 
 ```python
+import json
+import loza
 from loza.testkit.helpers import TestLogger, Capture, AssertEvent, AssertRedacted, AssertHasCheckpoint, CapturingLogger
 
 # Test logger with memory sink
@@ -474,7 +479,7 @@ with CapturingLogger("test") as (logger, store):
     ctx = logger.start_event(loza.Params(event="test"))
     logger.finish(ctx, "success")
     logger.emit(ctx)
-events = store.events()
+events = [json.loads(encoded) for encoded in store.events]
 ```
 
 ## Testing / Conformance
