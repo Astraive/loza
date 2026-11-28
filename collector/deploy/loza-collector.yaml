@@ -113,7 +113,7 @@ fanout:
       type: "loki"
       enabled: false
       loki:
-        url: "http://loki:3100/loki/api/core/push"
+        url: "http://loki:3100/loki/api/v1/push"
         labels:
           source: "loza"
           env: "dev"
