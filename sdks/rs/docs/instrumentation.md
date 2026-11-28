@@ -289,7 +289,7 @@ if let Some(val) = Get(&mut evt, "order.id") {
 
 // Read a group attribute
 if let Some(val) = GetGroup(&mut evt, "user") {
-    println!("user group: {}", val);
+    println!("user group: {:?}", val);
 }
 ```
 

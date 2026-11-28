@@ -6,6 +6,10 @@ All notable changes to the LOZA Rust SDK are documented in this file.
 
 ### Fixed
 
+- `Get`/`get` now traverse dotted attribute paths, and `GetGroup`/`get_group`
+  can read the `user` group as a map while continuing to return groups stored
+  under `attrs`.
+
 - Event mutators no longer discard the `ensure_mutable` lifecycle check:
   `set_attr`, `append_attr`, `merge_group`, `delete_attr`,
   `checkpoint_with_attrs`, `start_process`, `start_timer`, `start_group`, and
