@@ -12,6 +12,7 @@ All notable changes to this project are documented in this file.
 - Pass the event-bus envelope body to the worker processor without serializing transport metadata.
 - Keep Redis worker messages pending until commit, renew each active claim,
   process one entry at a time, and recover abandoned entries after 30s idle.
+- Negotiate response compression using quality values and avoid explicitly rejected encodings.
 
 ## [0.3.4] - 2026-08-26
 

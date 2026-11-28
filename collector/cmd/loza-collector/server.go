@@ -304,12 +304,12 @@ func runCollector(cfg collectorConfig) error {
 	}
 
 	mux := buildMux(state)
-	muxWithSecurity := withSecurityHeaders(mux)
-	muxWithCompression := withResponseCompression(muxWithSecurity)
+	muxWithCompression := withResponseCompression(mux)
+	muxWithSecurity := withSecurityHeaders(muxWithCompression)
 
 	server := &http.Server{
 		Addr:              cfg.addr,
-		Handler:           muxWithCompression,
+		Handler:           muxWithSecurity,
 		ReadHeaderTimeout: cfg.readHeaderTimeout,
 		ReadTimeout:       30 * time.Second,
 		WriteTimeout:      30 * time.Second,

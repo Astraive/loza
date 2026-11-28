@@ -18,36 +18,173 @@ var (
 	newZstdResponseWriter = func(w io.Writer) (io.WriteCloser, error) { return zstd.NewWriter(w) }
 )
 
+func preferredResponseEncoding(values []string) string {
+	if len(values) == 0 {
+		return "identity"
+	}
+
+	var (
+		gzipQuality, zstdQuality, wildcardQuality, identityQuality int
+		hasGzip, hasZstd, hasWildcard, hasIdentity                 bool
+	)
+	for _, value := range values {
+		for value != "" {
+			item, rest, _ := strings.Cut(value, ",")
+			value = rest
+			item = strings.TrimSpace(item)
+			if item == "" {
+				continue
+			}
+
+			coding, parameter, hasParameter := strings.Cut(item, ";")
+			coding = strings.TrimSpace(coding)
+			quality := 1000
+			if hasParameter {
+				name, value, ok := strings.Cut(parameter, "=")
+				if !ok || !strings.EqualFold(strings.TrimSpace(name), "q") {
+					continue
+				}
+				parsedQuality, ok := parseEncodingQuality(strings.TrimSpace(value))
+				if !ok {
+					continue
+				}
+				quality = parsedQuality
+			}
+
+			switch {
+			case strings.EqualFold(coding, "gzip"):
+				if !hasGzip || quality > gzipQuality {
+					gzipQuality, hasGzip = quality, true
+				}
+			case strings.EqualFold(coding, "zstd"):
+				if !hasZstd || quality > zstdQuality {
+					zstdQuality, hasZstd = quality, true
+				}
+			case coding == "*":
+				if !hasWildcard || quality > wildcardQuality {
+					wildcardQuality, hasWildcard = quality, true
+				}
+			case strings.EqualFold(coding, "identity"):
+				if !hasIdentity || quality > identityQuality {
+					identityQuality, hasIdentity = quality, true
+				}
+			}
+		}
+	}
+
+	if !hasGzip && hasWildcard {
+		gzipQuality = wildcardQuality
+	}
+	if !hasZstd && hasWildcard {
+		zstdQuality = wildcardQuality
+	}
+	if !hasIdentity && hasWildcard && wildcardQuality == 0 {
+		identityQuality = 0
+	} else if !hasIdentity {
+		identityQuality = 1000
+	}
+
+	if zstdQuality > 0 && zstdQuality >= gzipQuality && zstdQuality >= identityQuality {
+		return "zstd"
+	}
+	if gzipQuality > 0 && gzipQuality >= identityQuality {
+		return "gzip"
+	}
+	if identityQuality > 0 {
+		return "identity"
+	}
+	return ""
+}
+
+func parseEncodingQuality(value string) (int, bool) {
+	if value == "" {
+		return 0, false
+	}
+
+	switch value[0] {
+	case '0':
+		if len(value) > 1 && value[1] != '.' {
+			return 0, false
+		}
+		fraction := ""
+		if len(value) > 1 {
+			fraction = value[2:]
+		}
+		if len(fraction) > 3 {
+			return 0, false
+		}
+		quality := 0
+		for i := 0; i < 3; i++ {
+			quality *= 10
+			if i < len(fraction) {
+				digit := fraction[i]
+				if digit < '0' || digit > '9' {
+					return 0, false
+				}
+				quality += int(digit - '0')
+			}
+		}
+		return quality, true
+	case '1':
+		if len(value) > 1 && value[1] != '.' {
+			return 0, false
+		}
+		fraction := ""
+		if len(value) > 1 {
+			fraction = value[2:]
+		}
+		if len(fraction) > 3 {
+			return 0, false
+		}
+		for i := range fraction {
+			if fraction[i] != '0' {
+				return 0, false
+			}
+		}
+		return 1000, true
+	default:
+		return 0, false
+	}
+}
+
 func withResponseCompression(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if websocket.IsWebSocketUpgrade(r) {
 			next.ServeHTTP(w, r)
 			return
 		}
-		acceptEncoding := strings.ToLower(r.Header.Get("Accept-Encoding"))
+		w.Header().Add("Vary", "Accept-Encoding")
+		encoding := preferredResponseEncoding(r.Header.Values("Accept-Encoding"))
+		if encoding == "identity" {
+			next.ServeHTTP(w, r)
+			return
+		}
+		if encoding == "" {
+			http.Error(w, "no acceptable content encoding", http.StatusNotAcceptable)
+			return
+		}
 
-		var (
-			writer   io.WriteCloser
-			encoding string
-		)
+		var writer io.WriteCloser
 		// Compressed bytes are staged here instead of being written straight to
 		// w. This keeps the response headers uncommitted until the compressed
 		// stream (including its footer) has been finalized successfully. Once a
 		// handler flushes, the staged bytes are committed and later writes pass
 		// through, preserving streaming responses such as /tail.
 		staged := &stagedCompressionWriter{underlying: w, statusCode: http.StatusOK}
-		switch {
-		case strings.Contains(acceptEncoding, "zstd"):
+		switch encoding {
+		case "zstd":
 			encoder, err := newZstdResponseWriter(staged)
 			if err != nil {
-				next.ServeHTTP(w, r)
+				logJSON("error", "response_compression_init_failed", map[string]any{
+					"encoding": encoding,
+					"error":    err.Error(),
+				})
+				http.Error(w, "compression failure", http.StatusInternalServerError)
 				return
 			}
 			writer = encoder
-			encoding = "zstd"
-		case strings.Contains(acceptEncoding, "gzip"):
+		case "gzip":
 			writer = newGzipResponseWriter(staged)
-			encoding = "gzip"
 		default:
 			next.ServeHTTP(w, r)
 			return
@@ -110,7 +247,6 @@ func (s *stagedCompressionWriter) commit() error {
 
 	header := s.underlying.Header()
 	header.Set("Content-Encoding", s.encoding)
-	header.Add("Vary", "Accept-Encoding")
 	header.Del("Content-Length")
 	s.underlying.WriteHeader(s.statusCode)
 

@@ -108,6 +108,146 @@ func TestResponseCompressionFinalizesBeforeCommittingHeaders(t *testing.T) {
 	}
 }
 
+func TestResponseCompressionNegotiatesAcceptEncoding(t *testing.T) {
+	tests := []struct {
+		name           string
+		acceptEncoding []string
+		wantEncoding   string
+		wantStatus     int
+	}{
+		{
+			name:           "explicitly_rejected_gzip",
+			acceptEncoding: []string{"gzip;q=0"},
+			wantStatus:     http.StatusOK,
+		},
+		{
+			name:           "rejected_zstd_uses_accepted_gzip",
+			acceptEncoding: []string{"zstd;q=0, gzip;q=1"},
+			wantEncoding:   "gzip",
+			wantStatus:     http.StatusOK,
+		},
+		{
+			name:           "accepted_gzip",
+			acceptEncoding: []string{"gzip"},
+			wantEncoding:   "gzip",
+			wantStatus:     http.StatusOK,
+		},
+		{
+			name:           "identity",
+			acceptEncoding: []string{"identity"},
+			wantStatus:     http.StatusOK,
+		},
+		{
+			name:           "identity_preferred",
+			acceptEncoding: []string{"gzip;q=0.5, identity;q=1"},
+			wantStatus:     http.StatusOK,
+		},
+		{
+			name:       "missing_header",
+			wantStatus: http.StatusOK,
+		},
+		{
+			name:           "highest_quality",
+			acceptEncoding: []string{"gzip;q=0.4, zstd;q=0.8, identity;q=0.2"},
+			wantEncoding:   "zstd",
+			wantStatus:     http.StatusOK,
+		},
+		{
+			name:           "wildcard_respects_explicit_rejection",
+			acceptEncoding: []string{"*;q=0.5, gzip;q=0, identity;q=0.1"},
+			wantEncoding:   "zstd",
+			wantStatus:     http.StatusOK,
+		},
+		{
+			name:           "malformed_quality_rejected",
+			acceptEncoding: []string{"gzip;q=bogus", "identity;q=0"},
+			wantStatus:     http.StatusNotAcceptable,
+		},
+		{
+			name:           "duplicate_quality_parameter_rejected",
+			acceptEncoding: []string{"gzip;q=0.5;q=1", "identity;q=0"},
+			wantStatus:     http.StatusNotAcceptable,
+		},
+		{
+			name:           "duplicate_coding_uses_highest_quality",
+			acceptEncoding: []string{"gzip;q=0.2, gzip;q=0.8, identity;q=0.5"},
+			wantEncoding:   "gzip",
+			wantStatus:     http.StatusOK,
+		},
+		{
+			name:           "identity_rejected",
+			acceptEncoding: []string{"gzip;q=0", "identity;q=0"},
+			wantStatus:     http.StatusNotAcceptable,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			handler := withSecurityHeaders(withResponseCompression(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				_, _ = io.WriteString(w, "negotiated payload")
+			})))
+			req := httptest.NewRequest(http.MethodGet, "/", nil)
+			for _, value := range tt.acceptEncoding {
+				req.Header.Add("Accept-Encoding", value)
+			}
+			handler.ServeHTTP(recorder, req)
+
+			res := recorder.Result()
+			defer res.Body.Close()
+			if res.StatusCode != tt.wantStatus {
+				t.Fatalf("status = %d, want %d", res.StatusCode, tt.wantStatus)
+			}
+			if got := res.Header.Get("Content-Encoding"); got != tt.wantEncoding {
+				t.Fatalf("Content-Encoding = %q, want %q", got, tt.wantEncoding)
+			}
+			if got := res.Header.Get("Vary"); !strings.Contains(got, "Accept-Encoding") {
+				t.Fatalf("Vary = %q, want Accept-Encoding", got)
+			}
+			if got := res.Header.Get("X-Content-Type-Options"); got != "nosniff" {
+				t.Fatalf("X-Content-Type-Options = %q, want nosniff", got)
+			}
+		})
+	}
+}
+
+func TestResponseCompressionZstdInitializationFailureReturnsError(t *testing.T) {
+	originalFactory := newZstdResponseWriter
+	newZstdResponseWriter = func(io.Writer) (io.WriteCloser, error) {
+		return nil, errors.New("simulated zstd initialization failure")
+	}
+	defer func() { newZstdResponseWriter = originalFactory }()
+
+	called := false
+	recorder := httptest.NewRecorder()
+	handler := withResponseCompression(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		called = true
+		_, _ = io.WriteString(w, "uncompressed fallback")
+	}))
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set("Accept-Encoding", "zstd, identity;q=0")
+	handler.ServeHTTP(recorder, req)
+
+	res := recorder.Result()
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want %d", res.StatusCode, http.StatusInternalServerError)
+	}
+	if got := res.Header.Get("Content-Encoding"); got != "" {
+		t.Fatalf("Content-Encoding = %q, want no encoded representation", got)
+	}
+	if called {
+		t.Fatal("handler ran after zstd initialization failed")
+	}
+	body, err := io.ReadAll(res.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	if !strings.Contains(string(body), "compression failure") {
+		t.Fatalf("body = %q, want compression failure response", body)
+	}
+}
+
 func TestResponseCompressionCloseFailureIsNotCommitted(t *testing.T) {
 	var logs bytes.Buffer
 	origLogOutput := log.Writer()
