@@ -4,9 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"sync"
 	"sync/atomic"
-	"fmt"
 	"testing"
 	"time"
 
@@ -315,5 +315,92 @@ func TestRedisMessageNackRequeues(t *testing.T) {
 	}
 	if got := calls.Load(); got < 2 {
 		t.Fatalf("handler called %d times, want at least 2 after Nack", got)
+	}
+}
+
+func TestRedisActiveMessageClaimHeartbeatPreventsReclaim(t *testing.T) {
+	const (
+		stream = "loza.test.active-claim"
+		group  = "loza-test-active-claim-group"
+	)
+	server := miniredis.RunT(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	newBus := func() *redisBus {
+		bus, err := New(ctx, eventbus.Config{
+			Type:          "redis",
+			Topic:         stream,
+			ConsumerGroup: group,
+			Redis: eventbus.RedisConfig{
+				Addr:   server.Addr(),
+				Stream: stream,
+				Group:  group,
+			},
+		})
+		if err != nil {
+			t.Fatalf("new bus: %v", err)
+		}
+		return bus.(*redisBus)
+	}
+	first, second := newBus(), newBus()
+	defer first.Close(context.Background())
+	defer second.Close(context.Background())
+	for _, bus := range []*redisBus{first, second} {
+		bus.pendingClaimIdle = 100 * time.Millisecond
+		bus.pendingClaimInterval = 10 * time.Millisecond
+		bus.claimHeartbeatInterval = 10 * time.Millisecond
+	}
+
+	started := make(chan struct{}, 1)
+	release := make(chan struct{})
+	handlerReturned := make(chan struct{}, 1)
+	handler := func(handlerCtx context.Context, msg eventbus.Message) error {
+		select {
+		case started <- struct{}{}:
+		default:
+		}
+		select {
+		case <-release:
+			handlerReturned <- struct{}{}
+			return nil
+		case <-handlerCtx.Done():
+			return handlerCtx.Err()
+		}
+	}
+	if err := first.Subscribe(ctx, stream, group, handler); err != nil {
+		t.Fatalf("subscribe first consumer: %v", err)
+	}
+	env := eventbus.Envelope{
+		ID: "redis-active-claim-1", Event: "test.active-claim",
+		Timestamp: time.Now(), Body: []byte(`{"x":1}`),
+	}
+	if err := first.Publish(ctx, stream, []eventbus.Envelope{env}); err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("first consumer did not start handling the message")
+	}
+
+	secondHandled := make(chan struct{}, 1)
+	if err := second.Subscribe(ctx, stream, group, func(context.Context, eventbus.Message) error {
+		secondHandled <- struct{}{}
+		return nil
+	}); err != nil {
+		t.Fatalf("subscribe second consumer: %v", err)
+	}
+	select {
+	case <-secondHandled:
+		t.Fatal("second consumer reclaimed a message with an active handler")
+	case <-time.After(redisReadBlock + 250*time.Millisecond):
+	}
+
+	close(release)
+	select {
+	case <-handlerReturned:
+	case <-time.After(time.Second):
+		t.Fatal("first consumer did not finish after release")
 	}
 }

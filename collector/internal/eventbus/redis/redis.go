@@ -29,25 +29,30 @@ const redisNackTimeout = 2 * time.Second
 
 const redisReadBlock = time.Second
 
-// Pending entries are reclaimed only after this idle period to avoid stealing
-// messages from active consumers.
+// Pending entries are reclaimed only after this idle period. Active handlers
+// refresh their pending-entry claim before the threshold expires.
 const redisPendingClaimIdle = 30 * time.Second
 
 const redisPendingClaimInterval = 5 * time.Second
+
+const redisClaimHeartbeatInterval = 10 * time.Second
 
 const redisPendingClaimCount = 10
 
 var errNackWithoutCause = errors.New("eventbus/redis: message nacked without cause")
 
 type redisBus struct {
-	client  *redis.Client
-	cfg     eventbus.RedisConfig
-	dlqCfg  string
-	closed  atomic.Bool
-	closing atomic.Bool
-	mu      sync.Mutex
-	subs    []context.CancelFunc
-	subsWg  sync.WaitGroup
+	client                 *redis.Client
+	cfg                    eventbus.RedisConfig
+	dlqCfg                 string
+	closed                 atomic.Bool
+	closing                atomic.Bool
+	mu                     sync.Mutex
+	subs                   []context.CancelFunc
+	subsWg                 sync.WaitGroup
+	pendingClaimIdle       time.Duration
+	pendingClaimInterval   time.Duration
+	claimHeartbeatInterval time.Duration
 }
 
 // New creates a new Redis Streams event bus.
@@ -91,9 +96,12 @@ func New(_ context.Context, cfg eventbus.Config) (eventbus.Bus, error) {
 	}
 
 	return &redisBus{
-		client: client,
-		cfg:    rc,
-		dlqCfg: cfg.DLQTopic,
+		client:                 client,
+		cfg:                    rc,
+		dlqCfg:                 cfg.DLQTopic,
+		pendingClaimIdle:       redisPendingClaimIdle,
+		pendingClaimInterval:   redisPendingClaimInterval,
+		claimHeartbeatInterval: redisClaimHeartbeatInterval,
 	}, nil
 }
 
@@ -200,7 +208,7 @@ func (b *redisBus) consume(ctx context.Context, stream, group, consumer string, 
 			if !b.claimPending(ctx, stream, group, consumer, handler) {
 				return
 			}
-			nextPendingClaim = time.Now().Add(redisPendingClaimInterval)
+			nextPendingClaim = time.Now().Add(b.pendingClaimInterval)
 		}
 
 		streams, err := b.client.XReadGroup(ctx, &redis.XReadGroupArgs{
@@ -223,7 +231,7 @@ func (b *redisBus) consume(ctx context.Context, stream, group, consumer string, 
 
 		for _, s := range streams {
 			for _, msg := range s.Messages {
-				if !b.handleMessage(ctx, stream, group, msg, handler) {
+				if !b.handleMessage(ctx, stream, group, consumer, msg, handler) {
 					return
 				}
 			}
@@ -239,7 +247,7 @@ func (b *redisBus) claimPending(
 	pending, err := b.client.XPendingExt(ctx, &redis.XPendingExtArgs{
 		Stream: stream,
 		Group:  group,
-		Idle:   redisPendingClaimIdle,
+		Idle:   b.pendingClaimIdle,
 		Start:  "-",
 		End:    "+",
 		Count:  redisPendingClaimCount,
@@ -263,7 +271,7 @@ func (b *redisBus) claimPending(
 		Stream:   stream,
 		Group:    group,
 		Consumer: consumer,
-		MinIdle:  redisPendingClaimIdle,
+		MinIdle:  b.pendingClaimIdle,
 		Messages: ids,
 	}).Result()
 	if err != nil {
@@ -274,7 +282,7 @@ func (b *redisBus) claimPending(
 		return ctx.Err() == nil
 	}
 	for _, msg := range messages {
-		if !b.handleMessage(ctx, stream, group, msg, handler) {
+		if !b.handleMessage(ctx, stream, group, consumer, msg, handler) {
 			return false
 		}
 	}
@@ -283,7 +291,7 @@ func (b *redisBus) claimPending(
 
 func (b *redisBus) handleMessage(
 	ctx context.Context,
-	stream, group string,
+	stream, group, consumer string,
 	msg redis.XMessage,
 	handler eventbus.Handler,
 ) bool {
@@ -312,7 +320,12 @@ func (b *redisBus) handleMessage(
 		streamID: msg.ID,
 		bus:      b,
 	}
-	if handlerErr := handler(ctx, busMsg); handlerErr != nil {
+	stopHeartbeat := b.keepClaimAlive(ctx, stream, group, consumer, msg.ID)
+	handlerErr := func() error {
+		defer stopHeartbeat()
+		return handler(ctx, busMsg)
+	}()
+	if handlerErr != nil {
 		// An interrupted handler was not committed. Leave it pending so a later
 		// consumer can claim it without spending the retry budget.
 		if ctx.Err() != nil {
@@ -335,6 +348,47 @@ func (b *redisBus) handleMessage(
 			Msg("failed to acknowledge Redis message; it remains pending for recovery")
 	}
 	return ctx.Err() == nil
+}
+
+// keepClaimAlive refreshes an active consumer's pending-entry idle time so
+// another consumer cannot reclaim a long-running handler. JUSTID avoids
+// incrementing Redis's delivery count for these lease renewals.
+func (b *redisBus) keepClaimAlive(
+	ctx context.Context,
+	stream, group, consumer, messageID string,
+) func() {
+	heartbeatCtx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		ticker := time.NewTicker(b.claimHeartbeatInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-heartbeatCtx.Done():
+				return
+			case <-ticker.C:
+				renewCtx, renewCancel := context.WithTimeout(heartbeatCtx, redisNackTimeout)
+				_, err := b.client.XClaimJustID(renewCtx, &redis.XClaimArgs{
+					Stream:   stream,
+					Group:    group,
+					Consumer: consumer,
+					MinIdle:  0,
+					Messages: []string{messageID},
+				}).Result()
+				renewCancel()
+				if err != nil && heartbeatCtx.Err() == nil {
+					log.Error().Err(err).Str("stream", stream).Str("group", group).
+						Str("consumer", consumer).Str("message_id", messageID).
+						Msg("failed to refresh active Redis message claim")
+				}
+			}
+		}
+	}()
+	return func() {
+		cancel()
+		<-done
+	}
 }
 
 // decodeMessage extracts the envelope from a Redis stream entry.
