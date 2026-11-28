@@ -14,6 +14,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `RedisUnavailableError` and logs the underlying error. **Migration:** deployments that
   intentionally relied on the silent fallback must set `DEDUPE_ALLOW_LOCAL_FALLBACK=1` to
   opt back in; the downgrade is then logged as a warning.
+- Schema-service image includes the canonical `schemas/json/` directory served by
+  `/schemas/<name>`.
 
 ## [0.3.4] - 2026-08-26
 

@@ -1,4 +1,5 @@
 import http.client
+import shutil
 import sys
 import tempfile
 import threading
@@ -95,6 +96,47 @@ class TestSchemaServiceSchemas(unittest.TestCase):
         expected = (spec_dir / "schemas" / "json" / "event.schema.json").read_bytes()
         self.assertEqual(status, 200)
         self.assertEqual(body, expected)
+
+    def test_image_copy_layout_serves_schema_and_contract(self):
+        dockerfile = spec_dir / "docker" / "schema-service" / "Dockerfile"
+        with tempfile.TemporaryDirectory() as temp_dir:
+            image_spec = Path(temp_dir) / "app" / "spec"
+            image_spec.mkdir(parents=True)
+            for line_number, line in enumerate(
+                dockerfile.read_text(encoding="utf-8").splitlines(), 1
+            ):
+                parts = line.split()
+                if not parts or parts[0] != "COPY":
+                    continue
+                self.assertEqual(
+                    len(parts),
+                    3,
+                    f"unsupported COPY syntax at line {line_number}: {line}",
+                )
+                source = repo_root / parts[1]
+                destination = image_spec / parts[2]
+                if source.is_dir():
+                    shutil.copytree(source, destination, dirs_exist_ok=True)
+                else:
+                    if destination.is_dir() or parts[2].endswith("/"):
+                        destination = destination / source.name
+                    destination.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(source, destination)
+
+            with patch.object(SchemaServiceHandler, "_spec_root", return_value=image_spec):
+                schema_status, schema_body = self._get("/schemas/event.schema.json")
+                contract_status, contract_body = self._get("/contract")
+
+            self.assertEqual(schema_status, 200)
+            self.assertEqual(
+                schema_body,
+                (spec_dir / "schemas" / "json" / "event.schema.json").read_bytes(),
+            )
+            self.assertEqual(contract_status, 200)
+            self.assertEqual(
+                contract_body,
+                (spec_dir / "generated" / "contract" / "loza-contract.json").read_bytes(),
+            )
 
     def test_missing_schema_returns_404(self):
         status, _ = self._get("/schemas/does-not-exist.schema.json")
