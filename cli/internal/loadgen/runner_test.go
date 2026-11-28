@@ -2,6 +2,7 @@ package loadgen
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -47,12 +48,30 @@ func (c *cancelAfterContext) Err() error {
 
 func (c *cancelAfterContext) Done() <-chan struct{} { return c.done }
 
+func writeAcceptedAck(w http.ResponseWriter, r *http.Request) {
+	var request struct {
+		Events []json.RawMessage `json:"events"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusAccepted)
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"request_id": "ing_loadgen_test",
+		"status":     "accepted",
+		"accepted":   len(request.Events),
+		"rejected":   0,
+	})
+}
+
 // TestRunAccountsForBatchBufferedOnCancellation is a regression test for the
 // in-flight batch being silently dropped when the context is cancelled while
 // events are buffered but before the flush condition is met.
 func TestRunAccountsForBatchBufferedOnCancellation(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeAcceptedAck(w, r)
 	}))
 	defer server.Close()
 
@@ -84,8 +103,8 @@ func TestRunAccountsForBatchBufferedOnCancellation(t *testing.T) {
 }
 
 func TestRunAccountsForAllEventsWithoutCancellation(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeAcceptedAck(w, r)
 	}))
 	defer server.Close()
 
@@ -102,6 +121,107 @@ func TestRunAccountsForAllEventsWithoutCancellation(t *testing.T) {
 	}
 	if report.Accepted != events || report.Errors != 0 {
 		t.Fatalf("report = %+v, want accepted=%d errors=0", report, events)
+	}
+}
+
+func TestRunReportsPartialCollectorAcknowledgement(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request struct {
+			Events []json.RawMessage `json:"events"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if len(request.Events) != 2 {
+			t.Errorf("request event count = %d, want 2", len(request.Events))
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusMultiStatus)
+		_, _ = w.Write([]byte(`{"request_id":"ing_loadgen_test","status":"partial","accepted":1,"rejected":1}`))
+	}))
+	defer server.Close()
+
+	report, err := Run(context.Background(), RunnerConfig{
+		URL:       server.URL,
+		Events:    2,
+		Workers:   1,
+		BatchSize: 2,
+		BodySize:  1,
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if report.Accepted != 1 || report.Rejected != 1 || report.Errors != 0 {
+		t.Fatalf("report = %+v, want accepted=1 rejected=1 errors=0", report)
+	}
+}
+
+func TestRunTreatsInvalidAcknowledgementsAsErrors(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		body string
+	}{
+		{name: "absent"},
+		{name: "malformed", body: `{"status":`},
+		{name: "non-Collector", body: `{"message":"ok"}`},
+		{name: "missing request ID", body: `{"status":"accepted","accepted":2,"rejected":0}`},
+		{name: "status contradicts counts", body: `{"request_id":"ing_test","status":"rejected","accepted":2,"rejected":0}`},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(http.StatusAccepted)
+				_, _ = w.Write([]byte(tt.body))
+			}))
+			defer server.Close()
+
+			report, err := Run(context.Background(), RunnerConfig{
+				URL:       server.URL,
+				Events:    2,
+				Workers:   1,
+				BatchSize: 2,
+				BodySize:  1,
+			})
+			if err != nil {
+				t.Fatalf("Run() error = %v", err)
+			}
+			if report.Accepted != 0 || report.Rejected != 0 || report.Errors != 2 {
+				t.Fatalf("report = %+v, want accepted=0 rejected=0 errors=2", report)
+			}
+		})
+	}
+}
+
+func TestPostBatchRejectsOversizedAcknowledgement(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusAccepted)
+		_, _ = w.Write([]byte(strings.Repeat(" ", maxAcknowledgementBytes+1)))
+	}))
+	defer server.Close()
+
+	_, err := postBatch(context.Background(), server.Client(), server.URL, [][]byte{[]byte(`{}`)})
+	if err == nil || !strings.Contains(err.Error(), "exceeds") {
+		t.Fatalf("postBatch() error = %v, want oversized acknowledgement error", err)
+	}
+}
+
+func TestParseAcknowledgementCountsInvalidAndQuarantinedAsRejected(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		body string
+	}{
+		{name: "invalid", body: `{"request_id":"ing_test","status":"partial","accepted":1,"rejected":0,"invalid":1}`},
+		{name: "quarantined", body: `{"request_id":"ing_test","status":"partial","accepted":1,"rejected":0,"quarantined":1}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			outcome, err := parseAcknowledgement([]byte(tc.body), 2)
+			if err != nil {
+				t.Fatalf("parseAcknowledgement() error = %v", err)
+			}
+			if outcome != (batchOutcome{accepted: 1, rejected: 1}) {
+				t.Fatalf("outcome = %+v, want accepted=1 rejected=1", outcome)
+			}
+		})
 	}
 }
 
@@ -141,6 +261,10 @@ func TestRunCategorizesBatchOutcomes(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if tt.status < 300 {
+					writeAcceptedAck(w, r)
+					return
+				}
 				w.WriteHeader(tt.status)
 			}))
 			defer srv.Close()
@@ -222,7 +346,7 @@ func TestRunBatchesEventsWithPositiveBatchSize(t *testing.T) {
 		mu.Lock()
 		requests++
 		mu.Unlock()
-		w.WriteHeader(http.StatusOK)
+		writeAcceptedAck(w, r)
 	}))
 	defer srv.Close()
 
@@ -287,7 +411,7 @@ func TestRunRejectsZeroWorkers(t *testing.T) {
 
 func TestRunAcceptsValidConfig(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusAccepted)
+		writeAcceptedAck(w, r)
 	}))
 	defer srv.Close()
 

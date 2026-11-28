@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math/rand"
 	"net/http"
 	"strings"
@@ -13,6 +14,8 @@ import (
 	"sync/atomic"
 	"time"
 )
+
+const maxAcknowledgementBytes = 1 << 20
 
 type RunnerConfig struct {
 	URL       string
@@ -113,19 +116,26 @@ func flushBatch(ctx context.Context, client *http.Client, cfg RunnerConfig, batc
 	if len(batch) == 0 {
 		return
 	}
-	if err := postBatch(ctx, client, cfg.URL, batch); err != nil {
+	outcome, err := postBatch(ctx, client, cfg.URL, batch)
+	if err != nil {
 		var rejection *rejectionError
 		if errors.As(err, &rejection) {
 			rejected.Add(int64(len(batch)))
 		} else {
 			errorsCount.Add(int64(len(batch)))
 		}
-	} else {
-		accepted.Add(int64(len(batch)))
+		return
 	}
+	accepted.Add(int64(outcome.accepted))
+	rejected.Add(int64(outcome.rejected))
 }
 
-func postBatch(ctx context.Context, client *http.Client, url string, batch [][]byte) error {
+type batchOutcome struct {
+	accepted int
+	rejected int
+}
+
+func postBatch(ctx context.Context, client *http.Client, url string, batch [][]byte) (batchOutcome, error) {
 	if !strings.HasSuffix(url, "/events") {
 		url = strings.TrimRight(url, "/") + "/events"
 	}
@@ -135,23 +145,131 @@ func postBatch(ctx context.Context, client *http.Client, url string, batch [][]b
 	}
 	body, err := json.Marshal(map[string]any{"events": events})
 	if err != nil {
-		return err
+		return batchOutcome{}, err
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
-		return err
+		return batchOutcome{}, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := client.Do(req)
 	if err != nil {
-		return err
+		return batchOutcome{}, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 && resp.StatusCode < 500 {
-		return &rejectionError{statusCode: resp.StatusCode}
+		return batchOutcome{}, &rejectionError{statusCode: resp.StatusCode}
 	}
 	if resp.StatusCode >= 300 {
-		return fmt.Errorf("loadgen post returned %d", resp.StatusCode)
+		return batchOutcome{}, fmt.Errorf("loadgen post returned %d", resp.StatusCode)
 	}
-	return nil
+
+	responseBody, err := io.ReadAll(io.LimitReader(resp.Body, maxAcknowledgementBytes+1))
+	if err != nil {
+		return batchOutcome{}, fmt.Errorf("read Collector acknowledgement: %w", err)
+	}
+	if len(responseBody) > maxAcknowledgementBytes {
+		return batchOutcome{}, fmt.Errorf("Collector acknowledgement exceeds %d bytes", maxAcknowledgementBytes)
+	}
+	outcome, err := parseAcknowledgement(responseBody, len(batch))
+	if err != nil {
+		return batchOutcome{}, err
+	}
+	return outcome, nil
+}
+
+// parseAcknowledgement accepts the Collector's status/count acknowledgement
+// fields. Invalid and quarantined events are reported as rejected because the
+// loadgen report has no separate counters for those non-accepted outcomes.
+func parseAcknowledgement(body []byte, batchSize int) (batchOutcome, error) {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(body, &fields); err != nil {
+		return batchOutcome{}, fmt.Errorf("invalid Collector acknowledgement JSON: %w", err)
+	}
+	if fields == nil {
+		return batchOutcome{}, fmt.Errorf("invalid Collector acknowledgement: expected an object")
+	}
+
+	var requestID string
+	if raw, ok := fields["request_id"]; !ok || json.Unmarshal(raw, &requestID) != nil || !strings.HasPrefix(requestID, "ing_") {
+		return batchOutcome{}, fmt.Errorf("invalid Collector acknowledgement: missing or invalid request_id")
+	}
+	var status string
+	if raw, ok := fields["status"]; !ok || json.Unmarshal(raw, &status) != nil {
+		return batchOutcome{}, fmt.Errorf("invalid Collector acknowledgement: missing or invalid status")
+	}
+	switch status {
+	case "accepted", "partial", "rejected", "invalid", "quarantined":
+	default:
+		return batchOutcome{}, fmt.Errorf("invalid Collector acknowledgement: unsupported status %q", status)
+	}
+
+	readCount := func(name string, required bool) (int, error) {
+		raw, ok := fields[name]
+		if !ok {
+			if required {
+				return 0, fmt.Errorf("missing %s count", name)
+			}
+			return 0, nil
+		}
+		var value *int
+		if err := json.Unmarshal(raw, &value); err != nil || value == nil || *value < 0 {
+			return 0, fmt.Errorf("invalid %s count", name)
+		}
+		return *value, nil
+	}
+	accepted, err := readCount("accepted", true)
+	if err != nil {
+		return batchOutcome{}, fmt.Errorf("invalid Collector acknowledgement: %w", err)
+	}
+	rejected, err := readCount("rejected", true)
+	if err != nil {
+		return batchOutcome{}, fmt.Errorf("invalid Collector acknowledgement: %w", err)
+	}
+	invalid, err := readCount("invalid", false)
+	if err != nil {
+		return batchOutcome{}, fmt.Errorf("invalid Collector acknowledgement: %w", err)
+	}
+	quarantined, err := readCount("quarantined", false)
+	if err != nil {
+		return batchOutcome{}, fmt.Errorf("invalid Collector acknowledgement: %w", err)
+	}
+	if accepted > batchSize || rejected > batchSize-accepted {
+		return batchOutcome{}, fmt.Errorf("invalid Collector acknowledgement: counts exceed batch size %d", batchSize)
+	}
+	remaining := batchSize - accepted - rejected
+	if invalid > remaining {
+		return batchOutcome{}, fmt.Errorf("invalid Collector acknowledgement: counts exceed batch size %d", batchSize)
+	}
+	remaining -= invalid
+	if quarantined > remaining {
+		return batchOutcome{}, fmt.Errorf("invalid Collector acknowledgement: counts exceed batch size %d", batchSize)
+	}
+	remaining -= quarantined
+	if remaining != 0 {
+		return batchOutcome{}, fmt.Errorf(
+			"invalid Collector acknowledgement: counts accepted=%d rejected=%d invalid=%d quarantined=%d do not match batch size %d",
+			accepted, rejected, invalid, quarantined, batchSize,
+		)
+	}
+
+	reportedRejected := batchSize - accepted
+	expectedStatus := "rejected"
+	switch {
+	case accepted > 0 && reportedRejected > 0:
+		expectedStatus = "partial"
+	case accepted > 0:
+		expectedStatus = "accepted"
+	case quarantined > 0:
+		expectedStatus = "quarantined"
+	case invalid > 0:
+		expectedStatus = "invalid"
+	}
+	if status != expectedStatus {
+		return batchOutcome{}, fmt.Errorf(
+			"invalid Collector acknowledgement: status %q contradicts event counts (expected %q)",
+			status, expectedStatus,
+		)
+	}
+	return batchOutcome{accepted: accepted, rejected: reportedRejected}, nil
 }
