@@ -8,6 +8,8 @@ All notable changes to this project are documented in this file.
 
 - Align CLI command examples with the current parsers and verify their output
   through finite command tests.
+- Use the linker-injected CLI version consistently in usage, help and `--version`
+  output.
 
 ## [0.3.4] - 2026-08-26
 
