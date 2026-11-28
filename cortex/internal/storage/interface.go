@@ -128,6 +128,7 @@ type SignatureStore interface {
 	Save(ctx context.Context, sig *models.IncidentSignature) error
 	Get(ctx context.Context, id string) (*models.IncidentSignature, error)
 	List(ctx context.Context, limit int) ([]*models.IncidentSignature, error)
+	// FindSimilar returns candidate scores; callers apply configured similarity thresholds.
 	FindSimilar(ctx context.Context, sig *models.IncidentSignature, limit int) ([]*models.SimilarIncident, error)
 	FindByBehavioralHash(ctx context.Context, hash string) ([]*models.IncidentSignature, error)
 	UpdateDecay(ctx context.Context, signatureID string, factor float64) error

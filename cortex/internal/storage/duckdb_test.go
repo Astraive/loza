@@ -135,3 +135,91 @@ func TestDuckDBFindSimilarRanksFallbackBeforeLimit(t *testing.T) {
 		t.Errorf("FindSimilar limit 1 = %+v, want only exact signature", top)
 	}
 }
+
+func TestDuckDBFindSimilarReturnsSubthresholdCandidates(t *testing.T) {
+	ctx := context.Background()
+	stor, err := NewDuckDBStorage(filepath.Join(t.TempDir(), "subthreshold.duckdb"))
+	if err != nil {
+		t.Fatalf("open DuckDB: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := stor.Close(); err != nil {
+			t.Errorf("close DuckDB: %v", err)
+		}
+	})
+	if err := stor.Init(ctx); err != nil {
+		t.Fatalf("initialize DuckDB: %v", err)
+	}
+
+	signatures := stor.Signatures()
+	query := &models.IncidentSignature{SignatureID: "query", Shape: "api_timeout"}
+	candidate := &models.IncidentSignature{SignatureID: "subthreshold", Shape: query.Shape}
+	if err := signatures.Save(ctx, candidate); err != nil {
+		t.Fatalf("save signature: %v", err)
+	}
+
+	matches, err := signatures.FindSimilar(ctx, query, 5)
+	if err != nil {
+		t.Fatalf("FindSimilar: %v", err)
+	}
+	if len(matches) != 1 || matches[0].IncidentID != candidate.SignatureID {
+		t.Fatalf("FindSimilar = %+v, want the subthreshold candidate", matches)
+	}
+	if matches[0].Similarity != 0.4 {
+		t.Errorf("subthreshold similarity = %v, want 0.4", matches[0].Similarity)
+	}
+}
+
+func TestDuckDBFindSimilarSQLRetainsSubthresholdCandidate(t *testing.T) {
+	ctx := context.Background()
+	stor, err := NewDuckDBStorage(filepath.Join(t.TempDir(), "sql-subthreshold.duckdb"))
+	if err != nil {
+		t.Fatalf("open DuckDB: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := stor.Close(); err != nil {
+			t.Errorf("close DuckDB: %v", err)
+		}
+	})
+	if err := stor.Init(ctx); err != nil {
+		t.Fatalf("initialize DuckDB: %v", err)
+	}
+
+	signatures := stor.Signatures()
+	queryVector := make([]float64, 768)
+	queryVector[0] = 1
+	query := &models.IncidentSignature{SignatureID: "query", FeatureVector: queryVector}
+
+	insertEmbedding := func(signatureID, secondValue string) {
+		values := make([]string, 768)
+		for i := range values {
+			values[i] = "0"
+		}
+		values[0] = "1"
+		values[1] = secondValue
+		embedding := "CAST([" + strings.Join(values, ",") + "] AS FLOAT[768])"
+		_, err := stor.db.ExecContext(ctx,
+			"INSERT INTO incident_signatures (signature_id, shape, embedding) VALUES (?, ?, "+embedding+")",
+			signatureID, "api_timeout",
+		)
+		if err != nil {
+			t.Fatalf("insert embedding for %q: %v", signatureID, err)
+		}
+	}
+	insertEmbedding("high", "0")
+	insertEmbedding("below-sql-cutoff", "4")
+
+	matches, err := signatures.FindSimilar(ctx, query, 5)
+	if err != nil {
+		t.Fatalf("FindSimilar: %v", err)
+	}
+	if len(matches) != 2 {
+		t.Fatalf("FindSimilar returned %d results, want 2: %+v", len(matches), matches)
+	}
+	if matches[0].IncidentID != "high" || matches[1].IncidentID != "below-sql-cutoff" {
+		t.Fatalf("FindSimilar order = [%q, %q], want [high, below-sql-cutoff]", matches[0].IncidentID, matches[1].IncidentID)
+	}
+	if matches[1].Similarity <= 0.2 || matches[1].Similarity >= 0.3 {
+		t.Errorf("below-cutoff similarity = %v, want between 0.2 and 0.3", matches[1].Similarity)
+	}
+}

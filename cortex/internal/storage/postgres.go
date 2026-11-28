@@ -1362,19 +1362,17 @@ func (s *PostgresSignatureStore) FindSimilar(ctx context.Context, sig *models.In
 		}
 
 		similarity := computeSimilarityPostgres(sig, &candidate)
-		if similarity >= 0.5 {
-			resolution := ""
-			if len(candidate.Remediation) > 0 {
-				resolution = candidate.Remediation[0]
-			}
-			results = append(results, &models.SimilarIncident{
-				IncidentID:     candidate.SignatureID,
-				Similarity:     similarity,
-				Shape:          candidate.Shape,
-				Resolution:     resolution,
-				ResolutionTime: candidate.AvgResolutionTime,
-			})
+		resolution := ""
+		if len(candidate.Remediation) > 0 {
+			resolution = candidate.Remediation[0]
 		}
+		results = append(results, &models.SimilarIncident{
+			IncidentID:     candidate.SignatureID,
+			Similarity:     similarity,
+			Shape:          candidate.Shape,
+			Resolution:     resolution,
+			ResolutionTime: candidate.AvgResolutionTime,
+		})
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
