@@ -490,7 +490,7 @@ logger, sink = TestLogger("test")
 events = Capture(lambda logger: some_function(logger))
 
 # Assert
-AssertEvent(events[0], **{"attrs.user.id": "u_123"})
+AssertEvent(events[0], **{"user.id": "u_123"})
 AssertRedacted(events[0], "attrs.password")
 AssertHasCheckpoint(events[0], "payment_started")
 ```
