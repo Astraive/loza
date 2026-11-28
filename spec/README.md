@@ -187,17 +187,44 @@ The specification generates authoritative contracts for both Loza and Cortex:
 Generated at: `generated/contract/loza-contract.json`
 
 ### Cortex Contract
+
 ```json
 {
   "spec_version": "v1",
   "api_version": "v1",
-  "kinds": ["event", "metric", "log", ...],
-  "provenance_types": ["loza", "collector", "otlp", "jsonl", "manual", "replay"],
-  "graph_node_types": ["service", "event", "trace", "span", ...],
-  "graph_edge_types": ["depends_on", "same_trace", "parent_span", ...],
+  "schemas": {
+    "event": "spec/cortex/schemas/json/cortex-event.schema.json",
+    "graph_node": "spec/cortex/schemas/json/cortex-graph-node.schema.json",
+    "graph_edge": "spec/cortex/schemas/json/cortex-graph-edge.schema.json",
+    "reconstruct_response": "spec/cortex/schemas/json/cortex-reconstruct-response.schema.json",
+    "feedback": "spec/cortex/schemas/json/cortex-feedback.schema.json"
+  },
+  "event_kinds": [
+    "deploy", "log", "metric", "trace", "topology", "incident_signal",
+    "remediation", "loza_event", "otel_log", "otel_span", "collector_event",
+    "http", "job", "queue", "cli", "cron", "agent", "ai"
+  ],
+  "event_levels": ["debug", "info", "warning", "error", "critical"],
+  "event_outcomes": ["success", "failure", "partial", "unknown"],
+  "provenance": ["loza", "otlp", "collector", "jsonl", "grpc"],
+  "graph_node_types": ["service", "deployment", "incident", "metric", "log"],
+  "graph_edge_types": [
+    "same_trace", "same_incident", "service_renamed_to", "depends_on",
+    "deployed_before", "metric_spiked_after", "log_error_after",
+    "caused_probably", "remediated_by", "similar_shape", "same_family",
+    "co_occurred", "deployment_adjacent", "remediation_sequence",
+    "inferred_causality"
+  ],
   "routes": {
-    "/cortex.CortexService/IngestEvent": { ... },
-    ...
+    "ingest_event": "POST /events",
+    "ingest_batch": "POST /events/batch",
+    "ingest_jsonl": "POST /events/jsonl",
+    "reconstruct": "POST /incidents/{incident_id}/reconstruct",
+    "service_graph": "GET /graph/service/{service}",
+    "incident_graph": "GET /graph/incident/{incident_id}",
+    "record_feedback": "POST /feedback/incident",
+    "record_remediation": "POST /feedback/remediation",
+    "stream_events": "GET /ws"
   }
 }
 ```
