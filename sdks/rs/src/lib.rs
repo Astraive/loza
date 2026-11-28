@@ -24,7 +24,7 @@ pub mod storagepath;
 pub mod testkit;
 pub mod utils;
 
-use serde_json::Value;
+use serde_json::{Map, Value};
 use std::sync::{Arc, OnceLock, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 pub use crate::core::client::{
@@ -226,11 +226,38 @@ pub fn Delete(event: &mut EventContext, key: &str) {
 }
 
 pub fn Get<'a>(event: &'a EventContext, key: &str) -> Option<&'a Value> {
-    event.attrs.get(key)
+    let (map, key) = if let Some(key) = key.strip_prefix("user.") {
+        (&event.user, key)
+    } else if let Some(key) = key.strip_prefix("tenant.") {
+        (&event.tenant, key)
+    } else if let Some(key) = key.strip_prefix("http.") {
+        (&event.http, key)
+    } else if let Some(key) = key.strip_prefix("resource.") {
+        (&event.resource, key)
+    } else {
+        (&event.attrs, key)
+    };
+    map.get(key).or_else(|| get_nested(map, key))
 }
 
-pub fn GetGroup<'a>(event: &'a EventContext, group: &str) -> Option<&'a Value> {
-    event.attrs.get(group)
+pub fn GetGroup<'a>(event: &'a EventContext, group: &str) -> Option<&'a Map<String, Value>> {
+    let map = match group {
+        "user" => &event.user,
+        "tenant" => &event.tenant,
+        "http" => &event.http,
+        "resource" => &event.resource,
+        _ => return get_nested(&event.attrs, group)?.as_object(),
+    };
+    (!map.is_empty()).then_some(map)
+}
+
+fn get_nested<'a>(map: &'a Map<String, Value>, path: &str) -> Option<&'a Value> {
+    let mut parts = path.split('.');
+    let mut value = map.get(parts.next()?)?;
+    for part in parts {
+        value = value.as_object()?.get(part)?;
+    }
+    Some(value)
 }
 
 pub fn Checkpoint(event: &mut EventContext, name: impl Into<String>) {
@@ -2006,7 +2033,7 @@ pub fn get<'a>(event: &'a EventContext, key: &str) -> Option<&'a Value> {
     Get(event, key)
 }
 
-pub fn get_group<'a>(event: &'a EventContext, group: &str) -> Option<&'a Value> {
+pub fn get_group<'a>(event: &'a EventContext, group: &str) -> Option<&'a Map<String, Value>> {
     GetGroup(event, group)
 }
 

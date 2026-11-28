@@ -39,10 +39,23 @@ mod coverage_tests {
         Append(&mut event, String("one", "1"));
         Enrich(&mut event, vec![Int("two", 2), Bool("three", true)]);
         Set(&mut event, "four", json!(4));
+        Set(&mut event, "order.id", "o-123");
+        Append(&mut event, String("user.id", "u-123"));
         let mut fields = serde_json::Map::new();
         fields.insert("five".into(), json!(5));
         Merge(&mut event, fields);
         assert_eq!(Get(&event, "one"), Some(&json!("1")));
+        assert_eq!(Get(&event, "order.id"), Some(&json!("o-123")));
+        assert_eq!(get(&event, "order.id"), Some(&json!("o-123")));
+        assert_eq!(Get(&event, "user.id"), Some(&json!("u-123")));
+        assert_eq!(
+            GetGroup(&event, "user").and_then(|group| group.get("id")),
+            Some(&json!("u-123"))
+        );
+        assert_eq!(
+            get_group(&event, "user").and_then(|group| group.get("id")),
+            Some(&json!("u-123"))
+        );
         assert!(GetGroup(&event, "missing").is_none());
         Checkpoint(&mut event, "checkpoint");
         CheckpointWithAttrs(&mut event, "checkpoint2", &[String("ok", "yes")]);
