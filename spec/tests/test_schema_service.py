@@ -143,17 +143,27 @@ class TestSchemaServiceDockerHealthcheck(unittest.TestCase):
             import healthcheck
 
             with patch.dict(
-                os.environ, {"SCHEMA_SERVICE_PORT": str(image_port)}, clear=True
+                os.environ,
+                {
+                    "SCHEMA_SERVICE_PORT": str(image_port),
+                    "SCHEMA_SERVICE_HOST": "127.0.0.1",
+                },
+                clear=True,
             ):
-                self.assertEqual(
-                    _env_int("SCHEMA_SERVICE_PORT", 9315), image_port
+                service_port = _env_int("SCHEMA_SERVICE_PORT", 9315)
+                self.assertEqual(service_port, image_port)
+                server = ThreadingHTTPServer(
+                    ("127.0.0.1", service_port), SchemaServiceHandler
                 )
-                with patch("healthcheck.urllib.request.urlopen") as urlopen:
-                    urlopen.return_value.__enter__.return_value.status = 200
+                server.start_time = time.time()
+                thread = threading.Thread(target=server.serve_forever, daemon=True)
+                thread.start()
+                try:
                     self.assertEqual(healthcheck.main(), 0)
-                    urlopen.assert_called_once_with(
-                        f"http://127.0.0.1:{image_port}/health", timeout=2
-                    )
+                finally:
+                    server.shutdown()
+                    server.server_close()
+                    thread.join(timeout=5)
 
             with patch.dict(os.environ, {}, clear=True):
                 with patch("healthcheck.urllib.request.urlopen") as urlopen:
