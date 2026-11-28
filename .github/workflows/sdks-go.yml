@@ -64,7 +64,7 @@ jobs:
       - name: Build (all modules)
         shell: pwsh
         run: |
-          $modules = @(".", "src/middleware", "src/integrations", "bench", "tests/integration")
+          $modules = @(".", "src/middleware", "src/integrations", "bench", "tests/integration", "examples/httpbatch-to-collector")
           foreach ($module in $modules) {
             Push-Location $module
             go build ./...
@@ -74,7 +74,7 @@ jobs:
       - name: Vet (all modules)
         shell: pwsh
         run: |
-          $modules = @(".", "src/middleware", "src/integrations", "bench", "tests/integration")
+          $modules = @(".", "src/middleware", "src/integrations", "bench", "tests/integration", "examples/httpbatch-to-collector")
           foreach ($module in $modules) {
             Push-Location $module
             go vet ./...
@@ -96,7 +96,7 @@ jobs:
       - name: Tests (all modules)
         shell: pwsh
         run: |
-          $modules = @(".", "src/middleware", "src/integrations", "bench", "tests/integration")
+          $modules = @(".", "src/middleware", "src/integrations", "bench", "tests/integration", "examples/httpbatch-to-collector")
           foreach ($module in $modules) {
             Push-Location $module
             go test ./... -count=1 -race
