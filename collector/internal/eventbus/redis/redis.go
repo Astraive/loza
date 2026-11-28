@@ -37,7 +37,8 @@ const redisPendingClaimInterval = 5 * time.Second
 
 const redisClaimHeartbeatInterval = 10 * time.Second
 
-const redisPendingClaimCount = 10
+// Claim one abandoned entry before starting its handler.
+const redisPendingClaimCount = 1
 
 var errNackWithoutCause = errors.New("eventbus/redis: message nacked without cause")
 
@@ -215,7 +216,7 @@ func (b *redisBus) consume(ctx context.Context, stream, group, consumer string, 
 			Group:    group,
 			Consumer: consumer,
 			Streams:  []string{stream, ">"},
-			Count:    10,
+			Count:    1, // Keep unleased prefetched entries out of the PEL.
 			Block:    redisReadBlock,
 		}).Result()
 		if err != nil {
@@ -320,11 +321,20 @@ func (b *redisBus) handleMessage(
 		streamID: msg.ID,
 		bus:      b,
 	}
-	stopHeartbeat := b.keepClaimAlive(ctx, stream, group, consumer, msg.ID)
+	handlerCtx, cancelHandler := context.WithCancel(ctx)
+	defer cancelHandler()
+	var leaseLost atomic.Bool
+	stopHeartbeat := b.keepClaimAlive(handlerCtx, stream, group, consumer, msg.ID, func() {
+		leaseLost.Store(true)
+		cancelHandler()
+	})
 	handlerErr := func() error {
 		defer stopHeartbeat()
-		return handler(ctx, busMsg)
+		return handler(handlerCtx, busMsg)
 	}()
+	if leaseLost.Load() {
+		return ctx.Err() == nil
+	}
 	if handlerErr != nil {
 		// An interrupted handler was not committed. Leave it pending so a later
 		// consumer can claim it without spending the retry budget.
@@ -356,6 +366,7 @@ func (b *redisBus) handleMessage(
 func (b *redisBus) keepClaimAlive(
 	ctx context.Context,
 	stream, group, consumer, messageID string,
+	cancelHandler context.CancelFunc,
 ) func() {
 	heartbeatCtx, cancel := context.WithCancel(ctx)
 	done := make(chan struct{})
@@ -380,7 +391,9 @@ func (b *redisBus) keepClaimAlive(
 				if err != nil && heartbeatCtx.Err() == nil {
 					log.Error().Err(err).Str("stream", stream).Str("group", group).
 						Str("consumer", consumer).Str("message_id", messageID).
-						Msg("failed to refresh active Redis message claim")
+						Msg("failed to refresh active Redis message claim; canceling handler")
+					cancelHandler()
+					return
 				}
 			}
 		}
