@@ -190,7 +190,7 @@ await loza.emit(ctx);
 
 // Audit event with loza.alias metadata
 const auditCtx = audit.startEvent({ event: 'audit.action', kind: 'http' });
-audit.enrich(ctx, string('action', 'user.login'));
+audit.enrich(auditCtx, string('action', 'user.login'));
 audit.finish(auditCtx, 'success');
 await audit.emit(auditCtx);
 ```

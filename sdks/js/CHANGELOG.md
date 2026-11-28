@@ -2,6 +2,12 @@
 
 All notable changes to this project are documented in this file.
 
+## [Unreleased]
+
+### Fixed
+
+- Fix the alias getting-started example to enrich the audit event context.
+
 ## [0.3.4] - 2026-08-26
 
 ### Changed
