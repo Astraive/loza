@@ -30,9 +30,9 @@ go get github.com/astraive/loza/sdks/go
 Optional modules:
 
 ```bash
-go get github.com/astraive/loza/sdks/go/middleware
-go get github.com/astraive/loza/sdks/go/integrations
-go get github.com/astraive/loza/sdks/go/sinks/httpbatch
+go get github.com/astraive/loza/sdks/go/src/middleware
+go get github.com/astraive/loza/sdks/go/src/integrations
+go get github.com/astraive/loza/sdks/go/src/sinks/httpbatch
 ```
 
 ## Credential transport security
@@ -135,10 +135,10 @@ For cross-language stable-v1 parity, treat `docs/sdk-parity-manifest.json` as th
 ## Package Boundaries
 
 - `github.com/astraive/loza/sdks/go`: lifecycle, attrs, config, schema, sampler, security, core sinks.
-- `github.com/astraive/loza/sdks/go/middleware/*`: HTTP/RPC adapters.
-- `github.com/astraive/loza/sdks/go/integrations/*`: slog/zap/zerolog/otel bridges.
-- `github.com/astraive/loza/sdks/go/sinks/httpbatch`: collector HTTP batch transport.
-- `github.com/astraive/loza/sdks/go/testkit`: capture/assert helpers for tests.
+- `github.com/astraive/loza/sdks/go/src/middleware/*`: HTTP/RPC adapters.
+- `github.com/astraive/loza/sdks/go/src/integrations/*`: slog/zap/zerolog/otel bridges.
+- `github.com/astraive/loza/sdks/go/src/sinks/httpbatch`: collector HTTP batch transport.
+- `github.com/astraive/loza/sdks/go/src/testkit`: capture/assert helpers for tests.
 
 Repository boundaries:
 
@@ -173,8 +173,8 @@ Heavy production sinks such as Kafka, ClickHouse, Postgres, DuckDB, OTLP, S3, GC
 
 ## Breaking Changes in Current Refactor
 
-- Root testing helpers moved to `github.com/astraive/loza/sdks/go/testkit`.
-- Root `net/http` middleware wrapper removed; use `github.com/astraive/loza/sdks/go/middleware/nethttp`.
+- Root testing helpers moved to `github.com/astraive/loza/sdks/go/src/testkit`.
+- Root `net/http` middleware wrapper removed; use `github.com/astraive/loza/sdks/go/src/middleware/nethttp`.
 
 ## Current Focus
 

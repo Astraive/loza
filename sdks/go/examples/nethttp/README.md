@@ -7,7 +7,7 @@ import (
 	"net/http"
 
 	"github.com/astraive/loza/sdks/go"
-	lozahttp "github.com/astraive/loza/sdks/go/middleware/nethttp"
+	lozahttp "github.com/astraive/loza/sdks/go/src/middleware/nethttp"
 )
 
 func main() {

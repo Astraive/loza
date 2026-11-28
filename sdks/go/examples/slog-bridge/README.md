@@ -5,10 +5,9 @@ package main
 
 import (
 	"log/slog"
-	"os"
 
 	"github.com/astraive/loza/sdks/go"
-	lozaslog "github.com/astraive/loza/sdks/go/integrations/slog"
+	lozaslog "github.com/astraive/loza/sdks/go/src/integrations/slog"
 )
 
 func main() {
