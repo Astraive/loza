@@ -1,0 +1,401 @@
+{
+  "$id": "https://github.com/Astraive/loza/spec/cortex/schemas/json/cortex-event.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "LOZA Cortex Event",
+  "type": "object",
+  "required": ["id", "timestamp", "service", "kind"],
+  "properties": {
+    "id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "event_id": {
+      "type": "string"
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "service": {
+      "type": "string",
+      "minLength": 1
+    },
+    "environment": {
+      "type": "string"
+    },
+    "release": {
+      "type": "string"
+    },
+    "schema_version": {
+      "type": "string"
+    },
+    "event_version": {
+      "type": "string"
+    },
+    "version": {
+      "type": "string"
+    },
+    "event": {
+      "type": "string"
+    },
+    "kind": {
+      "type": "string",
+      "enum": [
+        "deploy",
+        "log",
+        "metric",
+        "trace",
+        "topology",
+        "incident_signal",
+        "remediation",
+        "loza_event",
+        "otel_log",
+        "otel_span",
+        "collector_event",
+        "http",
+        "job",
+        "queue",
+        "cli",
+        "cron",
+        "agent",
+        "ai"
+      ]
+    },
+    "level": {
+      "type": "string",
+      "enum": ["debug", "info", "warning", "error", "critical"]
+    },
+    "outcome": {
+      "type": "string",
+      "enum": ["success", "failure", "partial", "unknown"]
+    },
+    "duration_ms": {
+      "type": "number"
+    },
+    "trace_id": {
+      "type": "string"
+    },
+    "span_id": {
+      "type": "string"
+    },
+    "trace_flags": {
+      "type": "string"
+    },
+    "request_id": {
+      "type": "string"
+    },
+    "http": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/HttpContext"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "user": {
+      "type": ["object", "null"],
+      "additionalProperties": true
+    },
+    "tenant": {
+      "type": ["object", "null"],
+      "additionalProperties": true
+    },
+    "attrs": {
+      "type": ["object", "null"],
+      "additionalProperties": true
+    },
+    "error": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/EventError"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "checkpoints": {
+      "type": ["array", "null"],
+      "items": {
+        "oneOf": [
+          {
+            "$ref": "#/$defs/EventCheckpoint"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      }
+    },
+    "processes": {
+      "type": ["array", "null"],
+      "items": {
+        "oneOf": [
+          {
+            "$ref": "#/$defs/EventProcess"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      }
+    },
+    "groups": {
+      "type": ["array", "null"],
+      "items": {
+        "oneOf": [
+          {
+            "$ref": "#/$defs/EventGroup"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      }
+    },
+    "timers": {
+      "type": ["array", "null"],
+      "items": {
+        "oneOf": [
+          {
+            "$ref": "#/$defs/EventTimer"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      }
+    },
+    "links": {
+      "type": ["array", "null"],
+      "items": {
+        "oneOf": [
+          {
+            "$ref": "#/$defs/EventLink"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      }
+    },
+    "sdk_name": {
+      "type": "string"
+    },
+    "sdk_version": {
+      "type": "string"
+    },
+    "sdk_language": {
+      "type": "string"
+    },
+    "raw": {
+      "type": ["object", "null"],
+      "additionalProperties": true
+    },
+    "provenance": {
+      "type": "string",
+      "enum": ["", "loza", "otlp", "collector", "jsonl", "grpc"]
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "incident_id": {
+      "type": "string"
+    }
+  },
+  "$defs": {
+    "HttpContext": {
+      "type": "object",
+      "properties": {
+        "method": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "route": {
+          "type": "string"
+        },
+        "status_code": {
+          "type": "integer"
+        },
+        "client_ip": {
+          "type": "string"
+        },
+        "user_agent": {
+          "type": "string"
+        },
+        "url": {
+          "type": "string"
+        },
+        "host": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "EventError": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        },
+        "code": {
+          "type": "string"
+        },
+        "retriable": {
+          "type": "boolean"
+        },
+        "cause": {
+          "type": "string"
+        },
+        "stack": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "EventCheckpoint": {
+      "type": "object",
+      "required": ["name", "at_ms"],
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "at_ms": {
+          "type": "integer"
+        },
+        "attrs": {
+          "type": ["object", "null"],
+          "additionalProperties": true
+        }
+      },
+      "additionalProperties": false
+    },
+    "EventProcess": {
+      "type": "object",
+      "required": ["step", "name", "started_at_ms"],
+      "properties": {
+        "step": {
+          "type": "integer"
+        },
+        "name": {
+          "type": "string"
+        },
+        "status_code": {
+          "type": "integer"
+        },
+        "started_at_ms": {
+          "type": "integer"
+        },
+        "ended_at_ms": {
+          "type": "integer"
+        },
+        "duration_ms": {
+          "type": "integer"
+        },
+        "attrs": {
+          "type": ["object", "null"],
+          "additionalProperties": true
+        },
+        "outcome": {
+          "type": "string"
+        },
+        "error": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/EventError"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "EventGroup": {
+      "type": "object",
+      "required": ["name", "started_at_ms"],
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "status_code": {
+          "type": "integer"
+        },
+        "started_at_ms": {
+          "type": "integer"
+        },
+        "ended_at_ms": {
+          "type": "integer"
+        },
+        "duration_ms": {
+          "type": "integer"
+        },
+        "attrs": {
+          "type": ["object", "null"],
+          "additionalProperties": true
+        },
+        "outcome": {
+          "type": "string"
+        },
+        "error": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/EventError"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "EventTimer": {
+      "type": "object",
+      "required": ["name", "duration_ms"],
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "duration_ms": {
+          "type": "integer"
+        },
+        "status_code": {
+          "type": "integer"
+        },
+        "attrs": {
+          "type": ["object", "null"],
+          "additionalProperties": true
+        }
+      },
+      "additionalProperties": false
+    },
+    "EventLink": {
+      "type": "object",
+      "required": ["type", "target"],
+      "properties": {
+        "type": {
+          "type": "string"
+        },
+        "target": {
+          "type": "string"
+        },
+        "attrs": {
+          "type": ["object", "null"],
+          "additionalProperties": true
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

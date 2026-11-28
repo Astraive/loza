@@ -200,6 +200,14 @@ def check_registry_integrity() -> list[str]:
     for name, rel_path in contract.get("schemas", {}).items():
         if not (REPO_ROOT / rel_path).exists():
             errors.append(f"contract schema path {name!r} does not exist: {rel_path}")
+    cortex_generated = SPEC_ROOT / "generated" / "contract" / "cortex-contract.json"
+    cortex_contract = _load_json(cortex_generated)
+    for name, rel_path in cortex_contract.get("schemas", {}).items():
+        if not (REPO_ROOT / rel_path).is_file():
+            errors.append(
+                f"Cortex contract schema path {name!r} does not exist: {rel_path}"
+            )
+
     return errors
 
 

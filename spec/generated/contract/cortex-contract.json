@@ -9,15 +9,8 @@
     "feedback": "spec/cortex/schemas/json/cortex-feedback.schema.json"
   },
   "event_kinds": [
-    "event",
-    "http",
-    "job",
-    "queue",
-    "cli",
-    "cron",
-    "log",
-    "checkpoint",
     "deploy",
+    "log",
     "metric",
     "trace",
     "topology",
@@ -26,7 +19,14 @@
     "loza_event",
     "otel_log",
     "otel_span",
-    "collector_event"
+    "collector_event",
+    "http",
+    "job",
+    "queue",
+    "cli",
+    "cron",
+    "agent",
+    "ai"
   ],
   "event_levels": [
     "debug",
@@ -43,37 +43,34 @@
   ],
   "provenance": [
     "loza",
-    "collector",
     "otlp",
+    "collector",
     "jsonl",
-    "manual",
-    "replay"
+    "grpc"
   ],
   "graph_node_types": [
     "service",
-    "event",
-    "trace",
-    "span",
-    "request",
     "deployment",
-    "metric",
-    "log",
     "incident",
-    "remediation",
-    "resource"
+    "metric",
+    "log"
   ],
   "graph_edge_types": [
-    "depends_on",
     "same_trace",
     "same_incident",
-    "parent_span",
-    "calls",
+    "service_renamed_to",
+    "depends_on",
     "deployed_before",
     "metric_spiked_after",
     "log_error_after",
     "caused_probably",
     "remediated_by",
-    "similar_shape"
+    "similar_shape",
+    "same_family",
+    "co_occurred",
+    "deployment_adjacent",
+    "remediation_sequence",
+    "inferred_causality"
   ],
   "routes": {
     "ingest_event": "POST /events",
@@ -82,7 +79,8 @@
     "reconstruct": "POST /incidents/{incident_id}/reconstruct",
     "service_graph": "GET /graph/service/{service}",
     "incident_graph": "GET /graph/incident/{incident_id}",
-    "record_feedback": "POST /feedback/remediation",
+    "record_feedback": "POST /feedback/incident",
+    "record_remediation": "POST /feedback/remediation",
     "stream_events": "GET /ws"
   }
 }

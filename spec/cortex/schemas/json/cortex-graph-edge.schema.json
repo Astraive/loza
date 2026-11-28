@@ -1,0 +1,55 @@
+{
+  "$id": "https://github.com/Astraive/loza/spec/cortex/schemas/json/cortex-graph-edge.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "LOZA Cortex Graph Edge",
+  "type": "object",
+  "required": ["id", "from_node_id", "to_node_id", "type"],
+  "properties": {
+    "id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "from_node_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "to_node_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "type": {
+      "type": "string",
+      "enum": [
+        "same_trace",
+        "same_incident",
+        "service_renamed_to",
+        "depends_on",
+        "deployed_before",
+        "metric_spiked_after",
+        "log_error_after",
+        "caused_probably",
+        "remediated_by",
+        "similar_shape",
+        "same_family",
+        "co_occurred",
+        "deployment_adjacent",
+        "remediation_sequence",
+        "inferred_causality"
+      ]
+    },
+    "weight": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "attributes": {
+      "type": ["object", "null"],
+      "additionalProperties": true
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "additionalProperties": false
+}

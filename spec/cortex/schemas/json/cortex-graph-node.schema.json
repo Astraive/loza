@@ -1,0 +1,34 @@
+{
+  "$id": "https://github.com/Astraive/loza/spec/cortex/schemas/json/cortex-graph-node.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "LOZA Cortex Graph Node",
+  "type": "object",
+  "required": ["id", "type", "label"],
+  "properties": {
+    "id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "type": {
+      "type": "string",
+      "enum": ["service", "deployment", "incident", "metric", "log"]
+    },
+    "label": {
+      "type": "string",
+      "minLength": 1
+    },
+    "attributes": {
+      "type": ["object", "null"],
+      "additionalProperties": true
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "updated_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "additionalProperties": false
+}

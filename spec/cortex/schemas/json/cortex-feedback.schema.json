@@ -1,0 +1,40 @@
+{
+  "$id": "https://github.com/Astraive/loza/spec/cortex/schemas/json/cortex-feedback.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "LOZA Cortex Feedback",
+  "type": "object",
+  "required": ["incident_id", "remediation_id", "outcome_code"],
+  "properties": {
+    "feedback_id": {
+      "type": "string"
+    },
+    "incident_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "remediation_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "outcome_code": {
+      "type": "integer",
+      "minimum": 100,
+      "maximum": 599
+    },
+    "outcome_category": {
+      "type": "string",
+      "enum": ["pending", "success", "partial", "failed"]
+    },
+    "time_to_resolve_seconds": {
+      "type": "integer"
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "notes": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": false
+}
