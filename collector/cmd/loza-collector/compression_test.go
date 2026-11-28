@@ -163,9 +163,9 @@ func TestResponseCompressionNegotiatesAcceptEncoding(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			recorder := httptest.NewRecorder()
-			handler := withResponseCompression(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			handler := withSecurityHeaders(withResponseCompression(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				_, _ = io.WriteString(w, "negotiated payload")
-			}))
+			})))
 			req := httptest.NewRequest(http.MethodGet, "/", nil)
 			for _, value := range tt.acceptEncoding {
 				req.Header.Add("Accept-Encoding", value)
@@ -182,6 +182,9 @@ func TestResponseCompressionNegotiatesAcceptEncoding(t *testing.T) {
 			}
 			if got := res.Header.Get("Vary"); !strings.Contains(got, "Accept-Encoding") {
 				t.Fatalf("Vary = %q, want Accept-Encoding", got)
+			}
+			if got := res.Header.Get("X-Content-Type-Options"); got != "nosniff" {
+				t.Fatalf("X-Content-Type-Options = %q, want nosniff", got)
 			}
 		})
 	}
