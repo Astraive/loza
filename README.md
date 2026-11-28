@@ -334,10 +334,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 #### JavaScript / TypeScript
 
 ```ts
-import { loza } from '@astraive/loza';
+import { loza, configure, production, string } from '@astraive/loza';
 
-loza.configure(
-  loza.production('checkout')
+configure(
+  production('checkout')
     .withCollectorEndpoint('http://127.0.0.1:9308')
 );
 
@@ -346,7 +346,7 @@ const ctx = loza.startEvent({
   kind: 'http',
 });
 
-loza.enrich(ctx, { 'user.id': 'u-1' });
+loza.enrich(ctx, string('user.id', 'u-1'));
 loza.finish(ctx, 'success');
 
 await loza.emit(ctx);
