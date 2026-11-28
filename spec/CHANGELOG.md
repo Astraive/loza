@@ -15,6 +15,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   intentionally relied on the silent fallback must set `DEDUPE_ALLOW_LOCAL_FALLBACK=1` to
   opt back in; the downgrade is then logged as a warning.
 
+- Schema-service Docker image sets `SCHEMA_SERVICE_PORT=8080` for both the server and
+  health probe, preserving the standalone health-check default.
+
 ## [0.3.4] - 2026-08-26
 
 ### Changed
