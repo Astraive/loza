@@ -429,24 +429,33 @@ def start_event(params: Params) -> EventContext:
     return _default.start_event(replace(params))
 
 
+def _typed_starter_params(params: Params, kind: str, event: str) -> Params:
+    # "event" is Params' generic default, not an explicit typed-starter override.
+    return replace(
+        params,
+        kind=kind if params.kind == "event" else params.kind,
+        event=params.event or event,
+    )
+
+
 def start_http_event(params: Params) -> EventContext:
-    return start_event(replace(params, kind=params.kind or "http", event=params.event or "http.request"))
+    return start_event(_typed_starter_params(params, "http", "http.request"))
 
 
 def start_job_event(params: Params) -> EventContext:
-    return start_event(replace(params, kind=params.kind or "job", event=params.event or "job.run"))
+    return start_event(_typed_starter_params(params, "job", "job.run"))
 
 
 def start_queue_event(params: Params) -> EventContext:
-    return start_event(replace(params, kind=params.kind or "queue", event=params.event or "queue.process"))
+    return start_event(_typed_starter_params(params, "queue", "queue.process"))
 
 
 def start_cli_event(params: Params) -> EventContext:
-    return start_event(replace(params, kind=params.kind or "cli", event=params.event or "cli.run"))
+    return start_event(_typed_starter_params(params, "cli", "cli.run"))
 
 
 def start_cron_event(params: Params) -> EventContext:
-    return start_event(replace(params, kind=params.kind or "cron", event=params.event or "cron.tick"))
+    return start_event(_typed_starter_params(params, "cron", "cron.tick"))
 
 
 def start_event_from(parent: EventContext | None, params: Params) -> EventContext:
