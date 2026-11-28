@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Corrected the Python integration guide to use supported logging, Loguru, and
+  structlog adapters and configure the service name through LOZA.
+
+
 ### Security
 
 - `email_hash` and `ip_hash` now pseudonymize with keyed HMAC-SHA256 instead of

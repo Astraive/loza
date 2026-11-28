@@ -15,24 +15,29 @@ Python logging framework integrations for the LOZA SDK. Each integration bridges
 
 ```python
 import logging
+import loza
 from loza.integrations.logging import LozaHandler
 
+loza.configure(loza.dev("myapp"))
+
 logger = logging.getLogger("myapp")
-logger.addHandler(LozaHandler(service="myapp"))
+logger.addHandler(LozaHandler())
 logger.setLevel(logging.INFO)
 
 logger.info("User signed up", extra={"user.id": "u-123"})
 ```
 
-The handler converts each log record into a LOZA event with the appropriate level, message, and any extra fields as attributes.
+The handler converts each log record into a LOZA event with the appropriate level, message, and any extra fields as attributes. Configure the service name on the LOZA config, not on the handler.
 
 ## Loguru
 
 ```python
 from loguru import logger
-from loza.integrations.loguru import loza_sink
+import loza
+from loza.integrations.loguru import sink
 
-logger.add(loza_sink, level="INFO", service="myapp")
+loza.configure(loza.dev("myapp"))
+logger.add(sink(), level="INFO")
 
 logger.info("Order placed", order_id="ord-456")
 ```
@@ -41,11 +46,13 @@ logger.info("Order placed", order_id="ord-456")
 
 ```python
 import structlog
-from loza.integrations.structlog import LozaProcessor
+import loza
+from loza.integrations.structlog import processor
 
+loza.configure(loza.dev("myapp"))
 structlog.configure(
     processors=[
-        LozaProcessor(service="myapp"),
+        processor(),
         structlog.dev.ConsoleRenderer(),
     ]
 )
