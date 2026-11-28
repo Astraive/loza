@@ -143,20 +143,22 @@ class TestSchemaServiceDockerHealthcheck(unittest.TestCase):
             import healthcheck
 
             with patch.dict(
+                os.environ, {"SCHEMA_SERVICE_PORT": str(image_port)}, clear=True
+            ):
+                self.assertEqual(_env_int("SCHEMA_SERVICE_PORT", 9315), image_port)
+
+            server = ThreadingHTTPServer(("127.0.0.1", 0), SchemaServiceHandler)
+            server.start_time = time.time()
+            service_port = server.server_port
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            with patch.dict(
                 os.environ,
                 {
-                    "SCHEMA_SERVICE_PORT": str(image_port),
+                    "SCHEMA_SERVICE_PORT": str(service_port),
                     "SCHEMA_SERVICE_HOST": "127.0.0.1",
                 },
                 clear=True,
             ):
-                service_port = _env_int("SCHEMA_SERVICE_PORT", 9315)
-                self.assertEqual(service_port, image_port)
-                server = ThreadingHTTPServer(
-                    ("127.0.0.1", service_port), SchemaServiceHandler
-                )
-                server.start_time = time.time()
-                thread = threading.Thread(target=server.serve_forever, daemon=True)
                 thread.start()
                 try:
                     self.assertEqual(healthcheck.main(), 0)
