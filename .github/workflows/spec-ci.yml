@@ -77,6 +77,11 @@ jobs:
         run: python -m pip install --upgrade pip jsonschema pytest
       - name: Install Python SDK
         run: pip install -e sdks/py
+
+      - name: Test conformance category selection
+        working-directory: spec
+        run: python -m pytest -q tests/test_verify.py
+
       - name: Check fixture conformance
         working-directory: spec
         run: python scripts/check_conformance.py
