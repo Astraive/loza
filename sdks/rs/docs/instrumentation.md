@@ -344,7 +344,9 @@ Events can inherit trace context from a parent event or an HTTP carrier:
 let child = StartEvent(Some(&parent_evt), Params::new("sub_operation"));
 
 // From HTTP headers (W3C Trace Context)
-let carrier = ContextCarrier::from_traceparent("00-abc123-def456-01");
+let carrier = ContextCarrier::from_traceparent(
+    "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01",
+).expect("valid W3C traceparent");
 let evt = StartEvent(Some(&carrier), Params::new("incoming_request"));
 ```
 
@@ -821,7 +823,7 @@ let config = Config::production("my-service")
     .with_sink(HttpBatchSink("http://collector:9308/events"))
     .with_sampler(SampleAll())
     .with_redactor(DefaultRedactor())
-    .with_schema(DefaultSchema())
+    .with_schema(SchemaConfig::Default)
     .with_async(true)
     .with_duplicate_policy(CanonicalWins);
 ```
@@ -981,7 +983,7 @@ fn test_order_creation() {
     Append(&mut evt, OrderID("ord_test_1"));
     Append(&mut evt, Amount(99.99));
     Finish(&mut evt);
-    let encoded = Emit(&mut evt).unwrap();
+    let encoded = logger.emit(&evt).unwrap();
 
     assert_contains(&encoded, "ord_test_1");
     assert_contains(&encoded, "99.99");
