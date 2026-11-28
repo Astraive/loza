@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Preserve process, group, and timer start attributes in emitted entries;
+  finish/stop attributes override matching start keys.
+
 ### Security
 
 - `email_hash` and `ip_hash` now pseudonymize with keyed HMAC-SHA256 instead of

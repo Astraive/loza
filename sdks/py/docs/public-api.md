@@ -178,6 +178,10 @@ path relative to the process working directory instead (for example
 | `start_group(ctx, name, **attrs)` | Start a named group handle. |
 | `stopwatch()` | Create a standalone stopwatch. |
 
+Attributes supplied when starting a process, group, or timer are retained on
+the emitted entry. If the same key is supplied at finish/stop, the
+completion-time value wins.
+
 ## Cortex Client
 
 | Class | Description |

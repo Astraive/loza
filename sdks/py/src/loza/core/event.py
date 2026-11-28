@@ -142,21 +142,21 @@ class EventContext:
         self._ensure_mutable()
         self._mark_active()
         self._process_step += 1
-        return ProcessHandle(self, name, self._process_step, datetime.now(timezone.utc))
+        return ProcessHandle(self, name, self._process_step, datetime.now(timezone.utc), attrs)
 
     def start_timer(self, name: str, **attrs: object) -> "TimerHandle":
         from .timing import TimerHandle
 
         self._ensure_mutable()
         self._mark_active()
-        return TimerHandle(self, name, datetime.now(timezone.utc))
+        return TimerHandle(self, name, datetime.now(timezone.utc), attrs)
 
     def start_group(self, name: str, **attrs: object) -> "GroupHandle":
         from .timing import GroupHandle
 
         self._ensure_mutable()
         self._mark_active()
-        return GroupHandle(self, name, datetime.now(timezone.utc))
+        return GroupHandle(self, name, datetime.now(timezone.utc), attrs)
 
     def finish(self, outcome: str) -> None:
         # Keep the dedicated double-finish error, but still report the typed
