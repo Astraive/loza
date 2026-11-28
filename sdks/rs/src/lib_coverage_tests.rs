@@ -11,7 +11,7 @@ mod coverage_tests {
         let _ = NewWith(vec![WithService("coverage")]);
         let _ = TryNew(cfg.clone()).unwrap();
         let _ = NewClient(cfg.clone());
-        let _ = Configure(cfg.clone());
+        let _ = Configure(cfg.clone()).unwrap();
         let _ = crate::configure(cfg.clone()).unwrap();
         let _ = reset();
         let _ = Reset();
