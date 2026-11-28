@@ -1000,7 +1000,10 @@ def test_testkit_lifecycle_helpers_and_non_live_integrations() -> None:
     )
     handler.emit(record)
     loguru = LoguruSink()
+
+    loguru(SimpleNamespace(message="hello", record={"level": SimpleNamespace(name="INFO")}))
     loguru(SimpleNamespace(message="hello", record={"level": {"name": "INFO"}}))
+    loguru(SimpleNamespace(message="hello", record={"level": "INFO"}))
     structlog = StructlogProcessor()
     event_dict = {"event": "info", "key": "value"}
     assert structlog(None, "info", event_dict)["key"] == "value"
