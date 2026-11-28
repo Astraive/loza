@@ -502,11 +502,12 @@ func (e *Event) Delete(keys ...string) error {
 			continue
 		}
 		parts := splitPath(key)
-		if len(parts) == 1 {
-			e.Attrs = removeAttrByKey(e.Attrs, key)
-			continue
+		// A dotted key may be stored literally as well as represented by
+		// nested groups, so remove both forms.
+		e.Attrs = removeAttrByKey(e.Attrs, key)
+		if len(parts) > 1 {
+			e.Attrs = removeNestedAttr(e.Attrs, parts)
 		}
-		e.Attrs = removeNestedAttr(e.Attrs, parts)
 	}
 	return nil
 }
