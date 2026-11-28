@@ -66,7 +66,7 @@ func (f *MatcherFactory) Create(typ MatcherType) (Matcher, error) {
 	}
 }
 
-var ErrRustNotAvailable = &MatcherError{"Rust matcher not available - build with CGO_ENABLED and cortex-match crate"}
+var ErrRustNotAvailable = &MatcherError{"Rust matcher adapter is unavailable; use the Go matcher"}
 
 type MatcherError struct {
 	msg string
@@ -111,11 +111,10 @@ func NewMatcherForConfig(cfg config.MatcherConfig) (Matcher, error) {
 
 type RustMatcher struct{}
 
+// NewRustMatcher rejects Rust mode because the Rust bridge has no Matcher adapter.
+// Returning an error lets server constructors use their Go fallback.
 func NewRustMatcher() (Matcher, error) {
-	if !IsRustAvailable() {
-		return nil, ErrRustNotAvailable
-	}
-	return &RustMatcher{}, nil
+	return nil, ErrRustNotAvailable
 }
 
 type SignatureMatcher struct {
