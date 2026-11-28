@@ -302,8 +302,7 @@ impl Logger {
                 redaction::redact(encoded, &self.config.redactor)
             }
             other => {
-                let raw = serde_json::to_value(ctx)
-                    .unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
+                let raw = crate::schema::event_value_for_schema(ctx, other);
                 let raw = crate::event::apply_sensitive_to_value(raw, ctx);
                 let redactor = with_envelope_allowlist(&self.config.redactor);
                 let redacted = redaction::redact(raw, &redactor);

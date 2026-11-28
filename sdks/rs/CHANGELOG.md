@@ -5,6 +5,8 @@ All notable changes to the LOZA Rust SDK are documented in this file.
 ## [Unreleased]
 
 ### Fixed
+- ECS event durations now convert `duration_ms` to nanoseconds and clamp
+  overflow at the destination's signed 64-bit maximum.
 
 - Event mutators no longer discard the `ensure_mutable` lifecycle check:
   `set_attr`, `append_attr`, `merge_group`, `delete_attr`,
