@@ -17,10 +17,11 @@ Python web framework middleware for automatic HTTP event creation. Each middlewa
 The generic ASGI middleware wraps any ASGI application:
 
 ```python
-from loza.middleware.asgi import LozaMiddleware
+from loza.middleware.asgi import Middleware
 
-app = LozaMiddleware(asgi_app, service="my-service")
+app = Middleware(asgi_app, service="my-service")
 ```
+
 
 What it captures:
 - HTTP method, path, route
@@ -32,10 +33,10 @@ What it captures:
 
 ```python
 from fastapi import FastAPI
-from loza.middleware.fastapi import LozaMiddleware
+from loza.middleware.fastapi import Middleware
 
 app = FastAPI()
-app.add_middleware(LozaMiddleware, service="my-service")
+app.add_middleware(Middleware, service="my-service")
 
 @app.get("/users/{user_id}")
 async def get_user(user_id: str):
@@ -57,20 +58,20 @@ MIDDLEWARE = [
 
 ```python
 from flask import Flask
-from loza.middleware.flask import LozaMiddleware
+from loza.middleware.flask import Middleware
 
 app = Flask(__name__)
-LozaMiddleware(app, service="my-service")
+app.wsgi_app = Middleware(app.wsgi_app, service="my-service")
 ```
 
 ## Starlette
 
 ```python
 from starlette.applications import Starlette
-from loza.middleware.starlette import LozaMiddleware
+from loza.middleware.starlette import Middleware
 
 app = Starlette()
-app.add_middleware(LozaMiddleware, service="my-service")
+app.add_middleware(Middleware, service="my-service")
 ```
 
 ## Common Behavior

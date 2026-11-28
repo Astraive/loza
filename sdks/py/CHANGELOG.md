@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Corrected the ASGI, FastAPI, Flask, and Starlette middleware examples to use
+  the exported `Middleware` class.
+
 ### Security
 
 - `email_hash` and `ip_hash` now pseudonymize with keyed HMAC-SHA256 instead of
