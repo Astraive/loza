@@ -3,6 +3,8 @@
 ## [Unreleased]
 
 ### Fixed
+- Rust matcher configuration now reports the backend unavailable so server
+  startup uses its existing Go fallback instead of selecting an unusable stub.
 - DuckDB remediation statistics round fractional average resolution times to the nearest second.
 - Correlation synthesis now applies the minimum qualifying anomalous event-pair
   count per service pair before persisting co-occurrence edges.
