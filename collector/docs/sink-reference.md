@@ -181,7 +181,7 @@ fanout:
       type: loki
       enabled: true
       loki:
-        url: "http://localhost:3100/loki/api/core/push"
+        url: "http://localhost:3100/loki/api/v1/push"
         tenant_id: loza
         labels:
           source: loza-collector
@@ -190,7 +190,7 @@ fanout:
 **Behavior Notes**
 
 - Events are converted to Loki log entries with labels extracted from event fields.
-- Pushes use the `/loki/api/core/push` endpoint.
+- Pushes use the `/loki/api/v1/push` endpoint.
 - Retries are handled at the batch level.
 
 ---

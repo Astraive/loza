@@ -33,6 +33,10 @@ func TestFlushPushesLokiPayload(t *testing.T) {
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		reqCount.Add(1)
+		if r.URL.Path != "/loki/api/v1/push" {
+			http.Error(w, "unexpected Loki push path: "+r.URL.Path, http.StatusNotFound)
+			return
+		}
 		receivedTenant = r.Header.Get("X-Scope-OrgID")
 		body, _ := io.ReadAll(r.Body)
 		_ = r.Body.Close()
@@ -42,7 +46,7 @@ func TestFlushPushesLokiPayload(t *testing.T) {
 	defer srv.Close()
 
 	rawSink, err := New(Config{
-		URL:           srv.URL + "/loki/api/core/push",
+		URL:           srv.URL + "/loki/api/v1/push",
 		TenantID:      "tenant-a",
 		Labels:        map[string]string{"service": "checkout"},
 		BatchSize:     10,
