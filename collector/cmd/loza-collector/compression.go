@@ -84,10 +84,10 @@ func preferredResponseEncoding(values []string) string {
 		identityQuality = 1000
 	}
 
-	if zstdQuality > 0 && zstdQuality >= gzipQuality {
+	if zstdQuality > 0 && zstdQuality >= gzipQuality && zstdQuality >= identityQuality {
 		return "zstd"
 	}
-	if gzipQuality > 0 {
+	if gzipQuality > 0 && gzipQuality >= identityQuality {
 		return "gzip"
 	}
 	if identityQuality > 0 {

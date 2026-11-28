@@ -138,18 +138,23 @@ func TestResponseCompressionNegotiatesAcceptEncoding(t *testing.T) {
 			wantStatus:     http.StatusOK,
 		},
 		{
+			name:           "identity_preferred",
+			acceptEncoding: []string{"gzip;q=0.5, identity;q=1"},
+			wantStatus:     http.StatusOK,
+		},
+		{
 			name:       "missing_header",
 			wantStatus: http.StatusOK,
 		},
 		{
 			name:           "highest_quality",
-			acceptEncoding: []string{"gzip;q=0.4, zstd;q=0.8"},
+			acceptEncoding: []string{"gzip;q=0.4, zstd;q=0.8, identity;q=0.2"},
 			wantEncoding:   "zstd",
 			wantStatus:     http.StatusOK,
 		},
 		{
 			name:           "wildcard_respects_explicit_rejection",
-			acceptEncoding: []string{"*;q=0.5, gzip;q=0"},
+			acceptEncoding: []string{"*;q=0.5, gzip;q=0, identity;q=0.1"},
 			wantEncoding:   "zstd",
 			wantStatus:     http.StatusOK,
 		},
