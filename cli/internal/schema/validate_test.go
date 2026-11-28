@@ -163,9 +163,6 @@ func TestValidateOversizedPayloadsRejected(t *testing.T) {
 			if len(bytes.TrimSpace(tc.raw)) <= speccontract.MaxEventBytes {
 				t.Fatalf("test payload must exceed MaxEventBytes (%d)", speccontract.MaxEventBytes)
 			}
-			if err := speccontract.ValidateFlexibleJSONBytes(tc.raw, false); err == nil {
-				t.Fatal("ValidateFlexibleJSONBytes should reject oversized payload")
-			}
 			if err := ValidateEventBytes(tc.raw); err == nil {
 				t.Fatal("ValidateEventBytes should reject oversized payload")
 			}

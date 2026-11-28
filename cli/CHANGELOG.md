@@ -8,6 +8,8 @@ All notable changes to this project are documented in this file.
 
 - Align CLI command examples with the current parsers and verify their output
   through finite command tests.
+- Keep standalone payload-size validation compatible with the published spec
+  module and verify `GOWORK=off` builds in the release gate.
 
 ## [0.3.4] - 2026-08-26
 

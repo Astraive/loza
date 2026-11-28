@@ -9,6 +9,10 @@ import (
 	speccontract "github.com/astraive/loza/spec/generated/go/contract"
 )
 
+// maxBatchBytes mirrors the current spec contract limit. Released spec modules
+// do not export it, so the CLI must own the value for standalone builds.
+const maxBatchBytes = 1 << 20
+
 // firstExisting returns the first path that os.Stat does not report as absent.
 // A path is skipped only when it is confirmed missing (os.IsNotExist); errors such
 // as permission denied or a symlink loop are treated as existing-but-unusable
@@ -103,8 +107,8 @@ func ValidateEventBytes(raw []byte) error {
 }
 
 func ValidateEventBytesStrict(raw []byte, strict bool) error {
-	if len(raw) > speccontract.MaxBatchBytes {
-		return fmt.Errorf("payload exceeds max_batch_size_bytes (%d > %d)", len(raw), speccontract.MaxBatchBytes)
+	if len(raw) > maxBatchBytes {
+		return fmt.Errorf("payload exceeds max_batch_size_bytes (%d > %d)", len(raw), maxBatchBytes)
 	}
 	var payload map[string]any
 	if err := json.Unmarshal(raw, &payload); err == nil {

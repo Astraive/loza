@@ -33,6 +33,11 @@ jobs:
           python-version: "3.11"
       - run: python -m pip install pyyaml
       - run: python scripts/release/validate-manifests.py --component cli
+      - name: Verify standalone CLI build
+        env:
+          GOWORK: off
+        run: go build -o "$RUNNER_TEMP/loza-standalone" ./cmd/loza
+        working-directory: cli
       - name: Verify pinned spec module tag
         if: inputs.dry_run != true
         shell: bash
