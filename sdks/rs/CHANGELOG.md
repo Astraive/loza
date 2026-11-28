@@ -11,6 +11,10 @@ All notable changes to the LOZA Rust SDK are documented in this file.
   `checkpoint_with_attrs`, `start_process`, `start_timer`, `start_group`, and
   the matching `Logger` helpers are now no-ops once an event is emitting,
   emitted, or failed. Public signatures are unchanged.
+
+- Correct the instrumentation guide's context-carrier parsing, schema configuration,
+  and encoded-event examples to match the Rust SDK APIs.
+
 ### Changed
 
 - Sensitive-value hashing (`HashKeys` redaction and the `Hash`/`EmailHash`/`IPHash`
