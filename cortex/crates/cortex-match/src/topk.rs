@@ -104,6 +104,11 @@ impl TopK {
         }
     }
 
+    pub(crate) fn with_k(mut self, k: usize) -> Self {
+        self.k = k;
+        self
+    }
+
     pub fn with_threshold(mut self, threshold: f64) -> Self {
         self.threshold = threshold;
         self
